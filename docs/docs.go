@@ -43,7 +43,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -75,13 +75,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -110,19 +110,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
             },
             "put": {
-                "description": "更新账号昵称或状态",
+                "description": "更新账号昵称、头像、角色或状态",
                 "consumes": [
                     "application/json"
                 ],
@@ -155,7 +155,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -182,7 +182,65 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/auth/login": {
+            "post": {
+                "description": "使用用户名和密码登录，校验通过后返回 JWT Token 及用户信息。本接口无需鉴权。登录失败（用户名不存在、密码错误、账号被禁用）统一返回 401，避免泄露账号是否存在。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "用户名密码登录",
+                "parameters": [
+                    {
+                        "description": "登录信息",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.LoginRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "登录成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_handler_v1.LoginResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误（如缺少 username 或 password）",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "用户名或密码错误，或账号已被禁用",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -211,7 +269,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live_mixer_pkg_response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -219,18 +277,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "live_mixer_pkg_response.Body": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "integer"
-                },
-                "data": {},
-                "message": {
-                    "type": "string"
-                }
-            }
-        },
         "internal_handler_v1.CreateAccountRequest": {
             "type": "object",
             "required": [
@@ -239,6 +285,10 @@ const docTemplate = `{
                 "username"
             ],
             "properties": {
+                "avatar": {
+                    "description": "用户头像 URL",
+                    "type": "string"
+                },
                 "email": {
                     "type": "string"
                 },
@@ -249,28 +299,100 @@ const docTemplate = `{
                     "type": "string",
                     "minLength": 6
                 },
+                "roles": {
+                    "description": "用户角色，多个角色用逗号分隔",
+                    "type": "string"
+                },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_handler_v1.LoginRequest": {
+            "type": "object",
+            "required": [
+                "password",
+                "username"
+            ],
+            "properties": {
+                "password": {
+                    "type": "string",
+                    "example": "123456"
+                },
+                "username": {
+                    "type": "string",
+                    "example": "admin"
+                }
+            }
+        },
+        "internal_handler_v1.LoginResponse": {
+            "type": "object",
+            "properties": {
+                "avatar": {
+                    "type": "string",
+                    "example": "https://cdn.example.com/avatar/1.jpg"
+                },
+                "expires_in": {
+                    "type": "integer",
+                    "example": 7200
+                },
+                "id": {
+                    "type": "string",
+                    "example": "1"
+                },
+                "nickname": {
+                    "type": "string",
+                    "example": "管理员"
+                },
+                "roles": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "ADMIN"
+                    ]
+                },
+                "token": {
+                    "type": "string",
+                    "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                },
+                "username": {
+                    "type": "string",
+                    "example": "admin"
                 }
             }
         },
         "internal_handler_v1.UpdateAccountRequest": {
             "type": "object",
             "properties": {
+                "avatar": {
+                    "description": "可选，用户头像 URL",
+                    "type": "string"
+                },
                 "nickname": {
+                    "type": "string"
+                },
+                "roles": {
+                    "description": "可选，用户角色，多个角色用逗号分隔",
                     "type": "string"
                 },
                 "status": {
                     "type": "integer"
                 }
             }
-        }
-    },
-    "securityDefinitions": {
-        "BearerAuth": {
-            "type": "apiKey",
-            "name": "Authorization",
-            "in": "header"
+        },
+        "live-mixer_pkg_response.Body": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {},
+                "message": {
+                    "type": "string"
+                }
+            }
         }
     }
 }`

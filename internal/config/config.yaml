@@ -8,9 +8,9 @@ server:
 database:
   host: "127.0.0.1"
   port: 5432
-  user: "base"
+  user: "live_mixer"
   password: "password"   # 仅本地开发占位，生产环境由 docker/.env 注入
-  dbname: "base"
+  dbname: "live_mixer"
   sslmode: "disable"
   timezone: "Asia/Shanghai"
   max_idle_conns: 10
@@ -19,7 +19,7 @@ database:
 logger:
   level: "info"              # debug | info | warn | error
   format: "json"             # json | console
-  filename: "logs/base.log"  # 日志文件路径
+  filename: "logs/live-mixer.log"  # 日志文件路径
   max_size: 10               # 单个日志文件最大 10MB
   max_backups: 10            # 最多保留 10 个历史日志文件
 

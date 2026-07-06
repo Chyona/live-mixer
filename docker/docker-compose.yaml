@@ -17,7 +17,7 @@ services:
       APP_SERVER_MODE: release
       APP_LOGGER_LEVEL: info
       APP_LOGGER_FORMAT: json
-      APP_LOGGER_FILENAME: logs/base.log
+      APP_LOGGER_FILENAME: logs/live-mixer.log
       APP_LOGGER_MAX_SIZE: 10
       APP_LOGGER_MAX_BACKUPS: 10
       APP_DATABASE_SSLMODE: disable
