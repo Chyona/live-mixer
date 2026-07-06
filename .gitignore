@@ -1,0 +1,13 @@
+# 隐私与环境相关
+docker/.env
+
+# 运行时产物
+logs/
+*.log
+bin/
+webserver
+envinit
+
+# IDE
+.idea/
+.vscode/

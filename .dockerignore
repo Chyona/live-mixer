@@ -1,0 +1,8 @@
+.git
+.github
+bin
+*.md
+.env
+docker/.env
+logs/
+**/*_test.go

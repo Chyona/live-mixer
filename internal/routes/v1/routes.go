@@ -1,0 +1,27 @@
+// Package v1 注册 API v1 路由分组。
+package v1
+
+import (
+	v1handler "live-mixer/internal/handler/v1"
+	"live-mixer/internal/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+// RegisterRoutes 注册 v1 版本全部路由。
+func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, jwtSecret string) {
+	// 登录接口无需 JWT 鉴权
+	rg.POST("/auth/login", authHandler.Login)
+
+	// 其余 v1 接口均需 JWT 鉴权
+	authorized := rg.Group("", middleware.JWTAuth(jwtSecret))
+
+	accounts := authorized.Group("/accounts")
+	{
+		accounts.POST("", accountHandler.CreateAccount)
+		accounts.GET("", accountHandler.ListAccounts)
+		accounts.GET("/:id", accountHandler.GetAccount)
+		accounts.PUT("/:id", accountHandler.UpdateAccount)
+		accounts.DELETE("/:id", accountHandler.DeleteAccount)
+	}
+}

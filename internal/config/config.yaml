@@ -1,0 +1,28 @@
+# 应用默认配置（本地 go run 直接使用，不含生产密钥）
+# 优先级：环境变量 APP_* > 外部配置文件（-config）> 本文件
+server:
+  host: "0.0.0.0"
+  port: 30000
+  mode: "debug" # debug | release | test
+
+database:
+  host: "127.0.0.1"
+  port: 5432
+  user: "base"
+  password: "password"   # 仅本地开发占位，生产环境由 docker/.env 注入
+  dbname: "base"
+  sslmode: "disable"
+  timezone: "Asia/Shanghai"
+  max_idle_conns: 10
+  max_open_conns: 100
+
+logger:
+  level: "info"              # debug | info | warn | error
+  format: "json"             # json | console
+  filename: "logs/base.log"  # 日志文件路径
+  max_size: 10               # 单个日志文件最大 10MB
+  max_backups: 10            # 最多保留 10 个历史日志文件
+
+jwt:
+  secret: "live-mixer-jwt-secret-change-in-production"
+  expires_in: 7200             # Token 过期时间（秒）
