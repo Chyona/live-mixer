@@ -1,0 +1,76 @@
+// webserver 是 HTTP API 服务入口。
+package main
+
+import (
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+
+	"live-mixer/docs"
+	"live-mixer/internal/bootstrap"
+	"live-mixer/internal/config"
+	v1handler "live-mixer/internal/handler/v1"
+	v2handler "live-mixer/internal/handler/v2"
+	"live-mixer/internal/middleware"
+	"live-mixer/internal/repository"
+	"live-mixer/internal/service"
+	routesv1 "live-mixer/internal/routes/v1"
+	routesv2 "live-mixer/internal/routes/v2"
+
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	"go.uber.org/zap"
+)
+
+func main() {
+	configPath := flag.String("config", "", "外部配置文件路径（可选）")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger, err := bootstrap.InitLogger(cfg.Logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync() //nolint:errcheck
+
+	db, err := bootstrap.InitDatabase(cfg.Database, logger)
+	if err != nil {
+		logger.Fatal("初始化数据库失败", zap.Error(err))
+	}
+
+	accountRepo := repository.NewAccountRepository(db)
+	accountService := service.NewAccountService(accountRepo)
+	authService := service.NewAuthService(accountRepo, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
+	v1AccountHandler := v1handler.NewAccountHandler(accountService)
+	v1AuthHandler := v1handler.NewAuthHandler(authService)
+	v2AccountHandler := v2handler.NewAccountHandler(accountService)
+
+	gin.SetMode(cfg.Server.Mode)
+	r := gin.New()
+	r.Use(gin.Recovery(), middleware.RequestLogger(logger))
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	api := r.Group("/openapi/live-mixer")
+	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, cfg.JWT.Secret)
+	routesv2.RegisterRoutes(api.Group("/v2"), v2AccountHandler, cfg.JWT.Secret)
+
+	docs.SwaggerInfo.Host = cfg.Server.Addr()
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	addr := cfg.Server.Addr()
+	logger.Info("HTTP 服务启动", zap.String("addr", addr))
+	if err := r.Run(addr); err != nil {
+		logger.Fatal("HTTP 服务异常退出", zap.Error(err))
+	}
+}
