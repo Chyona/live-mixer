@@ -1,4 +1,4 @@
-package mos
+package storage
 
 const (
 	// defaultPartSizeMB COS 分片大小默认值（单位：MB）。

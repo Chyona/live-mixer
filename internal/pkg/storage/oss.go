@@ -1,4 +1,4 @@
-package mos
+package storage
 
 import (
 	"context"
@@ -94,7 +94,7 @@ func (p *ossProvider) UploadReader(ctx context.Context, r io.Reader, objectKey s
 
 	// 数据量较大时先落盘，复用分片上传的断点续传能力。
 	if size >= p.opts.ossPartSizeBytes() {
-		tmpFile, err := os.CreateTemp(p.opts.CheckpointDir, "mos-oss-upload-*")
+		tmpFile, err := os.CreateTemp(p.opts.CheckpointDir, "storage-oss-upload-*")
 		if err != nil {
 			return "", fmt.Errorf("创建临时文件失败: %w", err)
 		}
@@ -126,5 +126,5 @@ func ossCheckpointDir(opts UploadOptions) string {
 	if opts.CheckpointDir != "" {
 		return filepath.Join(opts.CheckpointDir, "oss-checkpoint")
 	}
-	return filepath.Join(os.TempDir(), "mos-oss-checkpoint")
+	return filepath.Join(os.TempDir(), "storage-oss-checkpoint")
 }

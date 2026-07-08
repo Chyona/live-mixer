@@ -1,4 +1,4 @@
-package mos
+package storage
 
 import "os"
 

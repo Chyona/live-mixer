@@ -1,4 +1,4 @@
-package mos
+package storage
 
 import (
 	"context"
@@ -81,7 +81,7 @@ func (p *cosProvider) UploadFile(ctx context.Context, localPath, objectKey strin
 
 // UploadReader 将数据流写入临时文件后走分片上传，保证与 UploadFile 相同的弱网容错能力。
 func (p *cosProvider) UploadReader(ctx context.Context, r io.Reader, objectKey string, size int64) (string, error) {
-	tmpFile, err := os.CreateTemp(p.opts.CheckpointDir, "mos-cos-upload-*")
+	tmpFile, err := os.CreateTemp(p.opts.CheckpointDir, "storage-cos-upload-*")
 	if err != nil {
 		return "", fmt.Errorf("创建临时文件失败: %w", err)
 	}
