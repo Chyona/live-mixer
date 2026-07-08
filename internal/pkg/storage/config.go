@@ -25,7 +25,12 @@ type Config struct {
 	OSS OSSConfig
 }
 
-// LoadConfigFromEnv 从环境变量加载对象存储配置。
+// LoadConfigFromEnv 从独立环境变量加载对象存储配置（不经过 config.yaml）。
+//
+// 应用内请优先使用 config.Load 配合 NewClientFromAppConfig，以遵循统一配置策略：
+// 环境变量 APP_STORAGE_* > 外部配置文件（-config）> 内嵌 config.yaml。
+//
+// 本函数保留用于仅需 COS_* / OSS_* 环境变量的独立场景：
 //
 // 腾讯云 COS（优先）：
 //   - COS_SECRET_ID

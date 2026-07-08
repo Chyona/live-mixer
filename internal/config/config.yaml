@@ -26,3 +26,16 @@ logger:
 jwt:
   secret: "live-mixer-jwt-secret-change-in-production"
   expires_in: 7200             # Token 过期时间（秒）
+
+# 对象存储（COS 优先，OSS 兜底；密钥生产环境由 APP_STORAGE_* 环境变量注入）
+storage:
+  cos:
+    secret_id: ""
+    secret_key: ""
+    bucket_name: ""
+    region: ""                 # 例如 ap-guangzhou
+  oss:
+    access_key_id: ""
+    access_key_secret: ""
+    bucket_name: ""
+    endpoint: ""               # 例如 oss-cn-hangzhou.aliyuncs.com

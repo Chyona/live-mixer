@@ -26,7 +26,8 @@ func NewClient(cfg Config, opts ...UploadOptions) (*Client, error) {
 	return &Client{provider: provider}, nil
 }
 
-// NewClientFromEnv 从环境变量加载配置并创建客户端，是容器部署时的便捷入口。
+// NewClientFromEnv 从 COS_* / OSS_* 环境变量加载配置并创建客户端。
+// 应用内请优先使用 config.Load 与 NewClientFromAppConfig。
 func NewClientFromEnv(opts ...UploadOptions) (*Client, error) {
 	return NewClient(LoadConfigFromEnv(), opts...)
 }

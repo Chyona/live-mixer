@@ -20,6 +20,7 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Logger   LoggerConfig   `mapstructure:"logger"`
 	JWT      JWTConfig      `mapstructure:"jwt"`
+	Storage  StorageConfig  `mapstructure:"storage"`
 }
 
 // ServerConfig HTTP 服务相关配置。
@@ -55,6 +56,28 @@ type LoggerConfig struct {
 type JWTConfig struct {
 	Secret    string `mapstructure:"secret"`
 	ExpiresIn int    `mapstructure:"expires_in"` // 过期时间（秒）
+}
+
+// StorageConfig 对象存储配置，COS 与 OSS 同时配置完整时优先使用 COS。
+type StorageConfig struct {
+	COS COSStorageConfig `mapstructure:"cos"`
+	OSS OSSStorageConfig `mapstructure:"oss"`
+}
+
+// COSStorageConfig 腾讯云对象存储（COS）连接配置。
+type COSStorageConfig struct {
+	SecretID   string `mapstructure:"secret_id"`
+	SecretKey  string `mapstructure:"secret_key"`
+	BucketName string `mapstructure:"bucket_name"`
+	Region     string `mapstructure:"region"`
+}
+
+// OSSStorageConfig 阿里云对象存储（OSS）连接配置。
+type OSSStorageConfig struct {
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	AccessKeySecret string `mapstructure:"access_key_secret"`
+	BucketName      string `mapstructure:"bucket_name"`
+	Endpoint        string `mapstructure:"endpoint"`
 }
 
 // DSN 生成 PostgreSQL 连接字符串。
@@ -178,5 +201,30 @@ func applyEnvOverrides(cfg *Config) {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.JWT.ExpiresIn = n
 		}
+	}
+
+	if val, ok := os.LookupEnv("APP_STORAGE_COS_SECRET_ID"); ok {
+		cfg.Storage.COS.SecretID = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_COS_SECRET_KEY"); ok {
+		cfg.Storage.COS.SecretKey = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_COS_BUCKET_NAME"); ok {
+		cfg.Storage.COS.BucketName = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_COS_REGION"); ok {
+		cfg.Storage.COS.Region = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_OSS_ACCESS_KEY_ID"); ok {
+		cfg.Storage.OSS.AccessKeyID = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_OSS_ACCESS_KEY_SECRET"); ok {
+		cfg.Storage.OSS.AccessKeySecret = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_OSS_BUCKET_NAME"); ok {
+		cfg.Storage.OSS.BucketName = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_OSS_ENDPOINT"); ok {
+		cfg.Storage.OSS.Endpoint = val
 	}
 }
