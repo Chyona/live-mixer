@@ -11,21 +11,30 @@ services:
     env_file:
       - .env
     environment:
-      # 非敏感配置：直接在 compose 中声明
-      APP_SERVER_HOST: "0.0.0.0"
-      APP_SERVER_PORT: 30000
-      APP_SERVER_MODE: release
-      APP_LOGGER_LEVEL: info
-      APP_LOGGER_FORMAT: json
-      APP_LOGGER_FILENAME: logs/live-mixer.log
-      APP_LOGGER_MAX_SIZE: 10
-      APP_LOGGER_MAX_BACKUPS: 10
-      APP_DATABASE_SSLMODE: disable
-      APP_DATABASE_TIMEZONE: Asia/Shanghai
-      APP_DATABASE_MAX_IDLE_CONNS: 10
-      APP_DATABASE_MAX_OPEN_CONNS: 100
-      APP_JWT_EXPIRES_IN: 7200
-      # APP_JWT_SECRET 由 .env 注入
+      # ── 非敏感配置：直接在此声明；敏感项（数据库账号/密码、JWT 密钥、对象存储密钥）由 .env 注入 ──
+
+      # 【HTTP 服务】控制 API 监听地址与运行模式
+      APP_SERVER_HOST: "0.0.0.0"   # 监听地址；0.0.0.0 表示容器内所有网卡，允许外部访问
+      APP_SERVER_PORT: 30000       # 监听端口；需与上方 ports 映射一致
+      APP_SERVER_MODE: release     # 运行模式：debug（详细日志）| release（生产）| test（测试）
+
+      # 【日志】控制日志级别、格式与滚动策略（输出到 volumes 挂载的 ./logs 目录）
+      APP_LOGGER_LEVEL: info           # 日志级别：debug | info | warn | error
+      APP_LOGGER_FORMAT: json          # 输出格式：json（便于采集）| console（人类可读）
+      APP_LOGGER_FILENAME: logs/live-mixer.log  # 日志文件路径（容器内相对路径）
+      APP_LOGGER_MAX_SIZE: 10          # 单个日志文件上限（MB），超出后自动切分
+      APP_LOGGER_MAX_BACKUPS: 10       # 最多保留的历史日志文件数，超出后删除最旧文件
+
+      # 【数据库连接】连接池与 SSL/时区（主机/端口/库名/账号/密码见 .env）
+      APP_DATABASE_SSLMODE: disable        # PostgreSQL SSL：disable | require | verify-full
+      APP_DATABASE_TIMEZONE: Asia/Shanghai # 数据库会话时区，影响时间字段读写
+      APP_DATABASE_MAX_IDLE_CONNS: 10      # 连接池空闲连接数上限
+      APP_DATABASE_MAX_OPEN_CONNS: 100     # 连接池最大打开连接数
+
+      # 【JWT 鉴权】Token 有效期（签名密钥 APP_JWT_SECRET 见 .env）
+      APP_JWT_EXPIRES_IN: 7200         # Access Token 过期时间（秒），7200 = 2 小时
+
+      # 【容器时区】影响系统时间与日志时间戳
       TZ: Asia/Shanghai
     networks:
       - live-mixer-net
