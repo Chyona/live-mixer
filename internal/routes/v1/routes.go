@@ -9,9 +9,11 @@ import (
 )
 
 // RegisterRoutes 注册 v1 版本全部路由。
-func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, jwtSecret string) {
+func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, asrHandler *v1handler.ASRHandler, jwtSecret string) {
 	// 登录接口无需 JWT 鉴权
 	rg.POST("/auth/login", authHandler.Login)
+	// ASR 同步识别接口无需 JWT 鉴权
+	rg.POST("/asr", asrHandler.Transcribe)
 
 	// 其余 v1 接口均需 JWT 鉴权
 	authorized := rg.Group("", middleware.JWTAuth(jwtSecret))

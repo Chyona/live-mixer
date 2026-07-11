@@ -21,6 +21,7 @@ type Config struct {
 	Logger   LoggerConfig   `mapstructure:"logger"`
 	JWT      JWTConfig      `mapstructure:"jwt"`
 	Storage  StorageConfig  `mapstructure:"storage"`
+	ASR      ASRConfig      `mapstructure:"asr"`
 }
 
 // ServerConfig HTTP 服务相关配置。
@@ -79,6 +80,15 @@ type OSSStorageConfig struct {
 	AccessKeySecret string `mapstructure:"access_key_secret"`
 	BucketName      string `mapstructure:"bucket_name"`
 	Endpoint        string `mapstructure:"endpoint"`
+}
+
+// ASRConfig 豆包语音识别（ASR）配置。
+type ASRConfig struct {
+	APIKey          string `mapstructure:"api_key"`
+	BaseURL         string `mapstructure:"base_url"`
+	ResourceID      string `mapstructure:"resource_id"`
+	PollIntervalSec int    `mapstructure:"poll_interval_sec"`
+	MaxPolls        int    `mapstructure:"max_polls"`
 }
 
 // TOSStorageConfig 火山引擎对象存储（TOS）连接配置。
@@ -251,5 +261,25 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_STORAGE_TOS_ENDPOINT"); ok {
 		cfg.Storage.TOS.Endpoint = val
+	}
+
+	if val, ok := os.LookupEnv("APP_ASR_API_KEY"); ok {
+		cfg.ASR.APIKey = val
+	}
+	if val, ok := os.LookupEnv("APP_ASR_BASE_URL"); ok {
+		cfg.ASR.BaseURL = val
+	}
+	if val, ok := os.LookupEnv("APP_ASR_RESOURCE_ID"); ok {
+		cfg.ASR.ResourceID = val
+	}
+	if val, ok := os.LookupEnv("APP_ASR_POLL_INTERVAL_SEC"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.ASR.PollIntervalSec = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_ASR_MAX_POLLS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.ASR.MaxPolls = n
+		}
 	}
 }

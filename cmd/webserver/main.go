@@ -49,8 +49,10 @@ func main() {
 	accountRepo := repository.NewAccountRepository(db)
 	accountService := service.NewAccountService(accountRepo)
 	authService := service.NewAuthService(accountRepo, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
+	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
+	v1ASRHandler := v1handler.NewASRHandler(asrService)
 	v2AccountHandler := v2handler.NewAccountHandler(accountService)
 
 	gin.SetMode(cfg.Server.Mode)
@@ -62,7 +64,7 @@ func main() {
 	})
 
 	api := r.Group("/openapi/live-mixer")
-	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, cfg.JWT.Secret)
+	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, v1ASRHandler, cfg.JWT.Secret)
 	routesv2.RegisterRoutes(api.Group("/v2"), v2AccountHandler, cfg.JWT.Secret)
 
 	docs.SwaggerInfo.Host = cfg.Server.Addr()

@@ -21,6 +21,17 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.Storage.TOS.Region != "" {
 		t.Errorf("TOS.Region = %q, want empty default", cfg.Storage.TOS.Region)
 	}
+
+	// ASR 默认 API Key 与轮询配置
+	if cfg.ASR.APIKey != "606b0b96-0706-4fa5-ba0d-d9d1e879a4f7" {
+		t.Errorf("ASR.APIKey = %q, want default api key", cfg.ASR.APIKey)
+	}
+	if cfg.ASR.ResourceID != "volc.seedasr.auc" {
+		t.Errorf("ASR.ResourceID = %q, want volc.seedasr.auc", cfg.ASR.ResourceID)
+	}
+	if cfg.ASR.PollIntervalSec != 10 {
+		t.Errorf("ASR.PollIntervalSec = %d, want 10", cfg.ASR.PollIntervalSec)
+	}
 }
 
 func TestLoad_StorageEnvOverride(t *testing.T) {
