@@ -17,6 +17,13 @@ func ConfigFromApp(cfg appconfig.StorageConfig) Config {
 			BucketName:      cfg.OSS.BucketName,
 			Endpoint:        cfg.OSS.Endpoint,
 		},
+		TOS: TOSConfig{
+			AccessKeyID:     cfg.TOS.AccessKeyID,
+			AccessKeySecret: cfg.TOS.AccessKeySecret,
+			BucketName:      cfg.TOS.BucketName,
+			Region:          cfg.TOS.Region,
+			Endpoint:        cfg.TOS.Endpoint,
+		},
 	}
 }
 

@@ -3,7 +3,7 @@ package storage
 const (
 	// defaultPartSizeMB COS 分片大小默认值（单位：MB）。
 	defaultPartSizeMB = 5
-	// defaultPartSizeBytes OSS 分片大小默认值（单位：字节）。
+	// defaultPartSizeBytes OSS / TOS 分片大小默认值（单位：字节）。
 	defaultPartSizeBytes = 5 * 1024 * 1024
 	// defaultConcurrency 并发上传分片的协程数。
 	defaultConcurrency = 3
@@ -13,7 +13,7 @@ const (
 type UploadOptions struct {
 	// PartSizeMB COS 分片大小（MB），小于等于 0 时使用默认值。
 	PartSizeMB int
-	// PartSizeBytes OSS 分片大小（字节），小于等于 0 时使用默认值。
+	// PartSizeBytes OSS / TOS 分片大小（字节），小于等于 0 时使用默认值。
 	PartSizeBytes int64
 	// Concurrency 并发上传分片数，小于等于 0 时使用默认值。
 	Concurrency int
@@ -35,6 +35,11 @@ func (o UploadOptions) ossPartSizeBytes() int64 {
 		return o.PartSizeBytes
 	}
 	return defaultPartSizeBytes
+}
+
+// tosPartSizeBytes 返回 TOS 分片大小（字节），复用 PartSizeBytes 配置项。
+func (o UploadOptions) tosPartSizeBytes() int64 {
+	return o.ossPartSizeBytes()
 }
 
 func (o UploadOptions) concurrency() int {

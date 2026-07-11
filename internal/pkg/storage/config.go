@@ -18,11 +18,21 @@ type OSSConfig struct {
 	Endpoint        string // 访问域名，例如 oss-cn-hangzhou.aliyuncs.com
 }
 
-// Config 多对象存储配置，同时包含 COS 与 OSS。
-// 当两者均配置完整时，优先使用 COS。
+// TOSConfig 火山引擎对象存储（TOS）连接配置。
+type TOSConfig struct {
+	AccessKeyID     string // 火山引擎 AccessKeyId
+	AccessKeySecret string // 火山引擎 AccessKeySecret
+	BucketName      string // 存储桶名称
+	Region          string // 地域，例如 cn-beijing
+	Endpoint        string // 可选，自定义访问域名；未设置时按地域自动生成
+}
+
+// Config 多对象存储配置，同时包含 COS、OSS 与 TOS。
+// 当多个后端均配置完整时，优先级为 COS > OSS > TOS。
 type Config struct {
 	COS COSConfig
 	OSS OSSConfig
+	TOS TOSConfig
 }
 
 // LoadConfigFromEnv 从独立环境变量加载对象存储配置（不经过 config.yaml）。
@@ -38,11 +48,18 @@ type Config struct {
 //   - COS_BUCKET_NAME
 //   - COS_REGION
 //
-// 阿里云 OSS（COS 未配置完整时作为兜底）：
+// 阿里云 OSS（COS 未配置完整时作为次选）：
 //   - OSS_ACCESS_KEY_ID
 //   - OSS_ACCESS_KEY_SECRET
 //   - OSS_BUCKET_NAME
 //   - OSS_ENDPOINT
+//
+// 火山引擎 TOS（COS、OSS 均未配置完整时作为兜底）：
+//   - TOS_ACCESS_KEY_ID
+//   - TOS_ACCESS_KEY_SECRET
+//   - TOS_BUCKET_NAME
+//   - TOS_REGION
+//   - TOS_ENDPOINT（可选）
 func LoadConfigFromEnv() Config {
 	return Config{
 		COS: COSConfig{
@@ -56,6 +73,13 @@ func LoadConfigFromEnv() Config {
 			AccessKeySecret: os.Getenv("OSS_ACCESS_KEY_SECRET"),
 			BucketName:      os.Getenv("OSS_BUCKET_NAME"),
 			Endpoint:        os.Getenv("OSS_ENDPOINT"),
+		},
+		TOS: TOSConfig{
+			AccessKeyID:     os.Getenv("TOS_ACCESS_KEY_ID"),
+			AccessKeySecret: os.Getenv("TOS_ACCESS_KEY_SECRET"),
+			BucketName:      os.Getenv("TOS_BUCKET_NAME"),
+			Region:          os.Getenv("TOS_REGION"),
+			Endpoint:        os.Getenv("TOS_ENDPOINT"),
 		},
 	}
 }
@@ -74,4 +98,12 @@ func isOSSConfigured(cfg OSSConfig) bool {
 		cfg.AccessKeySecret != "" &&
 		cfg.BucketName != "" &&
 		cfg.Endpoint != ""
+}
+
+// isTOSConfigured 判断 TOS 配置是否完整可用。
+func isTOSConfigured(cfg TOSConfig) bool {
+	return cfg.AccessKeyID != "" &&
+		cfg.AccessKeySecret != "" &&
+		cfg.BucketName != "" &&
+		cfg.Region != ""
 }

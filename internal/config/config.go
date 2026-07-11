@@ -58,10 +58,11 @@ type JWTConfig struct {
 	ExpiresIn int    `mapstructure:"expires_in"` // 过期时间（秒）
 }
 
-// StorageConfig 对象存储配置，COS 与 OSS 同时配置完整时优先使用 COS。
+// StorageConfig 对象存储配置，多个后端同时配置完整时优先级为 COS > OSS > TOS。
 type StorageConfig struct {
 	COS COSStorageConfig `mapstructure:"cos"`
 	OSS OSSStorageConfig `mapstructure:"oss"`
+	TOS TOSStorageConfig `mapstructure:"tos"`
 }
 
 // COSStorageConfig 腾讯云对象存储（COS）连接配置。
@@ -77,6 +78,15 @@ type OSSStorageConfig struct {
 	AccessKeyID     string `mapstructure:"access_key_id"`
 	AccessKeySecret string `mapstructure:"access_key_secret"`
 	BucketName      string `mapstructure:"bucket_name"`
+	Endpoint        string `mapstructure:"endpoint"`
+}
+
+// TOSStorageConfig 火山引擎对象存储（TOS）连接配置。
+type TOSStorageConfig struct {
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	AccessKeySecret string `mapstructure:"access_key_secret"`
+	BucketName      string `mapstructure:"bucket_name"`
+	Region          string `mapstructure:"region"`
 	Endpoint        string `mapstructure:"endpoint"`
 }
 
@@ -226,5 +236,20 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_STORAGE_OSS_ENDPOINT"); ok {
 		cfg.Storage.OSS.Endpoint = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_TOS_ACCESS_KEY_ID"); ok {
+		cfg.Storage.TOS.AccessKeyID = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_TOS_ACCESS_KEY_SECRET"); ok {
+		cfg.Storage.TOS.AccessKeySecret = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_TOS_BUCKET_NAME"); ok {
+		cfg.Storage.TOS.BucketName = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_TOS_REGION"); ok {
+		cfg.Storage.TOS.Region = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_TOS_ENDPOINT"); ok {
+		cfg.Storage.TOS.Endpoint = val
 	}
 }

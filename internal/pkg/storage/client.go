@@ -12,7 +12,7 @@ type Client struct {
 }
 
 // NewClient 根据配置创建对象存储客户端。
-// 当 COS 与 OSS 同时配置完整时，优先使用 COS。
+// 当 COS、OSS、TOS 同时配置完整时，优先级为 COS > OSS > TOS。
 func NewClient(cfg Config, opts ...UploadOptions) (*Client, error) {
 	uploadOpts := UploadOptions{}
 	if len(opts) > 0 {
@@ -26,7 +26,7 @@ func NewClient(cfg Config, opts ...UploadOptions) (*Client, error) {
 	return &Client{provider: provider}, nil
 }
 
-// NewClientFromEnv 从 COS_* / OSS_* 环境变量加载配置并创建客户端。
+// NewClientFromEnv 从 COS_* / OSS_* / TOS_* 环境变量加载配置并创建客户端。
 // 应用内请优先使用 config.Load 与 NewClientFromAppConfig。
 func NewClientFromEnv(opts ...UploadOptions) (*Client, error) {
 	return NewClient(LoadConfigFromEnv(), opts...)

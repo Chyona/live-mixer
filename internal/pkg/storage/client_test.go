@@ -139,6 +139,9 @@ func TestUploadOptions_Defaults(t *testing.T) {
 	if got := opts.ossPartSizeBytes(); got != defaultPartSizeBytes {
 		t.Errorf("ossPartSizeBytes() = %d, want %d", got, defaultPartSizeBytes)
 	}
+	if got := opts.tosPartSizeBytes(); got != defaultPartSizeBytes {
+		t.Errorf("tosPartSizeBytes() = %d, want %d", got, defaultPartSizeBytes)
+	}
 	if got := opts.concurrency(); got != defaultConcurrency {
 		t.Errorf("concurrency() = %d, want %d", got, defaultConcurrency)
 	}
@@ -156,6 +159,9 @@ func TestUploadOptions_CustomValues(t *testing.T) {
 	}
 	if got := opts.ossPartSizeBytes(); got != 10*1024*1024 {
 		t.Errorf("ossPartSizeBytes() = %d, want %d", got, 10*1024*1024)
+	}
+	if got := opts.tosPartSizeBytes(); got != 10*1024*1024 {
+		t.Errorf("tosPartSizeBytes() = %d, want %d", got, 10*1024*1024)
 	}
 	if got := opts.concurrency(); got != 5 {
 		t.Errorf("concurrency() = %d, want 5", got)

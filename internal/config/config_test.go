@@ -18,6 +18,9 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.Storage.OSS.Endpoint != "" {
 		t.Errorf("OSS.Endpoint = %q, want empty default", cfg.Storage.OSS.Endpoint)
 	}
+	if cfg.Storage.TOS.Region != "" {
+		t.Errorf("TOS.Region = %q, want empty default", cfg.Storage.TOS.Region)
+	}
 }
 
 func TestLoad_StorageEnvOverride(t *testing.T) {
@@ -64,5 +67,38 @@ func TestLoad_StorageCOSEnvOverride(t *testing.T) {
 	}
 	if cfg.Storage.COS.Region != "ap-beijing" {
 		t.Errorf("COS.Region = %q, want ap-beijing", cfg.Storage.COS.Region)
+	}
+}
+
+func TestLoad_StorageTOSEnvOverride(t *testing.T) {
+	for _, key := range []string{
+		"APP_STORAGE_TOS_ACCESS_KEY_ID",
+		"APP_STORAGE_TOS_ACCESS_KEY_SECRET",
+		"APP_STORAGE_TOS_BUCKET_NAME",
+		"APP_STORAGE_TOS_REGION",
+		"APP_STORAGE_TOS_ENDPOINT",
+	} {
+		os.Unsetenv(key)
+	}
+
+	t.Setenv("APP_STORAGE_TOS_ACCESS_KEY_ID", "tos-id")
+	t.Setenv("APP_STORAGE_TOS_ACCESS_KEY_SECRET", "tos-secret")
+	t.Setenv("APP_STORAGE_TOS_BUCKET_NAME", "tos-bucket")
+	t.Setenv("APP_STORAGE_TOS_REGION", "cn-shanghai")
+	t.Setenv("APP_STORAGE_TOS_ENDPOINT", "tos-cn-shanghai.volces.com")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Storage.TOS.AccessKeyID != "tos-id" {
+		t.Errorf("TOS.AccessKeyID = %q, want tos-id", cfg.Storage.TOS.AccessKeyID)
+	}
+	if cfg.Storage.TOS.Region != "cn-shanghai" {
+		t.Errorf("TOS.Region = %q, want cn-shanghai", cfg.Storage.TOS.Region)
+	}
+	if cfg.Storage.TOS.Endpoint != "tos-cn-shanghai.volces.com" {
+		t.Errorf("TOS.Endpoint = %q, want tos-cn-shanghai.volces.com", cfg.Storage.TOS.Endpoint)
 	}
 }
