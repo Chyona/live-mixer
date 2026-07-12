@@ -45,3 +45,11 @@ storage:
     bucket_name: ""
     region: ""                 # 例如 cn-beijing
     endpoint: ""               # 可选，例如 tos-cn-beijing.volces.com
+
+# 豆包语音识别（ASR）；生产环境可通过 APP_ASR_API_KEY 覆盖 api_key
+asr:
+  api_key: "616b0b96-0716-4fa5-ba1d-d9d1e87914f7"
+  base_url: "https://openspeech.bytedance.com/api/v3/auc/bigmodel"
+  resource_id: "volc.seedasr.auc"
+  poll_interval_sec: 10        # 轮询间隔（秒）
+  max_polls: 360               # 最大轮询次数
