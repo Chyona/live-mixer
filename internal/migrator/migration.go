@@ -14,6 +14,11 @@ func InitSchema(db *gorm.DB, logger *zap.Logger) error {
 	logger.Info("开始初始化数据库表结构...")
 	err := db.AutoMigrate(
 		&model.Account{},
+		&model.LiveMaterial{},
+		&model.EditProject{},
+		&model.EditProjectClip{},
+		&model.LLMSystemPrompt{},
+		&model.Task{},
 	)
 	if err != nil {
 		return fmt.Errorf("数据库表初始化失败: %w", err)
