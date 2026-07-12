@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS live_material (
     asr_error_msg   TEXT,
     asr_started_at  TIMESTAMPTZ,
     asr_updated_at  TIMESTAMPTZ,
+    ext             VARCHAR(1024),
     created_by      BIGINT        NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
@@ -69,6 +70,7 @@ COMMENT ON COLUMN live_material.asr_progress IS 'ASR 识别进度（0-100）';
 COMMENT ON COLUMN live_material.asr_error_msg IS 'ASR 识别失败原因';
 COMMENT ON COLUMN live_material.asr_started_at IS 'ASR 识别开始时间';
 COMMENT ON COLUMN live_material.asr_updated_at IS 'ASR 识别状态最后更新时间（用于检测长时间卡死任务）';
+COMMENT ON COLUMN live_material.ext IS '扩展字段';
 COMMENT ON COLUMN live_material.created_by IS '添加人（账号 ID）';
 COMMENT ON COLUMN live_material.created_at IS '添加时间';
 COMMENT ON COLUMN live_material.updated_at IS '最后更新时间';
@@ -86,6 +88,7 @@ CREATE TABLE IF NOT EXISTS video_project (
     clips1          JSONB       NOT NULL DEFAULT '[]',
     draft_url       VARCHAR(1024),
     video_url       VARCHAR(1024),
+    ext             VARCHAR(1024),
     created_by      BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -100,6 +103,7 @@ COMMENT ON COLUMN video_project.clips0 IS '视频切片列表（毫秒），格�
 COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片列表（毫秒），格式：[{"text":"...","start_time":0,"end_time":10,"words":[{"text":"...","start_time":0,"end_time":160}]}]';
 COMMENT ON COLUMN video_project.draft_url IS '剪映草稿 URL';
 COMMENT ON COLUMN video_project.video_url IS '视频地址 URL';
+COMMENT ON COLUMN video_project.ext IS '扩展字段';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
 COMMENT ON COLUMN video_project.updated_at IS '最后编辑时间';
@@ -113,6 +117,7 @@ CREATE TABLE IF NOT EXISTS llm_system_prompt (
     name         VARCHAR(128) NOT NULL,
     content      TEXT         NOT NULL,
     remark       VARCHAR(256),
+    ext          VARCHAR(1024),
     is_editable  SMALLINT     NOT NULL DEFAULT 1,
     created_by   BIGINT       NOT NULL REFERENCES account (id),
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -125,6 +130,7 @@ COMMENT ON COLUMN llm_system_prompt.id IS '主键';
 COMMENT ON COLUMN llm_system_prompt.name IS '提示词名称';
 COMMENT ON COLUMN llm_system_prompt.content IS '提示词内容';
 COMMENT ON COLUMN llm_system_prompt.remark IS '备注';
+COMMENT ON COLUMN llm_system_prompt.ext IS '扩展字段';
 COMMENT ON COLUMN llm_system_prompt.is_editable IS '是否允许修改：0否 1是';
 COMMENT ON COLUMN llm_system_prompt.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN llm_system_prompt.created_at IS '创建时间';
@@ -140,6 +146,7 @@ CREATE TABLE IF NOT EXISTS task (
     sys_prompt             TEXT,
     usr_prompt             TEXT,
     error_message          TEXT,
+    ext                    VARCHAR(1024),
     created_by             BIGINT      NOT NULL REFERENCES account (id),
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -156,6 +163,7 @@ COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执�
 COMMENT ON COLUMN task.sys_prompt IS '系统提示词';
 COMMENT ON COLUMN task.usr_prompt IS '用户提示词';
 COMMENT ON COLUMN task.error_message IS '失败原因';
+COMMENT ON COLUMN task.ext IS '扩展字段';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';
 COMMENT ON COLUMN task.created_at IS '创建时间';
 COMMENT ON COLUMN task.updated_at IS '更新时间';

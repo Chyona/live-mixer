@@ -27,6 +27,7 @@ type Task struct {
 	SysPrompt    string     `gorm:"column:sys_prompt;type:text;comment:系统提示词" json:"sys_prompt,omitempty"`
 	UsrPrompt    string     `gorm:"column:usr_prompt;type:text;comment:用户提示词" json:"usr_prompt,omitempty"`
 	ErrorMessage string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
+	Ext          string     `gorm:"size:1024;comment:扩展字段" json:"ext"`
 	CreatedBy    uint       `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
 	CreatedAt    time.Time  `gorm:"comment:创建时间" json:"created_at"`
 	UpdatedAt    time.Time  `gorm:"comment:更新时间" json:"updated_at"`
