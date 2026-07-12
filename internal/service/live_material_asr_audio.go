@@ -16,6 +16,10 @@ import (
 const (
 	// defaultASRAudioObjectPrefix TOS 上 ASR 临时音频的对象键前缀（与项目桶目录 video_editing/ 对齐）。
 	defaultASRAudioObjectPrefix = "video_editing/asr"
+	// defaultTempDirName 进程工作目录下的临时文件根目录名。
+	defaultTempDirName = "temp"
+	// defaultASRWorkSubDir ASR 预处理文件在 temp 下的子目录。
+	defaultASRWorkSubDir = "asr"
 )
 
 // FileDownloader 下载远程文件到本地的抽象，便于单元测试注入 mock。
@@ -87,9 +91,9 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		return "", nil, fmt.Errorf("对象存储未配置，无法上传 ASR 音频")
 	}
 
-	workDir, err := os.MkdirTemp(p.resolveWorkDir(), fmt.Sprintf("material-%d-", materialID))
+	workDir, err := p.createMaterialWorkDir(materialID)
 	if err != nil {
-		return "", nil, fmt.Errorf("创建临时工作目录失败: %w", err)
+		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(workDir) }
 
@@ -125,11 +129,49 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	return audioURL, cleanup, nil
 }
 
-func (p *liveMaterialASRAudioPreparer) resolveWorkDir() string {
+func (p *liveMaterialASRAudioPreparer) resolveWorkDir() (string, error) {
 	if strings.TrimSpace(p.workDir) != "" {
-		return p.workDir
+		return p.workDir, nil
 	}
-	return filepath.Join(os.TempDir(), "live-mixer", "asr")
+	return defaultASRWorkDir()
+}
+
+// processBaseDir 返回当前进程工作目录；获取失败时回退为可执行文件所在目录。
+func processBaseDir() (string, error) {
+	if wd, err := os.Getwd(); err == nil {
+		return wd, nil
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("获取进程目录失败: %w", err)
+	}
+	return filepath.Dir(execPath), nil
+}
+
+// defaultASRWorkDir 返回进程目录下 temp/asr 路径（不存在时由 createMaterialWorkDir 创建）。
+func defaultASRWorkDir() (string, error) {
+	base, err := processBaseDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, defaultTempDirName, defaultASRWorkSubDir), nil
+}
+
+// createMaterialWorkDir 在 workDir 下创建素材专属临时目录。
+// Windows 上 os.MkdirTemp 要求父目录已存在，因此需先 MkdirAll 根目录。
+func (p *liveMaterialASRAudioPreparer) createMaterialWorkDir(materialID uint) (string, error) {
+	baseDir, err := p.resolveWorkDir()
+	if err != nil {
+		return "", fmt.Errorf("解析 ASR 工作目录失败: %w", err)
+	}
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return "", fmt.Errorf("创建 ASR 工作根目录失败: %w", err)
+	}
+	workDir, err := os.MkdirTemp(baseDir, fmt.Sprintf("material-%d-", materialID))
+	if err != nil {
+		return "", fmt.Errorf("创建临时工作目录失败: %w", err)
+	}
+	return workDir, nil
 }
 
 // guessSourceExtension 根据 URL 路径猜测源文件扩展名，便于 ffmpeg 识别容器格式。

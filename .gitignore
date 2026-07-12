@@ -3,6 +3,7 @@ docker/.env
 
 # 运行时产物
 logs/
+temp/
 *.log
 bin/
 webserver

@@ -162,8 +162,55 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 
 func TestLiveMaterialASRAudioPreparer_WorkDirFallback(t *testing.T) {
 	p := NewLiveMaterialASRAudioPreparer(nil, nil, &mockObjectUploader{}, "").(*liveMaterialASRAudioPreparer)
-	got := p.resolveWorkDir()
-	if !strings.Contains(got, filepath.Join("live-mixer", "asr")) {
-		t.Errorf("work dir = %q, want live-mixer/asr under temp", got)
+	got, err := p.resolveWorkDir()
+	if err != nil {
+		t.Fatalf("resolveWorkDir() error = %v", err)
 	}
+	wantSuffix := filepath.Join(defaultTempDirName, defaultASRWorkSubDir)
+	if !strings.HasSuffix(got, wantSuffix) {
+		t.Errorf("work dir = %q, want suffix %q", got, wantSuffix)
+	}
+}
+
+func TestDefaultASRWorkDir_UnderProcessDir(t *testing.T) {
+	base, err := processBaseDir()
+	if err != nil {
+		t.Fatalf("processBaseDir() error = %v", err)
+	}
+	got, err := defaultASRWorkDir()
+	if err != nil {
+		t.Fatalf("defaultASRWorkDir() error = %v", err)
+	}
+	want := filepath.Join(base, defaultTempDirName, defaultASRWorkSubDir)
+	if got != want {
+		t.Errorf("defaultASRWorkDir() = %q, want %q", got, want)
+	}
+}
+
+// TestLiveMaterialASRAudioPreparer_Prepare_DefaultWorkDir 验证未指定 workDir 时自动创建嵌套临时目录（Windows 兼容）。
+func TestLiveMaterialASRAudioPreparer_Prepare_DefaultWorkDir(t *testing.T) {
+	preparer := NewLiveMaterialASRAudioPreparer(
+		&mockFileDownloader{
+			downloadFn: func(url, dest string) (string, error) {
+				return dest, os.WriteFile(dest, []byte("fake"), 0644)
+			},
+		},
+		&mockAudioConverter{
+			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+				return os.WriteFile(outputPath, []byte("wav"), 0644)
+			},
+		},
+		&mockObjectUploader{
+			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
+				return "https://bucket.example.com/" + objectKey, nil
+			},
+		},
+		"", // 使用进程目录下 temp/asr
+	)
+
+	_, cleanup, err := preparer.Prepare(context.Background(), 99, "https://example.com/live.mp4", nil)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	defer cleanup()
 }
