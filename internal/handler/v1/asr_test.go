@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"live-mixer/internal/pkg/asr"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,6 +18,10 @@ type mockASRService struct {
 }
 
 func (m *mockASRService) Transcribe(ctx context.Context, audioURL string) (json.RawMessage, error) {
+	return m.transcribeFn(ctx, audioURL)
+}
+
+func (m *mockASRService) TranscribeWithProgress(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
 	return m.transcribeFn(ctx, audioURL)
 }
 

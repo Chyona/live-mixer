@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	v1handler "live-mixer/internal/handler/v1"
+	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/service"
 	jwtpkg "live-mixer/pkg/jwt"
 
@@ -107,6 +108,10 @@ func TestRegisterRoutes_ASRPublic(t *testing.T) {
 type routeMockASRService struct{}
 
 func (routeMockASRService) Transcribe(_ context.Context, _ string) (json.RawMessage, error) {
+	return json.RawMessage(`{"result":{"text":"ok"}}`), nil
+}
+
+func (routeMockASRService) TranscribeWithProgress(_ context.Context, _ string, _ asr.ProgressCallback) (json.RawMessage, error) {
 	return json.RawMessage(`{"result":{"text":"ok"}}`), nil
 }
 

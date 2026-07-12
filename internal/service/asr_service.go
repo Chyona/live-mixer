@@ -12,11 +12,13 @@ import (
 // ASRTranscriber 豆包 ASR 转写能力抽象，便于单元测试注入 mock。
 type ASRTranscriber interface {
 	Transcribe(ctx context.Context, audioURL string) (json.RawMessage, error)
+	TranscribeWithProgress(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error)
 }
 
 // ASRService 语音识别业务接口。
 type ASRService interface {
 	Transcribe(ctx context.Context, audioURL string) (json.RawMessage, error)
+	TranscribeWithProgress(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error)
 }
 
 type asrService struct {
@@ -35,8 +37,13 @@ func NewASRServiceFromConfig(cfg asr.Config) ASRService {
 
 // Transcribe 同步转写公网音频 URL，返回豆包 ASR 完整 JSON 结果。
 func (s *asrService) Transcribe(ctx context.Context, audioURL string) (json.RawMessage, error) {
+	return s.TranscribeWithProgress(ctx, audioURL, nil)
+}
+
+// TranscribeWithProgress 同步转写并在轮询时回调估算进度。
+func (s *asrService) TranscribeWithProgress(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
 	if s.transcriber == nil {
 		return nil, fmt.Errorf("ASR 服务未初始化")
 	}
-	return s.transcriber.Transcribe(ctx, audioURL)
+	return s.transcriber.TranscribeWithProgress(ctx, audioURL, onProgress)
 }

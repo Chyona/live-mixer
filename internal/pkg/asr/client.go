@@ -85,8 +85,16 @@ type submitPayload struct {
 	} `json:"request"`
 }
 
+// ProgressCallback 轮询进度回调，progress 取值 5~95。
+type ProgressCallback func(progress int)
+
 // Transcribe 同步转写：提交 audioURL 对应任务并轮询，返回豆包 ASR 完整 JSON 结果。
 func (c *Client) Transcribe(ctx context.Context, audioURL string) (json.RawMessage, error) {
+	return c.TranscribeWithProgress(ctx, audioURL, nil)
+}
+
+// TranscribeWithProgress 同步转写并在轮询时回调估算进度。
+func (c *Client) TranscribeWithProgress(ctx context.Context, audioURL string, onProgress ProgressCallback) (json.RawMessage, error) {
 	if strings.TrimSpace(c.cfg.APIKey) == "" {
 		return nil, fmt.Errorf("ASR API Key 未配置")
 	}
@@ -100,7 +108,7 @@ func (c *Client) Transcribe(ctx context.Context, audioURL string) (json.RawMessa
 	if err := c.submit(ctx, taskID, audioURL, format); err != nil {
 		return nil, err
 	}
-	return c.poll(ctx, taskID)
+	return c.poll(ctx, taskID, onProgress)
 }
 
 // submit 向豆包 ASR 提交异步识别任务。
@@ -142,8 +150,20 @@ func (c *Client) submit(ctx context.Context, taskID, audioURL, format string) er
 	return nil
 }
 
+// calcPollProgress 根据轮询次数估算进度（5~95）。
+func calcPollProgress(pollIndex, maxPolls int) int {
+	if maxPolls <= 0 {
+		return 5
+	}
+	progress := 5 + pollIndex*90/maxPolls
+	if progress > 95 {
+		return 95
+	}
+	return progress
+}
+
 // poll 轮询 ASR 任务状态，直至成功或超时/失败。
-func (c *Client) poll(ctx context.Context, taskID string) (json.RawMessage, error) {
+func (c *Client) poll(ctx context.Context, taskID string, onProgress ProgressCallback) (json.RawMessage, error) {
 	for i := 0; i < c.cfg.MaxPolls; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -153,6 +173,10 @@ func (c *Client) poll(ctx context.Context, taskID string) (json.RawMessage, erro
 			if err := sleepWithContext(ctx, c.cfg.PollInterval); err != nil {
 				return nil, err
 			}
+		}
+
+		if onProgress != nil {
+			onProgress(calcPollProgress(i, c.cfg.MaxPolls))
 		}
 
 		result, done, err := c.queryOnce(ctx, taskID)

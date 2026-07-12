@@ -7,10 +7,14 @@ import (
 	"strings"
 
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
 )
+
+// ErrUnsupportedMediaFormat 创建素材时不支持的音视频格式。
+var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持: mp3, wav, mp4, ogg, raw")
 
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
@@ -26,11 +30,12 @@ type LiveMaterialService interface {
 
 type liveMaterialService struct {
 	liveMaterialRepo repository.LiveMaterialRepository
+	asrWorker        LiveMaterialASRWorker
 }
 
 // NewLiveMaterialService 创建直播素材业务服务实例。
-func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository) LiveMaterialService {
-	return &liveMaterialService{liveMaterialRepo: liveMaterialRepo}
+func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository, asrWorker LiveMaterialASRWorker) LiveMaterialService {
+	return &liveMaterialService{liveMaterialRepo: liveMaterialRepo, asrWorker: asrWorker}
 }
 
 func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
@@ -42,6 +47,12 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 	}
 	if liveURL == "" {
 		return nil, errors.New("直播链接不能为空")
+	}
+	if _, err := asr.DetectFormat(liveURL); err != nil {
+		if strings.Contains(err.Error(), "不支持的") {
+			return nil, ErrUnsupportedMediaFormat
+		}
+		return nil, err
 	}
 
 	material := &model.LiveMaterial{
@@ -57,6 +68,9 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 	}
 	if err := s.liveMaterialRepo.Create(ctx, material); err != nil {
 		return nil, err
+	}
+	if s.asrWorker != nil {
+		s.asrWorker.Enqueue(material.ID)
 	}
 	return material, nil
 }

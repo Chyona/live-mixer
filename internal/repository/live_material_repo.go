@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"live-mixer/internal/model"
 
@@ -17,6 +18,14 @@ type LiveMaterialRepository interface {
 	GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
+	// UpdateASRProcessing 标记 ASR 开始识别。
+	UpdateASRProcessing(ctx context.Context, id uint) error
+	// UpdateASRProgress 更新 ASR 识别进度。
+	UpdateASRProgress(ctx context.Context, id uint, progress int16) error
+	// UpdateASRCompleted 写入 ASR 成功结果。
+	UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error
+	// UpdateASRFailed 标记 ASR 识别失败。
+	UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
 	// List 分页查询直播素材列表，按 id 倒序，不含 live_asr 字段。
 	List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
 }
@@ -49,6 +58,57 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 		Model(material).
 		Select("name", "remark").
 		Updates(material).Error
+}
+
+func (r *liveMaterialRepository) UpdateASRProcessing(ctx context.Context, id uint) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).
+		Model(&model.LiveMaterial{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"asr_status":     model.ASRStatusProcessing,
+			"asr_progress":   int16(5),
+			"asr_error_msg":  "",
+			"asr_started_at": now,
+			"asr_updated_at": now,
+		}).Error
+}
+
+func (r *liveMaterialRepository) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
+	return r.db.WithContext(ctx).
+		Model(&model.LiveMaterial{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"asr_progress":   progress,
+			"asr_updated_at": time.Now(),
+		}).Error
+}
+
+func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).
+		Model(&model.LiveMaterial{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"asr_status":     model.ASRStatusCompleted,
+			"asr_progress":   int16(100),
+			"live_asr":       liveASR,
+			"duration":       duration,
+			"asr_error_msg":  "",
+			"asr_updated_at": now,
+		}).Error
+}
+
+func (r *liveMaterialRepository) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.LiveMaterial{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"asr_status":     model.ASRStatusFailed,
+			"asr_progress":   progress,
+			"asr_error_msg":  errorMsg,
+			"asr_updated_at": time.Now(),
+		}).Error
 }
 
 func (r *liveMaterialRepository) List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {

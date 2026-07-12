@@ -63,10 +63,21 @@ func (m *mockLiveMaterialRepo) List(ctx context.Context, offset, limit int) ([]m
 	return nil, 0, nil
 }
 
+func (m *mockLiveMaterialRepo) UpdateASRProcessing(ctx context.Context, id uint) error { return nil }
+func (m *mockLiveMaterialRepo) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
+	return nil
+}
+func (m *mockLiveMaterialRepo) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error {
+	return nil
+}
+func (m *mockLiveMaterialRepo) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+	return nil
+}
+
 // TestLiveMaterialService_Create_Success 验证创建时写入默认值且创建人正确。
 func TestLiveMaterialService_Create_Success(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
-	svc := NewLiveMaterialService(repo)
+	svc := NewLiveMaterialService(repo, nil)
 
 	material, err := svc.Create(context.Background(), 2, "  测试素材  ", " https://example.com/live.mp4 ", "备注", "")
 	if err != nil {
@@ -98,7 +109,7 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 
 // TestLiveMaterialService_Create_EmptyName 验证名称为纯空格时拒绝创建。
 func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
-	svc := NewLiveMaterialService(&mockLiveMaterialRepo{})
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
 	_, err := svc.Create(context.Background(), 1, "   ", "https://example.com/live.mp4", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty name")
@@ -110,7 +121,7 @@ func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 
 // TestLiveMaterialService_Create_EmptyLiveURL 验证直播链接为空时拒绝创建。
 func TestLiveMaterialService_Create_EmptyLiveURL(t *testing.T) {
-	svc := NewLiveMaterialService(&mockLiveMaterialRepo{})
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
 	_, err := svc.Create(context.Background(), 1, "素材", "  ", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty live_url")
@@ -132,7 +143,7 @@ func TestLiveMaterialService_Update_Success(t *testing.T) {
 			},
 		},
 	}
-	svc := NewLiveMaterialService(repo)
+	svc := NewLiveMaterialService(repo, nil)
 
 	material, err := svc.Update(context.Background(), 1, "  新名称  ", "新备注")
 	if err != nil {
@@ -153,7 +164,7 @@ func TestLiveMaterialService_Update_Success(t *testing.T) {
 
 // TestLiveMaterialService_Update_NotFound 验证素材不存在时返回错误。
 func TestLiveMaterialService_Update_NotFound(t *testing.T) {
-	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}})
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}}, nil)
 	_, err := svc.Update(context.Background(), 99, "名称", "备注")
 	if err == nil {
 		t.Fatal("expected error for not found")
@@ -170,7 +181,7 @@ func TestLiveMaterialService_Update_EmptyName(t *testing.T) {
 			1: {ID: 1, Name: "旧名称", LiveURL: "https://example.com/a.mp4"},
 		},
 	}
-	svc := NewLiveMaterialService(repo)
+	svc := NewLiveMaterialService(repo, nil)
 
 	_, err := svc.Update(context.Background(), 1, "   ", "备注")
 	if err == nil {
@@ -188,7 +199,7 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 			return errors.New("db down")
 		},
 	}
-	svc := NewLiveMaterialService(repo)
+	svc := NewLiveMaterialService(repo, nil)
 	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "")
 	if err == nil || err.Error() != "db down" {
 		t.Errorf("error = %v, want db down", err)
@@ -207,7 +218,7 @@ func TestLiveMaterialService_List_Pagination(t *testing.T) {
 			}, 5, nil
 		},
 	}
-	svc := NewLiveMaterialService(repo)
+	svc := NewLiveMaterialService(repo, nil)
 
 	materials, total, err := svc.List(context.Background(), 2, 20)
 	if err != nil {
@@ -235,7 +246,7 @@ func TestLiveMaterialService_Get_Success(t *testing.T) {
 			},
 		},
 	}
-	svc := NewLiveMaterialService(repo)
+	svc := NewLiveMaterialService(repo, nil)
 
 	material, err := svc.Get(context.Background(), 1)
 	if err != nil {
@@ -249,9 +260,51 @@ func TestLiveMaterialService_Get_Success(t *testing.T) {
 	}
 }
 
+// TestLiveMaterialService_Create_UnsupportedFormat 验证不支持的媒体格式拒绝创建。
+func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
+	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/audio.flac", "", "")
+	if err == nil {
+		t.Fatal("expected error for unsupported format")
+	}
+	if !errors.Is(err, ErrUnsupportedMediaFormat) {
+		t.Errorf("error = %v, want ErrUnsupportedMediaFormat", err)
+	}
+}
+
+// TestLiveMaterialService_Create_EnqueuesASR 验证创建成功后入队 ASR。
+func TestLiveMaterialService_Create_EnqueuesASR(t *testing.T) {
+	var enqueued uint
+	worker := &mockASRWorker{
+		enqueueFn: func(materialID uint) { enqueued = materialID },
+	}
+	repo := &mockLiveMaterialRepo{}
+	svc := NewLiveMaterialService(repo, worker)
+
+	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mp4", "", "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if enqueued != material.ID {
+		t.Errorf("enqueued = %d, want %d", enqueued, material.ID)
+	}
+}
+
+type mockASRWorker struct {
+	enqueueFn func(materialID uint)
+}
+
+func (m *mockASRWorker) Enqueue(materialID uint) {
+	if m.enqueueFn != nil {
+		m.enqueueFn(materialID)
+	}
+}
+func (m *mockASRWorker) Process(ctx context.Context, materialID uint) error { return nil }
+func (m *mockASRWorker) Start(ctx context.Context)                             {}
+
 // TestLiveMaterialService_Get_NotFound 验证素材不存在时返回错误。
 func TestLiveMaterialService_Get_NotFound(t *testing.T) {
-	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}})
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}}, nil)
 	_, err := svc.Get(context.Background(), 99)
 	if err == nil {
 		t.Fatal("expected error for not found")

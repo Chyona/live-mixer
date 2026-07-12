@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -51,7 +52,12 @@ func main() {
 	accountService := service.NewAccountService(accountRepo)
 	authService := service.NewAuthService(accountRepo, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
-	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo)
+	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(liveMaterialRepo, asrService, logger)
+	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	liveMaterialASRWorker.Start(ctx)
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
 	v1ASRHandler := v1handler.NewASRHandler(asrService)

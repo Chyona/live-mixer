@@ -151,6 +151,72 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 	}
 }
 
+// TestLiveMaterialRepository_UpdateASRStates 验证 ASR 状态更新方法。
+func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name:        "ASR素材",
+		LiveURL:     "https://example.com/live.mp4",
+		LiveASR:     "{}",
+		ASRStatus:   model.ASRStatusPending,
+		ASRProgress: 0,
+		CreatedBy:   1,
+	}
+	if err := repo.Create(ctx, material); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := repo.UpdateASRProcessing(ctx, material.ID); err != nil {
+		t.Fatalf("UpdateASRProcessing() error = %v", err)
+	}
+	got, _ := repo.GetByID(ctx, material.ID)
+	if got.ASRStatus != model.ASRStatusProcessing || got.ASRProgress != 5 {
+		t.Errorf("processing state = %s/%d, want processing/5", got.ASRStatus, got.ASRProgress)
+	}
+	if got.ASRStartedAt == nil {
+		t.Error("asr_started_at should be set")
+	}
+
+	if err := repo.UpdateASRProgress(ctx, material.ID, 50); err != nil {
+		t.Fatalf("UpdateASRProgress() error = %v", err)
+	}
+	got, _ = repo.GetByID(ctx, material.ID)
+	if got.ASRProgress != 50 {
+		t.Errorf("ASRProgress = %d, want 50", got.ASRProgress)
+	}
+
+	asrJSON := `{"audio_info":{"duration":3000},"result":{"text":"ok"}}`
+	if err := repo.UpdateASRCompleted(ctx, material.ID, asrJSON, 3000); err != nil {
+		t.Fatalf("UpdateASRCompleted() error = %v", err)
+	}
+	got, _ = repo.GetByID(ctx, material.ID)
+	if got.ASRStatus != model.ASRStatusCompleted || got.ASRProgress != 100 {
+		t.Errorf("completed state = %s/%d", got.ASRStatus, got.ASRProgress)
+	}
+	if got.Duration != 3000 {
+		t.Errorf("Duration = %d, want 3000", got.Duration)
+	}
+	if got.LiveASR != asrJSON {
+		t.Errorf("LiveASR = %q", got.LiveASR)
+	}
+
+	material2 := &model.LiveMaterial{
+		Name: "失败素材", LiveURL: "https://example.com/a.mp3",
+		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	_ = repo.Create(ctx, material2)
+	if err := repo.UpdateASRFailed(ctx, material2.ID, 20, "网络错误"); err != nil {
+		t.Fatalf("UpdateASRFailed() error = %v", err)
+	}
+	got2, _ := repo.GetByID(ctx, material2.ID)
+	if got2.ASRStatus != model.ASRStatusFailed || got2.ASRErrorMsg != "网络错误" {
+		t.Errorf("failed state = %+v", got2)
+	}
+}
+
 // TestLiveMaterialRepository_List_Empty 验证空表时分页结果正确。
 func TestLiveMaterialRepository_List_Empty(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)

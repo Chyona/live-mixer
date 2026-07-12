@@ -179,6 +179,22 @@ func TestClient_Transcribe_ContextCanceled(t *testing.T) {
 	}
 }
 
+func TestCalcPollProgress(t *testing.T) {
+	if got := calcPollProgress(0, 360); got != 5 {
+		t.Errorf("progress(0) = %d, want 5", got)
+	}
+	if got := calcPollProgress(360, 360); got != 95 {
+		t.Errorf("progress(360) = %d, want 95", got)
+	}
+}
+
+func TestParseDurationMs(t *testing.T) {
+	raw := json.RawMessage(`{"audio_info":{"duration":1500}}`)
+	if got := ParseDurationMs(raw); got != 1500 {
+		t.Errorf("ParseDurationMs() = %d, want 1500", got)
+	}
+}
+
 func TestNewClient_Defaults(t *testing.T) {
 	client := NewClient(Config{APIKey: "k"})
 	if client.cfg.BaseURL != DefaultBaseURL {

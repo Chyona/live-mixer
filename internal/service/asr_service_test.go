@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"live-mixer/internal/pkg/asr"
 )
 
 type mockASRTranscriber struct {
@@ -11,6 +13,13 @@ type mockASRTranscriber struct {
 }
 
 func (m *mockASRTranscriber) Transcribe(ctx context.Context, audioURL string) (json.RawMessage, error) {
+	return m.transcribeFn(ctx, audioURL)
+}
+
+func (m *mockASRTranscriber) TranscribeWithProgress(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
+	if onProgress != nil {
+		onProgress(5)
+	}
 	return m.transcribeFn(ctx, audioURL)
 }
 
