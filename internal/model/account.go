@@ -16,11 +16,11 @@ type Account struct {
 	Roles     string         `gorm:"size:64" json:"roles"`                         // 用户角色，多个角色用逗号分隔
 	OpenID    string         `gorm:"column:open_id;size:128;index" json:"open_id"` // 第三方授权 OpenId
 	Remark    string         `gorm:"size:256" json:"remark"`                       // 备注
-	Phone     string         `gorm:"size:32" json:"phone"`                         // 手机号码
-	Ext       string         `gorm:"size:1024" json:"ext"`                         // 扩展字段
+	Phone     string    `gorm:"size:32" json:"phone"`                         // 手机号码
 	IsActive  int8      `gorm:"column:is_active;not null;default:1;comment:是否启用0否1是" json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	Ext       string    `gorm:"size:1024" json:"ext"` // 扩展字段
 }
 
 // TableName 指定账号表名。

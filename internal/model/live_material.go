@@ -25,10 +25,10 @@ type LiveMaterial struct {
 	ASRErrorMsg  string     `gorm:"column:asr_error_msg;type:text;comment:ASR识别失败原因" json:"asr_error_msg,omitempty"`
 	ASRStartedAt *time.Time `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
 	ASRUpdatedAt *time.Time `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
-	Ext          string     `gorm:"size:1024;comment:扩展字段" json:"ext"`
 	CreatedBy    uint       `gorm:"not null;index;comment:添加人账号ID" json:"created_by"`
 	CreatedAt    time.Time  `gorm:"comment:添加时间" json:"created_at"`
 	UpdatedAt    time.Time  `gorm:"comment:最后更新时间" json:"updated_at"`
+	Ext          string     `gorm:"size:1024;comment:扩展字段" json:"ext"`
 }
 
 // TableName 指定直播素材表名。
