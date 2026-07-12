@@ -11,15 +11,21 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// 内嵌默认配置中 storage 字段为空占位
+	// 内嵌默认配置中 COS/OSS 为空占位，TOS 已配置项目桶
 	if cfg.Storage.COS.Region != "" {
 		t.Errorf("COS.Region = %q, want empty default", cfg.Storage.COS.Region)
 	}
 	if cfg.Storage.OSS.Endpoint != "" {
 		t.Errorf("OSS.Endpoint = %q, want empty default", cfg.Storage.OSS.Endpoint)
 	}
-	if cfg.Storage.TOS.Region != "" {
-		t.Errorf("TOS.Region = %q, want empty default", cfg.Storage.TOS.Region)
+	if cfg.Storage.TOS.BucketName != "arkclaw-wxbpd" {
+		t.Errorf("TOS.BucketName = %q, want arkclaw-wxbpd", cfg.Storage.TOS.BucketName)
+	}
+	if cfg.Storage.TOS.Region != "cn-shanghai" {
+		t.Errorf("TOS.Region = %q, want cn-shanghai", cfg.Storage.TOS.Region)
+	}
+	if cfg.Storage.TOS.Endpoint != "tos-cn-shanghai.volces.com" {
+		t.Errorf("TOS.Endpoint = %q, want tos-cn-shanghai.volces.com", cfg.Storage.TOS.Endpoint)
 	}
 
 	// ASR 默认 API Key 与轮询配置

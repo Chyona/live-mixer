@@ -14,6 +14,7 @@ import (
 	v1handler "live-mixer/internal/handler/v1"
 	v2handler "live-mixer/internal/handler/v2"
 	"live-mixer/internal/middleware"
+	"live-mixer/internal/pkg/storage"
 	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
 	routesv1 "live-mixer/internal/routes/v1"
@@ -52,7 +53,13 @@ func main() {
 	accountService := service.NewAccountService(accountRepo)
 	authService := service.NewAuthService(accountRepo, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
-	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(liveMaterialRepo, asrService, logger)
+
+	storageClient, err := storage.NewClientFromAppConfig(cfg.Storage)
+	if err != nil {
+		logger.Fatal("初始化对象存储失败", zap.Error(err))
+	}
+	audioPreparer := service.NewLiveMaterialASRAudioPreparer(nil, nil, storageClient, "")
+	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(liveMaterialRepo, asrService, audioPreparer, logger)
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 
 	ctx, cancel := context.WithCancel(context.Background())

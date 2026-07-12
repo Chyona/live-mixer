@@ -26,27 +26,30 @@ type LiveMaterialASRWorker interface {
 }
 
 type liveMaterialASRWorker struct {
-	repo       repository.LiveMaterialRepository
-	asrService ASRService
-	logger     *zap.Logger
-	queue      chan uint
-	startOnce  sync.Once
+	repo           repository.LiveMaterialRepository
+	asrService     ASRService
+	audioPreparer  LiveMaterialASRAudioPreparer
+	logger         *zap.Logger
+	queue          chan uint
+	startOnce      sync.Once
 }
 
 // NewLiveMaterialASRWorker 创建直播素材 ASR 后台 worker。
 func NewLiveMaterialASRWorker(
 	repo repository.LiveMaterialRepository,
 	asrService ASRService,
+	audioPreparer LiveMaterialASRAudioPreparer,
 	logger *zap.Logger,
 ) LiveMaterialASRWorker {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &liveMaterialASRWorker{
-		repo:       repo,
-		asrService: asrService,
-		logger:     logger,
-		queue:      make(chan uint, liveMaterialASRQueueSize),
+		repo:          repo,
+		asrService:    asrService,
+		audioPreparer: audioPreparer,
+		logger:        logger,
+		queue:         make(chan uint, liveMaterialASRQueueSize),
 	}
 }
 
@@ -95,25 +98,39 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 	}
 
 	var lastProgress int16 = 5
-	raw, err := w.asrService.TranscribeWithProgress(ctx, material.LiveURL, func(progress int) {
-		p := int16(progress)
-		if p == lastProgress {
+	updateProgress := func(progress int16) {
+		if progress <= lastProgress {
 			return
 		}
-		lastProgress = p
-		if updateErr := w.repo.UpdateASRProgress(ctx, materialID, p); updateErr != nil {
+		lastProgress = progress
+		if updateErr := w.repo.UpdateASRProgress(ctx, materialID, progress); updateErr != nil {
 			w.logger.Warn("更新 ASR 进度失败",
 				zap.Uint("material_id", materialID),
-				zap.Int16("progress", p),
+				zap.Int16("progress", progress),
 				zap.Error(updateErr),
 			)
 		}
+	}
+
+	// 下载源媒体 → 转 WAV → 上传对象存储，得到 ASR 可用的公网音频 URL。
+	audioURL, cleanup, err := w.prepareAudioURL(ctx, materialID, material.LiveURL, updateProgress)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		return w.failASR(ctx, materialID, lastProgress, err)
+	}
+
+	raw, err := w.asrService.TranscribeWithProgress(ctx, audioURL, func(progress int) {
+		// ASR 轮询阶段映射到 50~95，与预处理阶段 5~45 衔接。
+		mapped := int16(50 + progress*45/100)
+		if mapped > 95 {
+			mapped = 95
+		}
+		updateProgress(mapped)
 	})
 	if err != nil {
-		if failErr := w.repo.UpdateASRFailed(ctx, materialID, lastProgress, err.Error()); failErr != nil {
-			return fmt.Errorf("ASR 失败且写入失败状态异常: asr=%w, db=%v", err, failErr)
-		}
-		return err
+		return w.failASR(ctx, materialID, lastProgress, err)
 	}
 
 	duration := asr.ParseDurationMs(raw)
@@ -126,4 +143,24 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 		return fmt.Errorf("写入 ASR 成功结果失败: %w", err)
 	}
 	return nil
+}
+
+// prepareAudioURL 调用音频预处理服务；未配置时回退为直接使用素材原始 URL。
+func (w *liveMaterialASRWorker) prepareAudioURL(
+	ctx context.Context,
+	materialID uint,
+	sourceURL string,
+	updateProgress func(progress int16),
+) (string, func(), error) {
+	if w.audioPreparer == nil {
+		return sourceURL, nil, nil
+	}
+	return w.audioPreparer.Prepare(ctx, materialID, sourceURL, updateProgress)
+}
+
+func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, progress int16, err error) error {
+	if failErr := w.repo.UpdateASRFailed(ctx, materialID, progress, err.Error()); failErr != nil {
+		return fmt.Errorf("ASR 失败且写入失败状态异常: asr=%w, db=%v", err, failErr)
+	}
+	return err
 }
