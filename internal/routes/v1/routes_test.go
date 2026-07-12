@@ -32,9 +32,10 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	accountHandler := v1handler.NewAccountHandler(nil)
 	authHandler := v1handler.NewAuthHandler(routeMockAuthService{})
 	asrHandler := v1handler.NewASRHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, secret)
+	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, secret)
 
 	// 未携带 Token 访问账号列表应被 JWT 中间件拦截
 	req := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
@@ -73,7 +74,7 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	}
 	rWithRecovery := gin.New()
 	rWithRecovery.Use(gin.Recovery())
-	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, secret)
+	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, secret)
 
 	authReq := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
 	authReq.Header.Set("Authorization", "Bearer "+token)
@@ -90,7 +91,7 @@ func TestRegisterRoutes_ASRPublic(t *testing.T) {
 	asrHandler := v1handler.NewASRHandler(&routeMockASRService{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, secret)
 
 	body := []byte(`{"audio_url":"https://example.com/test.wav"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/asr", bytes.NewReader(body))
@@ -107,4 +108,22 @@ type routeMockASRService struct{}
 
 func (routeMockASRService) Transcribe(_ context.Context, _ string) (json.RawMessage, error) {
 	return json.RawMessage(`{"result":{"text":"ok"}}`), nil
+}
+
+// TestRegisterRoutes_LiveMaterialsProtected 验证直播素材接口需要 JWT 鉴权。
+func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, secret)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("POST /v1/live-materials without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
 }
