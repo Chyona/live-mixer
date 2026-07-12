@@ -78,20 +78,47 @@ func (p *tosProvider) uploadFileInput(localPath, objectKey string) *tos.UploadFi
 	return input
 }
 
-// UploadFile 使用 TOS 分片上传本地文件，并启用断点续传以应对网络中断。
+// UploadFile 使用 TOS 上传本地文件；小文件走 PutObject，大文件走分片上传。
 func (p *tosProvider) UploadFile(ctx context.Context, localPath, objectKey string) (string, error) {
-	if _, err := os.Stat(localPath); err != nil {
+	info, err := os.Stat(localPath)
+	if err != nil {
 		return "", fmt.Errorf("读取本地文件失败: %w", err)
 	}
 
-	// TOS SDK 的 UploadFile 支持 context 取消，上传前先做快速检查。
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	_, err := p.client.UploadFile(ctx, p.uploadFileInput(localPath, objectKey))
+	// ASR 生成的 WAV 通常较小，直接 PutObject 更简单可靠。
+	if info.Size() < p.opts.tosPartSizeBytes() {
+		return p.putObjectFromFile(ctx, localPath, objectKey, info.Size())
+	}
+
+	_, err = p.client.UploadFile(ctx, p.uploadFileInput(localPath, objectKey))
 	if err != nil {
 		return "", fmt.Errorf("TOS 分片上传失败: %w", err)
+	}
+	return p.objectURL(objectKey), nil
+}
+
+// putObjectFromFile 通过 PutObject 上传本地文件，适用于小文件场景。
+func (p *tosProvider) putObjectFromFile(ctx context.Context, localPath, objectKey string, size int64) (string, error) {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("打开本地文件失败: %w", err)
+	}
+	defer file.Close()
+
+	input := &tos.PutObjectV2Input{
+		PutObjectBasicInput: tos.PutObjectBasicInput{
+			Bucket:        p.bucketName,
+			Key:           objectKey,
+			ContentLength: size,
+		},
+		Content: file,
+	}
+	if _, err := p.client.PutObjectV2(ctx, input); err != nil {
+		return "", fmt.Errorf("TOS 上传失败: %w", err)
 	}
 	return p.objectURL(objectKey), nil
 }
@@ -139,12 +166,14 @@ func (p *tosProvider) UploadReader(ctx context.Context, r io.Reader, objectKey s
 	return p.objectURL(objectKey), nil
 }
 
-// resolveTOSEndpoint 解析 TOS 访问端点；未显式配置时按地域生成默认域名。
+// resolveTOSEndpoint 解析 TOS 访问端点（含 https 协议，符合官方 SDK 要求）。
 func resolveTOSEndpoint(cfg TOSConfig) string {
-	if cfg.Endpoint != "" {
-		return cfg.Endpoint
+	host := cfg.Endpoint
+	if host == "" {
+		host = fmt.Sprintf("tos-%s.volces.com", cfg.Region)
 	}
-	return fmt.Sprintf("tos-%s.volces.com", cfg.Region)
+	host = normalizeTOSHost(host)
+	return "https://" + host
 }
 
 // normalizeTOSHost 从端点字符串中提取主机名，用于拼接对象 URL。

@@ -222,12 +222,12 @@ func TestResolveTOSEndpoint(t *testing.T) {
 		{
 			name: "显式 Endpoint",
 			cfg: TOSConfig{Endpoint: "custom.tos.example.com", Region: "cn-beijing"},
-			want: "custom.tos.example.com",
+			want: "https://custom.tos.example.com",
 		},
 		{
 			name: "按地域生成默认 Endpoint",
 			cfg:  TOSConfig{Region: "cn-shanghai"},
-			want: "tos-cn-shanghai.volces.com",
+			want: "https://tos-cn-shanghai.volces.com",
 		},
 	}
 
