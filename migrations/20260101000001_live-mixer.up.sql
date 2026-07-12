@@ -40,7 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_account_open_id ON account (open_id);
 -- 直播素材表：一条记录对应一场直播及其 ASR 结果
 CREATE TABLE IF NOT EXISTS live_material (
     id           BIGSERIAL PRIMARY KEY,
-    name         VARCHAR(64),
+    name         VARCHAR(64) NOT NULL,
     remark       VARCHAR(256),
     live_url     VARCHAR(1024) NOT NULL,
     live_asr        JSONB         NOT NULL DEFAULT '{}',
