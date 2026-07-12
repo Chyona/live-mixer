@@ -25,8 +25,8 @@ type Task struct {
 	Type                string     `gorm:"size:32;not null;index;comment:任务类型" json:"type"`
 	Status              string     `gorm:"size:32;not null;default:pending;index;comment:任务状态" json:"status"`
 	LiveMaterialID      *uint      `gorm:"index;comment:源直播素材ID" json:"live_material_id,omitempty"`
-	EditProjectID       *uint      `gorm:"index;comment:源剪辑项目ID" json:"edit_project_id,omitempty"`
-	ResultEditProjectID *uint      `gorm:"comment:产出剪辑项目ID" json:"result_edit_project_id,omitempty"`
+	VideoProjectID       *uint      `gorm:"column:video_project_id;index;comment:源剪辑项目ID" json:"video_project_id,omitempty"`
+	ResultVideoProjectID *uint      `gorm:"column:result_video_project_id;comment:产出剪辑项目ID" json:"result_video_project_id,omitempty"`
 	ResultDraftURL      string     `gorm:"size:1024;comment:产出剪映草稿地址" json:"result_draft_url,omitempty"`
 	PromptID            *uint      `gorm:"comment:使用的大模型提示词ID" json:"prompt_id,omitempty"`
 	ErrorMessage        string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
@@ -34,7 +34,7 @@ type Task struct {
 	CreatedAt           time.Time  `gorm:"comment:创建时间" json:"created_at"`
 	UpdatedAt           time.Time  `gorm:"comment:更新时间" json:"updated_at"`
 	StartedAt           *time.Time `gorm:"comment:开始执行时间" json:"started_at,omitempty"`
-	FinishedAt          *time.Time `gorm:"comment:结束时间" json:"finished_at,omitempty"`
+	CompletedAt         *time.Time `gorm:"column:completed_at;comment:完成时间" json:"completed_at,omitempty"`
 }
 
 // TableName 指定任务表名。

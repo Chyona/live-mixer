@@ -15,8 +15,7 @@ func InitSchema(db *gorm.DB, logger *zap.Logger) error {
 	err := db.AutoMigrate(
 		&model.Account{},
 		&model.LiveMaterial{},
-		&model.EditProject{},
-		&model.EditProjectClip{},
+		&model.VideoProject{},
 		&model.LLMSystemPrompt{},
 		&model.Task{},
 	)
