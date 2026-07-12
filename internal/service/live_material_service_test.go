@@ -223,3 +223,40 @@ func TestLiveMaterialService_List_Pagination(t *testing.T) {
 		t.Errorf("unexpected materials: %+v", materials)
 	}
 }
+
+// TestLiveMaterialService_Get_Success 验证按 ID 返回完整素材（含 live_asr）。
+func TestLiveMaterialService_Get_Success(t *testing.T) {
+	repo := &mockLiveMaterialRepo{
+		materials: map[uint]*model.LiveMaterial{
+			1: {
+				ID:      1,
+				Name:    "素材A",
+				LiveASR: `{"result":{"text":"识别内容"}}`,
+			},
+		},
+	}
+	svc := NewLiveMaterialService(repo)
+
+	material, err := svc.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if material.Name != "素材A" {
+		t.Errorf("Name = %q, want 素材A", material.Name)
+	}
+	if material.LiveASR != `{"result":{"text":"识别内容"}}` {
+		t.Errorf("LiveASR = %q, want full ASR json", material.LiveASR)
+	}
+}
+
+// TestLiveMaterialService_Get_NotFound 验证素材不存在时返回错误。
+func TestLiveMaterialService_Get_NotFound(t *testing.T) {
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}})
+	_, err := svc.Get(context.Background(), 99)
+	if err == nil {
+		t.Fatal("expected error for not found")
+	}
+	if err.Error() != "直播素材不存在" {
+		t.Errorf("error = %q, want 直播素材不存在", err.Error())
+	}
+}

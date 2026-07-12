@@ -377,6 +377,45 @@ const docTemplate = `{
             }
         },
         "/v1/live-materials/{id}": {
+            "get": {
+                "description": "根据 ID 查询直播素材完整信息（含 live_asr）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "获取直播素材详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "素材 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            },
             "put": {
                 "description": "仅可编辑 name、remark，其它字段不可修改",
                 "consumes": [

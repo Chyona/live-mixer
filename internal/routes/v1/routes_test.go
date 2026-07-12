@@ -144,3 +144,20 @@ func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
 		t.Errorf("GET /v1/live-materials without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
+
+// TestRegisterRoutes_LiveMaterialsGetByIDProtected 验证直播素材详情接口需要 JWT 鉴权。
+func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, secret)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials/1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /v1/live-materials/1 without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}

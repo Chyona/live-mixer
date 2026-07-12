@@ -31,6 +31,7 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 	{
 		liveMaterials.GET("", liveMaterialHandler.ListLiveMaterials)
 		liveMaterials.POST("", liveMaterialHandler.CreateLiveMaterial)
+		liveMaterials.GET("/:id", liveMaterialHandler.GetLiveMaterial)
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
 	}
 }

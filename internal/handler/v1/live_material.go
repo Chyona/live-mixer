@@ -101,6 +101,35 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 	response.Success(c, material)
 }
 
+// GetLiveMaterial 获取直播素材详情
+// @Summary      获取直播素材详情
+// @Description  根据 ID 查询直播素材完整信息（含 live_asr）
+// @Tags         直播素材
+// @Produce      json
+// @Param        id   path  int  true  "素材 ID"
+// @Success      200  {object}  response.Body
+// @Failure      400  {object}  response.Body
+// @Failure      404  {object}  response.Body
+// @Router       /v1/live-materials/{id} [get]
+func (h *LiveMaterialHandler) GetLiveMaterial(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "无效的素材 ID")
+		return
+	}
+
+	material, err := h.liveMaterialService.Get(c.Request.Context(), uint(id))
+	if err != nil {
+		if err.Error() == "直播素材不存在" {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.Success(c, material)
+}
+
 // UpdateLiveMaterial 更新直播素材
 // @Summary      更新直播素材
 // @Description  仅可编辑 name、remark，其它字段不可修改

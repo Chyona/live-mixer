@@ -21,6 +21,7 @@ type mockLiveMaterialService struct {
 	createFn func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
 	updateFn func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
 	listFn   func(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error)
+	getFn    func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 }
 
 func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
@@ -44,11 +45,98 @@ func (m *mockLiveMaterialService) List(ctx context.Context, page, pageSize int) 
 	return nil, 0, nil
 }
 
+func (m *mockLiveMaterialService) Get(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+	if m.getFn != nil {
+		return m.getFn(ctx, id)
+	}
+	return nil, nil
+}
+
 // newAuthedRouter 创建带 JWT 鉴权的测试路由。
 func newAuthedRouter(secret string, handler gin.HandlerFunc, method, path string) *gin.Engine {
 	r := gin.New()
 	r.Handle(method, path, middleware.JWTAuth(secret), handler)
 	return r
+}
+
+// TestLiveMaterialHandler_Get_Success 验证详情接口返回完整字段（含 live_asr）。
+func TestLiveMaterialHandler_Get_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		getFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+			if id != 7 {
+				t.Errorf("id = %d, want 7", id)
+			}
+			return &model.LiveMaterial{
+				ID:        7,
+				Name:      "素材详情",
+				LiveURL:   "https://example.com/detail.mp4",
+				LiveASR:   `{"result":{"text":"完整识别"}}`,
+				ASRStatus: model.ASRStatusCompleted,
+			}, nil
+		},
+	})
+
+	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/7", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp struct {
+		Code int                 `json:"code"`
+		Data model.LiveMaterial `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Data.LiveASR != `{"result":{"text":"完整识别"}}` {
+		t.Errorf("live_asr = %q, want full ASR json", resp.Data.LiveASR)
+	}
+}
+
+// TestLiveMaterialHandler_Get_NotFound 验证素材不存在时返回 404。
+func TestLiveMaterialHandler_Get_NotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		getFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+			return nil, errLiveMaterialNotFound()
+		},
+	})
+	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/999", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// TestLiveMaterialHandler_Get_InvalidID 验证非法 ID 返回 400。
+func TestLiveMaterialHandler_Get_InvalidID(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/abc", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
 }
 
 // TestLiveMaterialHandler_List_Success 验证列表接口默认分页且不返回 live_asr。

@@ -20,6 +20,8 @@ type LiveMaterialService interface {
 	Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
 	// List 分页查询直播素材列表，不含 live_asr 字段。
 	List(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error)
+	// Get 根据 ID 获取直播素材完整信息（含 live_asr）。
+	Get(ctx context.Context, id uint) (*model.LiveMaterial, error)
 }
 
 type liveMaterialService struct {
@@ -86,4 +88,15 @@ func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark 
 func (s *liveMaterialService) List(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error) {
 	offset := (page - 1) * pageSize
 	return s.liveMaterialRepo.List(ctx, offset, pageSize)
+}
+
+func (s *liveMaterialService) Get(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+	material, err := s.liveMaterialRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("直播素材不存在")
+		}
+		return nil, err
+	}
+	return material, nil
 }
