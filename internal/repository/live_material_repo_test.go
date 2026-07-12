@@ -110,8 +110,8 @@ func TestLiveMaterialRepository_GetByID_NotFound(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialRepository_List_ReturnsAllFields 验证分页列表返回全部字段且按 id 倒序。
-func TestLiveMaterialRepository_List_ReturnsAllFields(t *testing.T) {
+// TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR 验证列表不含 live_asr 且按 id 倒序。
+func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
 	repo := NewLiveMaterialRepository(db)
 	ctx := context.Background()
@@ -146,8 +146,8 @@ func TestLiveMaterialRepository_List_ReturnsAllFields(t *testing.T) {
 	if materials[0].Name != "素材3" {
 		t.Errorf("materials[0].Name = %q, want 素材3", materials[0].Name)
 	}
-	if materials[0].LiveASR != `{"idx":3}` {
-		t.Errorf("live_asr = %q, want full ASR json", materials[0].LiveASR)
+	if materials[0].LiveURL == "" {
+		t.Error("live_url should be returned in list")
 	}
 }
 

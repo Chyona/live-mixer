@@ -43,7 +43,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -67,7 +67,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateAccountRequest"
+                            "$ref": "#/definitions/v1.CreateAccountRequest"
                         }
                     }
                 ],
@@ -75,13 +75,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -110,13 +110,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -147,7 +147,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.UpdateAccountRequest"
+                            "$ref": "#/definitions/v1.UpdateAccountRequest"
                         }
                     }
                 ],
@@ -155,7 +155,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -182,7 +182,53 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/asr": {
+            "post": {
+                "description": "提交公网音频 URL，同步返回豆包 ASR 完整识别结果",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "语音识别"
+                ],
+                "summary": "同步语音识别",
+                "parameters": [
+                    {
+                        "description": "音频 URL",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.ASRRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -208,7 +254,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.LoginRequest"
+                            "$ref": "#/definitions/v1.LoginRequest"
                         }
                     }
                 ],
@@ -218,13 +264,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                                    "$ref": "#/definitions/response.Body"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/internal_handler_v1.LoginResponse"
+                                            "$ref": "#/definitions/v1.LoginResponse"
                                         }
                                     }
                                 }
@@ -234,13 +280,150 @@ const docTemplate = `{
                     "400": {
                         "description": "请求参数错误（如缺少 username 或 password）",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "用户名或密码错误，或账号已被禁用",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/live-materials": {
+            "get": {
+                "description": "分页查询直播素材，不含 live_asr 字段，默认每页 20 条",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "直播素材列表",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，默认 20",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "添加一条直播素材，name、live_url 为必填",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "创建直播素材",
+                "parameters": [
+                    {
+                        "description": "素材信息",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.CreateLiveMaterialRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/live-materials/{id}": {
+            "put": {
+                "description": "仅可编辑 name、remark，其它字段不可修改",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "更新直播素材",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "素材 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新内容",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.UpdateLiveMaterialRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -269,7 +452,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -277,7 +460,30 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "internal_handler_v1.CreateAccountRequest": {
+        "response.Body": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {},
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "v1.ASRRequest": {
+            "type": "object",
+            "required": [
+                "audio_url"
+            ],
+            "properties": {
+                "audio_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "v1.CreateAccountRequest": {
             "type": "object",
             "required": [
                 "email",
@@ -308,7 +514,32 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.LoginRequest": {
+        "v1.CreateLiveMaterialRequest": {
+            "type": "object",
+            "required": [
+                "live_url",
+                "name"
+            ],
+            "properties": {
+                "ext": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "live_url": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                }
+            }
+        },
+        "v1.LoginRequest": {
             "type": "object",
             "required": [
                 "password",
@@ -325,7 +556,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.LoginResponse": {
+        "v1.LoginResponse": {
             "type": "object",
             "properties": {
                 "avatar": {
@@ -363,12 +594,15 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.UpdateAccountRequest": {
+        "v1.UpdateAccountRequest": {
             "type": "object",
             "properties": {
                 "avatar": {
                     "description": "可选，用户头像 URL",
                     "type": "string"
+                },
+                "is_active": {
+                    "type": "integer"
                 },
                 "nickname": {
                     "type": "string"
@@ -376,21 +610,22 @@ const docTemplate = `{
                 "roles": {
                     "description": "可选，用户角色，多个角色用逗号分隔",
                     "type": "string"
-                },
-                "status": {
-                    "type": "integer"
                 }
             }
         },
-        "live-mixer_pkg_response.Body": {
+        "v1.UpdateLiveMaterialRequest": {
             "type": "object",
+            "required": [
+                "name"
+            ],
             "properties": {
-                "code": {
-                    "type": "integer"
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
                 },
-                "data": {},
-                "message": {
-                    "type": "string"
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
                 }
             }
         }

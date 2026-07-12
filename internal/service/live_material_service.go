@@ -18,8 +18,8 @@ type LiveMaterialService interface {
 	Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
 	// Update 更新直播素材，仅允许修改 name、remark。
 	Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
-	// List 分页查询直播素材列表，返回全部字段。
-	List(ctx context.Context, page, pageSize int) ([]model.LiveMaterial, int64, error)
+	// List 分页查询直播素材列表，不含 live_asr 字段。
+	List(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error)
 }
 
 type liveMaterialService struct {
@@ -83,7 +83,7 @@ func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark 
 	return material, nil
 }
 
-func (s *liveMaterialService) List(ctx context.Context, page, pageSize int) ([]model.LiveMaterial, int64, error) {
+func (s *liveMaterialService) List(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error) {
 	offset := (page - 1) * pageSize
 	return s.liveMaterialRepo.List(ctx, offset, pageSize)
 }

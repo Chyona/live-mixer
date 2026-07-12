@@ -17,8 +17,8 @@ type LiveMaterialRepository interface {
 	GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
-	// List 分页查询直播素材列表，按 id 倒序，返回全部字段（含 live_asr）。
-	List(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error)
+	// List 分页查询直播素材列表，按 id 倒序，不含 live_asr 字段。
+	List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
 }
 
 type liveMaterialRepository struct {
@@ -51,12 +51,12 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 		Updates(material).Error
 }
 
-func (r *liveMaterialRepository) List(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error) {
-	var materials []model.LiveMaterial
+func (r *liveMaterialRepository) List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
+	var materials []model.LiveMaterialListItem
 	var total int64
 
-	// 查询全部字段，不做 Omit，确保 live_asr 等完整返回。
-	query := r.db.WithContext(ctx).Model(&model.LiveMaterial{})
+	// 使用列表专用结构体，GORM 不会查询 live_asr 列，减少 IO 与响应体积。
+	query := r.db.WithContext(ctx).Model(&model.LiveMaterialListItem{})
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}

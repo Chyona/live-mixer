@@ -16,7 +16,7 @@ type mockLiveMaterialRepo struct {
 	nextID    uint
 	createFn  func(ctx context.Context, material *model.LiveMaterial) error
 	updateFn  func(ctx context.Context, material *model.LiveMaterial) error
-	listFn    func(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error)
+	listFn    func(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
 }
 
 func (m *mockLiveMaterialRepo) Create(ctx context.Context, material *model.LiveMaterial) error {
@@ -56,7 +56,7 @@ func (m *mockLiveMaterialRepo) UpdateNameRemark(ctx context.Context, material *m
 	return nil
 }
 
-func (m *mockLiveMaterialRepo) List(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error) {
+func (m *mockLiveMaterialRepo) List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, offset, limit)
 	}
@@ -199,11 +199,11 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 func TestLiveMaterialService_List_Pagination(t *testing.T) {
 	var gotOffset, gotLimit int
 	repo := &mockLiveMaterialRepo{
-		listFn: func(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error) {
+		listFn: func(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
 			gotOffset = offset
 			gotLimit = limit
-			return []model.LiveMaterial{
-				{ID: 2, Name: "素材B", LiveASR: `{"text":"hello"}`},
+			return []model.LiveMaterialListItem{
+				{ID: 2, Name: "素材B", ASRStatus: model.ASRStatusCompleted},
 			}, 5, nil
 		},
 	}
@@ -219,7 +219,7 @@ func TestLiveMaterialService_List_Pagination(t *testing.T) {
 	if total != 5 {
 		t.Errorf("total = %d, want 5", total)
 	}
-	if len(materials) != 1 || materials[0].LiveASR != `{"text":"hello"}` {
+	if len(materials) != 1 || materials[0].Name != "素材B" {
 		t.Errorf("unexpected materials: %+v", materials)
 	}
 }
