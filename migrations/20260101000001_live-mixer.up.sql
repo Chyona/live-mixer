@@ -43,11 +43,18 @@ CREATE TABLE IF NOT EXISTS live_material (
     name         VARCHAR(64),
     remark       VARCHAR(256),
     live_url     VARCHAR(1024) NOT NULL,
-    live_asr     JSONB         NOT NULL DEFAULT '{}',
-    duration     BIGINT        NOT NULL DEFAULT 0,
-    created_by   BIGINT        NOT NULL REFERENCES account (id),
-    created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    live_asr        JSONB         NOT NULL DEFAULT '{}',
+    duration        BIGINT        NOT NULL DEFAULT 0,
+    asr_status      VARCHAR(20)   NOT NULL DEFAULT 'pending',
+    asr_progress    SMALLINT      NOT NULL DEFAULT 0,
+    asr_error_msg   TEXT,
+    asr_started_at  TIMESTAMPTZ,
+    asr_updated_at  TIMESTAMPTZ,
+    created_by      BIGINT        NOT NULL REFERENCES account (id),
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_live_material_asr_progress CHECK (asr_progress BETWEEN 0 AND 100),
+    CONSTRAINT chk_live_material_asr_status CHECK (asr_status IN ('pending', 'processing', 'completed', 'failed'))
 );
 
 COMMENT ON TABLE live_material IS '直播素材表';
@@ -57,11 +64,17 @@ COMMENT ON COLUMN live_material.remark IS '备注';
 COMMENT ON COLUMN live_material.live_url IS '直播链接';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.duration IS '直播时长（毫秒）';
+COMMENT ON COLUMN live_material.asr_status IS 'ASR 识别状态：pending待处理 processing识别中 completed已完成 failed失败';
+COMMENT ON COLUMN live_material.asr_progress IS 'ASR 识别进度（0-100）';
+COMMENT ON COLUMN live_material.asr_error_msg IS 'ASR 识别失败原因';
+COMMENT ON COLUMN live_material.asr_started_at IS 'ASR 识别开始时间';
+COMMENT ON COLUMN live_material.asr_updated_at IS 'ASR 识别状态最后更新时间（用于检测长时间卡死任务）';
 COMMENT ON COLUMN live_material.created_by IS '添加人（账号 ID）';
 COMMENT ON COLUMN live_material.created_at IS '添加时间';
 COMMENT ON COLUMN live_material.updated_at IS '最后更新时间';
 
 CREATE INDEX IF NOT EXISTS idx_live_material_created_by ON live_material (created_by);
+CREATE INDEX IF NOT EXISTS idx_live_material_asr_status ON live_material (asr_status);
 
 -- 剪辑项目表
 CREATE TABLE IF NOT EXISTS video_project (
