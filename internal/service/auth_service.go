@@ -60,7 +60,7 @@ func (s *authService) Login(ctx context.Context, username, password string) (*Lo
 	}
 
 	// 禁用账号不允许登录
-	if account.Status != 1 {
+	if account.IsActive != 1 {
 		return nil, errors.New("账号已被禁用")
 	}
 

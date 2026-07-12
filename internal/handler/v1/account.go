@@ -35,7 +35,7 @@ type UpdateAccountRequest struct {
 	Nickname string  `json:"nickname"`
 	Avatar   *string `json:"avatar"` // 可选，用户头像 URL
 	Roles    *string `json:"roles"`  // 可选，用户角色，多个角色用逗号分隔
-	Status   *int8   `json:"status"`
+	IsActive *int8   `json:"is_active"`
 }
 
 // CreateAccount 创建账号
@@ -137,7 +137,7 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 		return
 	}
 
-	account, err := h.accountService.UpdateAccount(c.Request.Context(), id, req.Nickname, req.Avatar, req.Roles, req.Status)
+	account, err := h.accountService.UpdateAccount(c.Request.Context(), id, req.Nickname, req.Avatar, req.Roles, req.IsActive)
 	if err != nil {
 		response.NotFound(c, err.Error())
 		return

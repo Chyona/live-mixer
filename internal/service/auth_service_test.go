@@ -55,7 +55,7 @@ func TestAuthService_Login_Success(t *testing.T) {
 				Nickname: "张三",
 				Avatar:   "https://cdn.example.com/avatar/123.jpg",
 				Roles:    "ADMIN",
-				Status:   1,
+				IsActive: 1,
 			},
 		},
 	}
@@ -90,7 +90,7 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 	hashed, _ := utils.HashPassword("admin")
 	repo := &mockAccountRepo{
 		accounts: map[string]*model.Account{
-			"admin": {Username: "admin", Password: hashed, Status: 1},
+			"admin": {Username: "admin", Password: hashed, IsActive: 1},
 		},
 	}
 
@@ -119,7 +119,7 @@ func TestAuthService_Login_DisabledAccount(t *testing.T) {
 	hashed, _ := utils.HashPassword("admin")
 	repo := &mockAccountRepo{
 		accounts: map[string]*model.Account{
-			"admin": {Username: "admin", Password: hashed, Status: 0},
+			"admin": {Username: "admin", Password: hashed, IsActive: 0},
 		},
 	}
 

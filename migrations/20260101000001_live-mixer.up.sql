@@ -13,10 +13,10 @@ CREATE TABLE IF NOT EXISTS account (
     remark      VARCHAR(256),
     phone       VARCHAR(32),
     ext         VARCHAR(1024),
-    status      SMALLINT     NOT NULL DEFAULT 1,
+    is_active   SMALLINT     NOT NULL DEFAULT 1,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    deleted_at  TIMESTAMPTZ
+    CONSTRAINT chk_account_is_active CHECK (is_active IN (0, 1))
 );
 
 COMMENT ON TABLE account IS '账号表';
@@ -31,12 +31,10 @@ COMMENT ON COLUMN account.open_id IS '第三方授权 OpenId';
 COMMENT ON COLUMN account.remark IS '备注';
 COMMENT ON COLUMN account.phone IS '手机号码';
 COMMENT ON COLUMN account.ext IS '扩展字段';
-COMMENT ON COLUMN account.status IS '账号状态：1正常 0禁用';
+COMMENT ON COLUMN account.is_active IS '是否启用：0否 1是';
 COMMENT ON COLUMN account.created_at IS '创建时间';
 COMMENT ON COLUMN account.updated_at IS '更新时间';
-COMMENT ON COLUMN account.deleted_at IS '软删除时间';
 
-CREATE INDEX IF NOT EXISTS idx_account_deleted_at ON account (deleted_at);
 CREATE INDEX IF NOT EXISTS idx_account_open_id ON account (open_id);
 
 -- 直播素材表：一条记录对应一场直播及其 ASR 结果

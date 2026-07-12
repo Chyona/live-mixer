@@ -5,5 +5,4 @@ DROP TABLE IF EXISTS video_project;
 DROP TABLE IF EXISTS live_material;
 
 DROP INDEX IF EXISTS idx_account_open_id;
-DROP INDEX IF EXISTS idx_account_deleted_at;
 DROP TABLE IF EXISTS account;

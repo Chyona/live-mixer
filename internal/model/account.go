@@ -3,8 +3,6 @@ package model
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 // Account 账号实体模型。
@@ -20,10 +18,9 @@ type Account struct {
 	Remark    string         `gorm:"size:256" json:"remark"`                       // 备注
 	Phone     string         `gorm:"size:32" json:"phone"`                         // 手机号码
 	Ext       string         `gorm:"size:1024" json:"ext"`                         // 扩展字段
-	Status    int8           `gorm:"default:1;comment:1正常 0禁用" json:"status"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	IsActive  int8      `gorm:"column:is_active;not null;default:1;comment:是否启用0否1是" json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TableName 指定账号表名。

@@ -31,7 +31,7 @@ func SeedAccounts(db *gorm.DB, logger *zap.Logger) error {
 			Password: hashed,
 			Nickname: "管理员",
 			Roles:    "ADMIN", // 默认管理员角色
-			Status:   1,
+			IsActive: 1,
 		},
 	}
 	if err := db.Create(&accounts).Error; err != nil {

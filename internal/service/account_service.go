@@ -16,7 +16,7 @@ type AccountService interface {
 	CreateAccount(ctx context.Context, username, email, password, nickname, avatar, roles string) (*model.Account, error)
 	GetAccount(ctx context.Context, id uint) (*model.Account, error)
 	ListAccounts(ctx context.Context, page, pageSize int) ([]model.Account, int64, error)
-	UpdateAccount(ctx context.Context, id uint, nickname string, avatar, roles *string, status *int8) (*model.Account, error)
+	UpdateAccount(ctx context.Context, id uint, nickname string, avatar, roles *string, isActive *int8) (*model.Account, error)
 	DeleteAccount(ctx context.Context, id uint) error
 }
 
@@ -49,7 +49,7 @@ func (s *accountService) CreateAccount(ctx context.Context, username, email, pas
 		Nickname: nickname,
 		Avatar:   avatar,
 		Roles:    roles,
-		Status:   1,
+		IsActive: 1,
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func (s *accountService) ListAccounts(ctx context.Context, page, pageSize int) (
 	return s.accountRepo.List(ctx, offset, pageSize)
 }
 
-func (s *accountService) UpdateAccount(ctx context.Context, id uint, nickname string, avatar, roles *string, status *int8) (*model.Account, error) {
+func (s *accountService) UpdateAccount(ctx context.Context, id uint, nickname string, avatar, roles *string, isActive *int8) (*model.Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -91,8 +91,8 @@ func (s *accountService) UpdateAccount(ctx context.Context, id uint, nickname st
 	if roles != nil {
 		account.Roles = *roles
 	}
-	if status != nil {
-		account.Status = *status
+	if isActive != nil {
+		account.IsActive = *isActive
 	}
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, err
