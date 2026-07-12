@@ -1,4 +1,4 @@
-package util
+package utils
 
 import (
 	"bytes"
@@ -14,14 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/gogf/gf/v2/os/glog"
 )
 
 const (
-	// 定义文件大小限制
-	MaxFileSize     = 100 * 1024 * 1024
-	DownloadTimeout = 30 * time.Minute
+	// DownloadTimeout 单次下载请求超时（0 表示不限制，适用于大文件）。
+	DownloadTimeout = 0
 )
 
 // 常用文件类型的魔数签名
@@ -85,50 +82,17 @@ func GetFileSizeFromURL(url string) (int64, error) {
 	return fileSize, nil
 }
 
-// 从网络下载文件并保存到指定路径
+// 从网络下载文件并保存到指定路径（不限制文件大小）。
 func DownloadFileFromURL(url string, savePath string) error {
-	fileSize, err := GetFileSizeFromURL(url)
-	if err != nil {
-		glog.Warningf(nil, "get file size from %s failed, err: %v", url, err)
-		fileSize = 0 // 如果获取不到文件大小，就默认为文件合格，不检查大小
-	}
+	return DownloadFile(url, savePath)
+}
 
-	// 检查文件大小是否超过限制
-	if fileSize > MaxFileSize {
-		return fmt.Errorf("file from %s is too large, size: %d bytes, exceeding %dMB limit", url, fileSize, MaxFileSize/(1024*1024))
-	}
-
-	// 如果文件大小检查通过，再发起 GET 请求下载文件
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("download from %s failed, err: %v", url, err)
-	}
-	defer resp.Body.Close()
-
-	// 检查 HTTP 响应状态码
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download from %s failed, status code: %d", url, resp.StatusCode)
-	}
-
-	// 创建文件保存路径
-	file, err := os.Create(savePath)
-	if err != nil {
-		return fmt.Errorf("create file failed, err: %v", err)
-	}
-	defer file.Close()
-
-	// 将响应体的内容写入文件
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		return fmt.Errorf("write file %s failed, err: %v", savePath, err)
-	}
-
-	return nil
+func defaultDownloadClient() *http.Client {
+	return &http.Client{Timeout: DownloadTimeout}
 }
 
 func DownloadFile(url string, savePath string) error {
-	// 创建带超时的HTTP客户端
-	client := &http.Client{Timeout: DownloadTimeout}
+	client := defaultDownloadClient()
 
 	// 创建请求并设置 User-Agent
 	req, err := http.NewRequest("GET", url, nil)
@@ -180,8 +144,7 @@ func DownloadFile(url string, savePath string) error {
 // @param saveDir 保存目录
 // @return 保存路径, 扩展名（示例：.jpg）, 错误
 func DownloadFilePlus(urlStr string, saveDir string) (string, string, error) {
-	// 创建带超时的HTTP客户端
-	client := &http.Client{Timeout: DownloadTimeout}
+	client := defaultDownloadClient()
 
 	// 创建请求并设置 User-Agent
 	req, err := http.NewRequest("GET", urlStr, nil)
