@@ -137,7 +137,8 @@ CREATE TABLE IF NOT EXISTS task (
     id                     BIGSERIAL PRIMARY KEY,
     type                   VARCHAR(32) NOT NULL,
     status                 VARCHAR(32) NOT NULL DEFAULT 'pending',
-    prompt_id              BIGINT      REFERENCES llm_system_prompt (id),
+    sys_prompt             TEXT,
+    usr_prompt             TEXT,
     error_message          TEXT,
     created_by             BIGINT      NOT NULL REFERENCES account (id),
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -152,7 +153,8 @@ COMMENT ON TABLE task IS '任务表';
 COMMENT ON COLUMN task.id IS '主键';
 COMMENT ON COLUMN task.type IS '任务类型：jianying_draft剪映草稿生成 ai_slice AI切片 ai_slice_jianying AI切片+剪映草稿生成';
 COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执行中 completed已完成 failed失败';
-COMMENT ON COLUMN task.prompt_id IS '使用的大模型系统提示词 ID（AI 切片类任务，可选）';
+COMMENT ON COLUMN task.sys_prompt IS '系统提示词';
+COMMENT ON COLUMN task.usr_prompt IS '用户提示词';
 COMMENT ON COLUMN task.error_message IS '失败原因';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';
 COMMENT ON COLUMN task.created_at IS '创建时间';
