@@ -4,27 +4,26 @@ import (
 	"time"
 )
 
-// 任务类型常量。
+// 任务类型常量（字符串标识）。
 const (
-	TaskTypeJianyingDraft      int8 = 1 // 剪映草稿生成任务
-	TaskTypeAISlice            int8 = 2 // AI 切片任务
-	TaskTypeAISliceJianying    int8 = 3 // AI 切片 + 剪映草稿生成任务
+	TaskTypeJianyingDraft   = "jianying_draft"    // 剪映草稿生成任务
+	TaskTypeAISlice         = "ai_slice"          // AI 切片任务
+	TaskTypeAISliceJianying = "ai_slice_jianying" // AI 切片 + 剪映草稿生成任务
 )
 
-// 任务状态常量。
+// 任务状态常量（字符串标识）。
 const (
-	TaskStatusPending   int8 = 0 // 待处理
-	TaskStatusRunning   int8 = 1 // 执行中
-	TaskStatusSuccess   int8 = 2 // 成功
-	TaskStatusFailed    int8 = 3 // 失败
-	TaskStatusCancelled int8 = 4 // 已取消
+	TaskStatusPending    = "pending"    // 待处理
+	TaskStatusProcessing = "processing" // 执行中
+	TaskStatusCompleted  = "completed"  // 已完成
+	TaskStatusFailed     = "failed"     // 失败
 )
 
 // Task 异步任务实体。
 type Task struct {
 	ID                  uint       `gorm:"primaryKey;comment:主键" json:"id"`
-	Type                int8       `gorm:"not null;index;comment:任务类型" json:"type"`
-	Status              int8       `gorm:"not null;default:0;index;comment:任务状态" json:"status"`
+	Type                string     `gorm:"size:32;not null;index;comment:任务类型" json:"type"`
+	Status              string     `gorm:"size:32;not null;default:pending;index;comment:任务状态" json:"status"`
 	LiveMaterialID      *uint      `gorm:"index;comment:源直播素材ID" json:"live_material_id,omitempty"`
 	EditProjectID       *uint      `gorm:"index;comment:源剪辑项目ID" json:"edit_project_id,omitempty"`
 	ResultEditProjectID *uint      `gorm:"comment:产出剪辑项目ID" json:"result_edit_project_id,omitempty"`

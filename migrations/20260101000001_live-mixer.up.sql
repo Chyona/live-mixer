@@ -19,6 +19,23 @@ CREATE TABLE IF NOT EXISTS account (
     deleted_at  TIMESTAMPTZ
 );
 
+COMMENT ON TABLE account IS '账号表';
+COMMENT ON COLUMN account.id IS '主键';
+COMMENT ON COLUMN account.username IS '用户名（唯一）';
+COMMENT ON COLUMN account.email IS '邮箱（唯一）';
+COMMENT ON COLUMN account.password IS '登录密码（加密存储）';
+COMMENT ON COLUMN account.nickname IS '昵称';
+COMMENT ON COLUMN account.avatar IS '用户头像 URL';
+COMMENT ON COLUMN account.roles IS '用户角色，多个角色用逗号分隔';
+COMMENT ON COLUMN account.open_id IS '第三方授权 OpenId';
+COMMENT ON COLUMN account.remark IS '备注';
+COMMENT ON COLUMN account.phone IS '手机号码';
+COMMENT ON COLUMN account.ext IS '扩展字段';
+COMMENT ON COLUMN account.status IS '账号状态：1正常 0禁用';
+COMMENT ON COLUMN account.created_at IS '创建时间';
+COMMENT ON COLUMN account.updated_at IS '更新时间';
+COMMENT ON COLUMN account.deleted_at IS '软删除时间';
+
 CREATE INDEX IF NOT EXISTS idx_account_deleted_at ON account (deleted_at);
 CREATE INDEX IF NOT EXISTS idx_account_open_id ON account (open_id);
 
@@ -127,8 +144,8 @@ CREATE INDEX IF NOT EXISTS idx_llm_system_prompt_deleted_at ON llm_system_prompt
 -- 任务表：异步任务统一入口，通过 type 区分三类业务
 CREATE TABLE IF NOT EXISTS task (
     id                     BIGSERIAL PRIMARY KEY,
-    type                   SMALLINT    NOT NULL,
-    status                 SMALLINT    NOT NULL DEFAULT 0,
+    type                   VARCHAR(32) NOT NULL,
+    status                 VARCHAR(32) NOT NULL DEFAULT 'pending',
     live_material_id       BIGINT      REFERENCES live_material (id),
     edit_project_id        BIGINT      REFERENCES edit_project (id),
     result_edit_project_id BIGINT      REFERENCES edit_project (id),
@@ -140,14 +157,14 @@ CREATE TABLE IF NOT EXISTS task (
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at             TIMESTAMPTZ,
     finished_at            TIMESTAMPTZ,
-    CONSTRAINT chk_task_type CHECK (type IN (1, 2, 3)),
-    CONSTRAINT chk_task_status CHECK (status IN (0, 1, 2, 3, 4))
+    CONSTRAINT chk_task_type CHECK (type IN ('jianying_draft', 'ai_slice', 'ai_slice_jianying')),
+    CONSTRAINT chk_task_status CHECK (status IN ('pending', 'processing', 'completed', 'failed'))
 );
 
 COMMENT ON TABLE task IS '任务表';
 COMMENT ON COLUMN task.id IS '主键';
-COMMENT ON COLUMN task.type IS '任务类型：1剪映草稿生成 2AI切片 3AI切片+剪映草稿生成';
-COMMENT ON COLUMN task.status IS '任务状态：0待处理 1执行中 2成功 3失败 4已取消';
+COMMENT ON COLUMN task.type IS '任务类型：jianying_draft剪映草稿生成 ai_slice AI切片 ai_slice_jianying AI切片+剪映草稿生成';
+COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执行中 completed已完成 failed失败';
 COMMENT ON COLUMN task.live_material_id IS '源直播素材 ID（AI 切片类任务）';
 COMMENT ON COLUMN task.edit_project_id IS '源剪辑项目 ID（剪映草稿生成类任务）';
 COMMENT ON COLUMN task.result_edit_project_id IS '产出的剪辑项目 ID（AI 切片类任务）';
