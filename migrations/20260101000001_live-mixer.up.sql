@@ -42,47 +42,46 @@ CREATE INDEX IF NOT EXISTS idx_account_open_id ON account (open_id);
 -- 直播素材表：一条记录对应一场直播及其 ASR 结果
 CREATE TABLE IF NOT EXISTS live_material (
     id           BIGSERIAL PRIMARY KEY,
+    name         VARCHAR(64),
+    remark       VARCHAR(256),
     live_url     VARCHAR(1024) NOT NULL,
     asr_result   JSONB         NOT NULL DEFAULT '{}',
     created_by   BIGINT        NOT NULL REFERENCES account (id),
     created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    deleted_at   TIMESTAMPTZ
+    updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE live_material IS '直播素材表';
 COMMENT ON COLUMN live_material.id IS '主键';
+COMMENT ON COLUMN live_material.name IS '素材名称';
+COMMENT ON COLUMN live_material.remark IS '备注';
 COMMENT ON COLUMN live_material.live_url IS '直播链接';
 COMMENT ON COLUMN live_material.asr_result IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.created_by IS '添加人（账号 ID）';
 COMMENT ON COLUMN live_material.created_at IS '添加时间';
 COMMENT ON COLUMN live_material.updated_at IS '最后更新时间';
-COMMENT ON COLUMN live_material.deleted_at IS '软删除时间';
 
 CREATE INDEX IF NOT EXISTS idx_live_material_created_by ON live_material (created_by);
-CREATE INDEX IF NOT EXISTS idx_live_material_deleted_at ON live_material (deleted_at);
 
 -- 剪辑项目表
 CREATE TABLE IF NOT EXISTS video_project (
     id              BIGSERIAL PRIMARY KEY,
+    name            VARCHAR(64),
+    remark          VARCHAR(256),
     created_by      BIGINT      NOT NULL REFERENCES account (id),
-    last_edited_by  BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMPTZ
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE video_project IS '剪辑项目表';
 COMMENT ON COLUMN video_project.id IS '主键';
+COMMENT ON COLUMN video_project.name IS '项目名称';
+COMMENT ON COLUMN video_project.remark IS '备注';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
-COMMENT ON COLUMN video_project.last_edited_by IS '最后编辑人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
 COMMENT ON COLUMN video_project.updated_at IS '最后编辑时间';
-COMMENT ON COLUMN video_project.deleted_at IS '软删除时间';
 
 CREATE INDEX IF NOT EXISTS idx_video_project_created_by ON video_project (created_by);
-CREATE INDEX IF NOT EXISTS idx_video_project_last_edited_by ON video_project (last_edited_by);
-CREATE INDEX IF NOT EXISTS idx_video_project_deleted_at ON video_project (deleted_at);
 
 -- 大模型系统提示词管理表
 CREATE TABLE IF NOT EXISTS llm_system_prompt (
