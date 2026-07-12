@@ -109,3 +109,61 @@ func TestLiveMaterialRepository_GetByID_NotFound(t *testing.T) {
 		t.Errorf("error = %v, want ErrRecordNotFound", err)
 	}
 }
+
+// TestLiveMaterialRepository_List_ReturnsAllFields 验证分页列表返回全部字段且按 id 倒序。
+func TestLiveMaterialRepository_List_ReturnsAllFields(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	asrPayloads := []string{`{"idx":1}`, `{"idx":2}`, `{"idx":3}`}
+	names := []string{"素材1", "素材2", "素材3"}
+	for i, name := range names {
+		material := &model.LiveMaterial{
+			Name:        name,
+			LiveURL:     "https://example.com/live.mp4",
+			LiveASR:     asrPayloads[i],
+			ASRStatus:   model.ASRStatusPending,
+			ASRProgress: 0,
+			CreatedBy:   1,
+		}
+		if err := repo.Create(ctx, material); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	materials, total, err := repo.List(ctx, 0, 2)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3", total)
+	}
+	if len(materials) != 2 {
+		t.Fatalf("len(materials) = %d, want 2", len(materials))
+	}
+	// 按 id 倒序，最新创建的在前。
+	if materials[0].Name != "素材3" {
+		t.Errorf("materials[0].Name = %q, want 素材3", materials[0].Name)
+	}
+	if materials[0].LiveASR != `{"idx":3}` {
+		t.Errorf("live_asr = %q, want full ASR json", materials[0].LiveASR)
+	}
+}
+
+// TestLiveMaterialRepository_List_Empty 验证空表时分页结果正确。
+func TestLiveMaterialRepository_List_Empty(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+
+	materials, total, err := repo.List(context.Background(), 0, 20)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 0 {
+		t.Errorf("total = %d, want 0", total)
+	}
+	if len(materials) != 0 {
+		t.Errorf("len(materials) = %d, want 0", len(materials))
+	}
+}

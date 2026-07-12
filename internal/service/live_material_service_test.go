@@ -16,6 +16,7 @@ type mockLiveMaterialRepo struct {
 	nextID    uint
 	createFn  func(ctx context.Context, material *model.LiveMaterial) error
 	updateFn  func(ctx context.Context, material *model.LiveMaterial) error
+	listFn    func(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error)
 }
 
 func (m *mockLiveMaterialRepo) Create(ctx context.Context, material *model.LiveMaterial) error {
@@ -53,6 +54,13 @@ func (m *mockLiveMaterialRepo) UpdateNameRemark(ctx context.Context, material *m
 	existing.Name = material.Name
 	existing.Remark = material.Remark
 	return nil
+}
+
+func (m *mockLiveMaterialRepo) List(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx, offset, limit)
+	}
+	return nil, 0, nil
 }
 
 // TestLiveMaterialService_Create_Success 验证创建时写入默认值且创建人正确。
@@ -184,5 +192,34 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "")
 	if err == nil || err.Error() != "db down" {
 		t.Errorf("error = %v, want db down", err)
+	}
+}
+
+// TestLiveMaterialService_List_Pagination 验证分页 offset 计算正确并返回仓储结果。
+func TestLiveMaterialService_List_Pagination(t *testing.T) {
+	var gotOffset, gotLimit int
+	repo := &mockLiveMaterialRepo{
+		listFn: func(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error) {
+			gotOffset = offset
+			gotLimit = limit
+			return []model.LiveMaterial{
+				{ID: 2, Name: "素材B", LiveASR: `{"text":"hello"}`},
+			}, 5, nil
+		},
+	}
+	svc := NewLiveMaterialService(repo)
+
+	materials, total, err := svc.List(context.Background(), 2, 20)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if gotOffset != 20 || gotLimit != 20 {
+		t.Errorf("offset/limit = %d/%d, want 20/20", gotOffset, gotLimit)
+	}
+	if total != 5 {
+		t.Errorf("total = %d, want 5", total)
+	}
+	if len(materials) != 1 || materials[0].LiveASR != `{"text":"hello"}` {
+		t.Errorf("unexpected materials: %+v", materials)
 	}
 }

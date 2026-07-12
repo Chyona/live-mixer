@@ -29,6 +29,7 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 
 	liveMaterials := authorized.Group("/live-materials")
 	{
+		liveMaterials.GET("", liveMaterialHandler.ListLiveMaterials)
 		liveMaterials.POST("", liveMaterialHandler.CreateLiveMaterial)
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
 	}

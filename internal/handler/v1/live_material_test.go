@@ -19,6 +19,7 @@ import (
 type mockLiveMaterialService struct {
 	createFn func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
 	updateFn func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
+	listFn   func(ctx context.Context, page, pageSize int) ([]model.LiveMaterial, int64, error)
 }
 
 func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
@@ -35,11 +36,98 @@ func (m *mockLiveMaterialService) Update(ctx context.Context, id uint, name, rem
 	return nil, nil
 }
 
+func (m *mockLiveMaterialService) List(ctx context.Context, page, pageSize int) ([]model.LiveMaterial, int64, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx, page, pageSize)
+	}
+	return nil, 0, nil
+}
+
 // newAuthedRouter 创建带 JWT 鉴权的测试路由。
 func newAuthedRouter(secret string, handler gin.HandlerFunc, method, path string) *gin.Engine {
 	r := gin.New()
 	r.Handle(method, path, middleware.JWTAuth(secret), handler)
 	return r
+}
+
+// TestLiveMaterialHandler_List_Success 验证列表接口默认分页及 live_asr 完整返回。
+func TestLiveMaterialHandler_List_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		listFn: func(ctx context.Context, page, pageSize int) ([]model.LiveMaterial, int64, error) {
+			if page != 1 || pageSize != 20 {
+				t.Errorf("page/pageSize = %d/%d, want 1/20", page, pageSize)
+			}
+			return []model.LiveMaterial{
+				{
+					ID:        1,
+					Name:      "素材A",
+					LiveURL:   "https://example.com/a.mp4",
+					LiveASR:   `{"result":{"text":"识别内容"}}`,
+					ASRStatus: model.ASRStatusCompleted,
+				},
+			}, 1, nil
+		},
+	})
+
+	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			List     []model.LiveMaterial `json:"list"`
+			Total    int64                `json:"total"`
+			Page     int                  `json:"page"`
+			PageSize int                  `json:"page_size"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Data.PageSize != 20 {
+		t.Errorf("page_size = %d, want 20", resp.Data.PageSize)
+	}
+	if len(resp.Data.List) != 1 {
+		t.Fatalf("list len = %d, want 1", len(resp.Data.List))
+	}
+	if resp.Data.List[0].LiveASR != `{"result":{"text":"识别内容"}}` {
+		t.Errorf("live_asr = %q, want full ASR json", resp.Data.List[0].LiveASR)
+	}
+}
+
+// TestLiveMaterialHandler_List_CustomPageSize 验证自定义 page_size 生效。
+func TestLiveMaterialHandler_List_CustomPageSize(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		listFn: func(ctx context.Context, page, pageSize int) ([]model.LiveMaterial, int64, error) {
+			if pageSize != 5 {
+				t.Errorf("pageSize = %d, want 5", pageSize)
+			}
+			return nil, 0, nil
+		},
+	})
+
+	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials?page_size=5", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
 }
 
 // TestLiveMaterialHandler_Create_Success 验证创建接口成功返回素材。

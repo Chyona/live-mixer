@@ -110,7 +110,7 @@ func (routeMockASRService) Transcribe(_ context.Context, _ string) (json.RawMess
 	return json.RawMessage(`{"result":{"text":"ok"}}`), nil
 }
 
-// TestRegisterRoutes_LiveMaterialsProtected 验证直播素材接口需要 JWT 鉴权。
+// TestRegisterRoutes_LiveMaterialsProtected 验证直播素材写接口需要 JWT 鉴权。
 func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 	secret := "route-test-secret"
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
@@ -125,5 +125,22 @@ func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("POST /v1/live-materials without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestRegisterRoutes_LiveMaterialsListProtected 验证直播素材列表接口需要 JWT 鉴权。
+func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, secret)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /v1/live-materials without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }

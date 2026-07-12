@@ -17,6 +17,8 @@ type LiveMaterialRepository interface {
 	GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
+	// List 分页查询直播素材列表，按 id 倒序，返回全部字段（含 live_asr）。
+	List(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error)
 }
 
 type liveMaterialRepository struct {
@@ -47,4 +49,19 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 		Model(material).
 		Select("name", "remark").
 		Updates(material).Error
+}
+
+func (r *liveMaterialRepository) List(ctx context.Context, offset, limit int) ([]model.LiveMaterial, int64, error) {
+	var materials []model.LiveMaterial
+	var total int64
+
+	// 查询全部字段，不做 Omit，确保 live_asr 等完整返回。
+	query := r.db.WithContext(ctx).Model(&model.LiveMaterial{})
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := query.Offset(offset).Limit(limit).Order("id DESC").Find(&materials).Error; err != nil {
+		return nil, 0, err
+	}
+	return materials, total, nil
 }

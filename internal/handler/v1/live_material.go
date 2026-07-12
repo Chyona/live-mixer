@@ -6,9 +6,13 @@ import (
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
+	"live-mixer/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
+
+// liveMaterialDefaultPageSize 直播素材列表默认每页条数。
+const liveMaterialDefaultPageSize = 20
 
 // LiveMaterialHandler 直播素材相关 HTTP 处理器。
 type LiveMaterialHandler struct {
@@ -32,6 +36,34 @@ type CreateLiveMaterialRequest struct {
 type UpdateLiveMaterialRequest struct {
 	Name   string `json:"name" binding:"required,max=64"`
 	Remark string `json:"remark" binding:"max=256"`
+}
+
+// ListLiveMaterials 直播素材列表
+// @Summary      直播素材列表
+// @Description  分页查询直播素材，返回全部字段（含 live_asr），默认每页 20 条
+// @Tags         直播素材
+// @Produce      json
+// @Param        page       query  int  false  "页码"
+// @Param        page_size  query  int  false  "每页数量，默认 20"
+// @Success      200        {object}  response.Body
+// @Failure      401        {object}  response.Body
+// @Router       /v1/live-materials [get]
+func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(liveMaterialDefaultPageSize)))
+	page, pageSize = utils.DefaultPage(page, pageSize)
+
+	materials, total, err := h.liveMaterialService.List(c.Request.Context(), page, pageSize)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.Success(c, response.PageData{
+		List:     materials,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
 }
 
 // CreateLiveMaterial 创建直播素材
