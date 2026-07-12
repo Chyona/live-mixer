@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS live_material (
     remark       VARCHAR(256),
     live_url     VARCHAR(1024) NOT NULL,
     live_asr     JSONB         NOT NULL DEFAULT '{}',
+    duration     BIGINT        NOT NULL DEFAULT 0,
     created_by   BIGINT        NOT NULL REFERENCES account (id),
     created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
@@ -55,6 +56,7 @@ COMMENT ON COLUMN live_material.name IS '素材名称';
 COMMENT ON COLUMN live_material.remark IS '备注';
 COMMENT ON COLUMN live_material.live_url IS '直播链接';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
+COMMENT ON COLUMN live_material.duration IS '直播时长（毫秒）';
 COMMENT ON COLUMN live_material.created_by IS '添加人（账号 ID）';
 COMMENT ON COLUMN live_material.created_at IS '添加时间';
 COMMENT ON COLUMN live_material.updated_at IS '最后更新时间';
