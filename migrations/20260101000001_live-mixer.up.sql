@@ -81,6 +81,11 @@ CREATE TABLE IF NOT EXISTS video_project (
     id              BIGSERIAL PRIMARY KEY,
     name            VARCHAR(64),
     remark          VARCHAR(256),
+    live_id         BIGINT      NOT NULL REFERENCES live_material (id),
+    clips0          JSONB       NOT NULL DEFAULT '[]',
+    clips1          JSONB       NOT NULL DEFAULT '[]',
+    draft_url       VARCHAR(1024),
+    video_url       VARCHAR(1024),
     created_by      BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -90,11 +95,17 @@ COMMENT ON TABLE video_project IS '剪辑项目表';
 COMMENT ON COLUMN video_project.id IS '主键';
 COMMENT ON COLUMN video_project.name IS '项目名称';
 COMMENT ON COLUMN video_project.remark IS '备注';
+COMMENT ON COLUMN video_project.live_id IS '关联直播素材 ID（live_material.id）';
+COMMENT ON COLUMN video_project.clips0 IS '视频切片列表（毫秒），格式：[{"start_time":0,"end_time":10}]';
+COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片列表（毫秒），格式：[{"text":"...","start_time":0,"end_time":10,"words":[{"text":"...","start_time":0,"end_time":160}]}]';
+COMMENT ON COLUMN video_project.draft_url IS '剪映草稿 URL';
+COMMENT ON COLUMN video_project.video_url IS '视频地址 URL';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
 COMMENT ON COLUMN video_project.updated_at IS '最后编辑时间';
 
 CREATE INDEX IF NOT EXISTS idx_video_project_created_by ON video_project (created_by);
+CREATE INDEX IF NOT EXISTS idx_video_project_live_id ON video_project (live_id);
 
 -- 大模型系统提示词管理表
 CREATE TABLE IF NOT EXISTS llm_system_prompt (
@@ -126,10 +137,6 @@ CREATE TABLE IF NOT EXISTS task (
     id                     BIGSERIAL PRIMARY KEY,
     type                   VARCHAR(32) NOT NULL,
     status                 VARCHAR(32) NOT NULL DEFAULT 'pending',
-    live_material_id       BIGINT      REFERENCES live_material (id),
-    video_project_id        BIGINT      REFERENCES video_project (id),
-    result_video_project_id BIGINT      REFERENCES video_project (id),
-    result_draft_url       VARCHAR(1024),
     prompt_id              BIGINT      REFERENCES llm_system_prompt (id),
     error_message          TEXT,
     created_by             BIGINT      NOT NULL REFERENCES account (id),
@@ -145,10 +152,6 @@ COMMENT ON TABLE task IS '任务表';
 COMMENT ON COLUMN task.id IS '主键';
 COMMENT ON COLUMN task.type IS '任务类型：jianying_draft剪映草稿生成 ai_slice AI切片 ai_slice_jianying AI切片+剪映草稿生成';
 COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执行中 completed已完成 failed失败';
-COMMENT ON COLUMN task.live_material_id IS '源直播素材 ID（AI 切片类任务）';
-COMMENT ON COLUMN task.video_project_id IS '源剪辑项目 ID（剪映草稿生成类任务）';
-COMMENT ON COLUMN task.result_video_project_id IS '产出的剪辑项目 ID（AI 切片类任务）';
-COMMENT ON COLUMN task.result_draft_url IS '产出的剪映草稿地址（剪映草稿生成类任务）';
 COMMENT ON COLUMN task.prompt_id IS '使用的大模型系统提示词 ID（AI 切片类任务，可选）';
 COMMENT ON COLUMN task.error_message IS '失败原因';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';
@@ -160,5 +163,3 @@ COMMENT ON COLUMN task.completed_at IS '完成时间';
 CREATE INDEX IF NOT EXISTS idx_task_type ON task (type);
 CREATE INDEX IF NOT EXISTS idx_task_status ON task (status);
 CREATE INDEX IF NOT EXISTS idx_task_created_by ON task (created_by);
-CREATE INDEX IF NOT EXISTS idx_task_live_material_id ON task (live_material_id);
-CREATE INDEX IF NOT EXISTS idx_task_video_project_id ON task (video_project_id);

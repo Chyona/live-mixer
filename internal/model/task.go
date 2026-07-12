@@ -23,12 +23,8 @@ const (
 type Task struct {
 	ID                  uint       `gorm:"primaryKey;comment:主键" json:"id"`
 	Type                string     `gorm:"size:32;not null;index;comment:任务类型" json:"type"`
-	Status              string     `gorm:"size:32;not null;default:pending;index;comment:任务状态" json:"status"`
-	LiveMaterialID      *uint      `gorm:"index;comment:源直播素材ID" json:"live_material_id,omitempty"`
-	VideoProjectID       *uint      `gorm:"column:video_project_id;index;comment:源剪辑项目ID" json:"video_project_id,omitempty"`
-	ResultVideoProjectID *uint      `gorm:"column:result_video_project_id;comment:产出剪辑项目ID" json:"result_video_project_id,omitempty"`
-	ResultDraftURL      string     `gorm:"size:1024;comment:产出剪映草稿地址" json:"result_draft_url,omitempty"`
-	PromptID            *uint      `gorm:"comment:使用的大模型提示词ID" json:"prompt_id,omitempty"`
+	Status       string     `gorm:"size:32;not null;default:pending;index;comment:任务状态" json:"status"`
+	PromptID     *uint      `gorm:"comment:使用的大模型提示词ID" json:"prompt_id,omitempty"`
 	ErrorMessage        string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
 	CreatedBy           uint       `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
 	CreatedAt           time.Time  `gorm:"comment:创建时间" json:"created_at"`
