@@ -12,3 +12,4 @@ envinit
 # IDE
 .idea/
 .vscode/
+/internal/config/config.yaml
