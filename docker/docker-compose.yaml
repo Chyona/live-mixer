@@ -51,8 +51,8 @@ services:
       # 容器系统时区，与日志、业务时间字段保持一致
       TZ: Asia/Shanghai
     networks:
-      - live-mixer-net
+      - live-mixer-network
 
 networks:
-  live-mixer-net:
+  live-mixer-network:
     driver: bridge
