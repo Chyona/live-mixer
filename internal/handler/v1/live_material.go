@@ -3,8 +3,11 @@ package v1
 import (
 	"errors"
 	"strconv"
+	"time"
 
 	"live-mixer/internal/middleware"
+	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
 	"live-mixer/pkg/utils"
@@ -34,6 +37,45 @@ type CreateLiveMaterialRequest struct {
 type UpdateLiveMaterialRequest struct {
 	Name   string `json:"name" binding:"required,max=64"`
 	Remark string `json:"remark" binding:"max=256"`
+}
+
+// LiveMaterialDetailResponse 直播素材详情响应，live_asr 为分句数组格式。
+type LiveMaterialDetailResponse struct {
+	ID           uint            `json:"id"`
+	Name         string          `json:"name"`
+	Remark       string          `json:"remark"`
+	LiveURL      string          `json:"live_url"`
+	LiveASR      []asr.Utterance `json:"live_asr"`
+	Duration     int64           `json:"duration"`
+	ASRStatus    string          `json:"asr_status"`
+	ASRProgress  int16           `json:"asr_progress"`
+	ASRErrorMsg  string          `json:"asr_error_msg,omitempty"`
+	ASRStartedAt *time.Time      `json:"asr_started_at,omitempty"`
+	ASRUpdatedAt *time.Time      `json:"asr_updated_at,omitempty"`
+	CreatedBy    uint            `json:"created_by"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+	Ext          string          `json:"ext"`
+}
+
+func toLiveMaterialDetailResponse(material *model.LiveMaterial) LiveMaterialDetailResponse {
+	return LiveMaterialDetailResponse{
+		ID:           material.ID,
+		Name:         material.Name,
+		Remark:       material.Remark,
+		LiveURL:      material.LiveURL,
+		LiveASR:      asr.FormatUtterancesForAPI(material.LiveASR),
+		Duration:     material.Duration,
+		ASRStatus:    material.ASRStatus,
+		ASRProgress:  material.ASRProgress,
+		ASRErrorMsg:  material.ASRErrorMsg,
+		ASRStartedAt: material.ASRStartedAt,
+		ASRUpdatedAt: material.ASRUpdatedAt,
+		CreatedBy:    material.CreatedBy,
+		CreatedAt:    material.CreatedAt,
+		UpdatedAt:    material.UpdatedAt,
+		Ext:          material.Ext,
+	}
 }
 
 // ListLiveMaterialsRequest 直播素材列表查询参数。
@@ -124,7 +166,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 
 // GetLiveMaterial 获取直播素材详情
 // @Summary      获取直播素材详情
-// @Description  根据 ID 查询直播素材完整信息（含 live_asr）
+// @Description  根据 ID 查询直播素材完整信息；live_asr 为分句数组，含 speaker、时间戳与字级 words
 // @Tags         直播素材
 // @Produce      json
 // @Param        id   path  int  true  "素材 ID"
@@ -148,7 +190,7 @@ func (h *LiveMaterialHandler) GetLiveMaterial(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	response.Success(c, material)
+	response.Success(c, toLiveMaterialDetailResponse(material))
 }
 
 // UpdateLiveMaterial 更新直播素材

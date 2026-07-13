@@ -68,9 +68,10 @@ func newAuthedRouter(secret string, handler gin.HandlerFunc, method, path string
 	return r
 }
 
-// TestLiveMaterialHandler_Get_Success 验证详情接口返回完整字段（含 live_asr）。
+// TestLiveMaterialHandler_Get_Success 验证详情接口返回分句格式的 live_asr。
 func TestLiveMaterialHandler_Get_Success(t *testing.T) {
 	secret := "handler-test-secret"
+	rawASR := `{"result":{"utterances":[{"additions":{"speaker":"1"},"end_time":400,"start_time":40,"text":"跳舞吗？","words":[{"end_time":160,"start_time":40,"text":"跳"}]}]}}`
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		getFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
 			if id != 7 {
@@ -80,7 +81,7 @@ func TestLiveMaterialHandler_Get_Success(t *testing.T) {
 				ID:        7,
 				Name:      "素材详情",
 				LiveURL:   "https://example.com/detail.mp4",
-				LiveASR:   `{"result":{"text":"完整识别"}}`,
+				LiveASR:   rawASR,
 				ASRStatus: model.ASRStatusCompleted,
 			}, nil
 		},
@@ -99,14 +100,20 @@ func TestLiveMaterialHandler_Get_Success(t *testing.T) {
 	}
 
 	var resp struct {
-		Code int                 `json:"code"`
-		Data model.LiveMaterial `json:"data"`
+		Code int                          `json:"code"`
+		Data LiveMaterialDetailResponse `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if resp.Data.LiveASR != `{"result":{"text":"完整识别"}}` {
-		t.Errorf("live_asr = %q, want full ASR json", resp.Data.LiveASR)
+	if len(resp.Data.LiveASR) != 1 {
+		t.Fatalf("live_asr len = %d, want 1", len(resp.Data.LiveASR))
+	}
+	if resp.Data.LiveASR[0].Speaker != "1" || resp.Data.LiveASR[0].Text != "跳舞吗？" {
+		t.Errorf("live_asr[0] = %+v", resp.Data.LiveASR[0])
+	}
+	if len(resp.Data.LiveASR[0].Words) != 1 || resp.Data.LiveASR[0].Words[0].Text != "跳" {
+		t.Errorf("live_asr[0].words = %+v", resp.Data.LiveASR[0].Words)
 	}
 }
 
