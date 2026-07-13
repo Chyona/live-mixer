@@ -13,14 +13,15 @@ import (
 
 // cosProvider 腾讯云 COS 存储后端实现。
 type cosProvider struct {
-	client     *cos.Client
-	bucketName string
-	region     string
-	opts       UploadOptions
+	client              *cos.Client
+	bucketName          string
+	region              string
+	opts                UploadOptions
+	signedURLExpireDays int
 }
 
 // newCOSProvider 创建 COS 存储后端。
-func newCOSProvider(cfg COSConfig, opts UploadOptions) (*cosProvider, error) {
+func newCOSProvider(cfg COSConfig, opts UploadOptions, signedURLExpireDays int) (*cosProvider, error) {
 	bucketURL, err := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", cfg.BucketName, cfg.Region))
 	if err != nil {
 		return nil, fmt.Errorf("解析 COS Bucket URL 失败: %w", err)
@@ -34,20 +35,22 @@ func newCOSProvider(cfg COSConfig, opts UploadOptions) (*cosProvider, error) {
 	})
 
 	return &cosProvider{
-		client:     client,
-		bucketName: cfg.BucketName,
-		region:     cfg.Region,
-		opts:       opts,
+		client:              client,
+		bucketName:          cfg.BucketName,
+		region:              cfg.Region,
+		opts:                opts,
+		signedURLExpireDays: signedURLExpireDays,
 	}, nil
 }
 
 // newCOSProviderWithClient 使用自定义客户端创建 COS 后端，仅供单元测试注入 mock HTTP 服务。
-func newCOSProviderWithClient(client *cos.Client, bucketName, region string, opts UploadOptions) *cosProvider {
+func newCOSProviderWithClient(client *cos.Client, bucketName, region string, opts UploadOptions, signedURLExpireDays int) *cosProvider {
 	return &cosProvider{
-		client:     client,
-		bucketName: bucketName,
-		region:     region,
-		opts:       opts,
+		client:              client,
+		bucketName:          bucketName,
+		region:              region,
+		opts:                opts,
+		signedURLExpireDays: signedURLExpireDays,
 	}
 }
 
@@ -55,9 +58,24 @@ func (p *cosProvider) Type() ProviderType {
 	return ProviderCOS
 }
 
-// objectURL 拼接上传完成后的对象访问地址。
+// objectURL 拼接对象的公开访问地址（未签名）。
 func (p *cosProvider) objectURL(objectKey string) string {
 	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", p.bucketName, p.region, objectKey)
+}
+
+// presignedURL 生成带有效期的 GET 签名链接。
+func (p *cosProvider) presignedURL(ctx context.Context, objectKey string) (string, error) {
+	expire := signedURLExpireDuration(p.signedURLExpireDays, ProviderCOS)
+	u, err := p.client.Object.GetPresignedURL2(ctx, http.MethodGet, objectKey, expire, nil)
+	if err != nil {
+		return "", fmt.Errorf("COS 生成签名 URL 失败: %w", err)
+	}
+	return u.String(), nil
+}
+
+// accessURL 返回上传完成后的可访问链接（默认带签名）。
+func (p *cosProvider) accessURL(ctx context.Context, objectKey string) (string, error) {
+	return p.presignedURL(ctx, objectKey)
 }
 
 // UploadFile 使用 COS 分片上传本地文件，并启用断点续传以应对网络中断。
@@ -76,7 +94,7 @@ func (p *cosProvider) UploadFile(ctx context.Context, localPath, objectKey strin
 	if err != nil {
 		return "", fmt.Errorf("COS 分片上传失败: %w", err)
 	}
-	return p.objectURL(objectKey), nil
+	return p.accessURL(ctx, objectKey)
 }
 
 // UploadReader 将数据流写入临时文件后走分片上传，保证与 UploadFile 相同的弱网容错能力。

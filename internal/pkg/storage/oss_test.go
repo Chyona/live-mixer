@@ -37,7 +37,7 @@ func newTestOSSProvider(t *testing.T, handler http.HandlerFunc) *ossProvider {
 		Concurrency:       2,
 		CheckpointDir:     t.TempDir(),
 		DisableCheckpoint: true,
-	})
+	}, 0)
 }
 
 // ossObjectKey 从请求路径中提取对象键名（兼容 path-style：/bucket/object）。
@@ -109,9 +109,7 @@ func TestOSSProvider_UploadFile_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadFile() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/small.txt") {
-		t.Errorf("url = %q, want suffix /small.txt", url)
-	}
+	assertPresignedURL(t, url, "small.txt")
 }
 
 func TestOSSProvider_UploadFile_Multipart(t *testing.T) {
@@ -122,9 +120,7 @@ func TestOSSProvider_UploadFile_Multipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadFile() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/large.bin") {
-		t.Errorf("url = %q, want suffix /large.bin", url)
-	}
+	assertPresignedURL(t, url, "large.bin")
 }
 
 func TestOSSProvider_UploadFile_FileNotFound(t *testing.T) {
@@ -143,9 +139,7 @@ func TestOSSProvider_UploadReader_Small(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadReader() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/reader.txt") {
-		t.Errorf("url = %q, want suffix /reader.txt", url)
-	}
+	assertPresignedURL(t, url, "reader.txt")
 }
 
 func TestOSSProvider_UploadReader_LargeUsesMultipart(t *testing.T) {
@@ -156,9 +150,7 @@ func TestOSSProvider_UploadReader_LargeUsesMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadReader() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/large-reader.bin") {
-		t.Errorf("url = %q, want suffix /large-reader.bin", url)
-	}
+	assertPresignedURL(t, url, "large-reader.bin")
 }
 
 func TestOSSProvider_Type(t *testing.T) {
@@ -196,7 +188,7 @@ func TestNewOSSProvider_EmptyBucket(t *testing.T) {
 		AccessKeySecret: "secret",
 		BucketName:      "",
 		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
-	}, UploadOptions{})
+	}, UploadOptions{}, 0)
 	if err == nil {
 		t.Fatal("expected error for empty bucket name")
 	}

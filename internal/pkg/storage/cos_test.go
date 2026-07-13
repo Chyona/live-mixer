@@ -39,7 +39,7 @@ func newTestCOSProvider(t *testing.T, handler http.HandlerFunc) *cosProvider {
 		Concurrency:       2,
 		CheckpointDir:     t.TempDir(),
 		DisableCheckpoint: true,
-	})
+	}, 0)
 }
 
 // cosMockHandler 模拟 COS 简单上传与分片上传接口。
@@ -119,6 +119,16 @@ func writeTempFile(t *testing.T, name string, size int) string {
 	return path
 }
 
+func assertPresignedURL(t *testing.T, got, objectKey string) {
+	t.Helper()
+	if !strings.Contains(got, objectKey) {
+		t.Errorf("url = %q, want to contain object key %q", got, objectKey)
+	}
+	if !strings.Contains(got, "?") {
+		t.Errorf("url = %q, want presigned URL with query string", got)
+	}
+}
+
 func TestCOSProvider_UploadFile_Simple(t *testing.T) {
 	provider := newTestCOSProvider(t, cosMockHandler(t))
 	localPath := writeTempFile(t, "small.txt", 1024)
@@ -127,10 +137,7 @@ func TestCOSProvider_UploadFile_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadFile() error = %v", err)
 	}
-	want := "https://test-bucket.cos.ap-guangzhou.myqcloud.com/small.txt"
-	if url != want {
-		t.Errorf("url = %q, want %q", url, want)
-	}
+	assertPresignedURL(t, url, "small.txt")
 }
 
 func TestCOSProvider_UploadFile_Multipart(t *testing.T) {
@@ -142,10 +149,7 @@ func TestCOSProvider_UploadFile_Multipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadFile() error = %v", err)
 	}
-	want := "https://test-bucket.cos.ap-guangzhou.myqcloud.com/large.bin"
-	if url != want {
-		t.Errorf("url = %q, want %q", url, want)
-	}
+	assertPresignedURL(t, url, "large.bin")
 }
 
 func TestCOSProvider_UploadFile_FileNotFound(t *testing.T) {
@@ -164,10 +168,7 @@ func TestCOSProvider_UploadReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadReader() error = %v", err)
 	}
-	want := "https://test-bucket.cos.ap-guangzhou.myqcloud.com/reader.txt"
-	if url != want {
-		t.Errorf("url = %q, want %q", url, want)
-	}
+	assertPresignedURL(t, url, "reader.txt")
 }
 
 func TestCOSProvider_Type(t *testing.T) {

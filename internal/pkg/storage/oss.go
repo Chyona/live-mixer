@@ -12,14 +12,15 @@ import (
 
 // ossProvider 阿里云 OSS 存储后端实现。
 type ossProvider struct {
-	bucket   *oss.Bucket
-	bucketName string
-	endpoint   string
-	opts       UploadOptions
+	bucket              *oss.Bucket
+	bucketName          string
+	endpoint            string
+	opts                UploadOptions
+	signedURLExpireDays int
 }
 
 // newOSSProvider 创建 OSS 存储后端。
-func newOSSProvider(cfg OSSConfig, opts UploadOptions) (*ossProvider, error) {
+func newOSSProvider(cfg OSSConfig, opts UploadOptions, signedURLExpireDays int) (*ossProvider, error) {
 	client, err := oss.New(cfg.Endpoint, cfg.AccessKeyID, cfg.AccessKeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("创建 OSS 客户端失败: %w", err)
@@ -31,20 +32,22 @@ func newOSSProvider(cfg OSSConfig, opts UploadOptions) (*ossProvider, error) {
 	}
 
 	return &ossProvider{
-		bucket:     bucket,
-		bucketName: cfg.BucketName,
-		endpoint:   cfg.Endpoint,
-		opts:       opts,
+		bucket:              bucket,
+		bucketName:          cfg.BucketName,
+		endpoint:            cfg.Endpoint,
+		opts:                opts,
+		signedURLExpireDays: signedURLExpireDays,
 	}, nil
 }
 
 // newOSSProviderWithBucket 使用自定义 Bucket 创建 OSS 后端，仅供单元测试注入 mock HTTP 服务。
-func newOSSProviderWithBucket(bucket *oss.Bucket, bucketName, endpoint string, opts UploadOptions) *ossProvider {
+func newOSSProviderWithBucket(bucket *oss.Bucket, bucketName, endpoint string, opts UploadOptions, signedURLExpireDays int) *ossProvider {
 	return &ossProvider{
-		bucket:     bucket,
-		bucketName: bucketName,
-		endpoint:   endpoint,
-		opts:       opts,
+		bucket:              bucket,
+		bucketName:          bucketName,
+		endpoint:            endpoint,
+		opts:                opts,
+		signedURLExpireDays: signedURLExpireDays,
 	}
 }
 
@@ -52,9 +55,24 @@ func (p *ossProvider) Type() ProviderType {
 	return ProviderOSS
 }
 
-// objectURL 拼接上传完成后的对象访问地址。
+// objectURL 拼接对象的公开访问地址（未签名）。
 func (p *ossProvider) objectURL(objectKey string) string {
 	return fmt.Sprintf("https://%s.%s/%s", p.bucketName, p.endpoint, objectKey)
+}
+
+// presignedURL 生成带有效期的 GET 签名链接。
+func (p *ossProvider) presignedURL(objectKey string) (string, error) {
+	expireSec := int64(signedURLExpireDuration(p.signedURLExpireDays, ProviderOSS).Seconds())
+	url, err := p.bucket.SignURL(objectKey, oss.HTTPGet, expireSec)
+	if err != nil {
+		return "", fmt.Errorf("OSS 生成签名 URL 失败: %w", err)
+	}
+	return url, nil
+}
+
+// accessURL 返回上传完成后的可访问链接（默认带签名）。
+func (p *ossProvider) accessURL(objectKey string) (string, error) {
+	return p.presignedURL(objectKey)
 }
 
 // uploadOptions 构建 OSS 分片上传选项，启用断点续传与并发分片。
@@ -83,7 +101,7 @@ func (p *ossProvider) UploadFile(ctx context.Context, localPath, objectKey strin
 	if err != nil {
 		return "", fmt.Errorf("OSS 分片上传失败: %w", err)
 	}
-	return p.objectURL(objectKey), nil
+	return p.accessURL(objectKey)
 }
 
 // UploadReader 将数据流上传到 OSS；已知大小时走分片上传，否则退化为单次 PutObject。
@@ -118,7 +136,7 @@ func (p *ossProvider) UploadReader(ctx context.Context, r io.Reader, objectKey s
 	if err != nil {
 		return "", fmt.Errorf("OSS 上传失败: %w", err)
 	}
-	return p.objectURL(objectKey), nil
+	return p.accessURL(objectKey)
 }
 
 // ossCheckpointDir 返回 OSS 断点续传目录，默认使用系统临时目录下的子目录。

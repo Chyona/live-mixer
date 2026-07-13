@@ -35,7 +35,7 @@ func newTestTOSProvider(t *testing.T, handler http.HandlerFunc) *tosProvider {
 		PartSizeBytes:     5 * 1024 * 1024,
 		Concurrency:       1,
 		DisableCheckpoint: true,
-	})
+	}, 0)
 }
 
 // writeTOSUploadFile 写入待上传的临时文件。
@@ -123,9 +123,7 @@ func TestTOSProvider_UploadFile_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadFile() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/small.txt") {
-		t.Errorf("url = %q, want suffix /small.txt", url)
-	}
+	assertPresignedURL(t, url, "small.txt")
 }
 
 func TestTOSProvider_UploadFile_Multipart(t *testing.T) {
@@ -136,9 +134,7 @@ func TestTOSProvider_UploadFile_Multipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadFile() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/large.bin") {
-		t.Errorf("url = %q, want suffix /large.bin", url)
-	}
+	assertPresignedURL(t, url, "large.bin")
 }
 
 func TestTOSProvider_UploadFile_FileNotFound(t *testing.T) {
@@ -157,9 +153,7 @@ func TestTOSProvider_UploadReader_Small(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadReader() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/reader.txt") {
-		t.Errorf("url = %q, want suffix /reader.txt", url)
-	}
+	assertPresignedURL(t, url, "reader.txt")
 }
 
 func TestTOSProvider_UploadReader_LargeUsesMultipart(t *testing.T) {
@@ -170,9 +164,7 @@ func TestTOSProvider_UploadReader_LargeUsesMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadReader() error = %v", err)
 	}
-	if !strings.HasSuffix(url, "/large-reader.bin") {
-		t.Errorf("url = %q, want suffix /large-reader.bin", url)
-	}
+	assertPresignedURL(t, url, "large-reader.bin")
 }
 
 func TestTOSProvider_Type(t *testing.T) {

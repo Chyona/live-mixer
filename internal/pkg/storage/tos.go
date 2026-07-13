@@ -9,19 +9,21 @@ import (
 	"strings"
 
 	"github.com/volcengine/ve-tos-golang-sdk/v2/tos"
+	"github.com/volcengine/ve-tos-golang-sdk/v2/tos/enum"
 )
 
 // tosProvider 火山引擎 TOS 存储后端实现。
 type tosProvider struct {
-	client     *tos.ClientV2
-	bucketName string
-	endpoint   string
-	region     string
-	opts       UploadOptions
+	client              *tos.ClientV2
+	bucketName          string
+	endpoint            string
+	region              string
+	opts                UploadOptions
+	signedURLExpireDays int
 }
 
 // newTOSProvider 创建 TOS 存储后端。
-func newTOSProvider(cfg TOSConfig, opts UploadOptions) (*tosProvider, error) {
+func newTOSProvider(cfg TOSConfig, opts UploadOptions, signedURLExpireDays int) (*tosProvider, error) {
 	endpoint := resolveTOSEndpoint(cfg)
 	client, err := tos.NewClientV2(endpoint,
 		tos.WithRegion(cfg.Region),
@@ -32,22 +34,24 @@ func newTOSProvider(cfg TOSConfig, opts UploadOptions) (*tosProvider, error) {
 	}
 
 	return &tosProvider{
-		client:     client,
-		bucketName: cfg.BucketName,
-		endpoint:   normalizeTOSHost(endpoint),
-		region:     cfg.Region,
-		opts:       opts,
+		client:              client,
+		bucketName:          cfg.BucketName,
+		endpoint:            normalizeTOSHost(endpoint),
+		region:              cfg.Region,
+		opts:                opts,
+		signedURLExpireDays: signedURLExpireDays,
 	}, nil
 }
 
 // newTOSProviderWithClient 使用自定义客户端创建 TOS 后端，仅供单元测试注入 mock HTTP 服务。
-func newTOSProviderWithClient(client *tos.ClientV2, bucketName, endpoint, region string, opts UploadOptions) *tosProvider {
+func newTOSProviderWithClient(client *tos.ClientV2, bucketName, endpoint, region string, opts UploadOptions, signedURLExpireDays int) *tosProvider {
 	return &tosProvider{
-		client:     client,
-		bucketName: bucketName,
-		endpoint:   normalizeTOSHost(endpoint),
-		region:     region,
-		opts:       opts,
+		client:              client,
+		bucketName:          bucketName,
+		endpoint:            normalizeTOSHost(endpoint),
+		region:              region,
+		opts:                opts,
+		signedURLExpireDays: signedURLExpireDays,
 	}
 }
 
@@ -55,9 +59,29 @@ func (p *tosProvider) Type() ProviderType {
 	return ProviderTOS
 }
 
-// objectURL 拼接上传完成后的对象访问地址（虚拟主机风格）。
+// objectURL 拼接对象的公开访问地址（未签名，虚拟主机风格）。
 func (p *tosProvider) objectURL(objectKey string) string {
 	return fmt.Sprintf("https://%s.%s/%s", p.bucketName, p.endpoint, objectKey)
+}
+
+// presignedURL 生成带有效期的 GET 签名链接。
+func (p *tosProvider) presignedURL(objectKey string) (string, error) {
+	expireSec := int64(signedURLExpireDuration(p.signedURLExpireDays, ProviderTOS).Seconds())
+	output, err := p.client.PreSignedURL(&tos.PreSignedURLInput{
+		HTTPMethod: enum.HttpMethodGet,
+		Bucket:     p.bucketName,
+		Key:        objectKey,
+		Expires:    expireSec,
+	})
+	if err != nil {
+		return "", fmt.Errorf("TOS 生成签名 URL 失败: %w", err)
+	}
+	return output.SignedUrl, nil
+}
+
+// accessURL 返回上传完成后的可访问链接（默认带签名）。
+func (p *tosProvider) accessURL(objectKey string) (string, error) {
+	return p.presignedURL(objectKey)
 }
 
 // uploadFileInput 构建 TOS 断点续传分片上传参数。
@@ -98,7 +122,7 @@ func (p *tosProvider) UploadFile(ctx context.Context, localPath, objectKey strin
 	if err != nil {
 		return "", fmt.Errorf("TOS 分片上传失败: %w", err)
 	}
-	return p.objectURL(objectKey), nil
+	return p.accessURL(objectKey)
 }
 
 // putObjectFromFile 通过 PutObject 上传本地文件，适用于小文件场景。
@@ -120,7 +144,7 @@ func (p *tosProvider) putObjectFromFile(ctx context.Context, localPath, objectKe
 	if _, err := p.client.PutObjectV2(ctx, input); err != nil {
 		return "", fmt.Errorf("TOS 上传失败: %w", err)
 	}
-	return p.objectURL(objectKey), nil
+	return p.accessURL(objectKey)
 }
 
 // UploadReader 将数据流上传到 TOS；已知大小时走分片上传，否则退化为单次 PutObject。
@@ -163,7 +187,7 @@ func (p *tosProvider) UploadReader(ctx context.Context, r io.Reader, objectKey s
 	if err != nil {
 		return "", fmt.Errorf("TOS 上传失败: %w", err)
 	}
-	return p.objectURL(objectKey), nil
+	return p.accessURL(objectKey)
 }
 
 // resolveTOSEndpoint 解析 TOS 访问端点（含 https 协议，符合官方 SDK 要求）。

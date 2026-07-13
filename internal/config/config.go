@@ -61,8 +61,9 @@ type JWTConfig struct {
 
 // StorageConfig 对象存储配置，多个后端同时配置完整时优先级为 COS > OSS > TOS。
 type StorageConfig struct {
-	BasePath string           `mapstructure:"base_path"`
-	COS      COSStorageConfig `mapstructure:"cos"`
+	BasePath            string           `mapstructure:"base_path"`
+	SignedURLExpireDays int              `mapstructure:"signed_url_expire_days"`
+	COS                 COSStorageConfig `mapstructure:"cos"`
 	OSS      OSSStorageConfig `mapstructure:"oss"`
 	TOS      TOSStorageConfig `mapstructure:"tos"`
 }
@@ -265,6 +266,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_STORAGE_BASE_PATH"); ok {
 		cfg.Storage.BasePath = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_SIGNED_URL_EXPIRE_DAYS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Storage.SignedURLExpireDays = n
+		}
 	}
 
 	if val, ok := os.LookupEnv("APP_ASR_API_KEY"); ok {

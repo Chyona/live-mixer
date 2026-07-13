@@ -31,21 +31,21 @@ type storageProvider interface {
 // selectProvider 根据配置选择对象存储后端，优先级为 COS > OSS > TOS。
 func selectProvider(cfg Config, opts UploadOptions) (storageProvider, error) {
 	if isCOSConfigured(cfg.COS) {
-		provider, err := newCOSProvider(cfg.COS, opts)
+		provider, err := newCOSProvider(cfg.COS, opts, cfg.SignedURLExpireDays)
 		if err != nil {
 			return nil, fmt.Errorf("初始化 COS 客户端失败: %w", err)
 		}
 		return provider, nil
 	}
 	if isOSSConfigured(cfg.OSS) {
-		provider, err := newOSSProvider(cfg.OSS, opts)
+		provider, err := newOSSProvider(cfg.OSS, opts, cfg.SignedURLExpireDays)
 		if err != nil {
 			return nil, fmt.Errorf("初始化 OSS 客户端失败: %w", err)
 		}
 		return provider, nil
 	}
 	if isTOSConfigured(cfg.TOS) {
-		provider, err := newTOSProvider(cfg.TOS, opts)
+		provider, err := newTOSProvider(cfg.TOS, opts, cfg.SignedURLExpireDays)
 		if err != nil {
 			return nil, fmt.Errorf("初始化 TOS 客户端失败: %w", err)
 		}

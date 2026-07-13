@@ -66,7 +66,7 @@ func (c *Client) TestObjectKey(parts ...string) string {
 // UploadFile 将本地文件上传到对象存储。
 //
 // localPath 为本地文件路径，objectKey 为相对对象键名，会自动附加 BasePath 前缀。
-// 返回上传完成后的访问 URL。
+// 返回上传完成后的带有效期签名访问 URL。
 func (c *Client) UploadFile(ctx context.Context, localPath, objectKey string) (string, error) {
 	if localPath == "" {
 		return "", fmt.Errorf("本地文件路径不能为空")

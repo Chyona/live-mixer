@@ -30,6 +30,7 @@ jwt:
 # 对象存储（COS > OSS > TOS；密钥生产环境由 APP_STORAGE_* 环境变量注入）
 storage:
   base_path: "video_editing"   # 对象键根目录；子目录约定见 storage 包（temp/ 临时文件、test/ 测试上传）
+  signed_url_expire_days: 30   # 上传后返回的签名链接有效期（天）；TOS 最长 7 天
   cos:
     secret_id: ""
     secret_key: ""

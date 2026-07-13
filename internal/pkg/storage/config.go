@@ -1,6 +1,9 @@
 package storage
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // COSConfig 腾讯云对象存储（COS）连接配置。
 type COSConfig struct {
@@ -30,10 +33,11 @@ type TOSConfig struct {
 // Config 多对象存储配置，同时包含 COS、OSS 与 TOS。
 // 当多个后端均配置完整时，优先级为 COS > OSS > TOS。
 type Config struct {
-	COS      COSConfig
-	OSS      OSSConfig
-	TOS      TOSConfig
-	BasePath string // 对象键保存路径前缀，空值时使用 DefaultBasePath
+	COS                 COSConfig
+	OSS                 OSSConfig
+	TOS                 TOSConfig
+	BasePath            string // 对象键保存路径前缀，空值时使用 DefaultBasePath
+	SignedURLExpireDays int    // 上传后返回的签名链接有效期（天），0 表示 DefaultSignedURLExpireDays
 }
 
 // LoadConfigFromEnv 从独立环境变量加载对象存储配置（不经过 config.yaml）。
@@ -64,7 +68,14 @@ type Config struct {
 //
 // 通用：
 //   - STORAGE_BASE_PATH（可选，默认 video_editing）
+//   - STORAGE_SIGNED_URL_EXPIRE_DAYS（可选，默认 30）
 func LoadConfigFromEnv() Config {
+	signedURLExpireDays := 0
+	if val := os.Getenv("STORAGE_SIGNED_URL_EXPIRE_DAYS"); val != "" {
+		if days, err := strconv.Atoi(val); err == nil {
+			signedURLExpireDays = days
+		}
+	}
 	return Config{
 		COS: COSConfig{
 			SecretID:   os.Getenv("COS_SECRET_ID"),
@@ -85,7 +96,8 @@ func LoadConfigFromEnv() Config {
 			Region:          os.Getenv("TOS_REGION"),
 			Endpoint:        os.Getenv("TOS_ENDPOINT"),
 		},
-		BasePath: os.Getenv("STORAGE_BASE_PATH"),
+		BasePath:            os.Getenv("STORAGE_BASE_PATH"),
+		SignedURLExpireDays: signedURLExpireDays,
 	}
 }
 
