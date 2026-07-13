@@ -29,6 +29,7 @@ jwt:
 
 # 对象存储（COS > OSS > TOS；密钥生产环境由 APP_STORAGE_* 环境变量注入）
 storage:
+  base_path: "video_editing"   # 上传文件默认保存目录（对象键前缀）
   cos:
     secret_id: ""
     secret_key: ""
