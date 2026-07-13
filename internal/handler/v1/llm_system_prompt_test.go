@@ -64,8 +64,8 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLLMSystemPromptHandler(&mockLLMSystemPromptService{
 		listFn: func(ctx context.Context, page, pageSize int, opts service.LLMSystemPromptListOptions) ([]model.LLMSystemPromptListItem, int64, error) {
-			if page != 1 || pageSize != 20 {
-				t.Errorf("page/pageSize = %d/%d, want 1/20", page, pageSize)
+			if page != 1 || pageSize != 10 {
+				t.Errorf("page/pageSize = %d/%d, want 1/10", page, pageSize)
 			}
 			if opts.Name != "直播" || opts.IsEditable == nil || *opts.IsEditable != 1 {
 				t.Errorf("unexpected opts: %+v", opts)

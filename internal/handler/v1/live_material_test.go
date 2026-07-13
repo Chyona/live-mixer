@@ -144,8 +144,8 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		listFn: func(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error) {
-			if page != 1 || pageSize != 20 {
-				t.Errorf("page/pageSize = %d/%d, want 1/20", page, pageSize)
+			if page != 1 || pageSize != 10 {
+				t.Errorf("page/pageSize = %d/%d, want 1/10", page, pageSize)
 			}
 			return []model.LiveMaterialListItem{
 				{
@@ -182,8 +182,8 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if resp.Data.PageSize != 20 {
-		t.Errorf("page_size = %d, want 20", resp.Data.PageSize)
+	if resp.Data.PageSize != 10 {
+		t.Errorf("page_size = %d, want 10", resp.Data.PageSize)
 	}
 	if len(resp.Data.List) != 1 {
 		t.Fatalf("list len = %d, want 1", len(resp.Data.List))

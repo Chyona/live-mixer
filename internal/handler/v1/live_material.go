@@ -12,7 +12,7 @@ import (
 )
 
 // liveMaterialDefaultPageSize 直播素材列表默认每页条数。
-const liveMaterialDefaultPageSize = 20
+const liveMaterialDefaultPageSize = 10
 
 // LiveMaterialHandler 直播素材相关 HTTP 处理器。
 type LiveMaterialHandler struct {
@@ -40,11 +40,11 @@ type UpdateLiveMaterialRequest struct {
 
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，不含 live_asr 字段，默认每页 20 条
+// @Description  分页查询直播素材，不含 live_asr 字段，默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
 // @Param        page       query  int  false  "页码"
-// @Param        page_size  query  int  false  "每页数量，默认 20"
+// @Param        page_size  query  int  false  "每页数量，默认 10"
 // @Success      200        {object}  response.Body
 // @Failure      401        {object}  response.Body
 // @Router       /v1/live-materials [get]

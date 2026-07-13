@@ -13,7 +13,7 @@ import (
 )
 
 // llmSystemPromptDefaultPageSize 系统提示词列表默认每页条数。
-const llmSystemPromptDefaultPageSize = 20
+const llmSystemPromptDefaultPageSize = 10
 
 // LLMSystemPromptHandler 大模型系统提示词 HTTP 处理器。
 type LLMSystemPromptHandler struct {
@@ -47,7 +47,7 @@ type UpdateLLMSystemPromptRequest struct {
 // @Tags         大模型系统提示词
 // @Produce      json
 // @Param        page         query  int     false  "页码"
-// @Param        page_size    query  int     false  "每页数量，默认 20"
+// @Param        page_size    query  int     false  "每页数量，默认 10"
 // @Param        name         query  string  false  "名称模糊搜索"
 // @Param        is_editable  query  int     false  "是否可编辑：0 否 1 是"
 // @Success      200          {object}  response.Body
