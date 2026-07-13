@@ -32,55 +32,38 @@ func (m *mockObjectUploader) UploadFile(ctx context.Context, localPath, objectKe
 	return m.uploadFn(ctx, localPath, objectKey)
 }
 
-func TestGuessSourceExtension(t *testing.T) {
-	tests := []struct {
-		url  string
-		want string
-	}{
-		{"https://example.com/live.mp4", ".mp4"},
-		{"https://example.com/audio.mp3?token=1", ".mp3"},
-		{"https://example.com/stream", ".mp4"},
-	}
-	for _, tt := range tests {
-		if got := guessSourceExtension(tt.url); got != tt.want {
-			t.Errorf("guessSourceExtension(%q) = %q, want %q", tt.url, got, tt.want)
-		}
-	}
-}
-
-func TestBuildASRAudioObjectKey(t *testing.T) {
-	key := buildASRAudioObjectKey("temp", 9)
-	if !strings.HasPrefix(key, "temp/9/") {
-		t.Errorf("object key = %q, want prefix temp/9/", key)
-	}
-	if !strings.HasSuffix(key, ".wav") {
-		t.Errorf("object key = %q, want .wav suffix", key)
-	}
-}
-
 func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
-	var uploadedKey string
+	const sessionID = "test-session-id"
+	oldNewASRSessionID := newASRSessionID
+	newASRSessionID = func() string { return sessionID }
+	t.Cleanup(func() { newASRSessionID = oldNewASRSessionID })
+
+	tempDir := t.TempDir()
+	var (
+		downloadDest string
+		uploadedKey  string
+		uploadedPath string
+	)
+
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{
 			downloadFn: func(url, dest string) (string, error) {
+				downloadDest = dest
 				if err := os.WriteFile(dest, []byte("fake-media"), 0644); err != nil {
 					return "", err
 				}
 				return dest, nil
 			},
 		},
-		&mockAudioConverter{
-			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
-				return os.WriteFile(outputPath, []byte("RIFFxxxxWAVE"), 0644)
-			},
-		},
+		nil,
 		&mockObjectUploader{
 			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
+				uploadedPath = localPath
 				uploadedKey = objectKey
 				return "https://bucket.example.com/" + objectKey, nil
 			},
 		},
-		t.TempDir(),
+		tempDir,
 		nil,
 	)
 
@@ -93,11 +76,19 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 	}
 	defer cleanup()
 
+	wantLocal := buildASRLocalPath(tempDir, sessionID)
+	if downloadDest != wantLocal {
+		t.Errorf("download dest = %q, want %q", downloadDest, wantLocal)
+	}
+	if uploadedPath != wantLocal {
+		t.Errorf("upload local path = %q, want %q", uploadedPath, wantLocal)
+	}
+	wantKey := buildASRObjectKey("temp", sessionID)
+	if uploadedKey != wantKey {
+		t.Errorf("uploaded key = %q, want %q", uploadedKey, wantKey)
+	}
 	if audioURL == "" {
 		t.Fatal("audioURL should not be empty")
-	}
-	if !strings.Contains(uploadedKey, "temp/12/") {
-		t.Errorf("uploaded key = %q, want under temp/12/", uploadedKey)
 	}
 	if len(progresses) == 0 {
 		t.Error("expected progress callbacks")
@@ -107,7 +98,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 func TestLiveMaterialASRAudioPreparer_Prepare_UploaderMissing(t *testing.T) {
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{},
-		&mockAudioConverter{},
+		nil,
 		nil,
 		t.TempDir(),
 		nil,
@@ -125,7 +116,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DownloadFailed(t *testing.T) {
 				return "", context.DeadlineExceeded
 			},
 		},
-		&mockAudioConverter{},
+		nil,
 		&mockObjectUploader{},
 		t.TempDir(),
 		nil,
@@ -139,19 +130,19 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DownloadFailed(t *testing.T) {
 	}
 }
 
-func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
+func TestLiveMaterialASRAudioPreparer_Prepare_UploadFailed(t *testing.T) {
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{
 			downloadFn: func(url, dest string) (string, error) {
 				return dest, os.WriteFile(dest, []byte("x"), 0644)
 			},
 		},
-		&mockAudioConverter{
-			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
-				return context.Canceled
+		nil,
+		&mockObjectUploader{
+			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
+				return "", context.Canceled
 			},
 		},
-		&mockObjectUploader{},
 		t.TempDir(),
 		nil,
 	)
@@ -159,57 +150,56 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 	if cleanup != nil {
 		defer cleanup()
 	}
-	if err == nil || !strings.Contains(err.Error(), "转码 WAV 失败") {
-		t.Fatalf("Prepare() error = %v, want convert failure", err)
+	if err == nil || !strings.Contains(err.Error(), "上传 ASR 音频失败") {
+		t.Fatalf("Prepare() error = %v, want upload failure", err)
 	}
 }
 
-func TestLiveMaterialASRAudioPreparer_WorkDirFallback(t *testing.T) {
+func TestLiveMaterialASRAudioPreparer_TempDirFallback(t *testing.T) {
 	p := NewLiveMaterialASRAudioPreparer(nil, nil, &mockObjectUploader{}, "", nil).(*liveMaterialASRAudioPreparer)
-	got, err := p.resolveWorkDir()
+	got, err := p.resolveTempDir()
 	if err != nil {
-		t.Fatalf("resolveWorkDir() error = %v", err)
+		t.Fatalf("resolveTempDir() error = %v", err)
 	}
-	wantSuffix := filepath.Join(defaultTempDirName, defaultASRWorkSubDir)
-	if !strings.HasSuffix(got, wantSuffix) {
-		t.Errorf("work dir = %q, want suffix %q", got, wantSuffix)
+	if !strings.HasSuffix(got, defaultTempDirName) {
+		t.Errorf("temp dir = %q, want suffix %q", got, defaultTempDirName)
 	}
 }
 
-func TestDefaultASRWorkDir_UnderProcessDir(t *testing.T) {
+func TestDefaultTempDir_UnderProcessDir(t *testing.T) {
 	base, err := processBaseDir()
 	if err != nil {
 		t.Fatalf("processBaseDir() error = %v", err)
 	}
-	got, err := defaultASRWorkDir()
+	got, err := defaultTempDir()
 	if err != nil {
-		t.Fatalf("defaultASRWorkDir() error = %v", err)
+		t.Fatalf("defaultTempDir() error = %v", err)
 	}
-	want := filepath.Join(base, defaultTempDirName, defaultASRWorkSubDir)
+	want := filepath.Join(base, defaultTempDirName)
 	if got != want {
-		t.Errorf("defaultASRWorkDir() = %q, want %q", got, want)
+		t.Errorf("defaultTempDir() = %q, want %q", got, want)
 	}
 }
 
-// TestLiveMaterialASRAudioPreparer_Prepare_DefaultWorkDir 验证未指定 workDir 时自动创建嵌套临时目录（Windows 兼容）。
-func TestLiveMaterialASRAudioPreparer_Prepare_DefaultWorkDir(t *testing.T) {
+func TestLiveMaterialASRAudioPreparer_Prepare_DefaultTempDir(t *testing.T) {
+	const sessionID = "default-temp-session"
+	oldNewASRSessionID := newASRSessionID
+	newASRSessionID = func() string { return sessionID }
+	t.Cleanup(func() { newASRSessionID = oldNewASRSessionID })
+
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{
 			downloadFn: func(url, dest string) (string, error) {
 				return dest, os.WriteFile(dest, []byte("fake"), 0644)
 			},
 		},
-		&mockAudioConverter{
-			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
-				return os.WriteFile(outputPath, []byte("wav"), 0644)
-			},
-		},
+		nil,
 		&mockObjectUploader{
 			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
 				return "https://bucket.example.com/" + objectKey, nil
 			},
 		},
-		"", // 使用进程目录下 temp/asr
+		"",
 		nil,
 	)
 
