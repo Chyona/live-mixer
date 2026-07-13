@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS account (
     email       VARCHAR(128) NOT NULL UNIQUE,
     password    VARCHAR(255) NOT NULL,
     nickname    VARCHAR(64),
-    avatar      VARCHAR(512),
+    avatar      VARCHAR(1024),
     roles       VARCHAR(64),
     open_id     VARCHAR(128),
     remark      VARCHAR(256),

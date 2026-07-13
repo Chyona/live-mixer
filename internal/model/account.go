@@ -12,7 +12,7 @@ type Account struct {
 	Email     string         `gorm:"size:128;uniqueIndex;not null" json:"email"`
 	Password  string         `gorm:"size:255;not null" json:"-"`
 	Nickname  string         `gorm:"size:64" json:"nickname"`
-	Avatar    string         `gorm:"size:512" json:"avatar"`                       // 用户头像 URL
+	Avatar    string         `gorm:"size:1024" json:"avatar"`                      // 用户头像 URL
 	Roles     string         `gorm:"size:64" json:"roles"`                         // 用户角色，多个角色用逗号分隔
 	OpenID    string         `gorm:"column:open_id;size:128;index" json:"open_id"` // 第三方授权 OpenId
 	Remark    string         `gorm:"size:256" json:"remark"`                       // 备注
