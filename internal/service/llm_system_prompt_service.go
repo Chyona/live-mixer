@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
@@ -20,9 +19,6 @@ var (
 	ErrLLMSystemPromptNotEditable  = errors.New("系统预置提示词不可修改")
 	ErrLLMSystemPromptNotDeletable = errors.New("系统预置提示词不可删除")
 )
-
-// llmSystemPromptContentPreviewRunes 列表接口中 content 预览的最大字符数（按 rune 计）。
-const llmSystemPromptContentPreviewRunes = 100
 
 // LLMSystemPromptListOptions 系统提示词列表查询选项（来自 HTTP 查询参数）。
 type LLMSystemPromptListOptions struct {
@@ -138,14 +134,14 @@ func (s *llmSystemPromptService) List(ctx context.Context, page, pageSize int, o
 	items := make([]model.LLMSystemPromptListItem, 0, len(prompts))
 	for _, p := range prompts {
 		items = append(items, model.LLMSystemPromptListItem{
-			ID:             p.ID,
-			Name:           p.Name,
-			ContentPreview: llmSystemPromptContentPreview(p.Content),
-			Remark:         p.Remark,
-			IsEditable:     p.IsEditable,
-			CreatedBy:      p.CreatedBy,
-			CreatedAt:      p.CreatedAt,
-			UpdatedAt:      p.UpdatedAt,
+			ID:         p.ID,
+			Name:       p.Name,
+			Content:    p.Content,
+			Remark:     p.Remark,
+			IsEditable: p.IsEditable,
+			CreatedBy:  p.CreatedBy,
+			CreatedAt:  p.CreatedAt,
+			UpdatedAt:  p.UpdatedAt,
 		})
 	}
 	return items, total, nil
@@ -187,13 +183,4 @@ func (s *llmSystemPromptService) Get(ctx context.Context, id uint) (*model.LLMSy
 		return nil, err
 	}
 	return prompt, nil
-}
-
-// llmSystemPromptContentPreview 截取提示词内容预览，超出长度时追加省略号。
-func llmSystemPromptContentPreview(content string) string {
-	if utf8.RuneCountInString(content) <= llmSystemPromptContentPreviewRunes {
-		return content
-	}
-	runes := []rune(content)
-	return string(runes[:llmSystemPromptContentPreviewRunes]) + "…"
 }

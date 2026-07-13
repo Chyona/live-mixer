@@ -48,7 +48,7 @@ type UpdateLLMSystemPromptRequest struct {
 
 // ListLLMSystemPrompts 系统提示词列表
 // @Summary      系统提示词列表
-// @Description  分页查询系统提示词，支持关键词与日期筛选，列表返回 content_preview
+// @Description  分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content
 // @Tags         大模型系统提示词
 // @Produce      json
 // @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/content/remark"

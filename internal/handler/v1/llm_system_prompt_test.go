@@ -71,7 +71,7 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 				t.Errorf("unexpected opts: %+v", opts)
 			}
 			return []model.LLMSystemPromptListItem{
-				{ID: 1, Name: "直播话术", ContentPreview: "预览", IsEditable: 1},
+				{ID: 1, Name: "直播话术", Content: "完整提示词内容", IsEditable: 1},
 			}, 1, nil
 		},
 	})

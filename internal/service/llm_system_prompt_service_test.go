@@ -146,13 +146,13 @@ func TestLLMSystemPromptService_Delete_NotDeletable(t *testing.T) {
 	}
 }
 
-// TestLLMSystemPromptService_List_ContentPreview 验证列表返回内容预览。
-func TestLLMSystemPromptService_List_ContentPreview(t *testing.T) {
-	longContent := strings.Repeat("中", 120)
+// TestLLMSystemPromptService_List_FullContent 验证列表返回完整 content。
+func TestLLMSystemPromptService_List_FullContent(t *testing.T) {
+	fullContent := strings.Repeat("中", 120)
 	repo := &mockLLMSystemPromptRepo{
 		listFn: func(ctx context.Context, filter repository.LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error) {
 			return []model.LLMSystemPrompt{
-				{ID: 1, Name: "测试", Content: longContent, IsEditable: 1, CreatedBy: 1},
+				{ID: 1, Name: "测试", Content: fullContent, IsEditable: 1, CreatedBy: 1},
 			}, 1, nil
 		},
 	}
@@ -165,25 +165,8 @@ func TestLLMSystemPromptService_List_ContentPreview(t *testing.T) {
 	if total != 1 || len(items) != 1 {
 		t.Fatalf("unexpected list result: total=%d len=%d", total, len(items))
 	}
-	if len([]rune(items[0].ContentPreview)) != 101 {
-		t.Errorf("preview rune len = %d, want 101 (100 + ellipsis)", len([]rune(items[0].ContentPreview)))
-	}
-	if !strings.HasSuffix(items[0].ContentPreview, "…") {
-		t.Errorf("preview should end with ellipsis, got %q", items[0].ContentPreview)
-	}
-}
-
-// TestLLMSystemPromptContentPreview 验证内容预览截断逻辑。
-func TestLLMSystemPromptContentPreview(t *testing.T) {
-	short := "短内容"
-	if got := llmSystemPromptContentPreview(short); got != short {
-		t.Errorf("preview short = %q, want %q", got, short)
-	}
-
-	long := strings.Repeat("字", 150)
-	got := llmSystemPromptContentPreview(long)
-	if len([]rune(got)) != 101 {
-		t.Errorf("preview long rune len = %d, want 101", len([]rune(got)))
+	if items[0].Content != fullContent {
+		t.Errorf("content = %q, want full content", items[0].Content)
 	}
 }
 

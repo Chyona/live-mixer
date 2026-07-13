@@ -539,7 +539,7 @@ const docTemplate = `{
         },
         "/v1/llm-system-prompts": {
             "get": {
-                "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回 content_preview",
+                "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content",
                 "produces": [
                     "application/json"
                 ],
