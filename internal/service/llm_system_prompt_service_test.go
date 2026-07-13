@@ -1,0 +1,196 @@
+package service
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"live-mixer/internal/model"
+	"live-mixer/internal/repository"
+
+	"gorm.io/gorm"
+)
+
+// mockLLMSystemPromptRepo 用于系统提示词 service 单元测试的仓储 mock。
+type mockLLMSystemPromptRepo struct {
+	prompts  map[uint]*model.LLMSystemPrompt
+	nextID   uint
+	createFn func(ctx context.Context, prompt *model.LLMSystemPrompt) error
+	updateFn func(ctx context.Context, prompt *model.LLMSystemPrompt) error
+	deleteFn func(ctx context.Context, id uint) error
+	listFn   func(ctx context.Context, filter repository.LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error)
+}
+
+func (m *mockLLMSystemPromptRepo) Create(ctx context.Context, prompt *model.LLMSystemPrompt) error {
+	if m.createFn != nil {
+		return m.createFn(ctx, prompt)
+	}
+	m.nextID++
+	prompt.ID = m.nextID
+	if m.prompts == nil {
+		m.prompts = make(map[uint]*model.LLMSystemPrompt)
+	}
+	stored := *prompt
+	m.prompts[prompt.ID] = &stored
+	return nil
+}
+
+func (m *mockLLMSystemPromptRepo) GetByID(ctx context.Context, id uint) (*model.LLMSystemPrompt, error) {
+	prompt, ok := m.prompts[id]
+	if !ok {
+		return nil, gorm.ErrRecordNotFound
+	}
+	stored := *prompt
+	return &stored, nil
+}
+
+func (m *mockLLMSystemPromptRepo) Update(ctx context.Context, prompt *model.LLMSystemPrompt) error {
+	if m.updateFn != nil {
+		return m.updateFn(ctx, prompt)
+	}
+	existing, ok := m.prompts[prompt.ID]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	existing.Name = prompt.Name
+	existing.Content = prompt.Content
+	existing.Remark = prompt.Remark
+	existing.Ext = prompt.Ext
+	return nil
+}
+
+func (m *mockLLMSystemPromptRepo) Delete(ctx context.Context, id uint) error {
+	if m.deleteFn != nil {
+		return m.deleteFn(ctx, id)
+	}
+	delete(m.prompts, id)
+	return nil
+}
+
+func (m *mockLLMSystemPromptRepo) List(ctx context.Context, filter repository.LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx, filter, offset, limit)
+	}
+	return nil, 0, nil
+}
+
+// TestLLMSystemPromptService_Create_Success 验证创建时写入默认值且创建人正确。
+func TestLLMSystemPromptService_Create_Success(t *testing.T) {
+	repo := &mockLLMSystemPromptRepo{}
+	svc := NewLLMSystemPromptService(repo)
+
+	prompt, err := svc.Create(context.Background(), 3, "  名称  ", "  内容  ", "备注", "ext")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if prompt.Name != "名称" {
+		t.Errorf("Name = %q, want 名称", prompt.Name)
+	}
+	if prompt.Content != "内容" {
+		t.Errorf("Content = %q, want 内容", prompt.Content)
+	}
+	if prompt.IsEditable != model.LLMSystemPromptEditable {
+		t.Errorf("IsEditable = %d, want %d", prompt.IsEditable, model.LLMSystemPromptEditable)
+	}
+	if prompt.CreatedBy != 3 {
+		t.Errorf("CreatedBy = %d, want 3", prompt.CreatedBy)
+	}
+}
+
+// TestLLMSystemPromptService_Create_EmptyName 验证名称为空时返回错误。
+func TestLLMSystemPromptService_Create_EmptyName(t *testing.T) {
+	svc := NewLLMSystemPromptService(&mockLLMSystemPromptRepo{})
+	if _, err := svc.Create(context.Background(), 1, "   ", "内容", "", ""); err == nil {
+		t.Fatal("Create() should fail for empty name")
+	}
+}
+
+// TestLLMSystemPromptService_Update_NotEditable 验证预置提示词不可修改。
+func TestLLMSystemPromptService_Update_NotEditable(t *testing.T) {
+	repo := &mockLLMSystemPromptRepo{
+		prompts: map[uint]*model.LLMSystemPrompt{
+			1: {
+				ID: 1, Name: "预置", Content: "内容",
+				IsEditable: model.LLMSystemPromptNotEditable, CreatedBy: 1,
+			},
+		},
+	}
+	svc := NewLLMSystemPromptService(repo)
+
+	_, err := svc.Update(context.Background(), 1, "新名称", "新内容", "", "")
+	if err != ErrLLMSystemPromptNotEditable {
+		t.Errorf("Update() error = %v, want %v", err, ErrLLMSystemPromptNotEditable)
+	}
+}
+
+// TestLLMSystemPromptService_Update_NotFound 验证记录不存在时返回错误。
+func TestLLMSystemPromptService_Update_NotFound(t *testing.T) {
+	svc := NewLLMSystemPromptService(&mockLLMSystemPromptRepo{prompts: map[uint]*model.LLMSystemPrompt{}})
+	_, err := svc.Update(context.Background(), 99, "名称", "内容", "", "")
+	if err != ErrLLMSystemPromptNotFound {
+		t.Errorf("Update() error = %v, want %v", err, ErrLLMSystemPromptNotFound)
+	}
+}
+
+// TestLLMSystemPromptService_Delete_NotDeletable 验证预置提示词不可删除。
+func TestLLMSystemPromptService_Delete_NotDeletable(t *testing.T) {
+	repo := &mockLLMSystemPromptRepo{
+		prompts: map[uint]*model.LLMSystemPrompt{
+			1: {ID: 1, Name: "预置", Content: "内容", IsEditable: model.LLMSystemPromptNotEditable},
+		},
+	}
+	svc := NewLLMSystemPromptService(repo)
+
+	if err := svc.Delete(context.Background(), 1); err != ErrLLMSystemPromptNotDeletable {
+		t.Errorf("Delete() error = %v, want %v", err, ErrLLMSystemPromptNotDeletable)
+	}
+}
+
+// TestLLMSystemPromptService_List_ContentPreview 验证列表返回内容预览。
+func TestLLMSystemPromptService_List_ContentPreview(t *testing.T) {
+	longContent := strings.Repeat("中", 120)
+	repo := &mockLLMSystemPromptRepo{
+		listFn: func(ctx context.Context, filter repository.LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error) {
+			return []model.LLMSystemPrompt{
+				{ID: 1, Name: "测试", Content: longContent, IsEditable: 1, CreatedBy: 1},
+			}, 1, nil
+		},
+	}
+	svc := NewLLMSystemPromptService(repo)
+
+	items, total, err := svc.List(context.Background(), 1, 20, LLMSystemPromptListOptions{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("unexpected list result: total=%d len=%d", total, len(items))
+	}
+	if len([]rune(items[0].ContentPreview)) != 101 {
+		t.Errorf("preview rune len = %d, want 101 (100 + ellipsis)", len([]rune(items[0].ContentPreview)))
+	}
+	if !strings.HasSuffix(items[0].ContentPreview, "…") {
+		t.Errorf("preview should end with ellipsis, got %q", items[0].ContentPreview)
+	}
+}
+
+// TestLLMSystemPromptContentPreview 验证内容预览截断逻辑。
+func TestLLMSystemPromptContentPreview(t *testing.T) {
+	short := "短内容"
+	if got := llmSystemPromptContentPreview(short); got != short {
+		t.Errorf("preview short = %q, want %q", got, short)
+	}
+
+	long := strings.Repeat("字", 150)
+	got := llmSystemPromptContentPreview(long)
+	if len([]rune(got)) != 101 {
+		t.Errorf("preview long rune len = %d, want 101", len([]rune(got)))
+	}
+}
+
+// TestLLMSystemPromptService_Get_NotFound 验证详情不存在时返回错误。
+func TestLLMSystemPromptService_Get_NotFound(t *testing.T) {
+	svc := NewLLMSystemPromptService(&mockLLMSystemPromptRepo{prompts: map[uint]*model.LLMSystemPrompt{}})
+	if _, err := svc.Get(context.Background(), 1); err != ErrLLMSystemPromptNotFound {
+		t.Errorf("Get() error = %v, want %v", err, ErrLLMSystemPromptNotFound)
+	}
+}

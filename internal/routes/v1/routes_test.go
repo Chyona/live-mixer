@@ -34,9 +34,10 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	authHandler := v1handler.NewAuthHandler(routeMockAuthService{})
 	asrHandler := v1handler.NewASRHandler(nil)
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	llmSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, secret)
+	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, secret)
 
 	// 未携带 Token 访问账号列表应被 JWT 中间件拦截
 	req := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
@@ -75,7 +76,7 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	}
 	rWithRecovery := gin.New()
 	rWithRecovery.Use(gin.Recovery())
-	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, secret)
+	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, secret)
 
 	authReq := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
 	authReq.Header.Set("Authorization", "Bearer "+token)
@@ -92,7 +93,7 @@ func TestRegisterRoutes_ASRPublic(t *testing.T) {
 	asrHandler := v1handler.NewASRHandler(&routeMockASRService{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, nil, secret)
 
 	body := []byte(`{"audio_url":"https://example.com/test.wav"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/asr", bytes.NewReader(body))
@@ -121,7 +122,7 @@ func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -139,7 +140,7 @@ func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials", nil)
 	w := httptest.NewRecorder()
@@ -156,7 +157,7 @@ func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials/1", nil)
 	w := httptest.NewRecorder()
@@ -164,5 +165,36 @@ func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("GET /v1/live-materials/1 without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestRegisterRoutes_LLMSystemPromptsProtected 验证系统提示词接口需要 JWT 鉴权。
+func TestRegisterRoutes_LLMSystemPromptsProtected(t *testing.T) {
+	secret := "route-test-secret"
+	llmHandler := v1handler.NewLLMSystemPromptHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, llmHandler, secret)
+
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/llm-system-prompts"},
+		{http.MethodPost, "/v1/llm-system-prompts"},
+		{http.MethodGet, "/v1/llm-system-prompts/1"},
+		{http.MethodPut, "/v1/llm-system-prompts/1"},
+		{http.MethodDelete, "/v1/llm-system-prompts/1"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.method == http.MethodPost || tc.method == http.MethodPut {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s without token: status = %d, want %d", tc.method, tc.path, w.Code, http.StatusUnauthorized)
+		}
 	}
 }

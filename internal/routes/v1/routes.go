@@ -9,7 +9,7 @@ import (
 )
 
 // RegisterRoutes 注册 v1 版本全部路由。
-func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, asrHandler *v1handler.ASRHandler, liveMaterialHandler *v1handler.LiveMaterialHandler, jwtSecret string) {
+func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, asrHandler *v1handler.ASRHandler, liveMaterialHandler *v1handler.LiveMaterialHandler, llmSystemPromptHandler *v1handler.LLMSystemPromptHandler, jwtSecret string) {
 	// 登录接口无需 JWT 鉴权
 	rg.POST("/auth/login", authHandler.Login)
 	// ASR 同步识别接口无需 JWT 鉴权
@@ -33,5 +33,14 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 		liveMaterials.POST("", liveMaterialHandler.CreateLiveMaterial)
 		liveMaterials.GET("/:id", liveMaterialHandler.GetLiveMaterial)
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
+	}
+
+	llmSystemPrompts := authorized.Group("/llm-system-prompts")
+	{
+		llmSystemPrompts.GET("", llmSystemPromptHandler.ListLLMSystemPrompts)
+		llmSystemPrompts.POST("", llmSystemPromptHandler.CreateLLMSystemPrompt)
+		llmSystemPrompts.GET("/:id", llmSystemPromptHandler.GetLLMSystemPrompt)
+		llmSystemPrompts.PUT("/:id", llmSystemPromptHandler.UpdateLLMSystemPrompt)
+		llmSystemPrompts.DELETE("/:id", llmSystemPromptHandler.DeleteLLMSystemPrompt)
 	}
 }

@@ -60,6 +60,11 @@ func Unauthorized(c *gin.Context, message string) {
 	Fail(c, http.StatusUnauthorized, 401, message)
 }
 
+// Forbidden 返回 403 错误。
+func Forbidden(c *gin.Context, message string) {
+	Fail(c, http.StatusForbidden, 403, message)
+}
+
 // PageData 分页数据结构。
 type PageData struct {
 	List     interface{} `json:"list"`
