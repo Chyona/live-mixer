@@ -9,7 +9,7 @@ import (
 )
 
 // RegisterRoutes 注册 v1 版本全部路由。
-func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, asrHandler *v1handler.ASRHandler, liveMaterialHandler *v1handler.LiveMaterialHandler, llmSystemPromptHandler *v1handler.LLMSystemPromptHandler, jwtSecret string) {
+func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, asrHandler *v1handler.ASRHandler, liveMaterialHandler *v1handler.LiveMaterialHandler, llmSystemPromptHandler *v1handler.LLMSystemPromptHandler, videoProjectHandler *v1handler.VideoProjectHandler, jwtSecret string) {
 	// 登录接口无需 JWT 鉴权
 	rg.POST("/auth/login", authHandler.Login)
 	// ASR 同步识别接口无需 JWT 鉴权
@@ -43,5 +43,14 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 		llmSystemPrompts.GET("/:id", llmSystemPromptHandler.GetLLMSystemPrompt)
 		llmSystemPrompts.PUT("/:id", llmSystemPromptHandler.UpdateLLMSystemPrompt)
 		llmSystemPrompts.DELETE("/:id", llmSystemPromptHandler.DeleteLLMSystemPrompt)
+	}
+
+	videoProjects := authorized.Group("/video-projects")
+	{
+		videoProjects.GET("", videoProjectHandler.ListVideoProjects)
+		videoProjects.POST("", videoProjectHandler.CreateVideoProject)
+		videoProjects.GET("/:id", videoProjectHandler.GetVideoProject)
+		videoProjects.PUT("/:id", videoProjectHandler.UpdateVideoProject)
+		videoProjects.DELETE("/:id", videoProjectHandler.DeleteVideoProject)
 	}
 }
