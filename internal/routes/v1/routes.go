@@ -33,6 +33,7 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 		liveMaterials.POST("", liveMaterialHandler.CreateLiveMaterial)
 		liveMaterials.GET("/:id", liveMaterialHandler.GetLiveMaterial)
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
+		liveMaterials.DELETE("/:id", liveMaterialHandler.DeleteLiveMaterial)
 	}
 
 	llmSystemPrompts := authorized.Group("/llm-system-prompts")

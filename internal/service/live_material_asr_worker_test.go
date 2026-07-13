@@ -33,6 +33,8 @@ func (m *workerMockRepo) List(ctx context.Context, filter repository.LiveMateria
 	return nil, 0, nil
 }
 
+func (m *workerMockRepo) Delete(ctx context.Context, id uint) error { return nil }
+
 func (m *workerMockRepo) UpdateASRProcessing(ctx context.Context, id uint) error {
 	material := m.materials[id]
 	if material == nil {

@@ -168,6 +168,23 @@ func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 	}
 }
 
+// TestRegisterRoutes_LiveMaterialsDeleteProtected 验证直播素材删除接口需要 JWT 鉴权。
+func TestRegisterRoutes_LiveMaterialsDeleteProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, secret)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/live-materials/1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("DELETE /v1/live-materials/1 without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
 // TestRegisterRoutes_LLMSystemPromptsProtected 验证系统提示词接口需要 JWT 鉴权。
 func TestRegisterRoutes_LLMSystemPromptsProtected(t *testing.T) {
 	secret := "route-test-secret"

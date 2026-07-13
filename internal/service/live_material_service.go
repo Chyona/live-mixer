@@ -27,6 +27,9 @@ const liveMaterialListDateLayout = "2006-01-02"
 // ErrUnsupportedMediaFormat 创建素材时不支持的音视频格式。
 var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持: mp3, wav, mp4, ogg, raw")
 
+// ErrLiveMaterialNotFound 直播素材不存在。
+var ErrLiveMaterialNotFound = errors.New("直播素材不存在")
+
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
 	// Create 创建直播素材，createdBy 来自 JWT 当前用户。
@@ -37,6 +40,8 @@ type LiveMaterialService interface {
 	List(ctx context.Context, page, pageSize int, opts LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
 	// Get 根据 ID 获取直播素材完整信息（含 live_asr）。
 	Get(ctx context.Context, id uint) (*model.LiveMaterial, error)
+	// Delete 删除直播素材，并级联删除关联剪辑项目。
+	Delete(ctx context.Context, id uint) error
 }
 
 type liveMaterialService struct {
@@ -90,7 +95,7 @@ func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark 
 	material, err := s.liveMaterialRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("直播素材不存在")
+			return nil, ErrLiveMaterialNotFound
 		}
 		return nil, err
 	}
@@ -168,9 +173,19 @@ func (s *liveMaterialService) Get(ctx context.Context, id uint) (*model.LiveMate
 	material, err := s.liveMaterialRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("直播素材不存在")
+			return nil, ErrLiveMaterialNotFound
 		}
 		return nil, err
 	}
 	return material, nil
+}
+
+func (s *liveMaterialService) Delete(ctx context.Context, id uint) error {
+	if err := s.liveMaterialRepo.Delete(ctx, id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrLiveMaterialNotFound
+		}
+		return err
+	}
+	return nil
 }

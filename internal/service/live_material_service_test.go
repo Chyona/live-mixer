@@ -17,6 +17,7 @@ type mockLiveMaterialRepo struct {
 	nextID    uint
 	createFn  func(ctx context.Context, material *model.LiveMaterial) error
 	updateFn  func(ctx context.Context, material *model.LiveMaterial) error
+	deleteFn func(ctx context.Context, id uint) error
 	listFn    func(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
 }
 
@@ -72,6 +73,14 @@ func (m *mockLiveMaterialRepo) UpdateASRCompleted(ctx context.Context, id uint, 
 	return nil
 }
 func (m *mockLiveMaterialRepo) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+	return nil
+}
+
+func (m *mockLiveMaterialRepo) Delete(ctx context.Context, id uint) error {
+	if m.deleteFn != nil {
+		return m.deleteFn(ctx, id)
+	}
+	delete(m.materials, id)
 	return nil
 }
 
@@ -382,5 +391,36 @@ func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
 	}
 	if len(gotFilter.TitleKeywords) != 1 || gotFilter.TitleKeywords[0] != "游戏" {
 		t.Errorf("filter = %+v", gotFilter)
+	}
+}
+
+// TestLiveMaterialService_Delete_Success 验证删除时调用仓储层。
+func TestLiveMaterialService_Delete_Success(t *testing.T) {
+	var deletedID uint
+	repo := &mockLiveMaterialRepo{
+		deleteFn: func(ctx context.Context, id uint) error {
+			deletedID = id
+			return nil
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+	if err := svc.Delete(context.Background(), 3); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if deletedID != 3 {
+		t.Errorf("deletedID = %d, want 3", deletedID)
+	}
+}
+
+// TestLiveMaterialService_Delete_NotFound 验证素材不存在时返回错误。
+func TestLiveMaterialService_Delete_NotFound(t *testing.T) {
+	repo := &mockLiveMaterialRepo{
+		deleteFn: func(ctx context.Context, id uint) error {
+			return gorm.ErrRecordNotFound
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+	if err := svc.Delete(context.Background(), 99); err != ErrLiveMaterialNotFound {
+		t.Errorf("Delete() error = %v, want %v", err, ErrLiveMaterialNotFound)
 	}
 }

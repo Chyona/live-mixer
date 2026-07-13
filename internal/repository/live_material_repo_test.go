@@ -18,7 +18,7 @@ func setupLiveMaterialTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.LiveMaterial{}); err != nil {
+	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
 	return db
@@ -320,5 +320,56 @@ func TestLiveMaterialRepository_List_DateFilter(t *testing.T) {
 	}
 	if total != 1 || len(materials) != 1 || materials[0].Name != "范围内" {
 		t.Errorf("unexpected result: total=%d materials=%+v", total, materials)
+	}
+}
+
+// TestLiveMaterialRepository_Delete_CascadeVideoProjects 验证删除素材时级联删除关联剪辑项目。
+func TestLiveMaterialRepository_Delete_CascadeVideoProjects(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "待删除素材", LiveURL: "https://example.com/del.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, material); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	project := &model.VideoProject{
+		Name: "关联项目", LiveID: material.ID, Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+	}
+	if err := db.Create(project).Error; err != nil {
+		t.Fatalf("create video_project: %v", err)
+	}
+
+	if err := repo.Delete(ctx, material.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := repo.GetByID(ctx, material.ID); err == nil {
+		t.Fatal("live_material should be deleted")
+	}
+
+	var count int64
+	if err := db.Model(&model.VideoProject{}).Where("live_id = ?", material.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count video_project: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("video_project count = %d, want 0", count)
+	}
+}
+
+// TestLiveMaterialRepository_Delete_NotFound 验证删除不存在的素材返回错误。
+func TestLiveMaterialRepository_Delete_NotFound(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+
+	err := repo.Delete(context.Background(), 999)
+	if err == nil {
+		t.Fatal("expected error for missing record")
+	}
+	if err != gorm.ErrRecordNotFound {
+		t.Errorf("error = %v, want ErrRecordNotFound", err)
 	}
 }

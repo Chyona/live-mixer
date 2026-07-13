@@ -21,6 +21,7 @@ import (
 type mockLiveMaterialService struct {
 	createFn func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
 	updateFn func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
+	deleteFn func(ctx context.Context, id uint) error
 	listFn   func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
 	getFn    func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 }
@@ -51,6 +52,13 @@ func (m *mockLiveMaterialService) Get(ctx context.Context, id uint) (*model.Live
 		return m.getFn(ctx, id)
 	}
 	return nil, nil
+}
+
+func (m *mockLiveMaterialService) Delete(ctx context.Context, id uint) error {
+	if m.deleteFn != nil {
+		return m.deleteFn(ctx, id)
+	}
+	return nil
 }
 
 // newAuthedRouter 创建带 JWT 鉴权的测试路由。
@@ -107,7 +115,7 @@ func TestLiveMaterialHandler_Get_NotFound(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		getFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
-			return nil, errLiveMaterialNotFound()
+			return nil, service.ErrLiveMaterialNotFound
 		},
 	})
 	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
@@ -362,7 +370,7 @@ func TestLiveMaterialHandler_Update_NotFound(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		updateFn: func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {
-			return nil, errLiveMaterialNotFound()
+			return nil, service.ErrLiveMaterialNotFound
 		},
 	})
 	r := newAuthedRouter(secret, handler.UpdateLiveMaterial, http.MethodPut, "/live-materials/:id")
@@ -443,11 +451,61 @@ func TestLiveMaterialHandler_List_InvalidPageSize(t *testing.T) {
 	}
 }
 
-// errLiveMaterialNotFound 模拟 service 返回的「不存在」错误。
-func errLiveMaterialNotFound() error {
-	return &liveMaterialNotFoundError{}
+// TestLiveMaterialHandler_Delete_Success 验证删除成功返回提示消息。
+func TestLiveMaterialHandler_Delete_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		deleteFn: func(ctx context.Context, id uint) error {
+			if id != 9 {
+				t.Errorf("id = %d, want 9", id)
+			}
+			return nil
+		},
+	})
+	r := newAuthedRouter(secret, handler.DeleteLiveMaterial, http.MethodDelete, "/live-materials/:id")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/live-materials/9", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Message != "删除成功" {
+		t.Errorf("message = %q, want 删除成功", resp.Message)
+	}
 }
 
-type liveMaterialNotFoundError struct{}
+// TestLiveMaterialHandler_Delete_NotFound 验证素材不存在时返回 404。
+func TestLiveMaterialHandler_Delete_NotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		deleteFn: func(ctx context.Context, id uint) error {
+			return service.ErrLiveMaterialNotFound
+		},
+	})
+	r := newAuthedRouter(secret, handler.DeleteLiveMaterial, http.MethodDelete, "/live-materials/:id")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
-func (e *liveMaterialNotFoundError) Error() string { return "直播素材不存在" }
+	req := httptest.NewRequest(http.MethodDelete, "/live-materials/999", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// errLiveMaterialNotFound 模拟 service 返回的「不存在」错误。
+func errLiveMaterialNotFound() error {
+	return service.ErrLiveMaterialNotFound
+}

@@ -28,6 +28,8 @@ type LiveMaterialRepository interface {
 	UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
 	// List 分页查询直播素材列表，支持日期与关键词筛选，按 id 倒序，不含 live_asr 字段。
 	List(ctx context.Context, filter LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
+	// Delete 物理删除直播素材，并级联删除关联的 video_project 记录。
+	Delete(ctx context.Context, id uint) error
 }
 
 // LiveMaterialListFilter 直播素材列表查询筛选条件。
@@ -158,4 +160,21 @@ func applyLiveMaterialListFilter(query *gorm.DB, filter LiveMaterialListFilter) 
 		)
 	}
 	return query
+}
+
+// Delete 物理删除直播素材，并在同一事务内级联删除 live_id 关联的剪辑项目。
+func (r *liveMaterialRepository) Delete(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("live_id = ?", id).Delete(&model.VideoProject{}).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&model.LiveMaterial{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }

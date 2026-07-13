@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"errors"
 	"strconv"
 
 	"live-mixer/internal/middleware"
@@ -140,7 +141,7 @@ func (h *LiveMaterialHandler) GetLiveMaterial(c *gin.Context) {
 
 	material, err := h.liveMaterialService.Get(c.Request.Context(), uint(id))
 	if err != nil {
-		if err.Error() == "直播素材不存在" {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
 			response.NotFound(c, err.Error())
 			return
 		}
@@ -177,7 +178,7 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 
 	material, err := h.liveMaterialService.Update(c.Request.Context(), uint(id), req.Name, req.Remark)
 	if err != nil {
-		if err.Error() == "直播素材不存在" {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
 			response.NotFound(c, err.Error())
 			return
 		}
@@ -185,4 +186,32 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 		return
 	}
 	response.Success(c, material)
+}
+
+// DeleteLiveMaterial 删除直播素材
+// @Summary      删除直播素材
+// @Description  物理删除直播素材，并级联删除 video_project 中关联的剪辑项目
+// @Tags         直播素材
+// @Produce      json
+// @Param        id   path  int  true  "素材 ID"
+// @Success      200  {object}  response.Body
+// @Failure      400  {object}  response.Body
+// @Failure      404  {object}  response.Body
+// @Router       /v1/live-materials/{id} [delete]
+func (h *LiveMaterialHandler) DeleteLiveMaterial(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的素材 ID")
+		return
+	}
+
+	if err := h.liveMaterialService.Delete(c.Request.Context(), id); err != nil {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.SuccessWithMessage(c, "删除成功", nil)
 }
