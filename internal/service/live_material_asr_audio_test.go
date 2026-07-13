@@ -81,6 +81,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 			},
 		},
 		t.TempDir(),
+		nil,
 	)
 
 	var progresses []int16
@@ -109,6 +110,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_UploaderMissing(t *testing.T) {
 		&mockAudioConverter{},
 		nil,
 		t.TempDir(),
+		nil,
 	)
 	_, _, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
 	if err == nil || !strings.Contains(err.Error(), "对象存储未配置") {
@@ -126,6 +128,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DownloadFailed(t *testing.T) {
 		&mockAudioConverter{},
 		&mockObjectUploader{},
 		t.TempDir(),
+		nil,
 	)
 	_, cleanup, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
 	if cleanup != nil {
@@ -150,6 +153,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 		},
 		&mockObjectUploader{},
 		t.TempDir(),
+		nil,
 	)
 	_, cleanup, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
 	if cleanup != nil {
@@ -161,7 +165,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 }
 
 func TestLiveMaterialASRAudioPreparer_WorkDirFallback(t *testing.T) {
-	p := NewLiveMaterialASRAudioPreparer(nil, nil, &mockObjectUploader{}, "").(*liveMaterialASRAudioPreparer)
+	p := NewLiveMaterialASRAudioPreparer(nil, nil, &mockObjectUploader{}, "", nil).(*liveMaterialASRAudioPreparer)
 	got, err := p.resolveWorkDir()
 	if err != nil {
 		t.Fatalf("resolveWorkDir() error = %v", err)
@@ -206,6 +210,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DefaultWorkDir(t *testing.T) {
 			},
 		},
 		"", // 使用进程目录下 temp/asr
+		nil,
 	)
 
 	_, cleanup, err := preparer.Prepare(context.Background(), 99, "https://example.com/live.mp4", nil)

@@ -58,7 +58,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("初始化对象存储失败", zap.Error(err))
 	}
-	audioPreparer := service.NewLiveMaterialASRAudioPreparer(nil, nil, storageClient, "")
+	audioPreparer := service.NewLiveMaterialASRAudioPreparer(nil, nil, storageClient, "", logger)
 	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(liveMaterialRepo, asrService, audioPreparer, logger)
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 

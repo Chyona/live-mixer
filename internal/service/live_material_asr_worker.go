@@ -75,7 +75,8 @@ func (w *liveMaterialASRWorker) run(ctx context.Context) {
 			return
 		case materialID := <-w.queue:
 			if err := w.Process(ctx, materialID); err != nil {
-				w.logger.Error("直播素材 ASR 处理失败",
+				// 常见失败场景已在 Process / failASR 内记录，此处仅兜底未显式打日志的错误。
+				w.logger.Error("直播素材 ASR 任务结束（失败）",
 					zap.Uint("material_id", materialID),
 					zap.Error(err),
 				)
@@ -87,11 +88,24 @@ func (w *liveMaterialASRWorker) run(ctx context.Context) {
 func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) error {
 	material, err := w.repo.GetByID(ctx, materialID)
 	if err != nil {
+		w.logger.Error("直播素材 ASR 查询失败",
+			zap.Uint("material_id", materialID),
+			zap.Error(err),
+		)
 		return fmt.Errorf("查询素材失败: %w", err)
 	}
 	if material.ASRStatus != model.ASRStatusPending {
+		w.logger.Debug("跳过非待处理素材的 ASR 任务",
+			zap.Uint("material_id", materialID),
+			zap.String("asr_status", string(material.ASRStatus)),
+		)
 		return nil
 	}
+
+	w.logger.Info("开始处理直播素材 ASR",
+		zap.Uint("material_id", materialID),
+		zap.String("live_url", material.LiveURL),
+	)
 
 	if err := w.repo.UpdateASRProcessing(ctx, materialID); err != nil {
 		return fmt.Errorf("更新 ASR 处理中状态失败: %w", err)
@@ -113,6 +127,10 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 	}
 
 	// 下载源媒体 → 转 WAV → 上传对象存储，得到 ASR 可用的公网音频 URL。
+	w.logger.Info("开始音频预处理",
+		zap.Uint("material_id", materialID),
+		zap.String("source_url", material.LiveURL),
+	)
 	audioURL, cleanup, err := w.prepareAudioURL(ctx, materialID, material.LiveURL, updateProgress)
 	if cleanup != nil {
 		defer cleanup()
@@ -120,7 +138,15 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 	if err != nil {
 		return w.failASR(ctx, materialID, lastProgress, err)
 	}
+	w.logger.Info("音频预处理完成",
+		zap.Uint("material_id", materialID),
+		zap.String("audio_url", audioURL),
+	)
 
+	w.logger.Info("开始 ASR 语音识别",
+		zap.Uint("material_id", materialID),
+		zap.String("audio_url", audioURL),
+	)
 	raw, err := w.asrService.TranscribeWithProgress(ctx, audioURL, func(progress int) {
 		// ASR 轮询阶段映射到 50~95，与预处理阶段 5~45 衔接。
 		mapped := int16(50 + progress*45/100)
@@ -142,6 +168,10 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 	if err := w.repo.UpdateASRCompleted(ctx, materialID, liveASR, duration); err != nil {
 		return fmt.Errorf("写入 ASR 成功结果失败: %w", err)
 	}
+	w.logger.Info("直播素材 ASR 处理完成",
+		zap.Uint("material_id", materialID),
+		zap.Int64("duration_ms", duration),
+	)
 	return nil
 }
 
@@ -159,6 +189,11 @@ func (w *liveMaterialASRWorker) prepareAudioURL(
 }
 
 func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, progress int16, err error) error {
+	w.logger.Error("直播素材 ASR 流程失败",
+		zap.Uint("material_id", materialID),
+		zap.Int16("progress", progress),
+		zap.Error(err),
+	)
 	if failErr := w.repo.UpdateASRFailed(ctx, materialID, progress, err.Error()); failErr != nil {
 		return fmt.Errorf("ASR 失败且写入失败状态异常: asr=%w, db=%v", err, failErr)
 	}

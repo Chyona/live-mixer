@@ -12,6 +12,8 @@ import (
 	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/storage"
 	"live-mixer/pkg/utils"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -38,7 +40,7 @@ type ObjectUploader interface {
 	UploadFile(ctx context.Context, localPath, objectKey string) (string, error)
 }
 
-// utilsFileDownloader 使用 pkg/utils.DownloadFile 的默认下载实现。
+// utilsFileDownloader 使用 pkg/utils 的默认下载实现（无日志）。
 type utilsFileDownloader struct{}
 
 func (utilsFileDownloader) Download(url, dest string) (string, error) {
@@ -58,6 +60,7 @@ type liveMaterialASRAudioPreparer struct {
 	uploader          ObjectUploader
 	objectKeyPrefix   string
 	workDir           string
+	logger            *zap.Logger
 }
 
 // NewLiveMaterialASRAudioPreparer 创建 ASR 音频预处理服务。
@@ -66,9 +69,13 @@ func NewLiveMaterialASRAudioPreparer(
 	converter AudioConverter,
 	uploader ObjectUploader,
 	workDir string,
+	logger *zap.Logger,
 ) LiveMaterialASRAudioPreparer {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if downloader == nil {
-		downloader = utilsFileDownloader{}
+		downloader = newLoggingResumableDownloader(logger)
 	}
 	if converter == nil {
 		converter = media.NewFFmpegConverter("")
@@ -79,6 +86,7 @@ func NewLiveMaterialASRAudioPreparer(
 		uploader:        uploader,
 		objectKeyPrefix: defaultASRAudioObjectPrefix,
 		workDir:         workDir,
+		logger:          logger,
 	}
 }
 
@@ -98,6 +106,12 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	}
 	cleanup := func() { _ = os.RemoveAll(workDir) }
 
+	p.logger.Info("开始 ASR 音频预处理",
+		zap.Uint("material_id", materialID),
+		zap.String("source_url", sourceURL),
+		zap.String("work_dir", workDir),
+	)
+
 	report := func(progress int16) {
 		if onProgress != nil {
 			onProgress(progress)
@@ -106,6 +120,11 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 
 	sourcePath := filepath.Join(workDir, "source"+guessSourceExtension(sourceURL))
 	report(10)
+	p.logger.Info("开始下载直播素材",
+		zap.Uint("material_id", materialID),
+		zap.String("source_url", sourceURL),
+		zap.String("dest", sourcePath),
+	)
 	if _, err := p.downloader.Download(sourceURL, sourcePath); err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("下载直播素材失败: %w", err)
@@ -113,6 +132,11 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	report(25)
 
 	wavPath := filepath.Join(workDir, "asr.wav")
+	p.logger.Info("开始转码 ASR 音频",
+		zap.Uint("material_id", materialID),
+		zap.String("source_path", sourcePath),
+		zap.String("wav_path", wavPath),
+	)
 	if err := p.converter.ConvertToASRWAV(ctx, sourcePath, wavPath); err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("转码 WAV 失败: %w", err)
@@ -120,12 +144,22 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	report(40)
 
 	objectKey := buildASRAudioObjectKey(p.objectKeyPrefix, materialID)
+	p.logger.Info("开始上传 ASR 临时音频",
+		zap.Uint("material_id", materialID),
+		zap.String("object_key", objectKey),
+		zap.String("wav_path", wavPath),
+	)
 	audioURL, err := p.uploader.UploadFile(ctx, wavPath, objectKey)
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("上传 ASR 音频失败: %w", err)
 	}
 	report(45)
+
+	p.logger.Info("ASR 音频预处理完成",
+		zap.Uint("material_id", materialID),
+		zap.String("audio_url", audioURL),
+	)
 
 	return audioURL, cleanup, nil
 }
