@@ -53,6 +53,16 @@ func (c *Client) ObjectKey(parts ...string) string {
 	return JoinObjectKey(c.basePath, key)
 }
 
+// TempObjectKey 生成临时文件对象键，位于 base_path/temp/ 下。
+func (c *Client) TempObjectKey(parts ...string) string {
+	return c.ObjectKey(append([]string{SubDirTemp}, parts...)...)
+}
+
+// TestObjectKey 生成测试文件对象键，位于 base_path/test/ 下（供 cmd/test 使用）。
+func (c *Client) TestObjectKey(parts ...string) string {
+	return c.ObjectKey(append([]string{SubDirTest}, parts...)...)
+}
+
 // UploadFile 将本地文件上传到对象存储。
 //
 // localPath 为本地文件路径，objectKey 为相对对象键名，会自动附加 BasePath 前缀。

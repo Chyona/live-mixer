@@ -29,7 +29,7 @@ func TestJoinObjectKey(t *testing.T) {
 		want      string
 	}{
 		{"video_editing", "test/main.go", "video_editing/test/main.go"},
-		{"video_editing", "/asr/1.wav", "video_editing/asr/1.wav"},
+		{"video_editing", "/temp/1.wav", "video_editing/temp/1.wav"},
 		{"", "plain.txt", "plain.txt"},
 		{"video_editing", "", "video_editing"},
 	}
@@ -63,7 +63,21 @@ func TestClient_UploadFile_WithBasePath(t *testing.T) {
 
 func TestClient_ObjectKey(t *testing.T) {
 	client := &Client{basePath: "video_editing"}
-	if got := client.ObjectKey("asr", "1", "a.wav"); got != "video_editing/asr/1/a.wav" {
-		t.Errorf("ObjectKey() = %q, want video_editing/asr/1/a.wav", got)
+	if got := client.ObjectKey("temp", "1", "a.wav"); got != "video_editing/temp/1/a.wav" {
+		t.Errorf("ObjectKey() = %q, want video_editing/temp/1/a.wav", got)
+	}
+}
+
+func TestClient_TempObjectKey(t *testing.T) {
+	client := &Client{basePath: "video_editing"}
+	if got := client.TempObjectKey("12", "a.wav"); got != "video_editing/temp/12/a.wav" {
+		t.Errorf("TempObjectKey() = %q, want video_editing/temp/12/a.wav", got)
+	}
+}
+
+func TestClient_TestObjectKey(t *testing.T) {
+	client := &Client{basePath: "video_editing"}
+	if got := client.TestObjectKey("main.go"); got != "video_editing/test/main.go" {
+		t.Errorf("TestObjectKey() = %q, want video_editing/test/main.go", got)
 	}
 }
