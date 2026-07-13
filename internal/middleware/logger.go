@@ -22,7 +22,7 @@ func RequestLogger(logger *zap.Logger) gin.HandlerFunc {
 
 		c.Next()
 
-		logger.Info("HTTP 请求",
+		logger.Debug("HTTP 请求",
 			zap.String("trace_id", traceID),
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
