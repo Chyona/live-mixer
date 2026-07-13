@@ -8,6 +8,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
+	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
 )
@@ -28,7 +29,7 @@ func (m *workerMockRepo) GetByID(ctx context.Context, id uint) (*model.LiveMater
 func (m *workerMockRepo) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }
-func (m *workerMockRepo) List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
+func (m *workerMockRepo) List(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
 	return nil, 0, nil
 }
 

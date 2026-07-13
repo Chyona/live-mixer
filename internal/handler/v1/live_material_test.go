@@ -11,6 +11,7 @@ import (
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
+	"live-mixer/internal/service"
 	jwtpkg "live-mixer/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
@@ -20,7 +21,7 @@ import (
 type mockLiveMaterialService struct {
 	createFn func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
 	updateFn func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
-	listFn   func(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error)
+	listFn   func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
 	getFn    func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 }
 
@@ -38,9 +39,9 @@ func (m *mockLiveMaterialService) Update(ctx context.Context, id uint, name, rem
 	return nil, nil
 }
 
-func (m *mockLiveMaterialService) List(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error) {
+func (m *mockLiveMaterialService) List(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {
 	if m.listFn != nil {
-		return m.listFn(ctx, page, pageSize)
+		return m.listFn(ctx, page, pageSize, opts)
 	}
 	return nil, 0, nil
 }
@@ -143,7 +144,7 @@ func TestLiveMaterialHandler_Get_InvalidID(t *testing.T) {
 func TestLiveMaterialHandler_List_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		listFn: func(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error) {
+		listFn: func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {
 			if page != 1 || pageSize != 10 {
 				t.Errorf("page/pageSize = %d/%d, want 1/10", page, pageSize)
 			}
@@ -200,7 +201,7 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 func TestLiveMaterialHandler_List_CustomPageSize(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		listFn: func(ctx context.Context, page, pageSize int) ([]model.LiveMaterialListItem, int64, error) {
+		listFn: func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {
 			if pageSize != 5 {
 				t.Errorf("pageSize = %d, want 5", pageSize)
 			}
@@ -395,6 +396,50 @@ func TestLiveMaterialHandler_Update_InvalidID(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestLiveMaterialHandler_List_WithFilters 验证列表筛选参数传递到 service。
+func TestLiveMaterialHandler_List_WithFilters(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		listFn: func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {
+			if opts.TitleKeyword != "游戏,周末" || opts.GlobalKeyword != "发布会" {
+				t.Errorf("unexpected opts: %+v", opts)
+			}
+			if opts.StartDate != "2026-01-01" || opts.EndDate != "2026-01-31" {
+				t.Errorf("unexpected date opts: %+v", opts)
+			}
+			return nil, 0, nil
+		},
+	})
+	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials?start_date=2026-01-01&end_date=2026-01-31&title_keyword=游戏,周末&global_keyword=发布会", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+// TestLiveMaterialHandler_List_InvalidPageSize 验证非法 page_size 返回 400。
+func TestLiveMaterialHandler_List_InvalidPageSize(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials?page_size=200", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d, body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 }
 

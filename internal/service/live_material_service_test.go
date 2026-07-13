@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"live-mixer/internal/model"
+	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
 )
@@ -16,7 +17,7 @@ type mockLiveMaterialRepo struct {
 	nextID    uint
 	createFn  func(ctx context.Context, material *model.LiveMaterial) error
 	updateFn  func(ctx context.Context, material *model.LiveMaterial) error
-	listFn    func(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
+	listFn    func(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
 }
 
 func (m *mockLiveMaterialRepo) Create(ctx context.Context, material *model.LiveMaterial) error {
@@ -56,9 +57,9 @@ func (m *mockLiveMaterialRepo) UpdateNameRemark(ctx context.Context, material *m
 	return nil
 }
 
-func (m *mockLiveMaterialRepo) List(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
+func (m *mockLiveMaterialRepo) List(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
 	if m.listFn != nil {
-		return m.listFn(ctx, offset, limit)
+		return m.listFn(ctx, filter, offset, limit)
 	}
 	return nil, 0, nil
 }
@@ -210,7 +211,7 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 func TestLiveMaterialService_List_Pagination(t *testing.T) {
 	var gotOffset, gotLimit int
 	repo := &mockLiveMaterialRepo{
-		listFn: func(ctx context.Context, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
+		listFn: func(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
 			gotOffset = offset
 			gotLimit = limit
 			return []model.LiveMaterialListItem{
@@ -220,7 +221,7 @@ func TestLiveMaterialService_List_Pagination(t *testing.T) {
 	}
 	svc := NewLiveMaterialService(repo, nil)
 
-	materials, total, err := svc.List(context.Background(), 2, 20)
+	materials, total, err := svc.List(context.Background(), 2, 20, LiveMaterialListOptions{})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -311,5 +312,75 @@ func TestLiveMaterialService_Get_NotFound(t *testing.T) {
 	}
 	if err.Error() != "直播素材不存在" {
 		t.Errorf("error = %q, want 直播素材不存在", err.Error())
+	}
+}
+
+// TestParseCommaKeywords 验证逗号分隔关键词解析与去空白。
+func TestParseCommaKeywords(t *testing.T) {
+	got := parseCommaKeywords(" 游戏, 周末 ,, ")
+	if len(got) != 2 || got[0] != "游戏" || got[1] != "周末" {
+		t.Errorf("parseCommaKeywords() = %v", got)
+	}
+	if parseCommaKeywords("   ") != nil {
+		t.Error("empty input should return nil")
+	}
+}
+
+// TestBuildLiveMaterialListFilter 验证日期与关键词筛选条件构建。
+func TestBuildLiveMaterialListFilter(t *testing.T) {
+	filter, err := buildLiveMaterialListFilter(LiveMaterialListOptions{
+		StartDate:     "2026-01-01",
+		EndDate:       "2026-01-31",
+		TitleKeyword:  "游戏,周末",
+		GlobalKeyword: "发布会",
+	})
+	if err != nil {
+		t.Fatalf("buildLiveMaterialListFilter() error = %v", err)
+	}
+	if filter.StartAt == nil || filter.EndAt == nil {
+		t.Fatal("date range should be set")
+	}
+	if len(filter.TitleKeywords) != 2 || len(filter.GlobalKeywords) != 1 {
+		t.Fatalf("unexpected keywords: title=%v global=%v", filter.TitleKeywords, filter.GlobalKeywords)
+	}
+}
+
+// TestBuildLiveMaterialListFilter_InvalidDate 验证非法日期返回错误。
+func TestBuildLiveMaterialListFilter_InvalidDate(t *testing.T) {
+	_, err := buildLiveMaterialListFilter(LiveMaterialListOptions{StartDate: "2026/01/01"})
+	if err == nil {
+		t.Fatal("expected invalid date error")
+	}
+}
+
+// TestBuildLiveMaterialListFilter_InvalidRange 验证开始日期晚于结束日期时返回错误。
+func TestBuildLiveMaterialListFilter_InvalidRange(t *testing.T) {
+	_, err := buildLiveMaterialListFilter(LiveMaterialListOptions{
+		StartDate: "2026-02-01",
+		EndDate:   "2026-01-01",
+	})
+	if err == nil {
+		t.Fatal("expected invalid range error")
+	}
+}
+
+// TestLiveMaterialService_List_PassesFilter 验证列表查询将筛选条件传递给仓储层。
+func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
+	var gotFilter repository.LiveMaterialListFilter
+	repo := &mockLiveMaterialRepo{
+		listFn: func(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
+			gotFilter = filter
+			return nil, 0, nil
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+	_, _, err := svc.List(context.Background(), 1, 10, LiveMaterialListOptions{
+		TitleKeyword: "游戏",
+	})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(gotFilter.TitleKeywords) != 1 || gotFilter.TitleKeywords[0] != "游戏" {
+		t.Errorf("filter = %+v", gotFilter)
 	}
 }

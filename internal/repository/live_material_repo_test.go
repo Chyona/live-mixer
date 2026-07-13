@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 
@@ -132,7 +133,7 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 		}
 	}
 
-	materials, total, err := repo.List(ctx, 0, 2)
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{}, 0, 2)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -222,7 +223,7 @@ func TestLiveMaterialRepository_List_Empty(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
 	repo := NewLiveMaterialRepository(db)
 
-	materials, total, err := repo.List(context.Background(), 0, 20)
+	materials, total, err := repo.List(context.Background(), LiveMaterialListFilter{}, 0, 20)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -231,5 +232,93 @@ func TestLiveMaterialRepository_List_Empty(t *testing.T) {
 	}
 	if len(materials) != 0 {
 		t.Errorf("len(materials) = %d, want 0", len(materials))
+	}
+}
+
+// TestLiveMaterialRepository_List_TitleKeywordFilter 验证标题关键词按「与」匹配 name/remark。
+func TestLiveMaterialRepository_List_TitleKeywordFilter(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	seed := []model.LiveMaterial{
+		{Name: "游戏直播", Remark: "周末场", LiveURL: "https://a.com/1.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1},
+		{Name: "游戏解说", Remark: "工作日", LiveURL: "https://a.com/2.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1},
+		{Name: "美食分享", Remark: "周末厨房", LiveURL: "https://a.com/3.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1},
+	}
+	for i := range seed {
+		if err := repo.Create(ctx, &seed[i]); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
+		TitleKeywords: []string{"游戏", "周末"},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(materials) != 1 || materials[0].Name != "游戏直播" {
+		t.Errorf("unexpected result: total=%d materials=%+v", total, materials)
+	}
+}
+
+// TestLiveMaterialRepository_List_GlobalKeywordFilter 验证全局关键词匹配链接与标题字段。
+func TestLiveMaterialRepository_List_GlobalKeywordFilter(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	m1 := &model.LiveMaterial{Name: "素材A", LiveURL: "https://launch.com/2026.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "timeout", CreatedBy: 1}
+	m2 := &model.LiveMaterial{Name: "发布会回顾", Remark: "2026", LiveURL: "https://other.com/a.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1}
+	m3 := &model.LiveMaterial{Name: "其它", Remark: "无", LiveURL: "https://other.com/b.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1}
+	for _, m := range []*model.LiveMaterial{m1, m2, m3} {
+		if err := repo.Create(ctx, m); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
+		GlobalKeywords: []string{"发布会", "2026"},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(materials) != 1 || materials[0].Name != "发布会回顾" {
+		t.Errorf("unexpected result: total=%d materials=%+v", total, materials)
+	}
+}
+
+// TestLiveMaterialRepository_List_DateFilter 验证按 created_at 日期范围筛选。
+func TestLiveMaterialRepository_List_DateFilter(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	inRange := &model.LiveMaterial{
+		Name: "范围内", LiveURL: "https://a.com/in.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+	}
+	outRange := &model.LiveMaterial{
+		Name: "范围外", LiveURL: "https://a.com/out.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, m := range []*model.LiveMaterial{inRange, outRange} {
+		if err := db.Create(m).Error; err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	startAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	endAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
+		StartAt: &startAt,
+		EndAt:   &endAt,
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(materials) != 1 || materials[0].Name != "范围内" {
+		t.Errorf("unexpected result: total=%d materials=%+v", total, materials)
 	}
 }

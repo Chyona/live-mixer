@@ -11,9 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// liveMaterialDefaultPageSize 直播素材列表默认每页条数。
-const liveMaterialDefaultPageSize = 10
-
 // LiveMaterialHandler 直播素材相关 HTTP 处理器。
 type LiveMaterialHandler struct {
 	liveMaterialService service.LiveMaterialService
@@ -38,24 +35,47 @@ type UpdateLiveMaterialRequest struct {
 	Remark string `json:"remark" binding:"max=256"`
 }
 
+// ListLiveMaterialsRequest 直播素材列表查询参数。
+type ListLiveMaterialsRequest struct {
+	StartDate     string `form:"start_date"`
+	EndDate       string `form:"end_date"`
+	TitleKeyword  string `form:"title_keyword"`  // 原始字符串，如 "游戏,周末"
+	GlobalKeyword string `form:"global_keyword"` // 原始字符串，如 "发布会,2026"
+	Page          int    `form:"page" binding:"omitempty,min=1"`
+	PageSize      int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+}
+
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，不含 live_asr 字段，默认每页 10 条
+// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr 字段，默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
-// @Param        page       query  int  false  "页码"
-// @Param        page_size  query  int  false  "每页数量，默认 10"
-// @Success      200        {object}  response.Body
-// @Failure      401        {object}  response.Body
+// @Param        start_date      query  string  false  "开始日期 YYYY-MM-DD"
+// @Param        end_date        query  string  false  "结束日期 YYYY-MM-DD"
+// @Param        title_keyword   query  string  false  "标题关键词，英文逗号分隔，匹配 name/remark"
+// @Param        global_keyword  query  string  false  "全局关键词，英文逗号分隔，匹配 live_url/asr_error_msg/name/remark"
+// @Param        page            query  int     false  "页码"
+// @Param        page_size       query  int     false  "每页数量，默认 10"
+// @Success      200             {object}  response.Body
+// @Failure      400             {object}  response.Body
+// @Failure      401             {object}  response.Body
 // @Router       /v1/live-materials [get]
 func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(liveMaterialDefaultPageSize)))
-	page, pageSize = utils.DefaultPage(page, pageSize)
+	var req ListLiveMaterialsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	page, pageSize := utils.DefaultPage(req.Page, req.PageSize)
 
-	materials, total, err := h.liveMaterialService.List(c.Request.Context(), page, pageSize)
+	materials, total, err := h.liveMaterialService.List(c.Request.Context(), page, pageSize, service.LiveMaterialListOptions{
+		StartDate:     req.StartDate,
+		EndDate:       req.EndDate,
+		TitleKeyword:  req.TitleKeyword,
+		GlobalKeyword: req.GlobalKeyword,
+	})
 	if err != nil {
-		response.InternalError(c, err.Error())
+		response.BadRequest(c, err.Error())
 		return
 	}
 	response.Success(c, response.PageData{
