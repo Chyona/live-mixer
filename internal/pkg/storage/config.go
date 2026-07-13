@@ -30,9 +30,10 @@ type TOSConfig struct {
 // Config 多对象存储配置，同时包含 COS、OSS 与 TOS。
 // 当多个后端均配置完整时，优先级为 COS > OSS > TOS。
 type Config struct {
-	COS COSConfig
-	OSS OSSConfig
-	TOS TOSConfig
+	COS      COSConfig
+	OSS      OSSConfig
+	TOS      TOSConfig
+	BasePath string // 对象键保存路径前缀，空值时使用 DefaultBasePath
 }
 
 // LoadConfigFromEnv 从独立环境变量加载对象存储配置（不经过 config.yaml）。
@@ -60,6 +61,9 @@ type Config struct {
 //   - TOS_BUCKET_NAME
 //   - TOS_REGION
 //   - TOS_ENDPOINT（可选）
+//
+// 通用：
+//   - STORAGE_BASE_PATH（可选，默认 video_editing）
 func LoadConfigFromEnv() Config {
 	return Config{
 		COS: COSConfig{
@@ -81,6 +85,7 @@ func LoadConfigFromEnv() Config {
 			Region:          os.Getenv("TOS_REGION"),
 			Endpoint:        os.Getenv("TOS_ENDPOINT"),
 		},
+		BasePath: os.Getenv("STORAGE_BASE_PATH"),
 	}
 }
 

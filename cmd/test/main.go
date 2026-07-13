@@ -16,7 +16,7 @@ import (
 func main() {
 	configPath := flag.String("config", "", "外部配置文件路径（默认使用内嵌 config.yaml）")
 	localFile := flag.String("file", "", "待上传的本地文件（默认为本程序 main.go）")
-	objectKey := flag.String("key", "", "对象键名（默认 video_editing/test/<文件名>）")
+	objectKey := flag.String("key", "", "相对对象键名（默认 test/<文件名>，自动附加 base_path 前缀）")
 	flag.Parse()
 
 	filePath := *localFile
@@ -36,7 +36,7 @@ func main() {
 
 	key := *objectKey
 	if key == "" {
-		key = filepath.ToSlash(filepath.Join("video_editing", "test", filepath.Base(filePath)))
+		key = filepath.ToSlash(filepath.Join("test", filepath.Base(filePath)))
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -52,10 +52,12 @@ func main() {
 	}
 
 	tos := cfg.Storage.TOS
+	fullKey := client.ObjectKey(key)
 	fmt.Printf("存储后端: %s\n", client.ProviderType())
+	fmt.Printf("保存路径: %s\n", client.BasePath())
 	fmt.Printf("TOS 桶: %s  地域: %s  Endpoint: %s\n", tos.BucketName, tos.Region, tos.Endpoint)
 	fmt.Printf("本地文件: %s\n", filePath)
-	fmt.Printf("对象键名: %s\n", key)
+	fmt.Printf("对象键名: %s\n", fullKey)
 
 	url, err := client.UploadFile(context.Background(), filePath, key)
 	if err != nil {

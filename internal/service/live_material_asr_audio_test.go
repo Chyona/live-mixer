@@ -49,9 +49,9 @@ func TestGuessSourceExtension(t *testing.T) {
 }
 
 func TestBuildASRAudioObjectKey(t *testing.T) {
-	key := buildASRAudioObjectKey("video_editing/asr", 9)
-	if !strings.HasPrefix(key, "video_editing/asr/9/") {
-		t.Errorf("object key = %q, want prefix video_editing/asr/9/", key)
+	key := buildASRAudioObjectKey("asr", 9)
+	if !strings.HasPrefix(key, "asr/9/") {
+		t.Errorf("object key = %q, want prefix asr/9/", key)
 	}
 	if !strings.HasSuffix(key, ".wav") {
 		t.Errorf("object key = %q, want .wav suffix", key)
@@ -95,8 +95,8 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 	if audioURL == "" {
 		t.Fatal("audioURL should not be empty")
 	}
-	if !strings.Contains(uploadedKey, "video_editing/asr/12/") {
-		t.Errorf("uploaded key = %q, want under video_editing/asr/12/", uploadedKey)
+	if !strings.Contains(uploadedKey, "asr/12/") {
+		t.Errorf("uploaded key = %q, want under asr/12/", uploadedKey)
 	}
 	if len(progresses) == 0 {
 		t.Error("expected progress callbacks")

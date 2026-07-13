@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// defaultASRAudioObjectPrefix TOS 上 ASR 临时音频的对象键前缀（与项目桶目录 video_editing/ 对齐）。
-	defaultASRAudioObjectPrefix = "video_editing/asr"
+	// defaultASRAudioObjectPrefix ASR 临时音频在保存路径下的子目录。
+	defaultASRAudioObjectPrefix = "asr"
 	// defaultTempDirName 进程工作目录下的临时文件根目录名。
 	defaultTempDirName = "temp"
 	// defaultASRWorkSubDir ASR 预处理文件在 temp 下的子目录。
@@ -187,7 +187,7 @@ func guessSourceExtension(sourceURL string) string {
 	return ext
 }
 
-// buildASRAudioObjectKey 生成对象存储键名，统一放在 video_editing/asr 目录下。
+// buildASRAudioObjectKey 生成对象存储键名，相对路径位于 asr 子目录下（由存储客户端附加 base_path）。
 func buildASRAudioObjectKey(prefix string, materialID uint) string {
 	prefix = strings.Trim(prefix, "/")
 	return fmt.Sprintf("%s/%d/%d.wav", prefix, materialID, time.Now().UnixNano())

@@ -5,6 +5,7 @@ import appconfig "live-mixer/internal/config"
 // ConfigFromApp 将应用全局配置中的 storage 段转换为 storage 包配置。
 func ConfigFromApp(cfg appconfig.StorageConfig) Config {
 	return Config{
+		BasePath: cfg.BasePath,
 		COS: COSConfig{
 			SecretID:   cfg.COS.SecretID,
 			SecretKey:  cfg.COS.SecretKey,

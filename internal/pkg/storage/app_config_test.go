@@ -8,6 +8,7 @@ import (
 
 func TestConfigFromApp(t *testing.T) {
 	appCfg := appconfig.StorageConfig{
+		BasePath: "custom-root",
 		COS: appconfig.COSStorageConfig{
 			SecretID: "cos-id", SecretKey: "cos-key",
 			BucketName: "cos-bucket", Region: "ap-guangzhou",
@@ -24,6 +25,9 @@ func TestConfigFromApp(t *testing.T) {
 
 	cfg := ConfigFromApp(appCfg)
 
+	if cfg.BasePath != "custom-root" {
+		t.Errorf("BasePath = %q, want custom-root", cfg.BasePath)
+	}
 	if cfg.COS.SecretID != "cos-id" {
 		t.Errorf("COS.SecretID = %q, want cos-id", cfg.COS.SecretID)
 	}

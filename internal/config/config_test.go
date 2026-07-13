@@ -27,6 +27,9 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.Storage.TOS.Endpoint != "tos-cn-shanghai.volces.com" {
 		t.Errorf("TOS.Endpoint = %q, want tos-cn-shanghai.volces.com", cfg.Storage.TOS.Endpoint)
 	}
+	if cfg.Storage.BasePath != "video_editing" {
+		t.Errorf("Storage.BasePath = %q, want video_editing", cfg.Storage.BasePath)
+	}
 
 	// ASR 默认 API Key 与轮询配置
 	if cfg.ASR.APIKey != "606b0b96-0706-4fa5-ba0d-d9d1e879a4f7" {

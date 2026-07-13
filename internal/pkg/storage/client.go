@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Client 多对象存储客户端，对外提供统一的上传接口。
 type Client struct {
 	provider storageProvider
+	basePath string
 }
 
 // NewClient 根据配置创建对象存储客户端。
@@ -23,7 +25,10 @@ func NewClient(cfg Config, opts ...UploadOptions) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{provider: provider}, nil
+	return &Client{
+		provider: provider,
+		basePath: ResolveBasePath(cfg.BasePath),
+	}, nil
 }
 
 // NewClientFromEnv 从 COS_* / OSS_* / TOS_* 环境变量加载配置并创建客户端。
@@ -37,9 +42,20 @@ func (c *Client) ProviderType() ProviderType {
 	return c.provider.Type()
 }
 
+// BasePath 返回对象键保存路径前缀（已规范化，不含首尾斜杠）。
+func (c *Client) BasePath() string {
+	return c.basePath
+}
+
+// ObjectKey 将相对路径片段拼接为完整对象键（自动附加 BasePath 前缀）。
+func (c *Client) ObjectKey(parts ...string) string {
+	key := strings.Join(parts, "/")
+	return JoinObjectKey(c.basePath, key)
+}
+
 // UploadFile 将本地文件上传到对象存储。
 //
-// localPath 为本地文件路径，objectKey 为对象在存储桶中的键名（路径）。
+// localPath 为本地文件路径，objectKey 为相对对象键名，会自动附加 BasePath 前缀。
 // 返回上传完成后的访问 URL。
 func (c *Client) UploadFile(ctx context.Context, localPath, objectKey string) (string, error) {
 	if localPath == "" {
@@ -48,7 +64,7 @@ func (c *Client) UploadFile(ctx context.Context, localPath, objectKey string) (s
 	if objectKey == "" {
 		return "", fmt.Errorf("对象键名不能为空")
 	}
-	return c.provider.UploadFile(ctx, localPath, objectKey)
+	return c.provider.UploadFile(ctx, localPath, c.ObjectKey(objectKey))
 }
 
 // UploadReader 将数据流上传到对象存储。
@@ -61,5 +77,5 @@ func (c *Client) UploadReader(ctx context.Context, r io.Reader, objectKey string
 	if objectKey == "" {
 		return "", fmt.Errorf("对象键名不能为空")
 	}
-	return c.provider.UploadReader(ctx, r, objectKey, size)
+	return c.provider.UploadReader(ctx, r, c.ObjectKey(objectKey), size)
 }

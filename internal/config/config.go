@@ -61,9 +61,10 @@ type JWTConfig struct {
 
 // StorageConfig 对象存储配置，多个后端同时配置完整时优先级为 COS > OSS > TOS。
 type StorageConfig struct {
-	COS COSStorageConfig `mapstructure:"cos"`
-	OSS OSSStorageConfig `mapstructure:"oss"`
-	TOS TOSStorageConfig `mapstructure:"tos"`
+	BasePath string           `mapstructure:"base_path"`
+	COS      COSStorageConfig `mapstructure:"cos"`
+	OSS      OSSStorageConfig `mapstructure:"oss"`
+	TOS      TOSStorageConfig `mapstructure:"tos"`
 }
 
 // COSStorageConfig 腾讯云对象存储（COS）连接配置。
@@ -261,6 +262,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_STORAGE_TOS_ENDPOINT"); ok {
 		cfg.Storage.TOS.Endpoint = val
+	}
+	if val, ok := os.LookupEnv("APP_STORAGE_BASE_PATH"); ok {
+		cfg.Storage.BasePath = val
 	}
 
 	if val, ok := os.LookupEnv("APP_ASR_API_KEY"); ok {
