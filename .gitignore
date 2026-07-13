@@ -13,3 +13,5 @@ envinit
 .idea/
 .vscode/
 /internal/config/config.yaml
+/docs/swagger.yaml
+/docs/swagger.json

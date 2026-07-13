@@ -43,7 +43,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -67,7 +67,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.CreateAccountRequest"
+                            "$ref": "#/definitions/internal_handler_v1.CreateAccountRequest"
                         }
                     }
                 ],
@@ -75,13 +75,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -110,13 +110,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -147,7 +147,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.UpdateAccountRequest"
+                            "$ref": "#/definitions/internal_handler_v1.UpdateAccountRequest"
                         }
                     }
                 ],
@@ -155,7 +155,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -182,7 +182,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -208,7 +208,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.ASRRequest"
+                            "$ref": "#/definitions/internal_handler_v1.ASRRequest"
                         }
                     }
                 ],
@@ -216,19 +216,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -254,7 +254,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.LoginRequest"
+                            "$ref": "#/definitions/internal_handler_v1.LoginRequest"
                         }
                     }
                 ],
@@ -264,13 +264,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/response.Body"
+                                    "$ref": "#/definitions/live-mixer_pkg_response.Body"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/v1.LoginResponse"
+                                            "$ref": "#/definitions/internal_handler_v1.LoginResponse"
                                         }
                                     }
                                 }
@@ -280,13 +280,13 @@ const docTemplate = `{
                     "400": {
                         "description": "请求参数错误（如缺少 username 或 password）",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "401": {
                         "description": "用户名或密码错误，或账号已被禁用",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -294,7 +294,7 @@ const docTemplate = `{
         },
         "/v1/live-materials": {
             "get": {
-                "description": "分页查询直播素材，不含 live_asr 字段，默认每页 20 条",
+                "description": "分页查询直播素材，支持日期与关键词筛选，不含 live_asr 字段，默认每页 10 条",
                 "produces": [
                     "application/json"
                 ],
@@ -304,6 +304,30 @@ const docTemplate = `{
                 "summary": "直播素材列表",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "开始日期 YYYY-MM-DD",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束日期 YYYY-MM-DD",
+                        "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "标题关键词，英文逗号分隔，匹配 name/remark",
+                        "name": "title_keyword",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "全局关键词，英文逗号分隔，匹配 live_url/asr_error_msg/name/remark",
+                        "name": "global_keyword",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "页码",
                         "name": "page",
@@ -311,7 +335,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "每页数量，默认 20",
+                        "description": "每页数量，默认 10",
                         "name": "page_size",
                         "in": "query"
                     }
@@ -320,13 +344,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -350,7 +380,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.CreateLiveMaterialRequest"
+                            "$ref": "#/definitions/internal_handler_v1.CreateLiveMaterialRequest"
                         }
                     }
                 ],
@@ -358,19 +388,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -399,19 +429,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -442,7 +472,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.UpdateLiveMaterialRequest"
+                            "$ref": "#/definitions/internal_handler_v1.UpdateLiveMaterialRequest"
                         }
                     }
                 ],
@@ -450,19 +480,548 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "物理删除直播素材，并级联删除 video_project 中关联的剪辑项目",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "删除直播素材",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "素材 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/llm-system-prompts": {
+            "get": {
+                "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回 content_preview",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "大模型系统提示词"
+                ],
+                "summary": "系统提示词列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "关键词，英文逗号分隔，匹配 name/content/remark",
+                        "name": "keywords",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "开始日期 YYYY-MM-DD",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束日期 YYYY-MM-DD",
+                        "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，默认 10",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "添加一条系统提示词，创建人取自 JWT 当前用户",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "大模型系统提示词"
+                ],
+                "summary": "创建系统提示词",
+                "parameters": [
+                    {
+                        "description": "提示词信息",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.CreateLLMSystemPromptRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/llm-system-prompts/{id}": {
+            "get": {
+                "description": "根据 ID 查询系统提示词完整信息（含 content）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "大模型系统提示词"
+                ],
+                "summary": "获取系统提示词详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "更新 name、content、remark、ext；is_editable=0 的预置提示词不可修改",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "大模型系统提示词"
+                ],
+                "summary": "更新系统提示词",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新内容",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.UpdateLLMSystemPromptRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "物理删除系统提示词；is_editable=0 的预置提示词不可删除",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "大模型系统提示词"
+                ],
+                "summary": "删除系统提示词",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/video-projects": {
+            "get": {
+                "description": "分页查询剪辑项目，支持关键词与日期筛选",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "剪辑项目"
+                ],
+                "summary": "剪辑项目列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "关键词，英文逗号分隔，匹配 name/remark",
+                        "name": "keywords",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "开始日期 YYYY-MM-DD",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束日期 YYYY-MM-DD",
+                        "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，默认 10",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "剪辑项目"
+                ],
+                "summary": "创建剪辑项目",
+                "parameters": [
+                    {
+                        "description": "项目信息",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.CreateVideoProjectRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/video-projects/{id}": {
+            "get": {
+                "description": "根据 ID 查询剪辑项目",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "剪辑项目"
+                ],
+                "summary": "获取剪辑项目详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "项目 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "更新 name、remark、clips0、clips1、draft_url、video_url，未传字段保持不变",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "剪辑项目"
+                ],
+                "summary": "更新剪辑项目",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "项目 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新内容",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.UpdateVideoProjectRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "物理删除剪辑项目",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "剪辑项目"
+                ],
+                "summary": "删除剪辑项目",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "项目 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -491,7 +1050,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.Body"
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
                     }
                 }
@@ -499,19 +1058,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "response.Body": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "integer"
-                },
-                "data": {},
-                "message": {
-                    "type": "string"
-                }
-            }
-        },
-        "v1.ASRRequest": {
+        "internal_handler_v1.ASRRequest": {
             "type": "object",
             "required": [
                 "audio_url"
@@ -522,7 +1069,7 @@ const docTemplate = `{
                 }
             }
         },
-        "v1.CreateAccountRequest": {
+        "internal_handler_v1.CreateAccountRequest": {
             "type": "object",
             "required": [
                 "email",
@@ -553,7 +1100,31 @@ const docTemplate = `{
                 }
             }
         },
-        "v1.CreateLiveMaterialRequest": {
+        "internal_handler_v1.CreateLLMSystemPromptRequest": {
+            "type": "object",
+            "required": [
+                "content",
+                "name"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "ext": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                }
+            }
+        },
+        "internal_handler_v1.CreateLiveMaterialRequest": {
             "type": "object",
             "required": [
                 "live_url",
@@ -578,7 +1149,33 @@ const docTemplate = `{
                 }
             }
         },
-        "v1.LoginRequest": {
+        "internal_handler_v1.CreateVideoProjectRequest": {
+            "type": "object",
+            "required": [
+                "live_id",
+                "name"
+            ],
+            "properties": {
+                "clips0": {
+                    "type": "string"
+                },
+                "clips1": {
+                    "type": "string"
+                },
+                "live_id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                }
+            }
+        },
+        "internal_handler_v1.LoginRequest": {
             "type": "object",
             "required": [
                 "password",
@@ -595,7 +1192,7 @@ const docTemplate = `{
                 }
             }
         },
-        "v1.LoginResponse": {
+        "internal_handler_v1.LoginResponse": {
             "type": "object",
             "properties": {
                 "avatar": {
@@ -633,7 +1230,7 @@ const docTemplate = `{
                 }
             }
         },
-        "v1.UpdateAccountRequest": {
+        "internal_handler_v1.UpdateAccountRequest": {
             "type": "object",
             "properties": {
                 "avatar": {
@@ -652,7 +1249,31 @@ const docTemplate = `{
                 }
             }
         },
-        "v1.UpdateLiveMaterialRequest": {
+        "internal_handler_v1.UpdateLLMSystemPromptRequest": {
+            "type": "object",
+            "required": [
+                "content",
+                "name"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "ext": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                }
+            }
+        },
+        "internal_handler_v1.UpdateLiveMaterialRequest": {
             "type": "object",
             "required": [
                 "name"
@@ -665,6 +1286,45 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
+                }
+            }
+        },
+        "internal_handler_v1.UpdateVideoProjectRequest": {
+            "type": "object",
+            "properties": {
+                "clips0": {
+                    "type": "string"
+                },
+                "clips1": {
+                    "type": "string"
+                },
+                "draft_url": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "video_url": {
+                    "type": "string",
+                    "maxLength": 1024
+                }
+            }
+        },
+        "live-mixer_pkg_response.Body": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {},
+                "message": {
+                    "type": "string"
                 }
             }
         }
