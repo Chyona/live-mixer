@@ -20,7 +20,7 @@ type mockAudioConverter struct {
 	convertFn func(ctx context.Context, inputPath, outputPath string) error
 }
 
-func (m *mockAudioConverter) ConvertToASRWAV(ctx context.Context, inputPath, outputPath string) error {
+func (m *mockAudioConverter) ConvertToASRMP3(ctx context.Context, inputPath, outputPath string) error {
 	return m.convertFn(ctx, inputPath, outputPath)
 }
 
@@ -32,6 +32,14 @@ func (m *mockObjectUploader) UploadFile(ctx context.Context, localPath, objectKe
 	return m.uploadFn(ctx, localPath, objectKey)
 }
 
+func defaultMockConverter() *mockAudioConverter {
+	return &mockAudioConverter{
+		convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+			return os.WriteFile(outputPath, []byte("fake-mp3"), 0644)
+		},
+	}
+}
+
 func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 	const sessionID = "test-session-id"
 	oldNewASRSessionID := newASRSessionID
@@ -41,6 +49,8 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 	tempDir := t.TempDir()
 	var (
 		downloadDest string
+		convertInput string
+		convertOut   string
 		uploadedKey  string
 		uploadedPath string
 	)
@@ -55,7 +65,13 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 				return dest, nil
 			},
 		},
-		nil,
+		&mockAudioConverter{
+			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+				convertInput = inputPath
+				convertOut = outputPath
+				return os.WriteFile(outputPath, []byte("fake-mp3"), 0644)
+			},
+		},
 		&mockObjectUploader{
 			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
 				uploadedPath = localPath
@@ -76,12 +92,19 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 	}
 	defer cleanup()
 
-	wantLocal := buildASRLocalPath(tempDir, sessionID)
-	if downloadDest != wantLocal {
-		t.Errorf("download dest = %q, want %q", downloadDest, wantLocal)
+	wantSource := buildASRSourceLocalPath(tempDir, sessionID)
+	if downloadDest != wantSource {
+		t.Errorf("download dest = %q, want %q", downloadDest, wantSource)
 	}
-	if uploadedPath != wantLocal {
-		t.Errorf("upload local path = %q, want %q", uploadedPath, wantLocal)
+	wantMP3 := buildASRLocalPath(tempDir, sessionID)
+	if convertInput != wantSource {
+		t.Errorf("convert input = %q, want %q", convertInput, wantSource)
+	}
+	if convertOut != wantMP3 {
+		t.Errorf("convert output = %q, want %q", convertOut, wantMP3)
+	}
+	if uploadedPath != wantMP3 {
+		t.Errorf("upload local path = %q, want %q", uploadedPath, wantMP3)
 	}
 	wantKey := buildASRObjectKey("temp", sessionID)
 	if uploadedKey != wantKey {
@@ -98,7 +121,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 func TestLiveMaterialASRAudioPreparer_Prepare_UploaderMissing(t *testing.T) {
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{},
-		nil,
+		defaultMockConverter(),
 		nil,
 		t.TempDir(),
 		nil,
@@ -116,7 +139,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DownloadFailed(t *testing.T) {
 				return "", context.DeadlineExceeded
 			},
 		},
-		nil,
+		defaultMockConverter(),
 		&mockObjectUploader{},
 		t.TempDir(),
 		nil,
@@ -130,6 +153,31 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DownloadFailed(t *testing.T) {
 	}
 }
 
+func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
+	preparer := NewLiveMaterialASRAudioPreparer(
+		&mockFileDownloader{
+			downloadFn: func(url, dest string) (string, error) {
+				return dest, os.WriteFile(dest, []byte("x"), 0644)
+			},
+		},
+		&mockAudioConverter{
+			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+				return context.Canceled
+			},
+		},
+		&mockObjectUploader{},
+		t.TempDir(),
+		nil,
+	)
+	_, cleanup, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "转码 ASR MP3 失败") {
+		t.Fatalf("Prepare() error = %v, want convert failure", err)
+	}
+}
+
 func TestLiveMaterialASRAudioPreparer_Prepare_UploadFailed(t *testing.T) {
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{
@@ -137,7 +185,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_UploadFailed(t *testing.T) {
 				return dest, os.WriteFile(dest, []byte("x"), 0644)
 			},
 		},
-		nil,
+		defaultMockConverter(),
 		&mockObjectUploader{
 			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
 				return "", context.Canceled
@@ -193,7 +241,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DefaultTempDir(t *testing.T) {
 				return dest, os.WriteFile(dest, []byte("fake"), 0644)
 			},
 		},
-		nil,
+		defaultMockConverter(),
 		&mockObjectUploader{
 			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
 				return "https://bucket.example.com/" + objectKey, nil

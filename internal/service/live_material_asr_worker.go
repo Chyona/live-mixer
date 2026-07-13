@@ -126,7 +126,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 		}
 	}
 
-	// 下载源媒体 → 转 WAV → 上传对象存储，得到 ASR 可用的公网音频 URL。
+	// 下载源媒体 → 转标准 MP3 → 上传对象存储，得到 ASR 可用的公网音频 URL。
 	w.logger.Info("开始音频预处理",
 		zap.Uint("material_id", materialID),
 		zap.String("source_url", material.LiveURL),

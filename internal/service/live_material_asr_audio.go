@@ -26,9 +26,9 @@ type FileDownloader interface {
 	Download(url, dest string) (string, error)
 }
 
-// AudioConverter 将媒体文件转为 ASR 适用 WAV 的抽象。
+// AudioConverter 将媒体文件转为 ASR 适用标准 MP3 的抽象。
 type AudioConverter interface {
-	ConvertToASRWAV(ctx context.Context, inputPath, outputPath string) error
+	ConvertToASRMP3(ctx context.Context, inputPath, outputPath string) error
 }
 
 // ObjectUploader 上传本地文件到对象存储的抽象。
@@ -45,13 +45,13 @@ func (utilsFileDownloader) Download(url, dest string) (string, error) {
 
 // LiveMaterialASRAudioPreparer 为直播素材 ASR 准备公网可访问的媒体 URL。
 type LiveMaterialASRAudioPreparer interface {
-	// Prepare 下载源媒体、上传对象存储，返回可供 ASR 调用的媒体 URL。
+	// Prepare 下载源媒体、转标准 MP3、上传对象存储，返回可供 ASR 调用的媒体 URL。
 	// cleanup 用于删除本地临时文件，调用方应在完成后执行 defer cleanup()。
 	Prepare(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (string, func(), error)
 }
 
 type liveMaterialASRAudioPreparer struct {
-	downloader      FileDownloader
+	downloader        FileDownloader
 	converter         AudioConverter
 	uploader          ObjectUploader
 	objectKeyPrefix   string
@@ -102,9 +102,11 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	}
 
 	sessionID := newASRSessionID()
-	sourcePath := buildASRLocalPath(tempDir, sessionID)
+	sourcePath := buildASRSourceLocalPath(tempDir, sessionID)
+	mp3Path := buildASRLocalPath(tempDir, sessionID)
 	cleanup := func() {
 		_ = os.Remove(sourcePath)
+		_ = os.Remove(mp3Path)
 	}
 
 	p.logger.Info("开始 ASR 音频预处理",
@@ -112,6 +114,7 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		zap.String("source_url", sourceURL),
 		zap.String("session_id", sessionID),
 		zap.String("source_path", sourcePath),
+		zap.String("mp3_path", mp3Path),
 	)
 
 	report := func(progress int16) {
@@ -130,18 +133,28 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		cleanup()
 		return "", nil, fmt.Errorf("下载直播素材失败: %w", err)
 	}
-	report(25)
+	report(20)
 
+	p.logger.Info("开始转码为标准 MP3",
+		zap.Uint("material_id", materialID),
+		zap.String("input", sourcePath),
+		zap.String("output", mp3Path),
+	)
 	report(25)
+	if err := p.converter.ConvertToASRMP3(ctx, sourcePath, mp3Path); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("转码 ASR MP3 失败: %w", err)
+	}
+	report(35)
 
 	objectKey := buildASRObjectKey(p.objectKeyPrefix, sessionID)
 	p.logger.Info("开始上传 ASR 临时媒体",
 		zap.Uint("material_id", materialID),
 		zap.String("object_key", objectKey),
-		zap.String("local_path", sourcePath),
+		zap.String("local_path", mp3Path),
 	)
 	report(40)
-	audioURL, err := p.uploader.UploadFile(ctx, sourcePath, objectKey)
+	audioURL, err := p.uploader.UploadFile(ctx, mp3Path, objectKey)
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("上传 ASR 音频失败: %w", err)
@@ -184,7 +197,7 @@ func defaultTempDir() (string, error) {
 	return filepath.Join(base, defaultTempDirName), nil
 }
 
-// ensureTempDir 确保临时目录存在，用于存放 temp/asr_{uuid}.mp4 等文件。
+// ensureTempDir 确保临时目录存在，用于存放 asr_{uuid}.src / asr_{uuid}.mp3 等文件。
 func (p *liveMaterialASRAudioPreparer) ensureTempDir() (string, error) {
 	tempDir, err := p.resolveTempDir()
 	if err != nil {

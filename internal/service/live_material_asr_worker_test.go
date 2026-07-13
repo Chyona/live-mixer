@@ -126,7 +126,7 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 			if onProgress != nil {
 				onProgress(45)
 			}
-			return "https://bucket.example.com/video_editing/asr/1/test.wav", func() {}, nil
+			return "https://bucket.example.com/video_editing/temp/asr/1/test.mp3", func() {}, nil
 		},
 	}
 	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, nil)
@@ -148,8 +148,8 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 	if material.LiveASR == "" {
 		t.Error("LiveASR should not be empty")
 	}
-	if asrAudioURL != "https://bucket.example.com/video_editing/asr/1/test.wav" {
-		t.Errorf("ASR audio URL = %q, want uploaded wav url", asrAudioURL)
+	if asrAudioURL != "https://bucket.example.com/video_editing/temp/asr/1/test.mp3" {
+		t.Errorf("ASR audio URL = %q, want uploaded mp3 url", asrAudioURL)
 	}
 }
 
@@ -173,7 +173,7 @@ func TestLiveMaterialASRWorker_Process_Failed(t *testing.T) {
 	}
 	worker := NewLiveMaterialASRWorker(repo, asrSvc, &mockASRAudioPreparer{
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (string, func(), error) {
-			return "https://bucket.example.com/asr.wav", func() {}, nil
+			return "https://bucket.example.com/temp/asr.mp3", func() {}, nil
 		},
 	}, nil)
 
@@ -207,7 +207,7 @@ func TestLiveMaterialASRWorker_Process_SkipNonPending(t *testing.T) {
 	worker := NewLiveMaterialASRWorker(repo, asrSvc, &mockASRAudioPreparer{
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (string, func(), error) {
 			prepareCalled = true
-			return "https://bucket.example.com/asr.wav", func() {}, nil
+			return "https://bucket.example.com/temp/asr.mp3", func() {}, nil
 		},
 	}, nil)
 
