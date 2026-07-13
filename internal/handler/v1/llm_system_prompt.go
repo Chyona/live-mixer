@@ -2,7 +2,6 @@ package v1
 
 import (
 	"errors"
-	"strconv"
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/service"
@@ -12,8 +11,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// llmSystemPromptDefaultPageSize 系统提示词列表默认每页条数。
-const llmSystemPromptDefaultPageSize = 10
+// ListLLMSystemPromptsRequest 系统提示词列表查询参数。
+type ListLLMSystemPromptsRequest struct {
+	Keywords  string `form:"keywords"`   // 原始字符串，如 "直播,话术"
+	StartDate string `form:"start_date"` // 开始日期 YYYY-MM-DD
+	EndDate   string `form:"end_date"`   // 结束日期 YYYY-MM-DD
+	Page      int    `form:"page" binding:"omitempty,min=1"`
+	PageSize  int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+}
 
 // LLMSystemPromptHandler 大模型系统提示词 HTTP 处理器。
 type LLMSystemPromptHandler struct {
@@ -43,37 +48,33 @@ type UpdateLLMSystemPromptRequest struct {
 
 // ListLLMSystemPrompts 系统提示词列表
 // @Summary      系统提示词列表
-// @Description  分页查询系统提示词，支持名称与可编辑状态筛选，列表返回 content_preview
+// @Description  分页查询系统提示词，支持关键词与日期筛选，列表返回 content_preview
 // @Tags         大模型系统提示词
 // @Produce      json
+// @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/content/remark"
+// @Param        start_date   query  string  false  "开始日期 YYYY-MM-DD"
+// @Param        end_date     query  string  false  "结束日期 YYYY-MM-DD"
 // @Param        page         query  int     false  "页码"
 // @Param        page_size    query  int     false  "每页数量，默认 10"
-// @Param        name         query  string  false  "名称模糊搜索"
-// @Param        is_editable  query  int     false  "是否可编辑：0 否 1 是"
 // @Success      200          {object}  response.Body
+// @Failure      400          {object}  response.Body
 // @Failure      401          {object}  response.Body
 // @Router       /v1/llm-system-prompts [get]
 func (h *LLMSystemPromptHandler) ListLLMSystemPrompts(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(llmSystemPromptDefaultPageSize)))
-	page, pageSize = utils.DefaultPage(page, pageSize)
-
-	opts := service.LLMSystemPromptListOptions{
-		Name: c.Query("name"),
+	var req ListLLMSystemPromptsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
-	if raw := c.Query("is_editable"); raw != "" {
-		v, err := strconv.Atoi(raw)
-		if err != nil || (v != 0 && v != 1) {
-			response.BadRequest(c, "is_editable 只能为 0 或 1")
-			return
-		}
-		editable := int8(v)
-		opts.IsEditable = &editable
-	}
+	page, pageSize := utils.DefaultPage(req.Page, req.PageSize)
 
-	items, total, err := h.llmSystemPromptService.List(c.Request.Context(), page, pageSize, opts)
+	items, total, err := h.llmSystemPromptService.List(c.Request.Context(), page, pageSize, service.LLMSystemPromptListOptions{
+		Keywords:  req.Keywords,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+	})
 	if err != nil {
-		response.InternalError(c, err.Error())
+		response.BadRequest(c, err.Error())
 		return
 	}
 	response.Success(c, response.PageData{

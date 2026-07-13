@@ -194,3 +194,48 @@ func TestLLMSystemPromptService_Get_NotFound(t *testing.T) {
 		t.Errorf("Get() error = %v, want %v", err, ErrLLMSystemPromptNotFound)
 	}
 }
+
+// TestBuildLLMSystemPromptListFilter 验证日期与关键词筛选条件构建。
+func TestBuildLLMSystemPromptListFilter(t *testing.T) {
+	filter, err := buildLLMSystemPromptListFilter(LLMSystemPromptListOptions{
+		Keywords:  "直播,话术",
+		StartDate: "2026-01-01",
+		EndDate:   "2026-01-31",
+	})
+	if err != nil {
+		t.Fatalf("buildLLMSystemPromptListFilter() error = %v", err)
+	}
+	if filter.StartAt == nil || filter.EndAt == nil {
+		t.Fatal("date range should be set")
+	}
+	if len(filter.Keywords) != 2 {
+		t.Fatalf("keywords = %v, want len 2", filter.Keywords)
+	}
+}
+
+// TestBuildLLMSystemPromptListFilter_InvalidDate 验证非法日期返回错误。
+func TestBuildLLMSystemPromptListFilter_InvalidDate(t *testing.T) {
+	_, err := buildLLMSystemPromptListFilter(LLMSystemPromptListOptions{StartDate: "2026/01/01"})
+	if err == nil {
+		t.Fatal("expected invalid date error")
+	}
+}
+
+// TestLLMSystemPromptService_List_PassesFilter 验证列表查询将筛选条件传递给仓储层。
+func TestLLMSystemPromptService_List_PassesFilter(t *testing.T) {
+	var gotFilter repository.LLMSystemPromptListFilter
+	repo := &mockLLMSystemPromptRepo{
+		listFn: func(ctx context.Context, filter repository.LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error) {
+			gotFilter = filter
+			return nil, 0, nil
+		},
+	}
+	svc := NewLLMSystemPromptService(repo)
+	_, _, err := svc.List(context.Background(), 1, 10, LLMSystemPromptListOptions{Keywords: "直播"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(gotFilter.Keywords) != 1 || gotFilter.Keywords[0] != "直播" {
+		t.Errorf("filter = %+v", gotFilter)
+	}
+}

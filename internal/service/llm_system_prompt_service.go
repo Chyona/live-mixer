@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"live-mixer/internal/model"
@@ -23,10 +24,11 @@ var (
 // llmSystemPromptContentPreviewRunes 列表接口中 content 预览的最大字符数（按 rune 计）。
 const llmSystemPromptContentPreviewRunes = 100
 
-// LLMSystemPromptListOptions 系统提示词列表查询选项。
+// LLMSystemPromptListOptions 系统提示词列表查询选项（来自 HTTP 查询参数）。
 type LLMSystemPromptListOptions struct {
-	Name       string
-	IsEditable *int8
+	Keywords  string
+	StartDate string
+	EndDate   string
 }
 
 // LLMSystemPromptService 大模型系统提示词业务接口。
@@ -123,11 +125,11 @@ func (s *llmSystemPromptService) Delete(ctx context.Context, id uint) error {
 }
 
 func (s *llmSystemPromptService) List(ctx context.Context, page, pageSize int, opts LLMSystemPromptListOptions) ([]model.LLMSystemPromptListItem, int64, error) {
-	offset := (page - 1) * pageSize
-	filter := repository.LLMSystemPromptListFilter{
-		Name:       opts.Name,
-		IsEditable: opts.IsEditable,
+	filter, err := buildLLMSystemPromptListFilter(opts)
+	if err != nil {
+		return nil, 0, err
 	}
+	offset := (page - 1) * pageSize
 	prompts, total, err := s.repo.List(ctx, filter, offset, pageSize)
 	if err != nil {
 		return nil, 0, err
@@ -147,6 +149,33 @@ func (s *llmSystemPromptService) List(ctx context.Context, page, pageSize int, o
 		})
 	}
 	return items, total, nil
+}
+
+// buildLLMSystemPromptListFilter 解析列表筛选参数并转换为仓储层筛选条件。
+func buildLLMSystemPromptListFilter(opts LLMSystemPromptListOptions) (repository.LLMSystemPromptListFilter, error) {
+	filter := repository.LLMSystemPromptListFilter{
+		Keywords: parseCommaKeywords(opts.Keywords),
+	}
+
+	if raw := strings.TrimSpace(opts.StartDate); raw != "" {
+		startAt, err := time.ParseInLocation(liveMaterialListDateLayout, raw, time.UTC)
+		if err != nil {
+			return filter, errors.New("start_date 格式无效，应为 YYYY-MM-DD")
+		}
+		filter.StartAt = &startAt
+	}
+	if raw := strings.TrimSpace(opts.EndDate); raw != "" {
+		endDate, err := time.ParseInLocation(liveMaterialListDateLayout, raw, time.UTC)
+		if err != nil {
+			return filter, errors.New("end_date 格式无效，应为 YYYY-MM-DD")
+		}
+		endAt := endDate.Add(24 * time.Hour)
+		filter.EndAt = &endAt
+	}
+	if filter.StartAt != nil && filter.EndAt != nil && !filter.StartAt.Before(*filter.EndAt) {
+		return filter, errors.New("start_date 不能晚于 end_date")
+	}
+	return filter, nil
 }
 
 func (s *llmSystemPromptService) Get(ctx context.Context, id uint) (*model.LLMSystemPrompt, error) {

@@ -67,7 +67,7 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 			if page != 1 || pageSize != 10 {
 				t.Errorf("page/pageSize = %d/%d, want 1/10", page, pageSize)
 			}
-			if opts.Name != "直播" || opts.IsEditable == nil || *opts.IsEditable != 1 {
+			if opts.Keywords != "直播,话术" || opts.StartDate != "2026-01-01" || opts.EndDate != "2026-01-31" {
 				t.Errorf("unexpected opts: %+v", opts)
 			}
 			return []model.LLMSystemPromptListItem{
@@ -79,7 +79,7 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 	r := newAuthedRouter(secret, handler.ListLLMSystemPrompts, http.MethodGet, "/llm-system-prompts")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
-	req := httptest.NewRequest(http.MethodGet, "/llm-system-prompts?name=直播&is_editable=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/llm-system-prompts?keywords=直播,话术&start_date=2026-01-01&end_date=2026-01-31", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -89,14 +89,14 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 	}
 }
 
-// TestLLMSystemPromptHandler_List_InvalidIsEditable 验证非法 is_editable 返回 400。
-func TestLLMSystemPromptHandler_List_InvalidIsEditable(t *testing.T) {
+// TestLLMSystemPromptHandler_List_InvalidPageSize 验证非法 page_size 返回 400。
+func TestLLMSystemPromptHandler_List_InvalidPageSize(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLLMSystemPromptHandler(&mockLLMSystemPromptService{})
 	r := newAuthedRouter(secret, handler.ListLLMSystemPrompts, http.MethodGet, "/llm-system-prompts")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
-	req := httptest.NewRequest(http.MethodGet, "/llm-system-prompts?is_editable=2", nil)
+	req := httptest.NewRequest(http.MethodGet, "/llm-system-prompts?page_size=200", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

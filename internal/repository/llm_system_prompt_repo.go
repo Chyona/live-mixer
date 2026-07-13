@@ -3,7 +3,7 @@ package repository
 
 import (
 	"context"
-	"strings"
+	"time"
 
 	"live-mixer/internal/model"
 
@@ -12,8 +12,9 @@ import (
 
 // LLMSystemPromptListFilter 系统提示词列表查询筛选条件。
 type LLMSystemPromptListFilter struct {
-	Name       string // 名称模糊匹配，空字符串表示不过滤
-	IsEditable *int8  // 是否可编辑筛选，nil 表示不过滤
+	StartAt   *time.Time // 开始日期（含），按 created_at 筛选
+	EndAt     *time.Time // 结束日期次日零点（不含），按 created_at 筛选
+	Keywords  []string   // 关键词列表，每个词匹配 name/content/remark，词之间为「与」
 }
 
 // LLMSystemPromptRepository 大模型系统提示词数据访问接口。
@@ -26,7 +27,7 @@ type LLMSystemPromptRepository interface {
 	Update(ctx context.Context, prompt *model.LLMSystemPrompt) error
 	// Delete 物理删除系统提示词记录。
 	Delete(ctx context.Context, id uint) error
-	// List 分页查询系统提示词，支持名称与可编辑状态筛选，按更新时间倒序。
+	// List 分页查询系统提示词，支持日期与关键词筛选，按更新时间倒序。
 	List(ctx context.Context, filter LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error)
 }
 
@@ -69,13 +70,7 @@ func (r *llmSystemPromptRepository) List(ctx context.Context, filter LLMSystemPr
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.LLMSystemPrompt{})
-	if name := strings.TrimSpace(filter.Name); name != "" {
-		// 使用 LOWER + LIKE，兼容 PostgreSQL 与 SQLite 测试库。
-		query = query.Where("LOWER(name) LIKE ?", "%"+strings.ToLower(name)+"%")
-	}
-	if filter.IsEditable != nil {
-		query = query.Where("is_editable = ?", *filter.IsEditable)
-	}
+	query = applyLLMSystemPromptListFilter(query, filter)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -84,4 +79,23 @@ func (r *llmSystemPromptRepository) List(ctx context.Context, filter LLMSystemPr
 		return nil, 0, err
 	}
 	return prompts, total, nil
+}
+
+// applyLLMSystemPromptListFilter 将列表筛选条件应用到 GORM 查询。
+func applyLLMSystemPromptListFilter(query *gorm.DB, filter LLMSystemPromptListFilter) *gorm.DB {
+	if filter.StartAt != nil {
+		query = query.Where("created_at >= ?", *filter.StartAt)
+	}
+	if filter.EndAt != nil {
+		query = query.Where("created_at < ?", *filter.EndAt)
+	}
+	for _, kw := range filter.Keywords {
+		pattern := "%" + kw + "%"
+		// 单个关键词命中 name、content 或 remark 即可，多个关键词之间为「与」。
+		query = query.Where(
+			"LOWER(name) LIKE ? OR LOWER(content) LIKE ? OR LOWER(remark) LIKE ?",
+			pattern, pattern, pattern,
+		)
+	}
+	return query
 }

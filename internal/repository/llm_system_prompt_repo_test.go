@@ -132,38 +132,63 @@ func TestLLMSystemPromptRepository_Delete(t *testing.T) {
 	}
 }
 
-// TestLLMSystemPromptRepository_List_FilterAndPagination 验证筛选、分页与排序。
-func TestLLMSystemPromptRepository_List_FilterAndPagination(t *testing.T) {
+// TestLLMSystemPromptRepository_List_KeywordFilter 验证关键词按「与」匹配 name/content/remark。
+func TestLLMSystemPromptRepository_List_KeywordFilter(t *testing.T) {
 	db := setupLLMSystemPromptTestDB(t)
 	repo := NewLLMSystemPromptRepository(db)
 	ctx := context.Background()
 
-	now := time.Now()
 	seedLLMSystemPrompt(t, db, &model.LLMSystemPrompt{
-		Name: "直播话术", Content: "A", IsEditable: model.LLMSystemPromptNotEditable,
-		CreatedBy: 1, CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-1 * time.Hour),
+		Name: "直播话术", Content: "周末促销内容", Remark: "默认", IsEditable: model.LLMSystemPromptEditable, CreatedBy: 1,
 	})
 	seedLLMSystemPrompt(t, db, &model.LLMSystemPrompt{
-		Name: "商品介绍", Content: "B", IsEditable: model.LLMSystemPromptEditable,
-		CreatedBy: 1, CreatedAt: now.Add(-1 * time.Hour), UpdatedAt: now,
+		Name: "直播开场", Content: "工作日内容", Remark: "备注", IsEditable: model.LLMSystemPromptEditable, CreatedBy: 1,
 	})
 	seedLLMSystemPrompt(t, db, &model.LLMSystemPrompt{
-		Name: "直播开场", Content: "C", IsEditable: model.LLMSystemPromptEditable,
-		CreatedBy: 1, CreatedAt: now, UpdatedAt: now.Add(-30 * time.Minute),
+		Name: "商品介绍", Content: "周末优惠", Remark: "其它", IsEditable: model.LLMSystemPromptEditable, CreatedBy: 1,
 	})
 
-	editable := model.LLMSystemPromptEditable
 	prompts, total, err := repo.List(ctx, LLMSystemPromptListFilter{
-		Name:       "直播",
-		IsEditable: &editable,
+		Keywords: []string{"直播", "周末"},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if total != 1 {
-		t.Errorf("total = %d, want 1", total)
+	if total != 1 || len(prompts) != 1 || prompts[0].Name != "直播话术" {
+		t.Errorf("unexpected result: total=%d prompts=%+v", total, prompts)
 	}
-	if len(prompts) != 1 || prompts[0].Name != "直播开场" {
-		t.Errorf("unexpected list result: %+v", prompts)
+}
+
+// TestLLMSystemPromptRepository_List_DateFilter 验证按 created_at 日期范围筛选。
+func TestLLMSystemPromptRepository_List_DateFilter(t *testing.T) {
+	db := setupLLMSystemPromptTestDB(t)
+	repo := NewLLMSystemPromptRepository(db)
+	ctx := context.Background()
+
+	inRange := &model.LLMSystemPrompt{
+		Name: "范围内", Content: "内容", IsEditable: model.LLMSystemPromptEditable, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+	}
+	outRange := &model.LLMSystemPrompt{
+		Name: "范围外", Content: "内容", IsEditable: model.LLMSystemPromptEditable, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, p := range []*model.LLMSystemPrompt{inRange, outRange} {
+		if err := db.Create(p).Error; err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	startAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	endAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	prompts, total, err := repo.List(ctx, LLMSystemPromptListFilter{
+		StartAt: &startAt,
+		EndAt:   &endAt,
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(prompts) != 1 || prompts[0].Name != "范围内" {
+		t.Errorf("unexpected result: total=%d prompts=%+v", total, prompts)
 	}
 }
