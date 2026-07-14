@@ -10,7 +10,7 @@ services:
     memswap_limit: 12G
     cpus: '6'
     ports:
-      - "31000:30000"
+      - "30000:30000"
     volumes:
       - ./logs:/app/logs
     env_file:
@@ -58,7 +58,7 @@ services:
     networks:
       - live-mixer-network
 
-  live-capcut-mate:
+  capcut-mate:
     image: gogoshine/capcut-mate:latest
     container_name: live-capcut-mate
     platform: linux/amd64
@@ -82,7 +82,7 @@ services:
     networks:
       - live-mixer-network    
 
-  live-nginx: # nginx服务器
+  nginx: # nginx服务器
     image: gogoshine/nginx:latest
     container_name: live-nginx
     platform: linux/amd64
