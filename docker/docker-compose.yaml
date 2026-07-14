@@ -5,7 +5,7 @@ services:
     platform: linux/amd64
     restart: unless-stopped
     ports:
-      - "30000:30000"
+      - "30001:30000"
     volumes:
       - ./logs:/app/logs
     env_file:
@@ -52,6 +52,53 @@ services:
       TZ: Asia/Shanghai
     networks:
       - live-mixer-network
+
+  capcut-mate:
+    image: gogoshine/capcut-mate:latest
+    container_name: live-capcut-mate
+    platform: linux/amd64
+    ports:
+      - "30002:30000"
+    volumes:
+      - ./html/output:/app/output  # 挂载配置文件目录
+      - ./logs:/app/logs  # 挂载配置文件目录
+      #- /etc/localtime:/etc/localtime:ro
+      #- /etc/timezone:/etc/timezone:ro
+    environment:
+      # 草稿下载URL
+      - DRAFT_URL=http://192.168.3.219/openapi/capcut-mate/v1/get_draft
+      # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
+      - DOWNLOAD_URL=http://192.168.3.219
+      # 草稿提示URL
+      - TIP_URL=https://docs.jcaigc.cn
+      # 文件下载大小限制（字节），默认1GB（1073741824）
+      - DOWNLOAD_FILE_SIZE_LIMIT=1073741824
+    networks:
+      - live-mixer-network
+    restart: unless-stopped  # 除非手动停止，否则总是重启容器
+
+  nginx: # nginx服务器
+    image: gogoshine/nginx:latest
+    container_name: live-nginx
+    platform: linux/amd64
+    ports:
+      - "80:80"
+    environment:
+      - PROXY_PASS_URL_1=http://capcut-mate:30000/openapi/capcut-mate/
+      - PROXY_LOCATION_1=/openapi/capcut-mate/
+      - PROXY_PASS_URL_2=http://192.168.3.219:30000/openapi/capcut-mate/v1/gen_video
+      - PROXY_LOCATION_2=/openapi/capcut-mate/v1/gen_video
+      - PROXY_PASS_URL_3=http://192.168.3.219:30000/openapi/capcut-mate/v1/gen_video_status
+      - PROXY_LOCATION_3=/openapi/capcut-mate/v1/gen_video_status
+      - PROXY_PASS_URL_4=http://192.168.3.219:30000/openapi/capcut-mate/v1/gen_video_active_count
+      - PROXY_LOCATION_4=/openapi/capcut-mate/v1/gen_video_active_count
+      - PROXY_PASS_URL_5=http://live-mixer:30000/openapi/live-mixer/
+      - PROXY_LOCATION_5=/openapi/live-mixer/
+    volumes:
+      - ./html:/usr/share/nginx/html
+    networks:
+      - live-mixer-network
+    restart: unless-stopped  # 除非手动停止，否则总是重启容器
 
 networks:
   live-mixer-network:
