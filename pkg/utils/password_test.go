@@ -1,6 +1,10 @@
 package utils
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode"
+)
 
 func TestComparePassword(t *testing.T) {
 	hashed, err := HashPassword("admin")
@@ -14,6 +18,50 @@ func TestComparePassword(t *testing.T) {
 	if ComparePassword(hashed, "wrong") {
 		t.Error("ComparePassword() should not match wrong password")
 	}
+}
+
+// TestGenerateRandomPassword 验证随机密码长度、字符集与非法参数。
+func TestGenerateRandomPassword(t *testing.T) {
+	t.Run("default length", func(t *testing.T) {
+		pwd, err := GenerateRandomPassword(DefaultRandomPasswordLength)
+		if err != nil {
+			t.Fatalf("GenerateRandomPassword() error = %v", err)
+		}
+		if len(pwd) != DefaultRandomPasswordLength {
+			t.Fatalf("len = %d, want %d", len(pwd), DefaultRandomPasswordLength)
+		}
+		for _, r := range pwd {
+			if !(unicode.IsDigit(r) || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+				t.Fatalf("非法字符 %q in %q", r, pwd)
+			}
+		}
+	})
+
+	t.Run("invalid length", func(t *testing.T) {
+		if _, err := GenerateRandomPassword(0); err == nil {
+			t.Fatal("expected error for length 0")
+		}
+		if _, err := GenerateRandomPassword(-1); err == nil {
+			t.Fatal("expected error for negative length")
+		}
+	})
+
+	t.Run("not constant", func(t *testing.T) {
+		a, err := GenerateRandomPassword(16)
+		if err != nil {
+			t.Fatalf("first: %v", err)
+		}
+		b, err := GenerateRandomPassword(16)
+		if err != nil {
+			t.Fatalf("second: %v", err)
+		}
+		if a == b {
+			t.Fatalf("两次生成结果相同，疑似随机性异常: %q", a)
+		}
+		if strings.Trim(a, randomPasswordCharset) != "" {
+			t.Fatalf("密码含非法字符: %q", a)
+		}
+	})
 }
 
 func TestParseRoles(t *testing.T) {

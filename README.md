@@ -55,13 +55,15 @@ CREATE DATABASE base_db;
 
 ### 3. 执行环境初始化
 
-`envinit` 提供三个子命令：
+`envinit` 提供以下子命令：
 
 | 命令 | 说明 |
 |------|------|
 | `schema` | 仅初始化数据库表结构（GORM AutoMigrate） |
 | `seed` | 仅填充基础数据 |
 | `init` | 一键执行：建表 + 填充基础数据 |
+| `reinit` | 删除全部表与数据后，重新建表并填充默认数据 |
+| `reset-password` | 重置账号密码（默认 `admin`；可指定用户名与新密码） |
 
 **推荐：首次使用执行一键初始化**
 
@@ -76,12 +78,25 @@ go run ./cmd/envinit schema   # 建表
 go run ./cmd/envinit seed     # 填充种子数据
 ```
 
-初始化完成后会创建默认账号（密码均为 `123456`）：
+重建环境（会清空全部表数据）：
+
+```bash
+go run ./cmd/envinit reinit
+```
+
+重置密码（新密码会原样写入日志；未指定时生成 16 位随机密码）：
+
+```bash
+go run ./cmd/envinit reset-password                      # 重置 admin，生成随机密码
+go run ./cmd/envinit reset-password -p 'YourNewPass'     # 重置 admin 为指定密码
+go run ./cmd/envinit reset-password -u demo -p 'xxx'     # 重置指定账号
+```
+
+初始化完成后会创建默认账号（默认密码为 `admin`）：
 
 | 用户名 | 邮箱 |
 |--------|------|
 | admin | admin@example.com |
-| demo | demo@example.com |
 
 ### 4. 使用自定义配置初始化
 
