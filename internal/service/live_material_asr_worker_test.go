@@ -78,6 +78,19 @@ func (m *workerMockRepo) UpdateASRFailed(ctx context.Context, id uint, progress 
 	return nil
 }
 
+func (m *workerMockRepo) ResetASRToPending(ctx context.Context, id uint) error {
+	material := m.materials[id]
+	if material == nil {
+		return gorm.ErrRecordNotFound
+	}
+	material.ASRStatus = model.ASRStatusPending
+	material.ASRProgress = 0
+	material.LiveASR = "{}"
+	material.ASRErrorMsg = ""
+	material.ASRStartedAt = nil
+	return nil
+}
+
 type workerMockASR struct {
 	transcribeFn func(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error)
 }

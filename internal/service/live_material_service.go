@@ -30,6 +30,12 @@ var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持
 // ErrLiveMaterialNotFound 直播素材不存在。
 var ErrLiveMaterialNotFound = errors.New("直播素材不存在")
 
+// ErrASRAlreadyProcessing ASR 正在识别中，不允许重复提交。
+var ErrASRAlreadyProcessing = errors.New("ASR 进行中，请勿重复提交")
+
+// ErrASRCompletedNeedForce ASR 已完成，需传 force=true 才能重试。
+var ErrASRCompletedNeedForce = errors.New("ASR 已完成，如需重新识别请设置 force=true")
+
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
 	// Create 创建直播素材，createdBy 来自 JWT 当前用户。
@@ -42,6 +48,8 @@ type LiveMaterialService interface {
 	Get(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// Delete 删除直播素材，并级联删除关联剪辑项目。
 	Delete(ctx context.Context, id uint) error
+	// RetryASR 将素材 ASR 重置为 pending 并重新入队；force 允许在 completed 时覆盖。
+	RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error)
 }
 
 type liveMaterialService struct {
@@ -188,4 +196,39 @@ func (s *liveMaterialService) Delete(ctx context.Context, id uint) error {
 		return err
 	}
 	return nil
+}
+
+func (s *liveMaterialService) RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error) {
+	material, err := s.liveMaterialRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLiveMaterialNotFound
+		}
+		return nil, err
+	}
+
+	switch material.ASRStatus {
+	case model.ASRStatusProcessing:
+		return nil, ErrASRAlreadyProcessing
+	case model.ASRStatusCompleted:
+		if !force {
+			return nil, ErrASRCompletedNeedForce
+		}
+	case model.ASRStatusPending, model.ASRStatusFailed:
+		// 允许重试
+	default:
+		return nil, errors.New("当前 ASR 状态不允许重试")
+	}
+
+	if err := s.liveMaterialRepo.ResetASRToPending(ctx, id); err != nil {
+		return nil, err
+	}
+	material, err = s.liveMaterialRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.asrWorker != nil {
+		s.asrWorker.Enqueue(id)
+	}
+	return material, nil
 }

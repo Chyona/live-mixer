@@ -52,6 +52,7 @@ func main() {
 	liveMaterialRepo := repository.NewLiveMaterialRepository(db)
 	llmSystemPromptRepo := repository.NewLLMSystemPromptRepository(db)
 	videoProjectRepo := repository.NewVideoProjectRepository(db)
+	taskRepo := repository.NewTaskRepository(db)
 	accountService := service.NewAccountService(accountRepo)
 	authService := service.NewAuthService(accountRepo, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
@@ -65,6 +66,7 @@ func main() {
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 	llmSystemPromptService := service.NewLLMSystemPromptService(llmSystemPromptRepo)
 	videoProjectService := service.NewVideoProjectService(videoProjectRepo, liveMaterialRepo)
+	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,6 +77,7 @@ func main() {
 	v1LiveMaterialHandler := v1handler.NewLiveMaterialHandler(liveMaterialService)
 	v1LLMSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(llmSystemPromptService)
 	v1VideoProjectHandler := v1handler.NewVideoProjectHandler(videoProjectService)
+	v1TaskHandler := v1handler.NewTaskHandler(taskService)
 	v2AccountHandler := v2handler.NewAccountHandler(accountService)
 
 	gin.SetMode(cfg.Server.Mode)
@@ -86,7 +89,7 @@ func main() {
 	})
 
 	api := r.Group("/openapi/live-mixer")
-	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, v1ASRHandler, v1LiveMaterialHandler, v1LLMSystemPromptHandler, v1VideoProjectHandler, cfg.JWT.Secret)
+	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, v1ASRHandler, v1LiveMaterialHandler, v1LLMSystemPromptHandler, v1VideoProjectHandler, v1TaskHandler, cfg.JWT.Secret)
 	routesv2.RegisterRoutes(api.Group("/v2"), v2AccountHandler, cfg.JWT.Secret)
 
 	docs.SwaggerInfo.Host = cfg.Server.Addr()

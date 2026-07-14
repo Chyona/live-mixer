@@ -1,3 +1,5 @@
+name: live-mixer
+
 services:
   live-mixer:
     container_name: live-mixer

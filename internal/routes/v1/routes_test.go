@@ -37,7 +37,7 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	llmSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, secret)
+	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, secret)
 
 	// 未携带 Token 访问账号列表应被 JWT 中间件拦截
 	req := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
@@ -76,7 +76,7 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	}
 	rWithRecovery := gin.New()
 	rWithRecovery.Use(gin.Recovery())
-	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, secret)
+	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, secret)
 
 	authReq := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
 	authReq.Header.Set("Authorization", "Bearer "+token)
@@ -93,7 +93,7 @@ func TestRegisterRoutes_ASRPublic(t *testing.T) {
 	asrHandler := v1handler.NewASRHandler(&routeMockASRService{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, nil, nil, nil, secret)
 
 	body := []byte(`{"audio_url":"https://example.com/test.wav"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/asr", bytes.NewReader(body))
@@ -122,7 +122,7 @@ func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -140,7 +140,7 @@ func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials", nil)
 	w := httptest.NewRecorder()
@@ -157,7 +157,7 @@ func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials/1", nil)
 	w := httptest.NewRecorder()
@@ -174,7 +174,7 @@ func TestRegisterRoutes_LiveMaterialsDeleteProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/live-materials/1", nil)
 	w := httptest.NewRecorder()
@@ -191,7 +191,7 @@ func TestRegisterRoutes_LLMSystemPromptsProtected(t *testing.T) {
 	llmHandler := v1handler.NewLLMSystemPromptHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, llmHandler, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, llmHandler, nil, nil, secret)
 
 	cases := []struct {
 		method string
@@ -222,7 +222,7 @@ func TestRegisterRoutes_VideoProjectsProtected(t *testing.T) {
 	videoHandler := v1handler.NewVideoProjectHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, videoHandler, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, videoHandler, nil, secret)
 
 	cases := []struct {
 		method string
@@ -244,5 +244,54 @@ func TestRegisterRoutes_VideoProjectsProtected(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s without token: status = %d, want %d", tc.method, tc.path, w.Code, http.StatusUnauthorized)
 		}
+	}
+}
+
+// TestRegisterRoutes_TasksProtected 验证异步任务接口需要 JWT 鉴权。
+func TestRegisterRoutes_TasksProtected(t *testing.T) {
+	secret := "route-test-secret"
+	taskHandler := v1handler.NewTaskHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, nil, taskHandler, secret)
+
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/tasks"},
+		{http.MethodPost, "/v1/tasks/ai-slice"},
+		{http.MethodPost, "/v1/tasks/draft"},
+		{http.MethodPost, "/v1/tasks/ai-slice-draft"},
+		{http.MethodGet, "/v1/tasks/1"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s without token: status = %d, want %d", tc.method, tc.path, w.Code, http.StatusUnauthorized)
+		}
+	}
+}
+
+// TestRegisterRoutes_ASRRetryProtected 验证重新 ASR 接口需要 JWT 鉴权。
+func TestRegisterRoutes_ASRRetryProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials/1/asr/retry", nil)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("POST /v1/live-materials/1/asr/retry without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }

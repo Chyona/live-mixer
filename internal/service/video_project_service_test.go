@@ -99,6 +99,9 @@ func (m *mockLiveMaterialRepoForProject) UpdateASRCompleted(ctx context.Context,
 func (m *mockLiveMaterialRepoForProject) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
 	return nil
 }
+func (m *mockLiveMaterialRepoForProject) ResetASRToPending(ctx context.Context, id uint) error {
+	return nil
+}
 func (m *mockLiveMaterialRepoForProject) List(ctx context.Context, filter repository.LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
 	return nil, 0, nil
 }

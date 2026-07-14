@@ -152,13 +152,13 @@ CREATE TABLE IF NOT EXISTS task (
     started_at             TIMESTAMPTZ,
     completed_at           TIMESTAMPTZ,
     ext                    VARCHAR(1024),
-    CONSTRAINT chk_task_type CHECK (type IN ('jianying_draft', 'ai_slice', 'ai_slice_jianying')),
+    CONSTRAINT chk_task_type CHECK (type IN ('ai_slice', 'draft', 'ai_slice_draft')),
     CONSTRAINT chk_task_status CHECK (status IN ('pending', 'processing', 'completed', 'failed'))
 );
 
 COMMENT ON TABLE task IS '任务表';
 COMMENT ON COLUMN task.id IS '主键';
-COMMENT ON COLUMN task.type IS '任务类型：jianying_draft剪映草稿生成 ai_slice AI切片 ai_slice_jianying AI切片+剪映草稿生成';
+COMMENT ON COLUMN task.type IS '任务类型：ai_slice AI切片 draft 剪映草稿 ai_slice_draft AI切片+剪映草稿';
 COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执行中 completed已完成 failed失败';
 COMMENT ON COLUMN task.sys_prompt IS '系统提示词';
 COMMENT ON COLUMN task.usr_prompt IS '用户提示词';

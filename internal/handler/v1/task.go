@@ -1,0 +1,275 @@
+package v1
+
+import (
+	"errors"
+	"time"
+
+	"live-mixer/internal/middleware"
+	"live-mixer/internal/model"
+	"live-mixer/internal/service"
+	"live-mixer/pkg/response"
+	"live-mixer/pkg/utils"
+
+	"github.com/gin-gonic/gin"
+)
+
+// TaskHandler 异步任务 HTTP 处理器。
+type TaskHandler struct {
+	taskService service.TaskService
+}
+
+// NewTaskHandler 创建任务处理器实例。
+func NewTaskHandler(taskService service.TaskService) *TaskHandler {
+	return &TaskHandler{taskService: taskService}
+}
+
+// CreateAISliceTaskRequest AI 切片任务请求体。
+type CreateAISliceTaskRequest struct {
+	LiveID           uint   `json:"live_id" binding:"required"`
+	Name             string `json:"name" binding:"max=64"`
+	Remark           string `json:"remark" binding:"max=256"`
+	SysPromptID      uint   `json:"sys_prompt_id"`
+	UsrPrompt        string `json:"usr_prompt"`
+	TargetDurationMs int64  `json:"target_duration_ms"`
+}
+
+// CreateDraftTaskRequest 剪映草稿任务请求体。
+type CreateDraftTaskRequest struct {
+	LiveID         uint              `json:"live_id"`
+	VideoProjectID uint              `json:"video_project_id"`
+	Name           string            `json:"name" binding:"max=64"`
+	Clips0         []model.ClipRange `json:"clips0"`
+	CanvasWidth    int               `json:"canvas_width"`
+	CanvasHeight   int               `json:"canvas_height"`
+}
+
+// CreateAISliceDraftTaskRequest 一键成片任务请求体。
+type CreateAISliceDraftTaskRequest struct {
+	LiveID           uint   `json:"live_id" binding:"required"`
+	Name             string `json:"name" binding:"max=64"`
+	Remark           string `json:"remark" binding:"max=256"`
+	SysPromptID      uint   `json:"sys_prompt_id"`
+	UsrPrompt        string `json:"usr_prompt"`
+	TargetDurationMs int64  `json:"target_duration_ms"`
+	CanvasWidth      int    `json:"canvas_width"`
+	CanvasHeight     int    `json:"canvas_height"`
+}
+
+// ListTasksRequest 任务列表查询参数。
+type ListTasksRequest struct {
+	Type     string `form:"type"`
+	Status   string `form:"status"`
+	Page     int    `form:"page" binding:"omitempty,min=1"`
+	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+}
+
+// TaskCreateResponse 创建任务立即返回的摘要。
+type TaskCreateResponse struct {
+	ID        uint      `json:"id"`
+	Type      string    `json:"type"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
+	return TaskCreateResponse{
+		ID:        task.ID,
+		Type:      task.Type,
+		Status:    task.Status,
+		CreatedAt: task.CreatedAt,
+	}
+}
+
+// CreateAISliceTask 创建 AI 切片任务
+// @Summary      创建 AI 切片任务
+// @Description  异步：LLM 分析直播 ASR，提取合计约 1 分钟的高光时间段；立即返回 task，请轮询 GET /v1/tasks/:id
+// @Tags         异步任务
+// @Accept       json
+// @Produce      json
+// @Param        body  body      CreateAISliceTaskRequest  true  "任务参数"
+// @Success      200   {object}  response.Body
+// @Failure      400   {object}  response.Body
+// @Failure      401   {object}  response.Body
+// @Router       /v1/tasks/ai-slice [post]
+func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
+	var req CreateAISliceTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	user, ok := middleware.GetAuthUser(c)
+	if !ok {
+		response.Unauthorized(c, "未登录")
+		return
+	}
+
+	task, err := h.taskService.CreateAISlice(c.Request.Context(), user.ID, service.CreateAISliceInput{
+		LiveID:           req.LiveID,
+		Name:             req.Name,
+		Remark:           req.Remark,
+		SysPromptID:      req.SysPromptID,
+		UsrPrompt:        req.UsrPrompt,
+		TargetDurationMs: req.TargetDurationMs,
+	})
+	if err != nil {
+		writeTaskCreateError(c, err)
+		return
+	}
+	response.Success(c, toTaskCreateResponse(task))
+}
+
+// CreateDraftTask 创建剪映草稿任务
+// @Summary      创建剪映草稿任务
+// @Description  异步：按已有 clips0 对直播视频切片并调用 capcut-mate 组装剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id
+// @Tags         异步任务
+// @Accept       json
+// @Produce      json
+// @Param        body  body      CreateDraftTaskRequest  true  "任务参数"
+// @Success      200   {object}  response.Body
+// @Failure      400   {object}  response.Body
+// @Failure      401   {object}  response.Body
+// @Router       /v1/tasks/draft [post]
+func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
+	var req CreateDraftTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	user, ok := middleware.GetAuthUser(c)
+	if !ok {
+		response.Unauthorized(c, "未登录")
+		return
+	}
+
+	task, err := h.taskService.CreateDraft(c.Request.Context(), user.ID, service.CreateDraftInput{
+		LiveID:         req.LiveID,
+		VideoProjectID: req.VideoProjectID,
+		Name:           req.Name,
+		Clips0:         req.Clips0,
+		CanvasWidth:    req.CanvasWidth,
+		CanvasHeight:   req.CanvasHeight,
+	})
+	if err != nil {
+		writeTaskCreateError(c, err)
+		return
+	}
+	response.Success(c, toTaskCreateResponse(task))
+}
+
+// CreateAISliceDraftTask 创建一键成片任务
+// @Summary      创建一键成片任务
+// @Description  异步：先 AI 切片再 ffmpeg+capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id
+// @Tags         异步任务
+// @Accept       json
+// @Produce      json
+// @Param        body  body      CreateAISliceDraftTaskRequest  true  "任务参数"
+// @Success      200   {object}  response.Body
+// @Failure      400   {object}  response.Body
+// @Failure      401   {object}  response.Body
+// @Router       /v1/tasks/ai-slice-draft [post]
+func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
+	var req CreateAISliceDraftTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	user, ok := middleware.GetAuthUser(c)
+	if !ok {
+		response.Unauthorized(c, "未登录")
+		return
+	}
+
+	task, err := h.taskService.CreateAISliceDraft(c.Request.Context(), user.ID, service.CreateAISliceDraftInput{
+		LiveID:           req.LiveID,
+		Name:             req.Name,
+		Remark:           req.Remark,
+		SysPromptID:      req.SysPromptID,
+		UsrPrompt:        req.UsrPrompt,
+		TargetDurationMs: req.TargetDurationMs,
+		CanvasWidth:      req.CanvasWidth,
+		CanvasHeight:     req.CanvasHeight,
+	})
+	if err != nil {
+		writeTaskCreateError(c, err)
+		return
+	}
+	response.Success(c, toTaskCreateResponse(task))
+}
+
+// ListTasks 任务列表
+// @Summary      任务列表
+// @Description  分页查询异步任务，支持按 type、status 筛选
+// @Tags         异步任务
+// @Produce      json
+// @Param        type       query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
+// @Param        status     query  string  false  "任务状态：pending / processing / completed / failed"
+// @Param        page       query  int     false  "页码"
+// @Param        page_size  query  int     false  "每页数量，默认 10"
+// @Success      200        {object}  response.Body
+// @Failure      400        {object}  response.Body
+// @Failure      401        {object}  response.Body
+// @Router       /v1/tasks [get]
+func (h *TaskHandler) ListTasks(c *gin.Context) {
+	var req ListTasksRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	page, pageSize := utils.DefaultPage(req.Page, req.PageSize)
+
+	tasks, total, err := h.taskService.List(c.Request.Context(), page, pageSize, service.TaskListOptions{
+		Type:   req.Type,
+		Status: req.Status,
+	})
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, response.PageData{
+		List:     tasks,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
+// GetTask 获取任务详情
+// @Summary      获取任务详情
+// @Description  根据 ID 查询任务状态；异步任务完成后在此查看结果字段（当前业务执行逻辑待实现）
+// @Tags         异步任务
+// @Produce      json
+// @Param        id   path  int  true  "任务 ID"
+// @Success      200  {object}  response.Body
+// @Failure      400  {object}  response.Body
+// @Failure      404  {object}  response.Body
+// @Router       /v1/tasks/{id} [get]
+func (h *TaskHandler) GetTask(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的任务 ID")
+		return
+	}
+
+	task, err := h.taskService.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrTaskNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.Success(c, task)
+}
+
+func writeTaskCreateError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrLiveMaterialNotFound),
+		errors.Is(err, service.ErrVideoProjectNotFound):
+		response.NotFound(c, err.Error())
+	case errors.Is(err, service.ErrTaskASRNotReady):
+		response.BadRequest(c, err.Error())
+	default:
+		response.BadRequest(c, err.Error())
+	}
+}

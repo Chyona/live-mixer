@@ -9,7 +9,17 @@ import (
 )
 
 // RegisterRoutes 注册 v1 版本全部路由。
-func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandler, authHandler *v1handler.AuthHandler, asrHandler *v1handler.ASRHandler, liveMaterialHandler *v1handler.LiveMaterialHandler, llmSystemPromptHandler *v1handler.LLMSystemPromptHandler, videoProjectHandler *v1handler.VideoProjectHandler, jwtSecret string) {
+func RegisterRoutes(
+	rg *gin.RouterGroup,
+	accountHandler *v1handler.AccountHandler,
+	authHandler *v1handler.AuthHandler,
+	asrHandler *v1handler.ASRHandler,
+	liveMaterialHandler *v1handler.LiveMaterialHandler,
+	llmSystemPromptHandler *v1handler.LLMSystemPromptHandler,
+	videoProjectHandler *v1handler.VideoProjectHandler,
+	taskHandler *v1handler.TaskHandler,
+	jwtSecret string,
+) {
 	// 登录接口无需 JWT 鉴权
 	rg.POST("/auth/login", authHandler.Login)
 	// ASR 同步识别接口无需 JWT 鉴权
@@ -34,6 +44,7 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 		liveMaterials.GET("/:id", liveMaterialHandler.GetLiveMaterial)
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
 		liveMaterials.DELETE("/:id", liveMaterialHandler.DeleteLiveMaterial)
+		liveMaterials.POST("/:id/asr/retry", liveMaterialHandler.RetryASR)
 	}
 
 	llmSystemPrompts := authorized.Group("/llm-system-prompts")
@@ -52,5 +63,15 @@ func RegisterRoutes(rg *gin.RouterGroup, accountHandler *v1handler.AccountHandle
 		videoProjects.GET("/:id", videoProjectHandler.GetVideoProject)
 		videoProjects.PUT("/:id", videoProjectHandler.UpdateVideoProject)
 		videoProjects.DELETE("/:id", videoProjectHandler.DeleteVideoProject)
+	}
+
+	tasks := authorized.Group("/tasks")
+	{
+		// 具体路径须注册在 /:id 之前，避免被当成 id。
+		tasks.POST("/ai-slice", taskHandler.CreateAISliceTask)
+		tasks.POST("/draft", taskHandler.CreateDraftTask)
+		tasks.POST("/ai-slice-draft", taskHandler.CreateAISliceDraftTask)
+		tasks.GET("", taskHandler.ListTasks)
+		tasks.GET("/:id", taskHandler.GetTask)
 	}
 }

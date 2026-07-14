@@ -75,6 +75,21 @@ func (m *mockLiveMaterialRepo) UpdateASRCompleted(ctx context.Context, id uint, 
 func (m *mockLiveMaterialRepo) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
 	return nil
 }
+func (m *mockLiveMaterialRepo) ResetASRToPending(ctx context.Context, id uint) error {
+	if m.materials == nil {
+		return nil
+	}
+	material, ok := m.materials[id]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	material.ASRStatus = model.ASRStatusPending
+	material.ASRProgress = 0
+	material.LiveASR = "{}"
+	material.ASRErrorMsg = ""
+	material.ASRStartedAt = nil
+	return nil
+}
 
 func (m *mockLiveMaterialRepo) Delete(ctx context.Context, id uint) error {
 	if m.deleteFn != nil {

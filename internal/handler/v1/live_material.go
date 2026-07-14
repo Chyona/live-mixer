@@ -39,6 +39,11 @@ type UpdateLiveMaterialRequest struct {
 	Remark string `json:"remark" binding:"max=256"`
 }
 
+// RetryASRRequest 重新触发 ASR 请求体。
+type RetryASRRequest struct {
+	Force bool `json:"force"` // 为 true 时允许覆盖已完成的 ASR
+}
+
 // LiveMaterialDetailResponse 直播素材详情响应，live_asr 为分句数组格式。
 type LiveMaterialDetailResponse struct {
 	ID           uint            `json:"id"`
@@ -256,4 +261,44 @@ func (h *LiveMaterialHandler) DeleteLiveMaterial(c *gin.Context) {
 		return
 	}
 	response.SuccessWithMessage(c, "删除成功", nil)
+}
+
+// RetryASR 重新触发直播素材 ASR
+// @Summary      重新 ASR
+// @Description  将素材 ASR 重置为 pending 并后台重新识别；processing 中不可提交；completed 需 force=true
+// @Tags         直播素材
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int              true  "素材 ID"
+// @Param        body  body  RetryASRRequest  false "是否强制覆盖已完成结果"
+// @Success      200   {object}  response.Body
+// @Failure      400   {object}  response.Body
+// @Failure      404   {object}  response.Body
+// @Router       /v1/live-materials/{id}/asr/retry [post]
+func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的素材 ID")
+		return
+	}
+
+	var req RetryASRRequest
+	// 允许空 body
+	_ = c.ShouldBindJSON(&req)
+
+	material, err := h.liveMaterialService.RetryASR(c.Request.Context(), id, req.Force)
+	if err != nil {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, gin.H{
+		"id":            material.ID,
+		"asr_status":    material.ASRStatus,
+		"asr_progress":  material.ASRProgress,
+		"asr_error_msg": material.ASRErrorMsg,
+	})
 }

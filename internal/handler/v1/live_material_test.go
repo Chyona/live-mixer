@@ -61,6 +61,10 @@ func (m *mockLiveMaterialService) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
+func (m *mockLiveMaterialService) RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error) {
+	return nil, nil
+}
+
 // newAuthedRouter 创建带 JWT 鉴权的测试路由。
 func newAuthedRouter(secret string, handler gin.HandlerFunc, method, path string) *gin.Engine {
 	r := gin.New()

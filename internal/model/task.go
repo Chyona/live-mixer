@@ -6,9 +6,9 @@ import (
 
 // 任务类型常量（字符串标识）。
 const (
-	TaskTypeJianyingDraft   = "jianying_draft"    // 剪映草稿生成任务
-	TaskTypeAISlice         = "ai_slice"          // AI 切片任务
-	TaskTypeAISliceJianying = "ai_slice_jianying" // AI 切片 + 剪映草稿生成任务
+	TaskTypeAISlice      = "ai_slice"       // AI 切片任务
+	TaskTypeDraft        = "draft"          // 剪映草稿生成任务
+	TaskTypeAISliceDraft = "ai_slice_draft" // AI 切片 + 剪映草稿生成任务
 )
 
 // 任务状态常量（字符串标识）。
@@ -38,4 +38,10 @@ type Task struct {
 // TableName 指定任务表名。
 func (Task) TableName() string {
 	return "task"
+}
+
+// ClipRange 视频时间片段（毫秒）。
+type ClipRange struct {
+	StartTime int64 `json:"start_time"`
+	EndTime   int64 `json:"end_time"`
 }

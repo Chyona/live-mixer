@@ -26,6 +26,8 @@ type LiveMaterialRepository interface {
 	UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error
 	// UpdateASRFailed 标记 ASR 识别失败。
 	UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
+	// ResetASRToPending 将 ASR 重置为待处理，供重试入队。
+	ResetASRToPending(ctx context.Context, id uint) error
 	// List 分页查询直播素材列表，支持日期与关键词筛选，按 id 倒序，不含 live_asr 字段。
 	List(ctx context.Context, filter LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
 	// Delete 物理删除直播素材，并级联删除关联的 video_project 记录。
@@ -118,6 +120,21 @@ func (r *liveMaterialRepository) UpdateASRFailed(ctx context.Context, id uint, p
 			"asr_progress":   progress,
 			"asr_error_msg":  errorMsg,
 			"asr_updated_at": time.Now(),
+		}).Error
+}
+
+func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).
+		Model(&model.LiveMaterial{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"asr_status":     model.ASRStatusPending,
+			"asr_progress":   int16(0),
+			"live_asr":       "{}",
+			"asr_error_msg":  "",
+			"asr_started_at": nil,
+			"asr_updated_at": now,
 		}).Error
 }
 
