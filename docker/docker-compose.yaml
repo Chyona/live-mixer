@@ -53,7 +53,7 @@ services:
     networks:
       - live-mixer-network
 
-  capcut-mate:
+  live-capcut-mate:
     image: gogoshine/capcut-mate:latest
     container_name: live-capcut-mate
     platform: linux/amd64
@@ -77,7 +77,7 @@ services:
     networks:
       - live-mixer-network    
 
-  nginx: # nginx服务器
+  live-nginx: # nginx服务器
     image: gogoshine/nginx:latest
     container_name: live-nginx
     platform: linux/amd64
