@@ -6,6 +6,9 @@ services:
     image: gogoshine/live-mixer:latest
     platform: linux/amd64
     restart: unless-stopped
+    mem_limit: 12G
+    memswap_limit: 12G
+    cpus: '6'
     ports:
       - "31000:30000"
     volumes:
