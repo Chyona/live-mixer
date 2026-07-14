@@ -537,6 +537,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/live-materials/{id}/asr/retry": {
+            "post": {
+                "description": "将素材 ASR 重置为 pending 并后台重新识别；processing 中不可提交；completed 需 force=true",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "重新 ASR",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "素材 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "是否强制覆盖已完成结果",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.RetryASRRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/llm-system-prompts": {
             "get": {
                 "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content",
@@ -775,6 +827,243 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/tasks": {
+            "get": {
+                "description": "分页查询异步任务，支持按 type、status 筛选",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "任务列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "任务类型：ai_slice / draft / ai_slice_draft",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "任务状态：pending / processing / completed / failed",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，默认 10",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/tasks/ai-slice": {
+            "post": {
+                "description": "异步：LLM 分析直播 ASR，提取合计约 1 分钟的高光时间段；立即返回 task，请轮询 GET /v1/tasks/:id",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "创建 AI 切片任务",
+                "parameters": [
+                    {
+                        "description": "任务参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.CreateAISliceTaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/tasks/ai-slice-draft": {
+            "post": {
+                "description": "异步：先 AI 切片再 ffmpeg+capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "创建一键成片任务",
+                "parameters": [
+                    {
+                        "description": "任务参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.CreateAISliceDraftTaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/tasks/draft": {
+            "post": {
+                "description": "异步：按已有 clips0 对直播视频切片并调用 capcut-mate 组装剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "创建剪映草稿任务",
+                "parameters": [
+                    {
+                        "description": "任务参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.CreateDraftTaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/tasks/{id}": {
+            "get": {
+                "description": "根据 ID 查询任务状态；异步任务完成后在此查看结果字段（当前业务执行逻辑待实现）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "获取任务详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
@@ -1100,6 +1389,95 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler_v1.CreateAISliceDraftTaskRequest": {
+            "type": "object",
+            "required": [
+                "live_id"
+            ],
+            "properties": {
+                "canvas_height": {
+                    "type": "integer"
+                },
+                "canvas_width": {
+                    "type": "integer"
+                },
+                "live_id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "sys_prompt_id": {
+                    "type": "integer"
+                },
+                "target_duration_ms": {
+                    "type": "integer"
+                },
+                "usr_prompt": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler_v1.CreateAISliceTaskRequest": {
+            "type": "object",
+            "required": [
+                "live_id"
+            ],
+            "properties": {
+                "live_id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "remark": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "sys_prompt_id": {
+                    "type": "integer"
+                },
+                "target_duration_ms": {
+                    "type": "integer"
+                },
+                "usr_prompt": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler_v1.CreateDraftTaskRequest": {
+            "type": "object",
+            "properties": {
+                "canvas_height": {
+                    "type": "integer"
+                },
+                "canvas_width": {
+                    "type": "integer"
+                },
+                "clips0": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
+                    }
+                },
+                "live_id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "video_project_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_handler_v1.CreateLLMSystemPromptRequest": {
             "type": "object",
             "required": [
@@ -1230,6 +1608,15 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler_v1.RetryASRRequest": {
+            "type": "object",
+            "properties": {
+                "force": {
+                    "description": "为 true 时允许覆盖已完成的 ASR",
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_handler_v1.UpdateAccountRequest": {
             "type": "object",
             "properties": {
@@ -1313,6 +1700,19 @@ const docTemplate = `{
                 "video_url": {
                     "type": "string",
                     "maxLength": 1024
+                }
+            }
+        },
+        "live-mixer_internal_model.ClipRange": {
+            "type": "object",
+            "properties": {
+                "end_time": {
+                    "description": "结束时间（毫秒）",
+                    "type": "integer"
+                },
+                "start_time": {
+                    "description": "开始时间（毫秒）",
+                    "type": "integer"
                 }
             }
         },
