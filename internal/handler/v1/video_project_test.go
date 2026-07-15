@@ -15,16 +15,16 @@ import (
 
 // mockVideoProjectService 用于 handler 单元测试。
 type mockVideoProjectService struct {
-	createFn func(ctx context.Context, createdBy uint, name, remark string, liveID uint, clips0, clips1 string) (*model.VideoProject, error)
+	createFn func(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error)
 	updateFn func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error)
 	deleteFn func(ctx context.Context, id uint) error
 	listFn   func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProject, int64, error)
 	getFn    func(ctx context.Context, id uint) (*model.VideoProject, error)
 }
 
-func (m *mockVideoProjectService) Create(ctx context.Context, createdBy uint, name, remark string, liveID uint, clips0, clips1 string) (*model.VideoProject, error) {
+func (m *mockVideoProjectService) Create(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error) {
 	if m.createFn != nil {
-		return m.createFn(ctx, createdBy, name, remark, liveID, clips0, clips1)
+		return m.createFn(ctx, createdBy, name, remark, liveID, promptID, clips0, clips1)
 	}
 	return nil, nil
 }
@@ -61,11 +61,14 @@ func (m *mockVideoProjectService) Get(ctx context.Context, id uint) (*model.Vide
 func TestVideoProjectHandler_Create_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewVideoProjectHandler(&mockVideoProjectService{
-		createFn: func(ctx context.Context, createdBy uint, name, remark string, liveID uint, clips0, clips1 string) (*model.VideoProject, error) {
+		createFn: func(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error) {
 			if createdBy != 3 || liveID != 5 {
 				t.Errorf("createdBy/liveID = %d/%d, want 3/5", createdBy, liveID)
 			}
-			return &model.VideoProject{ID: 1, Name: name, LiveID: liveID, CreatedBy: createdBy}, nil
+			if promptID != 0 {
+				t.Errorf("promptID = %d, want 0 (handler passes request value)", promptID)
+			}
+			return &model.VideoProject{ID: 1, Name: name, LiveID: liveID, PromptID: 1, CreatedBy: createdBy}, nil
 		},
 	})
 	r := newAuthedRouter(secret, handler.CreateVideoProject, http.MethodPost, "/video-projects")

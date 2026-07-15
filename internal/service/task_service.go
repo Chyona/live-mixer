@@ -123,9 +123,24 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 		return nil, err
 	}
 
+	// 从项目上的 prompt_id 解析系统提示词（默认 1）；找不到时仍允许创建，Worker 回退内置默认提示词。
+	promptID := project.PromptID
+	if promptID == 0 {
+		promptID = model.DefaultVideoProjectPromptID
+	}
+	sysPrompt, err := s.resolveSysPrompt(ctx, promptID)
+	if err != nil {
+		// prompt_id 无外键约束，提示词可能尚未入库；回退空内容，由 Worker 使用内置默认提示词。
+		if !strings.Contains(err.Error(), "不存在") {
+			return nil, err
+		}
+		sysPrompt = ""
+	}
+
 	ext, err := marshalTaskExt(TaskExt{
 		LiveID:           project.LiveID,
 		VideoProjectID:   project.ID,
+		SysPromptID:      promptID,
 		TargetDurationMs: 60000, // 默认目标成片时长 60 秒
 	})
 	if err != nil {
@@ -136,6 +151,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 		Type:      model.TaskTypeAISlice,
 		Status:    model.TaskStatusPending,
 		Progress:  0,
+		SysPrompt: sysPrompt,
 		CreatedBy: createdBy,
 		Ext:       ext,
 	}

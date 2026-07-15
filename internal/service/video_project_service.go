@@ -31,6 +31,7 @@ type VideoProjectListOptions struct {
 type VideoProjectUpdateInput struct {
 	Name     *string
 	Remark   *string
+	PromptID *uint
 	Clips0   *string
 	Clips1   *string
 	DraftURL *string
@@ -39,8 +40,8 @@ type VideoProjectUpdateInput struct {
 
 // VideoProjectService 剪辑项目业务接口。
 type VideoProjectService interface {
-	// Create 创建剪辑项目，createdBy 来自 JWT 当前用户。
-	Create(ctx context.Context, createdBy uint, name, remark string, liveID uint, clips0, clips1 string) (*model.VideoProject, error)
+	// Create 创建剪辑项目，createdBy 来自 JWT 当前用户；promptID 为 0 时使用默认值 1。
+	Create(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error)
 	// Update 更新剪辑项目可编辑字段。
 	Update(ctx context.Context, id uint, input VideoProjectUpdateInput) (*model.VideoProject, error)
 	// Delete 删除剪辑项目。
@@ -64,7 +65,7 @@ func NewVideoProjectService(videoProjectRepo repository.VideoProjectRepository, 
 	}
 }
 
-func (s *videoProjectService) Create(ctx context.Context, createdBy uint, name, remark string, liveID uint, clips0, clips1 string) (*model.VideoProject, error) {
+func (s *videoProjectService) Create(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("项目名称不能为空")
@@ -77,6 +78,10 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, name, 
 			return nil, ErrLiveMaterialNotFoundForProject
 		}
 		return nil, err
+	}
+
+	if promptID == 0 {
+		promptID = model.DefaultVideoProjectPromptID
 	}
 
 	clips0 = defaultJSONArray(clips0)
@@ -92,6 +97,7 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, name, 
 		Name:      name,
 		Remark:    remark,
 		LiveID:    liveID,
+		PromptID:  promptID,
 		Clips0:    clips0,
 		Clips1:    clips1,
 		CreatedBy: createdBy,
@@ -120,6 +126,13 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 	}
 	if input.Remark != nil {
 		project.Remark = *input.Remark
+	}
+	if input.PromptID != nil {
+		promptID := *input.PromptID
+		if promptID == 0 {
+			promptID = model.DefaultVideoProjectPromptID
+		}
+		project.PromptID = promptID
 	}
 	if input.Clips0 != nil {
 		clips0 := defaultJSONArray(*input.Clips0)

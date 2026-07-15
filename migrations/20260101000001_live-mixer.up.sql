@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS video_project (
     name            VARCHAR(64),
     remark          VARCHAR(256),
     live_id         BIGINT      NOT NULL REFERENCES live_material (id),
+    -- 提示词 ID（对应 llm_system_prompt.id），不设外键，便于灵活配置；默认 1
+    prompt_id       BIGINT      NOT NULL DEFAULT 1,
     clips0          JSONB       NOT NULL DEFAULT '[]',
     clips1          JSONB       NOT NULL DEFAULT '[]',
     draft_url       VARCHAR(1024),
@@ -99,6 +101,7 @@ COMMENT ON COLUMN video_project.id IS '主键';
 COMMENT ON COLUMN video_project.name IS '项目名称';
 COMMENT ON COLUMN video_project.remark IS '备注';
 COMMENT ON COLUMN video_project.live_id IS '关联直播素材 ID（live_material.id）';
+COMMENT ON COLUMN video_project.prompt_id IS '提示词 ID（llm_system_prompt.id），无外键约束，默认 1';
 COMMENT ON COLUMN video_project.clips0 IS '视频切片列表（毫秒），格式：[{"start_time":0,"end_time":10}]';
 COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片列表（毫秒），格式：[{"text":"...","start_time":0,"end_time":10,"words":[{"text":"...","start_time":0,"end_time":160}]}]';
 COMMENT ON COLUMN video_project.draft_url IS '剪映草稿 URL';
@@ -110,6 +113,7 @@ COMMENT ON COLUMN video_project.ext IS '扩展字段';
 
 CREATE INDEX IF NOT EXISTS idx_video_project_created_by ON video_project (created_by);
 CREATE INDEX IF NOT EXISTS idx_video_project_live_id ON video_project (live_id);
+CREATE INDEX IF NOT EXISTS idx_video_project_prompt_id ON video_project (prompt_id);
 
 -- 大模型系统提示词管理表
 CREATE TABLE IF NOT EXISTS llm_system_prompt (

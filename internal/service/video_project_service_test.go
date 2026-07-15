@@ -115,7 +115,7 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	projectRepo := &mockVideoProjectRepo{}
 	svc := NewVideoProjectService(projectRepo, liveRepo)
 
-	project, err := svc.Create(context.Background(), 2, "  项目  ", "备注", 1, "", "")
+	project, err := svc.Create(context.Background(), 2, "  项目  ", "备注", 1, 0, "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -125,6 +125,9 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	if project.Clips0 != "[]" || project.Clips1 != "[]" {
 		t.Errorf("clips defaults = %q/%q, want []/[]", project.Clips0, project.Clips1)
 	}
+	if project.PromptID != model.DefaultVideoProjectPromptID {
+		t.Errorf("PromptID = %d, want %d", project.PromptID, model.DefaultVideoProjectPromptID)
+	}
 	if project.CreatedBy != 2 || project.LiveID != 1 {
 		t.Errorf("unexpected project: %+v", project)
 	}
@@ -133,7 +136,7 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 // TestVideoProjectService_Create_LiveMaterialNotFound 验证关联素材不存在时返回错误。
 func TestVideoProjectService_Create_LiveMaterialNotFound(t *testing.T) {
 	svc := NewVideoProjectService(&mockVideoProjectRepo{}, &mockLiveMaterialRepoForProject{})
-	_, err := svc.Create(context.Background(), 1, "项目", "", 9, "[]", "[]")
+	_, err := svc.Create(context.Background(), 1, "项目", "", 9, 1, "[]", "[]")
 	if err != ErrLiveMaterialNotFoundForProject {
 		t.Errorf("Create() error = %v, want %v", err, ErrLiveMaterialNotFoundForProject)
 	}
