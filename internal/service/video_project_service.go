@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -27,13 +28,25 @@ type VideoProjectListOptions struct {
 	EndDate   string
 }
 
-// VideoProjectUpdateInput 剪辑项目更新入参，nil 表示不修改对应字段。
+// CreateVideoProjectInput 创建剪辑项目入参。
+// Clips0 / Clips1 为可选：nil 或空切片均写入 JSON 空数组 []。
+type CreateVideoProjectInput struct {
+	Name     string
+	Remark   string
+	LiveID   uint
+	PromptID uint
+	Clips0   []model.ClipRange
+	Clips1   []model.ClipWithText
+}
+
+// VideoProjectUpdateInput 剪辑项目更新入参。
+// 指针字段为 nil 表示「请求未传该字段，保持原值」；非 nil 则校验通过后写入。
 type VideoProjectUpdateInput struct {
 	Name     *string
 	Remark   *string
 	PromptID *uint
-	Clips0   *string
-	Clips1   *string
+	Clips0   *[]model.ClipRange
+	Clips1   *[]model.ClipWithText
 	DraftURL *string
 	VideoURL *string
 }
@@ -41,8 +54,8 @@ type VideoProjectUpdateInput struct {
 // VideoProjectService 剪辑项目业务接口。
 type VideoProjectService interface {
 	// Create 创建剪辑项目，createdBy 来自 JWT 当前用户；promptID 为 0 时使用默认值 1。
-	Create(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error)
-	// Update 更新剪辑项目可编辑字段。
+	Create(ctx context.Context, createdBy uint, input CreateVideoProjectInput) (*model.VideoProject, error)
+	// Update 更新剪辑项目可编辑字段（仅更新请求中显式传入且合法的字段）。
 	Update(ctx context.Context, id uint, input VideoProjectUpdateInput) (*model.VideoProject, error)
 	// Delete 删除剪辑项目。
 	Delete(ctx context.Context, id uint) error
@@ -65,41 +78,42 @@ func NewVideoProjectService(videoProjectRepo repository.VideoProjectRepository, 
 	}
 }
 
-func (s *videoProjectService) Create(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error) {
-	name = strings.TrimSpace(name)
+func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input CreateVideoProjectInput) (*model.VideoProject, error) {
+	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		return nil, errors.New("项目名称不能为空")
 	}
-	if liveID == 0 {
+	if input.LiveID == 0 {
 		return nil, errors.New("直播素材 ID 不能为空")
 	}
-	if _, err := s.liveMaterialRepo.GetByID(ctx, liveID); err != nil {
+	if _, err := s.liveMaterialRepo.GetByID(ctx, input.LiveID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLiveMaterialNotFoundForProject
 		}
 		return nil, err
 	}
 
+	promptID := input.PromptID
 	if promptID == 0 {
 		promptID = model.DefaultVideoProjectPromptID
 	}
 
-	clips0 = defaultJSONArray(clips0)
-	clips1 = defaultJSONArray(clips1)
-	if err := validateJSONClipArray("clips0", clips0); err != nil {
+	clips0JSON, err := marshalAndValidateClips0(input.Clips0)
+	if err != nil {
 		return nil, err
 	}
-	if err := validateJSONClipArray("clips1", clips1); err != nil {
+	clips1JSON, err := marshalAndValidateClips1(input.Clips1)
+	if err != nil {
 		return nil, err
 	}
 
 	project := &model.VideoProject{
 		Name:      name,
-		Remark:    remark,
-		LiveID:    liveID,
+		Remark:    input.Remark,
+		LiveID:    input.LiveID,
 		PromptID:  promptID,
-		Clips0:    clips0,
-		Clips1:    clips1,
+		Clips0:    clips0JSON,
+		Clips1:    clips1JSON,
 		CreatedBy: createdBy,
 	}
 	if err := s.videoProjectRepo.Create(ctx, project); err != nil {
@@ -117,6 +131,7 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 		return nil, err
 	}
 
+	// 以下各字段均为「传了才更新」：指针 nil 表示请求未携带该字段。
 	if input.Name != nil {
 		name := strings.TrimSpace(*input.Name)
 		if name == "" {
@@ -135,18 +150,18 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 		project.PromptID = promptID
 	}
 	if input.Clips0 != nil {
-		clips0 := defaultJSONArray(*input.Clips0)
-		if err := validateJSONClipArray("clips0", clips0); err != nil {
+		clips0JSON, err := marshalAndValidateClips0(*input.Clips0)
+		if err != nil {
 			return nil, err
 		}
-		project.Clips0 = clips0
+		project.Clips0 = clips0JSON
 	}
 	if input.Clips1 != nil {
-		clips1 := defaultJSONArray(*input.Clips1)
-		if err := validateJSONClipArray("clips1", clips1); err != nil {
+		clips1JSON, err := marshalAndValidateClips1(*input.Clips1)
+		if err != nil {
 			return nil, err
 		}
-		project.Clips1 = clips1
+		project.Clips1 = clips1JSON
 	}
 	if input.DraftURL != nil {
 		project.DraftURL = *input.DraftURL
@@ -218,19 +233,36 @@ func buildVideoProjectListFilter(opts VideoProjectListOptions) (repository.Video
 	return filter, nil
 }
 
-// defaultJSONArray 将空 clips 归一化为 JSON 空数组。
-func defaultJSONArray(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return "[]"
+// marshalAndValidateClips0 校验 clips0 时间段并序列化为 JSON 数组字符串。
+func marshalAndValidateClips0(clips []model.ClipRange) (string, error) {
+	if clips == nil {
+		clips = []model.ClipRange{}
 	}
-	return raw
+	for i, clip := range clips {
+		if clip.StartTime < 0 || clip.EndTime <= clip.StartTime {
+			return "", fmt.Errorf("clips0[%d] 时间段无效：start_time 须小于 end_time 且均非负", i)
+		}
+	}
+	raw, err := json.Marshal(clips)
+	if err != nil {
+		return "", fmt.Errorf("序列化 clips0 失败: %w", err)
+	}
+	return string(raw), nil
 }
 
-// validateJSONClipArray 校验 clips 字段为合法 JSON 数组。
-func validateJSONClipArray(field, raw string) error {
-	var arr []json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &arr); err != nil {
-		return errors.New(field + " 必须是合法的 JSON 数组")
+// marshalAndValidateClips1 校验 clips1 片段并序列化为 JSON 数组字符串。
+func marshalAndValidateClips1(clips []model.ClipWithText) (string, error) {
+	if clips == nil {
+		clips = []model.ClipWithText{}
 	}
-	return nil
+	for i, clip := range clips {
+		if clip.StartTime < 0 || clip.EndTime <= clip.StartTime {
+			return "", fmt.Errorf("clips1[%d] 时间段无效：start_time 须小于 end_time 且均非负", i)
+		}
+	}
+	raw, err := json.Marshal(clips)
+	if err != nil {
+		return "", fmt.Errorf("序列化 clips1 失败: %w", err)
+	}
+	return string(raw), nil
 }

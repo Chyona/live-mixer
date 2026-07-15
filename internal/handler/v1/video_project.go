@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"live-mixer/internal/middleware"
+	"live-mixer/internal/model"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
 	"live-mixer/pkg/utils"
@@ -31,24 +32,26 @@ func NewVideoProjectHandler(videoProjectService service.VideoProjectService) *Vi
 }
 
 // CreateVideoProjectRequest 创建剪辑项目请求体。
+// Clips0 / Clips1 为可选 JSON 数组；未传时存为空数组。
 type CreateVideoProjectRequest struct {
-	Name     string `json:"name" binding:"required,max=64"`
-	Remark   string `json:"remark" binding:"max=256"`
-	LiveID   uint   `json:"live_id" binding:"required"`
-	PromptID uint   `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
-	Clips0   string `json:"clips0"`
-	Clips1   string `json:"clips1"`
+	Name     string               `json:"name" binding:"required,max=64"`
+	Remark   string               `json:"remark" binding:"max=256"`
+	LiveID   uint                 `json:"live_id" binding:"required"`
+	PromptID uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
+	Clips0   []model.ClipRange    `json:"clips0"`
+	Clips1   []model.ClipWithText `json:"clips1"`
 }
 
-// UpdateVideoProjectRequest 更新剪辑项目请求体（字段可选，传则更新）。
+// UpdateVideoProjectRequest 更新剪辑项目请求体。
+// 指针字段为 nil 表示未传，不更新；非 nil（含空数组/空字符串）表示要更新为该值。
 type UpdateVideoProjectRequest struct {
-	Name     *string `json:"name" binding:"omitempty,max=64"`
-	Remark   *string `json:"remark" binding:"omitempty,max=256"`
-	PromptID *uint   `json:"prompt_id"`
-	Clips0   *string `json:"clips0"`
-	Clips1   *string `json:"clips1"`
-	DraftURL *string `json:"draft_url" binding:"omitempty,max=1024"`
-	VideoURL *string `json:"video_url" binding:"omitempty,max=1024"`
+	Name     *string               `json:"name" binding:"omitempty,max=64"`
+	Remark   *string               `json:"remark" binding:"omitempty,max=256"`
+	PromptID *uint                 `json:"prompt_id"`
+	Clips0   *[]model.ClipRange    `json:"clips0"`
+	Clips1   *[]model.ClipWithText `json:"clips1"`
+	DraftURL *string               `json:"draft_url" binding:"omitempty,max=1024"`
+	VideoURL *string               `json:"video_url" binding:"omitempty,max=1024"`
 }
 
 // ListVideoProjects 剪辑项目列表
@@ -92,7 +95,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
-// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户
+// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -114,9 +117,14 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 		return
 	}
 
-	project, err := h.videoProjectService.Create(
-		c.Request.Context(), user.ID, req.Name, req.Remark, req.LiveID, req.PromptID, req.Clips0, req.Clips1,
-	)
+	project, err := h.videoProjectService.Create(c.Request.Context(), user.ID, service.CreateVideoProjectInput{
+		Name:     req.Name,
+		Remark:   req.Remark,
+		LiveID:   req.LiveID,
+		PromptID: req.PromptID,
+		Clips0:   req.Clips0,
+		Clips1:   req.Clips1,
+	})
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
@@ -155,7 +163,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  更新 name、remark、prompt_id、clips0、clips1、draft_url、video_url，未传字段保持不变
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url）；未传字段保持不变
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"live-mixer/internal/model"
@@ -89,7 +90,9 @@ func (m *mockLiveMaterialRepoForProject) GetByID(ctx context.Context, id uint) (
 func (m *mockLiveMaterialRepoForProject) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }
-func (m *mockLiveMaterialRepoForProject) UpdateASRProcessing(ctx context.Context, id uint) error { return nil }
+func (m *mockLiveMaterialRepoForProject) UpdateASRProcessing(ctx context.Context, id uint) error {
+	return nil
+}
 func (m *mockLiveMaterialRepoForProject) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
 	return nil
 }
@@ -115,7 +118,9 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	projectRepo := &mockVideoProjectRepo{}
 	svc := NewVideoProjectService(projectRepo, liveRepo)
 
-	project, err := svc.Create(context.Background(), 2, "  项目  ", "备注", 1, 0, "", "")
+	project, err := svc.Create(context.Background(), 2, CreateVideoProjectInput{
+		Name: "  项目  ", Remark: "备注", LiveID: 1,
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -133,10 +138,52 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	}
 }
 
+// TestVideoProjectService_Create_WithTypedClips 验证按结构化 clips 创建并落库。
+func TestVideoProjectService_Create_WithTypedClips(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{1: {ID: 1, Name: "素材"}},
+	}
+	projectRepo := &mockVideoProjectRepo{}
+	svc := NewVideoProjectService(projectRepo, liveRepo)
+
+	project, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name:   "项目",
+		LiveID: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+		Clips1: []model.ClipWithText{{Text: "我是中国人", StartTime: 0, EndTime: 1000}},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if !strings.Contains(project.Clips0, `"end_time":1000`) {
+		t.Errorf("Clips0 = %s", project.Clips0)
+	}
+	if !strings.Contains(project.Clips1, "我是中国人") {
+		t.Errorf("Clips1 = %s", project.Clips1)
+	}
+}
+
+// TestVideoProjectService_Create_InvalidClips 验证非法时间段被拒绝。
+func TestVideoProjectService_Create_InvalidClips(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{1: {ID: 1}},
+	}
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, liveRepo)
+	_, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "项目", LiveID: 1,
+		Clips0: []model.ClipRange{{StartTime: 10, EndTime: 5}},
+	})
+	if err == nil {
+		t.Fatal("expected invalid clips0 error")
+	}
+}
+
 // TestVideoProjectService_Create_LiveMaterialNotFound 验证关联素材不存在时返回错误。
 func TestVideoProjectService_Create_LiveMaterialNotFound(t *testing.T) {
 	svc := NewVideoProjectService(&mockVideoProjectRepo{}, &mockLiveMaterialRepoForProject{})
-	_, err := svc.Create(context.Background(), 1, "项目", "", 9, 1, "[]", "[]")
+	_, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "项目", LiveID: 9,
+	})
 	if err != ErrLiveMaterialNotFoundForProject {
 		t.Errorf("Create() error = %v, want %v", err, ErrLiveMaterialNotFoundForProject)
 	}
@@ -147,7 +194,7 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 	draft := "https://draft.example.com"
 	projectRepo := &mockVideoProjectRepo{
 		projects: map[uint]*model.VideoProject{
-			1: {ID: 1, Name: "旧名称", Remark: "旧备注", LiveID: 1, Clips0: "[]", Clips1: "[]", CreatedBy: 1},
+			1: {ID: 1, Name: "旧名称", Remark: "旧备注", LiveID: 1, Clips0: `[{"start_time":0,"end_time":1}]`, Clips1: `[{"text":"旧","start_time":0,"end_time":1}]`, CreatedBy: 1},
 		},
 	}
 	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
@@ -161,6 +208,48 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 	}
 	if updated.Name != "旧名称" {
 		t.Errorf("Name should remain unchanged, got %q", updated.Name)
+	}
+	if !strings.Contains(updated.Clips0, `"end_time":1`) {
+		t.Errorf("Clips0 should remain unchanged, got %s", updated.Clips0)
+	}
+}
+
+// TestVideoProjectService_Update_ClipsWhenProvided 验证显式传入 clips 时才会更新。
+func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
+	projectRepo := &mockVideoProjectRepo{
+		projects: map[uint]*model.VideoProject{
+			1: {ID: 1, Name: "项目", LiveID: 1, Clips0: "[]", Clips1: "[]", CreatedBy: 1},
+		},
+	}
+	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
+
+	clips0 := []model.ClipRange{{StartTime: 0, EndTime: 1000}}
+	clips1 := []model.ClipWithText{{Text: "我是中国人", StartTime: 0, EndTime: 1000}}
+	updated, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{
+		Clips0: &clips0,
+		Clips1: &clips1,
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if !strings.Contains(updated.Clips0, `"end_time":1000`) {
+		t.Errorf("Clips0 = %s", updated.Clips0)
+	}
+	if !strings.Contains(updated.Clips1, "我是中国人") {
+		t.Errorf("Clips1 = %s", updated.Clips1)
+	}
+
+	// 传入空数组应清空切片。
+	empty0 := []model.ClipRange{}
+	cleared, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{Clips0: &empty0})
+	if err != nil {
+		t.Fatalf("clear clips0 error = %v", err)
+	}
+	if cleared.Clips0 != "[]" {
+		t.Errorf("Clips0 after clear = %s, want []", cleared.Clips0)
+	}
+	if !strings.Contains(cleared.Clips1, "我是中国人") {
+		t.Errorf("Clips1 should remain, got %s", cleared.Clips1)
 	}
 }
 
@@ -195,15 +284,5 @@ func TestVideoProjectService_Delete_NotFound(t *testing.T) {
 	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
 	if err := svc.Delete(context.Background(), 99); err != ErrVideoProjectNotFound {
 		t.Errorf("Delete() error = %v, want %v", err, ErrVideoProjectNotFound)
-	}
-}
-
-// TestValidateJSONClipArray 验证 clips JSON 数组校验。
-func TestValidateJSONClipArray(t *testing.T) {
-	if err := validateJSONClipArray("clips0", `[{"start_time":0,"end_time":10}]`); err != nil {
-		t.Errorf("valid array should pass: %v", err)
-	}
-	if err := validateJSONClipArray("clips0", `{"start_time":0}`); err == nil {
-		t.Error("object should fail validation")
 	}
 }

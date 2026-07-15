@@ -15,16 +15,16 @@ import (
 
 // mockVideoProjectService 用于 handler 单元测试。
 type mockVideoProjectService struct {
-	createFn func(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error)
+	createFn func(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error)
 	updateFn func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error)
 	deleteFn func(ctx context.Context, id uint) error
 	listFn   func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProject, int64, error)
 	getFn    func(ctx context.Context, id uint) (*model.VideoProject, error)
 }
 
-func (m *mockVideoProjectService) Create(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error) {
+func (m *mockVideoProjectService) Create(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error) {
 	if m.createFn != nil {
-		return m.createFn(ctx, createdBy, name, remark, liveID, promptID, clips0, clips1)
+		return m.createFn(ctx, createdBy, input)
 	}
 	return nil, nil
 }
@@ -61,20 +61,32 @@ func (m *mockVideoProjectService) Get(ctx context.Context, id uint) (*model.Vide
 func TestVideoProjectHandler_Create_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewVideoProjectHandler(&mockVideoProjectService{
-		createFn: func(ctx context.Context, createdBy uint, name, remark string, liveID, promptID uint, clips0, clips1 string) (*model.VideoProject, error) {
-			if createdBy != 3 || liveID != 5 {
-				t.Errorf("createdBy/liveID = %d/%d, want 3/5", createdBy, liveID)
+		createFn: func(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error) {
+			if createdBy != 3 || input.LiveID != 5 {
+				t.Errorf("createdBy/liveID = %d/%d, want 3/5", createdBy, input.LiveID)
 			}
-			if promptID != 0 {
-				t.Errorf("promptID = %d, want 0 (handler passes request value)", promptID)
+			if input.PromptID != 0 {
+				t.Errorf("promptID = %d, want 0 (handler passes request value)", input.PromptID)
 			}
-			return &model.VideoProject{ID: 1, Name: name, LiveID: liveID, PromptID: 1, CreatedBy: createdBy}, nil
+			if len(input.Clips0) != 1 || input.Clips0[0].EndTime != 1000 {
+				t.Errorf("Clips0 = %#v", input.Clips0)
+			}
+			if len(input.Clips1) != 1 || input.Clips1[0].Text != "我是中国人" {
+				t.Errorf("Clips1 = %#v", input.Clips1)
+			}
+			return &model.VideoProject{ID: 1, Name: input.Name, LiveID: input.LiveID, PromptID: 1, CreatedBy: createdBy}, nil
 		},
 	})
 	r := newAuthedRouter(secret, handler.CreateVideoProject, http.MethodPost, "/video-projects")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 3, Username: "admin"})
 
-	body := []byte(`{"name":"剪辑项目","live_id":5,"remark":"备注"}`)
+	body := []byte(`{
+		"name":"剪辑项目",
+		"live_id":5,
+		"remark":"备注",
+		"clips0":[{"start_time":0,"end_time":1000}],
+		"clips1":[{"text":"我是中国人","start_time":0,"end_time":1000}]
+	}`)
 	req := httptest.NewRequest(http.MethodPost, "/video-projects", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -110,13 +122,16 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 	}
 }
 
-// TestVideoProjectHandler_Update_Partial 验证部分字段更新。
+// TestVideoProjectHandler_Update_Partial 验证部分字段更新（未传 clips 不触发更新）。
 func TestVideoProjectHandler_Update_Partial(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewVideoProjectHandler(&mockVideoProjectService{
 		updateFn: func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error) {
 			if id != 2 || input.VideoURL == nil || *input.VideoURL != "https://video.example.com/a.mp4" {
 				t.Errorf("unexpected update input: id=%d input=%+v", id, input)
+			}
+			if input.Clips0 != nil || input.Clips1 != nil {
+				t.Errorf("clips should be nil when omitted, got clips0=%v clips1=%v", input.Clips0, input.Clips1)
 			}
 			return &model.VideoProject{ID: 2, VideoURL: *input.VideoURL}, nil
 		},
@@ -126,6 +141,38 @@ func TestVideoProjectHandler_Update_Partial(t *testing.T) {
 
 	body := []byte(`{"video_url":"https://video.example.com/a.mp4"}`)
 	req := httptest.NewRequest(http.MethodPut, "/video-projects/2", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+// TestVideoProjectHandler_Update_WithClips 验证显式传入 clips 数组时会传给 service。
+func TestVideoProjectHandler_Update_WithClips(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{
+		updateFn: func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error) {
+			if input.Clips0 == nil || len(*input.Clips0) != 1 {
+				t.Fatalf("Clips0 = %#v", input.Clips0)
+			}
+			if input.Clips1 == nil || (*input.Clips1)[0].Text != "我是中国人" {
+				t.Fatalf("Clips1 = %#v", input.Clips1)
+			}
+			return &model.VideoProject{ID: id}, nil
+		},
+	})
+	r := newAuthedRouter(secret, handler.UpdateVideoProject, http.MethodPut, "/video-projects/:id")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	body := []byte(`{
+		"clips0":[{"start_time":0,"end_time":1000}],
+		"clips1":[{"text":"我是中国人","start_time":0,"end_time":1000}]
+	}`)
+	req := httptest.NewRequest(http.MethodPut, "/video-projects/3", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()

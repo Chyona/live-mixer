@@ -46,3 +46,10 @@ type ClipRange struct {
 	StartTime int64 `json:"start_time"`
 	EndTime   int64 `json:"end_time"`
 }
+
+// ClipWithText 带文本的切片片段（毫秒），对应 video_project.clips1 的 API 入参形态。
+type ClipWithText struct {
+	Text      string `json:"text"`
+	StartTime int64  `json:"start_time"`
+	EndTime   int64  `json:"end_time"`
+}
