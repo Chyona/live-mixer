@@ -16,13 +16,29 @@ var embeddedConfig embed.FS
 
 // Config 应用全局配置结构体，字段与 config.yaml 一一对应。
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Logger   LoggerConfig   `mapstructure:"logger"`
-	JWT      JWTConfig      `mapstructure:"jwt"`
-	Storage  StorageConfig  `mapstructure:"storage"`
-	ASR      ASRConfig      `mapstructure:"asr"`
-	LLM      LLMConfig      `mapstructure:"llm"`
+	Server     ServerConfig     `mapstructure:"server"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Logger     LoggerConfig     `mapstructure:"logger"`
+	JWT        JWTConfig        `mapstructure:"jwt"`
+	Storage    StorageConfig    `mapstructure:"storage"`
+	ASR        ASRConfig        `mapstructure:"asr"`
+	LLM        LLMConfig        `mapstructure:"llm"`
+	CapCutMate CapCutMateConfig `mapstructure:"capcut_mate"`
+	Web        WebConfig        `mapstructure:"web"`
+}
+
+// CapCutMateConfig 剪映草稿服务（capcut-mate）连接配置。
+type CapCutMateConfig struct {
+	// BaseURL capcut-mate REST API 根地址，默认 http://192.168.3.219:81
+	BaseURL string `mapstructure:"base_url"`
+}
+
+// WebConfig 本地静态目录与对外 URL，用于把切片文件路径转成 capcut-mate 可访问的地址。
+type WebConfig struct {
+	// RootDir 静态文件根目录（切片落盘根路径），例如 D:\code\GitHub\live-mixer\docker\html
+	RootDir string `mapstructure:"root_dir"`
+	// RootURL 静态文件对外访问前缀，例如 http://192.168.3.219:81
+	RootURL string `mapstructure:"root_url"`
 }
 
 // ServerConfig HTTP 服务相关配置。
@@ -310,4 +326,25 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_LLM_MODEL"); ok {
 		cfg.LLM.Model = val
 	}
+
+	// 剪映草稿服务与 WEB 静态目录（也可兼容无 APP_ 前缀的环境变量名）
+	if val, ok := lookupEnvPrefer("APP_CAPCUT_MATE_BASE_URL", "CAPCUT_MATE_URL"); ok {
+		cfg.CapCutMate.BaseURL = val
+	}
+	if val, ok := lookupEnvPrefer("APP_WEB_ROOT_DIR", "WEB_ROOT_DIR"); ok {
+		cfg.Web.RootDir = val
+	}
+	if val, ok := lookupEnvPrefer("APP_WEB_ROOT_URL", "WEB_ROOT_URL"); ok {
+		cfg.Web.RootURL = val
+	}
+}
+
+// lookupEnvPrefer 依次查找多个环境变量名，返回第一个已设置的值。
+func lookupEnvPrefer(keys ...string) (string, bool) {
+	for _, key := range keys {
+		if val, ok := os.LookupEnv(key); ok {
+			return val, true
+		}
+	}
+	return "", false
 }

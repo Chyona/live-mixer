@@ -38,14 +38,11 @@ type CreateAISliceInput struct {
 	TargetDurationMs  int64
 }
 
-// CreateDraftInput 剪映草稿任务创建入参。
+// CreateDraftInput 剪映草稿任务创建入参（仅需 video_project_id；切片与直播 URL 由 Worker 读取）。
 type CreateDraftInput struct {
-	LiveID          uint
-	VideoProjectID  uint
-	Name            string
-	Clips0          []model.ClipRange
-	CanvasWidth     int
-	CanvasHeight    int
+	VideoProjectID uint
+	CanvasWidth    int
+	CanvasHeight   int
 }
 
 // CreateAISliceDraftInput 一键成片任务创建入参。
@@ -88,16 +85,18 @@ type taskService struct {
 	videoProjectRepo    repository.VideoProjectRepository
 	llmSystemPromptRepo repository.LLMSystemPromptRepository
 	aiSliceWorker       AISliceWorker // 可选；为 nil 时仅落库不调度
+	draftWorker         DraftWorker   // 可选；为 nil 时仅落库不调度
 }
 
 // NewTaskService 创建任务业务服务实例。
-// aiSliceWorker 可为 nil（例如纯单测场景）；生产环境应注入并 Start。
+// aiSliceWorker / draftWorker 可为 nil（例如纯单测场景）；生产环境应注入并 Start。
 func NewTaskService(
 	taskRepo repository.TaskRepository,
 	liveMaterialRepo repository.LiveMaterialRepository,
 	videoProjectRepo repository.VideoProjectRepository,
 	llmSystemPromptRepo repository.LLMSystemPromptRepository,
 	aiSliceWorker AISliceWorker,
+	draftWorker DraftWorker,
 ) TaskService {
 	return &taskService{
 		taskRepo:            taskRepo,
@@ -105,6 +104,7 @@ func NewTaskService(
 		videoProjectRepo:    videoProjectRepo,
 		llmSystemPromptRepo: llmSystemPromptRepo,
 		aiSliceWorker:       aiSliceWorker,
+		draftWorker:         draftWorker,
 	}
 }
 
@@ -157,39 +157,29 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 }
 
 func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input CreateDraftInput) (*model.Task, error) {
-	liveID := input.LiveID
-	clips0 := input.Clips0
-
-	if input.VideoProjectID != 0 {
-		project, err := s.videoProjectRepo.GetByID(ctx, input.VideoProjectID)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrVideoProjectNotFound
-			}
-			return nil, err
-		}
-		if liveID == 0 {
-			liveID = project.LiveID
-		}
-		if len(clips0) == 0 {
-			var parsed []model.ClipRange
-			if err := json.Unmarshal([]byte(project.Clips0), &parsed); err != nil {
-				return nil, errors.New("video_project.clips0 格式无效")
-			}
-			clips0 = parsed
-		}
+	// /draft 仅接受 video_project_id：直播 URL 与切片由 Worker 从关联表读取。
+	if input.VideoProjectID == 0 {
+		return nil, errors.New("video_project_id 不能为空")
 	}
 
-	if liveID == 0 {
-		return nil, errors.New("live_id 不能为空（或提供有效的 video_project_id）")
-	}
-	if len(clips0) == 0 {
-		return nil, errors.New("clips0 不能为空（或提供含 clips0 的 video_project_id）")
-	}
-	if err := validateClipRanges(clips0); err != nil {
+	project, err := s.videoProjectRepo.GetByID(ctx, input.VideoProjectID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrVideoProjectNotFound
+		}
 		return nil, err
 	}
-	if _, err := s.liveMaterialRepo.GetByID(ctx, liveID); err != nil {
+
+	// 创建前校验切片可用，避免无效任务进入队列。
+	clips, err := resolveDraftClipRanges(project)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateClipRanges(clips); err != nil {
+		return nil, err
+	}
+
+	if _, err := s.liveMaterialRepo.GetByID(ctx, project.LiveID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLiveMaterialNotFound
 		}
@@ -198,27 +188,19 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 
 	width, height := input.CanvasWidth, input.CanvasHeight
 	if width <= 0 {
-		width = 1080
+		width = draftDefaultCanvasWidth
 	}
 	if height <= 0 {
-		height = 1920
+		height = draftDefaultCanvasHeight
 	}
 
-	extPayload := TaskExt{
-		LiveID:         liveID,
-		VideoProjectID: input.VideoProjectID,
-		Name:           strings.TrimSpace(input.Name),
+	// clips 不写入 ext，由 Worker 从 video_project 读取，避免超出 1024 字节限制。
+	ext, err := marshalTaskExt(TaskExt{
+		LiveID:         project.LiveID,
+		VideoProjectID: project.ID,
 		CanvasWidth:    width,
 		CanvasHeight:   height,
-	}
-	// 无项目 ID 时需在 ext 中保留 clips0；已有项目则后续由 Worker 读取，避免超出 ext 长度。
-	if input.VideoProjectID == 0 {
-		extPayload.Clips0 = clips0
-	} else if len(input.Clips0) > 0 {
-		extPayload.Clips0 = input.Clips0
-	}
-
-	ext, err := marshalTaskExt(extPayload)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +215,10 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
 	}
-	// TODO: 入队 Worker，ffmpeg 切片并调用 capcut-mate 生成剪映草稿。
+	// 唤醒草稿 Worker；多实例下由 DB 原子抢占领取，进度/状态写入数据库供轮询。
+	if s.draftWorker != nil {
+		s.draftWorker.Enqueue()
+	}
 	return task, nil
 }
 

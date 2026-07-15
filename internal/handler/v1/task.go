@@ -33,14 +33,11 @@ type CreateAISliceTaskRequest struct {
 	TargetDurationMs int64  `json:"target_duration_ms"`
 }
 
-// CreateDraftTaskRequest 剪映草稿任务请求体。
+// CreateDraftTaskRequest 剪映草稿任务请求体（仅需 video_project_id）。
 type CreateDraftTaskRequest struct {
-	LiveID         uint              `json:"live_id"`
-	VideoProjectID uint              `json:"video_project_id"`
-	Name           string            `json:"name" binding:"max=64"`
-	Clips0         []model.ClipRange `json:"clips0"`
-	CanvasWidth    int               `json:"canvas_width"`
-	CanvasHeight   int               `json:"canvas_height"`
+	VideoProjectID uint `json:"video_project_id" binding:"required"`
+	CanvasWidth    int  `json:"canvas_width"`
+	CanvasHeight   int  `json:"canvas_height"`
 }
 
 // CreateAISliceDraftTaskRequest 一键成片任务请求体。
@@ -122,7 +119,7 @@ func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 
 // CreateDraftTask 创建剪映草稿任务
 // @Summary      创建剪映草稿任务
-// @Description  异步：按已有 clips0 对直播视频切片并调用 capcut-mate 组装剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id
+// @Description  异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -144,10 +141,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 	}
 
 	task, err := h.taskService.CreateDraft(c.Request.Context(), user.ID, service.CreateDraftInput{
-		LiveID:         req.LiveID,
 		VideoProjectID: req.VideoProjectID,
-		Name:           req.Name,
-		Clips0:         req.Clips0,
 		CanvasWidth:    req.CanvasWidth,
 		CanvasHeight:   req.CanvasHeight,
 	})

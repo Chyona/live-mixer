@@ -22,6 +22,66 @@ func TestBuildASRMP3Args(t *testing.T) {
 	}
 }
 
+func TestBuildCutVideoArgs(t *testing.T) {
+	args := buildCutVideoArgs("/in.mp4", "/out.mp4", 10, 30)
+	want := []string{
+		"-y", "-i", "/in.mp4",
+		"-ss", "10", "-to", "30",
+		"-map", "0:v:0", "-map", "0:a:0?",
+		"-c:v", "libx264", "-crf", "18",
+		"-c:a", "aac", "-b:a", "192k",
+		"-movflags", "+faststart",
+		"/out.mp4",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("args len = %d, want %d; args=%v", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("args[%d] = %q, want %q", i, args[i], want[i])
+		}
+	}
+}
+
+func TestFFmpegConverter_CutVideoSegment_InvalidRange(t *testing.T) {
+	c := NewFFmpegConverter("")
+	err := c.CutVideoSegment(context.Background(), "in.mp4", "out.mp4", 10, 10)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestFFmpegConverter_CutVideoSegment_Success(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+
+	workDir := t.TempDir()
+	inputPath := filepath.Join(workDir, "input.mp4")
+	genCmd := exec.Command(ffmpegPath,
+		"-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+		"-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", inputPath,
+	)
+	if output, err := genCmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate input mp4: %v, output=%s", err, output)
+	}
+
+	outputPath := filepath.Join(workDir, "clip.mp4")
+	c := NewFFmpegConverter(ffmpegPath)
+	if err := c.CutVideoSegment(context.Background(), inputPath, outputPath, 0.2, 1.0); err != nil {
+		t.Fatalf("CutVideoSegment() error = %v", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("output should not be empty")
+	}
+}
+
 func TestFFmpegConverter_ResolvedDefaults(t *testing.T) {
 	c := &FFmpegConverter{}
 	if c.resolvedSampleRate() != DefaultASRSampleRate {

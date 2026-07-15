@@ -122,3 +122,39 @@ func TestLoad_StorageTOSEnvOverride(t *testing.T) {
 		t.Errorf("TOS.Endpoint = %q, want tos-cn-shanghai.volces.com", cfg.Storage.TOS.Endpoint)
 	}
 }
+
+func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CapCutMate.BaseURL != "http://192.168.3.219:81" {
+		t.Errorf("CapCutMate.BaseURL = %q", cfg.CapCutMate.BaseURL)
+	}
+	if cfg.Web.RootDir != "docker/html" {
+		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
+	}
+	if cfg.Web.RootURL != "http://192.168.3.219:81" {
+		t.Errorf("Web.RootURL = %q", cfg.Web.RootURL)
+	}
+}
+
+func TestLoad_CapCutMateEnvOverride(t *testing.T) {
+	t.Setenv("CAPCUT_MATE_URL", "http://10.0.0.1:81")
+	t.Setenv("WEB_ROOT_DIR", `D:\html`)
+	t.Setenv("WEB_ROOT_URL", "http://10.0.0.1:81")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CapCutMate.BaseURL != "http://10.0.0.1:81" {
+		t.Errorf("CapCutMate.BaseURL = %q", cfg.CapCutMate.BaseURL)
+	}
+	if cfg.Web.RootDir != `D:\html` {
+		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
+	}
+	if cfg.Web.RootURL != "http://10.0.0.1:81" {
+		t.Errorf("Web.RootURL = %q", cfg.Web.RootURL)
+	}
+}

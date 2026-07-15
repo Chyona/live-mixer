@@ -14,8 +14,10 @@ import (
 	v1handler "live-mixer/internal/handler/v1"
 	v2handler "live-mixer/internal/handler/v2"
 	"live-mixer/internal/middleware"
+	"live-mixer/internal/pkg/capcutmate"
 	"live-mixer/internal/pkg/llm"
 	"live-mixer/internal/pkg/storage"
+	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
 	routesv1 "live-mixer/internal/routes/v1"
@@ -71,12 +73,27 @@ func main() {
 	// OpenAI 兼容协议 LLM 客户端，供 AI 切片 Worker 调用大模型选取高光片段。
 	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
 	aiSliceWorker := service.NewAISliceWorker(taskRepo, liveMaterialRepo, videoProjectRepo, llmClient, logger)
-	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker)
+
+	// 剪映草稿 Worker：ffmpeg 切片 + capcut-mate 组装草稿，进度写入 task 表。
+	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())
+	draftWorker := service.NewDraftWorker(service.DraftWorkerDeps{
+		TaskRepo:         taskRepo,
+		LiveMaterialRepo: liveMaterialRepo,
+		VideoProjectRepo: videoProjectRepo,
+		CapCut:           capcutClient,
+		Web: webroot.Config{
+			RootDir: cfg.Web.RootDir,
+			RootURL: cfg.Web.RootURL,
+		},
+		Logger: logger,
+	})
+	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker, draftWorker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	liveMaterialASRWorker.Start(ctx)
 	aiSliceWorker.Start(ctx)
+	draftWorker.Start(ctx)
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
 	v1ASRHandler := v1handler.NewASRHandler(asrService)

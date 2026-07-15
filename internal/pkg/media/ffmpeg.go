@@ -88,3 +88,52 @@ func (c *FFmpegConverter) resolvedMP3Bitrate() string {
 	}
 	return DefaultASRMP3Bitrate
 }
+
+// CutVideoSegment 按起止秒精确裁剪视频片段（重编码，保证切点准确）。
+// 参考命令：
+//
+//	ffmpeg -y -i input.mp4 -ss 10 -to 30 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
+//
+// startSec / endSec 单位为秒；endSec 须大于 startSec。
+func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	if endSec <= startSec {
+		return fmt.Errorf("裁剪时间无效: start=%.3f end=%.3f", startSec, endSec)
+	}
+	binary := c.BinaryPath
+	if strings.TrimSpace(binary) == "" {
+		binary = DefaultFFmpegBinary
+	}
+
+	args := buildCutVideoArgs(inputPath, outputPath, startSec, endSec)
+	cmd := exec.CommandContext(ctx, binary, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg 裁剪视频失败: %w, output: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// buildCutVideoArgs 构建精确裁剪参数列表，便于单元测试校验。
+// -ss/-to 放在 -i 之后做输出侧精确裁剪；-map 0:a:0? 表示音频轨可选。
+func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
+	return []string{
+		"-y",
+		"-i", inputPath,
+		"-ss", formatFFmpegSeconds(startSec),
+		"-to", formatFFmpegSeconds(endSec),
+		"-map", "0:v:0",
+		"-map", "0:a:0?",
+		"-c:v", "libx264",
+		"-crf", "18",
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-movflags", "+faststart",
+		outputPath,
+	}
+}
+
+// formatFFmpegSeconds 将秒数格式化为 ffmpeg 可接受的小数秒字符串。
+func formatFFmpegSeconds(sec float64) string {
+	// 去掉多余尾随 0，避免过长浮点文本。
+	return strconv.FormatFloat(sec, 'f', -1, 64)
+}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"live-mixer/internal/model"
@@ -110,13 +111,48 @@ func (stubVideoProjectRepo) List(ctx context.Context, filter repository.VideoPro
 	return nil, 0, nil
 }
 
+type mockVideoProjectRepoForDraft struct {
+	project *model.VideoProject
+	err     error
+}
+
+func (m *mockVideoProjectRepoForDraft) Create(ctx context.Context, project *model.VideoProject) error {
+	return nil
+}
+func (m *mockVideoProjectRepoForDraft) GetByID(ctx context.Context, id uint) (*model.VideoProject, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.project == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return m.project, nil
+}
+func (m *mockVideoProjectRepoForDraft) Update(ctx context.Context, project *model.VideoProject) error {
+	return nil
+}
+func (m *mockVideoProjectRepoForDraft) Delete(ctx context.Context, id uint) error { return nil }
+func (m *mockVideoProjectRepoForDraft) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error) {
+	return nil, 0, nil
+}
+
+type mockDraftWorkerEnqueue struct {
+	enqueued int
+}
+
+func (m *mockDraftWorkerEnqueue) Enqueue() { m.enqueued++ }
+func (m *mockDraftWorkerEnqueue) Process(ctx context.Context, task *model.Task) error {
+	return nil
+}
+func (m *mockDraftWorkerEnqueue) Start(ctx context.Context) {}
+
 func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, ASRStatus: model.ASRStatusCompleted,
 	}}
 	tasks := &mockTaskRepo{}
 	worker := &mockAISliceWorkerEnqueue{}
-	svc := NewTaskService(tasks, live, stubVideoProjectRepo{}, &mockPromptRepo{}, worker)
+	svc := NewTaskService(tasks, live, stubVideoProjectRepo{}, &mockPromptRepo{}, worker, nil)
 
 	got, err := svc.CreateAISlice(context.Background(), 7, CreateAISliceInput{
 		LiveID: 1, Name: "n", TargetDurationMs: 30000,
@@ -136,10 +172,56 @@ func TestTaskService_CreateAISlice_ASRNotReady(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, ASRStatus: model.ASRStatusProcessing,
 	}}
-	svc := NewTaskService(&mockTaskRepo{}, live, stubVideoProjectRepo{}, &mockPromptRepo{}, nil)
+	svc := NewTaskService(&mockTaskRepo{}, live, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
 	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{LiveID: 1})
 	if !errors.Is(err, ErrTaskASRNotReady) {
 		t.Fatalf("error = %v, want ErrTaskASRNotReady", err)
+	}
+}
+
+func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 3, LiveID: 9,
+		Clips1: `[{"text":"a","start_time":0,"end_time":1000,"words":[]}]`,
+		Clips0: `[]`,
+	}}
+	tasks := &mockTaskRepo{}
+	draftWorker := &mockDraftWorkerEnqueue{}
+	svc := NewTaskService(tasks, live, projects, &mockPromptRepo{}, nil, draftWorker)
+
+	got, err := svc.CreateDraft(context.Background(), 7, CreateDraftInput{VideoProjectID: 3})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	if got.Type != model.TaskTypeDraft || got.Status != model.TaskStatusPending {
+		t.Errorf("task = %#v", got)
+	}
+	if draftWorker.enqueued != 1 {
+		t.Errorf("enqueued = %d, want 1", draftWorker.enqueued)
+	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":3`) {
+		t.Errorf("ext = %v", tasks.created)
+	}
+}
+
+func TestTaskService_CreateDraft_MissingProjectID(t *testing.T) {
+	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	_, err := svc.CreateDraft(context.Background(), 1, CreateDraftInput{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestTaskService_CreateDraft_EmptyClips(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 1}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 1, LiveID: 1, Clips0: `[]`, Clips1: `[]`,
+	}}
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil)
+	_, err := svc.CreateDraft(context.Background(), 1, CreateDraftInput{VideoProjectID: 1})
+	if err == nil {
+		t.Fatal("expected empty clips error")
 	}
 }
 
@@ -154,7 +236,7 @@ func TestTaskService_GetFromDB(t *testing.T) {
 	task := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing, Progress: 66, CreatedBy: 1}
 	_ = repo.Create(ctx, task)
 
-	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil)
+	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
 	got, err := svc.Get(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
