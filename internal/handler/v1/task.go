@@ -49,10 +49,12 @@ type CreateAISliceDraftTaskRequest struct {
 
 // ListTasksRequest 任务列表查询参数。
 type ListTasksRequest struct {
-	Type     string `form:"type"`
-	Status   string `form:"status"`
-	Page     int    `form:"page" binding:"omitempty,min=1"`
-	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+	Type      string `form:"type"`
+	Status    string `form:"status"`
+	StartDate string `form:"start_date"` // 开始日期 YYYY-MM-DD，按 created_at 筛选
+	EndDate   string `form:"end_date"`   // 结束日期 YYYY-MM-DD，按 created_at 筛选
+	Page      int    `form:"page" binding:"omitempty,min=1"`
+	PageSize  int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
 // TaskCreateResponse 创建任务立即返回的摘要。
@@ -184,16 +186,18 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status 筛选
+// @Description  分页查询异步任务，支持按 type、status 与创建日期（start_date/end_date）筛选
 // @Tags         异步任务
 // @Produce      json
-// @Param        type       query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
-// @Param        status     query  string  false  "任务状态：pending / processing / completed / failed"
-// @Param        page       query  int     false  "页码"
-// @Param        page_size  query  int     false  "每页数量，默认 10"
-// @Success      200        {object}  response.Body
-// @Failure      400        {object}  response.Body
-// @Failure      401        {object}  response.Body
+// @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
+// @Param        status      query  string  false  "任务状态：pending / processing / completed / failed"
+// @Param        start_date  query  string  false  "开始日期 YYYY-MM-DD，按 created_at 筛选"
+// @Param        end_date    query  string  false  "结束日期 YYYY-MM-DD，按 created_at 筛选"
+// @Param        page        query  int     false  "页码"
+// @Param        page_size   query  int     false  "每页数量，默认 10"
+// @Success      200         {object}  response.Body
+// @Failure      400         {object}  response.Body
+// @Failure      401         {object}  response.Body
 // @Router       /v1/tasks [get]
 func (h *TaskHandler) ListTasks(c *gin.Context) {
 	var req ListTasksRequest
@@ -204,8 +208,10 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 	page, pageSize := utils.DefaultPage(req.Page, req.PageSize)
 
 	tasks, total, err := h.taskService.List(c.Request.Context(), page, pageSize, service.TaskListOptions{
-		Type:   req.Type,
-		Status: req.Status,
+		Type:      req.Type,
+		Status:    req.Status,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())

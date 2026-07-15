@@ -14,8 +14,10 @@ import (
 
 // TaskListFilter 任务列表查询筛选条件。
 type TaskListFilter struct {
-	Type   string // 任务类型，空表示不限
-	Status string // 任务状态，空表示不限
+	Type    string     // 任务类型，空表示不限
+	Status  string     // 任务状态，空表示不限
+	StartAt *time.Time // 开始日期（含），按 created_at 筛选
+	EndAt   *time.Time // 结束日期次日零点（不含），按 created_at 筛选
 }
 
 // TaskRepository 异步任务数据访问接口。
@@ -68,12 +70,7 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.Task{})
-	if filter.Type != "" {
-		query = query.Where("type = ?", filter.Type)
-	}
-	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
-	}
+	query = applyTaskListFilter(query, filter)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -82,6 +79,23 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 		return nil, 0, err
 	}
 	return tasks, total, nil
+}
+
+// applyTaskListFilter 将列表筛选条件应用到 GORM 查询。
+func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
+	if filter.Type != "" {
+		query = query.Where("type = ?", filter.Type)
+	}
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.StartAt != nil {
+		query = query.Where("created_at >= ?", *filter.StartAt)
+	}
+	if filter.EndAt != nil {
+		query = query.Where("created_at < ?", *filter.EndAt)
+	}
+	return query
 }
 
 // ClaimPendingByType 原子抢占：选最早一条 pending 任务并改为 processing。

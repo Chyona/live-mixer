@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 
@@ -55,6 +56,36 @@ func TestTaskRepository_CreateGetList(t *testing.T) {
 	}
 	if total != 1 || len(list) != 1 {
 		t.Errorf("List total/len = %d/%d, want 1/1", total, len(list))
+	}
+}
+
+func TestTaskRepository_List_DateFilter(t *testing.T) {
+	db := setupTaskTestDB(t)
+	repo := NewTaskRepository(db)
+	ctx := context.Background()
+
+	inRange := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC),
+	}
+	outRange := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, task := range []*model.Task{inRange, outRange} {
+		if err := db.Create(task).Error; err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	startAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	endAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	list, total, err := repo.List(ctx, TaskListFilter{StartAt: &startAt, EndAt: &endAt}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].ID != inRange.ID {
+		t.Errorf("unexpected result: total=%d list=%+v", total, list)
 	}
 }
 

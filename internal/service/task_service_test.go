@@ -262,3 +262,34 @@ func TestTaskService_GetFromDB(t *testing.T) {
 		t.Errorf("got = %#v", got)
 	}
 }
+
+func TestBuildTaskListFilter_DateRange(t *testing.T) {
+	filter, err := buildTaskListFilter(TaskListOptions{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending,
+		StartDate: "2026-01-01", EndDate: "2026-01-31",
+	})
+	if err != nil {
+		t.Fatalf("buildTaskListFilter() error = %v", err)
+	}
+	if filter.Type != model.TaskTypeAISlice || filter.Status != model.TaskStatusPending {
+		t.Errorf("type/status = %s/%s", filter.Type, filter.Status)
+	}
+	if filter.StartAt == nil || filter.EndAt == nil {
+		t.Fatal("StartAt/EndAt should be set")
+	}
+	if filter.StartAt.Format("2006-01-02") != "2026-01-01" {
+		t.Errorf("StartAt = %v", filter.StartAt)
+	}
+	// end_date 含当日整天：次日零点（不含）
+	if filter.EndAt.Format("2006-01-02") != "2026-02-01" {
+		t.Errorf("EndAt = %v, want 2026-02-01", filter.EndAt)
+	}
+}
+
+func TestTaskService_List_InvalidDate(t *testing.T) {
+	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	_, _, err := svc.List(context.Background(), 1, 10, TaskListOptions{StartDate: "2026/01/01"})
+	if err == nil || !strings.Contains(err.Error(), "start_date") {
+		t.Fatalf("error = %v, want start_date format error", err)
+	}
+}

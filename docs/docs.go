@@ -842,7 +842,7 @@ const docTemplate = `{
         },
         "/v1/tasks": {
             "get": {
-                "description": "分页查询异步任务，支持按 type、status 筛选",
+                "description": "分页查询异步任务，支持按 type、status 与创建日期（start_date/end_date）筛选",
                 "produces": [
                     "application/json"
                 ],
@@ -861,6 +861,18 @@ const docTemplate = `{
                         "type": "string",
                         "description": "任务状态：pending / processing / completed / failed",
                         "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "开始日期 YYYY-MM-DD，按 created_at 筛选",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束日期 YYYY-MM-DD，按 created_at 筛选",
+                        "name": "end_date",
                         "in": "query"
                     },
                     {

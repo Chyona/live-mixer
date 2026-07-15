@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
@@ -24,8 +25,10 @@ var ErrTaskInvalidType = errors.New("任务类型无效")
 
 // TaskListOptions 任务列表查询选项。
 type TaskListOptions struct {
-	Type   string
-	Status string
+	Type      string
+	Status    string
+	StartDate string // YYYY-MM-DD，按 created_at 筛选
+	EndDate   string // YYYY-MM-DD，按 created_at 筛选
 }
 
 // CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。
@@ -303,11 +306,40 @@ func (s *taskService) List(ctx context.Context, page, pageSize int, opts TaskLis
 	if opts.Status != "" && !isValidTaskStatus(opts.Status) {
 		return nil, 0, errors.New("任务状态无效")
 	}
+	filter, err := buildTaskListFilter(opts)
+	if err != nil {
+		return nil, 0, err
+	}
 	offset := (page - 1) * pageSize
-	return s.taskRepo.List(ctx, repository.TaskListFilter{
+	return s.taskRepo.List(ctx, filter, offset, pageSize)
+}
+
+// buildTaskListFilter 解析列表筛选参数并转换为仓储层筛选条件。
+func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error) {
+	filter := repository.TaskListFilter{
 		Type:   opts.Type,
 		Status: opts.Status,
-	}, offset, pageSize)
+	}
+
+	if raw := strings.TrimSpace(opts.StartDate); raw != "" {
+		startAt, err := time.ParseInLocation(liveMaterialListDateLayout, raw, time.UTC)
+		if err != nil {
+			return filter, errors.New("start_date 格式无效，应为 YYYY-MM-DD")
+		}
+		filter.StartAt = &startAt
+	}
+	if raw := strings.TrimSpace(opts.EndDate); raw != "" {
+		endDate, err := time.ParseInLocation(liveMaterialListDateLayout, raw, time.UTC)
+		if err != nil {
+			return filter, errors.New("end_date 格式无效，应为 YYYY-MM-DD")
+		}
+		endAt := endDate.Add(24 * time.Hour)
+		filter.EndAt = &endAt
+	}
+	if filter.StartAt != nil && filter.EndAt != nil && !filter.StartAt.Before(*filter.EndAt) {
+		return filter, errors.New("start_date 不能晚于 end_date")
+	}
+	return filter, nil
 }
 
 func (s *taskService) requireASRCompleted(ctx context.Context, liveID uint) error {
