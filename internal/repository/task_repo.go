@@ -18,7 +18,7 @@ type TaskListFilter struct {
 	Status   string     // 任务状态，空表示不限
 	StartAt  *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt    *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	Keywords []string   // 关键词（已规范化小写），模糊匹配关联项目/素材名称，多词 AND
+	Keywords []string   // 关键词（已规范化小写），模糊匹配 video_project_name，多词 AND
 }
 
 // TaskRepository 异步任务数据访问接口。
@@ -73,60 +73,34 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.Task{})
-	if len(filter.Keywords) > 0 {
-		query = withTaskKeywordJoins(query)
-	}
 	query = applyTaskListFilter(query, filter)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	find := query
-	if len(filter.Keywords) > 0 {
-		// JOIN 后显式只取 task 列，避免列名冲突。
-		find = find.Select("task.*")
-	}
-	if err := find.Offset(offset).Limit(limit).Order("task.id DESC").Find(&tasks).Error; err != nil {
+	if err := query.Offset(offset).Limit(limit).Order("id DESC").Find(&tasks).Error; err != nil {
 		return nil, 0, err
 	}
 	return tasks, total, nil
 }
 
-// withTaskKeywordJoins 通过 task.video_project_id（及 ext.live_id 兜底）关联项目与直播素材。
-func withTaskKeywordJoins(query *gorm.DB) *gorm.DB {
-	if query.Dialector.Name() == "postgres" {
-		return query.
-			Joins(`LEFT JOIN video_project AS vp ON vp.id = task.video_project_id`).
-			Joins(`LEFT JOIN live_material AS lm ON lm.id = COALESCE(vp.live_id, NULLIF(task.ext::jsonb->>'live_id', '')::bigint)`)
-	}
-	// SQLite（单测）：项目用列关联；素材优先项目 live_id，否则回退 ext.live_id。
-	return query.
-		Joins(`LEFT JOIN video_project AS vp ON vp.id = task.video_project_id`).
-		Joins(`LEFT JOIN live_material AS lm ON lm.id = COALESCE(vp.live_id, CAST(json_extract(task.ext, '$.live_id') AS INTEGER))`)
-}
-
-// applyTaskListFilter 将列表筛选条件应用到 GORM 查询（列名带表前缀，避免 JOIN 歧义）。
+// applyTaskListFilter 将列表筛选条件应用到 GORM 查询。
 func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
-	const table = "task"
 	if filter.Type != "" {
-		query = query.Where(table+".type = ?", filter.Type)
+		query = query.Where("type = ?", filter.Type)
 	}
 	if filter.Status != "" {
-		query = query.Where(table+".status = ?", filter.Status)
+		query = query.Where("status = ?", filter.Status)
 	}
 	if filter.StartAt != nil {
-		query = query.Where(table+".created_at >= ?", *filter.StartAt)
+		query = query.Where("created_at >= ?", *filter.StartAt)
 	}
 	if filter.EndAt != nil {
-		query = query.Where(table+".created_at < ?", *filter.EndAt)
+		query = query.Where("created_at < ?", *filter.EndAt)
 	}
 	for _, kw := range filter.Keywords {
 		pattern := "%" + kw + "%"
-		// 优先匹配任务上冗余的项目名，并兼容 JOIN 的项目名 / 直播素材名。
-		query = query.Where(
-			"LOWER(COALESCE(NULLIF("+table+".video_project_name, ''), vp.name, '')) LIKE ? OR LOWER(COALESCE(lm.name, '')) LIKE ?",
-			pattern, pattern,
-		)
+		query = query.Where("LOWER(video_project_name) LIKE ?", pattern)
 	}
 	return query
 }

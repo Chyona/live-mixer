@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -91,71 +90,34 @@ func TestTaskRepository_List_DateFilter(t *testing.T) {
 }
 
 func TestTaskRepository_List_Keywords(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}, &model.Task{}); err != nil {
-		t.Fatalf("AutoMigrate: %v", err)
-	}
-	repo := NewTaskRepository(db)
+	repo := NewTaskRepository(setupTaskTestDB(t))
 	ctx := context.Background()
-
-	material := &model.LiveMaterial{
-		Name: "春季发布会直播", LiveURL: "https://example.com/a.mp4", LiveASR: "{}",
-		ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
-	}
-	if err := db.Create(material).Error; err != nil {
-		t.Fatalf("create material: %v", err)
-	}
-	project := &model.VideoProject{
-		Name: "发布会精剪", LiveID: material.ID, CreatedBy: 1,
-		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
-	}
-	if err := db.Create(project).Error; err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-	otherMaterial := &model.LiveMaterial{
-		Name: "周末游戏回放", LiveURL: "https://example.com/b.mp4", LiveASR: "{}",
-		ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
-	}
-	if err := db.Create(otherMaterial).Error; err != nil {
-		t.Fatalf("create other material: %v", err)
-	}
-	otherProject := &model.VideoProject{
-		Name: "游戏高光", LiveID: otherMaterial.ID, CreatedBy: 1,
-		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
-	}
-	if err := db.Create(otherProject).Error; err != nil {
-		t.Fatalf("create other project: %v", err)
-	}
 
 	hit := &model.Task{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID:   model.NewUintPtr(project.ID),
-		VideoProjectName: project.Name,
-		Ext:              fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, material.ID, project.ID),
+		VideoProjectName: "发布会精剪",
 	}
 	miss := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID:   model.NewUintPtr(otherProject.ID),
-		VideoProjectName: otherProject.Name,
-		Ext:              fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, otherMaterial.ID, otherProject.ID),
+		VideoProjectName: "游戏高光",
 	}
-	if err := db.Create(hit).Error; err != nil {
+	if err := repo.Create(ctx, hit); err != nil {
 		t.Fatalf("create hit: %v", err)
 	}
-	if err := db.Create(miss).Error; err != nil {
+	if err := repo.Create(ctx, miss); err != nil {
 		t.Fatalf("create miss: %v", err)
 	}
 
-	// 「发布会」命中项目名，「春季」命中素材名 → AND 均满足。
-	list, total, err := repo.List(ctx, TaskListFilter{Keywords: []string{"发布会", "春季"}}, 0, 10)
+	// 仅匹配 task.video_project_name；多词 AND。
+	list, total, err := repo.List(ctx, TaskListFilter{Keywords: []string{"发布会", "精剪"}}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
 	if total != 1 || len(list) != 1 || list[0].ID != hit.ID {
 		t.Fatalf("unexpected keywords result: total=%d list=%+v want id=%d", total, list, hit.ID)
+	}
+	if list[0].VideoProjectName != "发布会精剪" {
+		t.Errorf("VideoProjectName = %q, want 发布会精剪", list[0].VideoProjectName)
 	}
 }
 

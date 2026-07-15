@@ -29,7 +29,7 @@ type TaskListOptions struct {
 	Status    string
 	StartDate string   // YYYY-MM-DD，按 created_at 筛选
 	EndDate   string   // YYYY-MM-DD，按 created_at 筛选
-	Keywords  []string // 模糊匹配 task.video_project_name / video_project.name / live_material.name，多词 AND
+	Keywords  []string // 模糊匹配 task.video_project_name，多词 AND
 }
 
 // CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。

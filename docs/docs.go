@@ -842,7 +842,7 @@ const docTemplate = `{
         },
         "/v1/tasks": {
             "get": {
-                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name / live_material.name，多个关键词为 AND",
+                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name",
                 "produces": [
                     "application/json"
                 ],
@@ -881,7 +881,7 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "关键词数组，模糊匹配 task.video_project_name / live_material.name，多词 AND；如 keywords=发布会&keywords=春季",
+                        "description": "关键词数组，模糊匹配 task.video_project_name，多词 AND；如 keywords=发布会&keywords=精剪",
                         "name": "keywords",
                         "in": "query"
                     },
