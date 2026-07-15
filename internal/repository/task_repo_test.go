@@ -132,11 +132,13 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 
 	hit := &model.Task{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
-		Ext: fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, material.ID, project.ID),
+		VideoProjectID: model.NewUintPtr(project.ID),
+		Ext:            fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, material.ID, project.ID),
 	}
 	miss := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		Ext: fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, otherMaterial.ID, otherProject.ID),
+		VideoProjectID: model.NewUintPtr(otherProject.ID),
+		Ext:            fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, otherMaterial.ID, otherProject.ID),
 	}
 	if err := db.Create(hit).Error; err != nil {
 		t.Fatalf("create hit: %v", err)

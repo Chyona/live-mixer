@@ -169,6 +169,9 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	if worker.enqueued != 1 {
 		t.Errorf("enqueued = %d, want 1", worker.enqueued)
 	}
+	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 5 {
+		t.Errorf("VideoProjectID = %v, want 5", tasks.created.VideoProjectID)
+	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":5`) {
 		t.Errorf("ext = %v", tasks.created)
 	}
@@ -216,6 +219,9 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	}
 	if draftWorker.enqueued != 1 {
 		t.Errorf("enqueued = %d, want 1", draftWorker.enqueued)
+	}
+	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 3 {
+		t.Errorf("VideoProjectID = %v, want 3", tasks.created.VideoProjectID)
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":3`) {
 		t.Errorf("ext = %v", tasks.created)

@@ -200,11 +200,15 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("解析任务 ext 失败: %w", err))
 	}
-	if ext.VideoProjectID == 0 {
+	projectID := model.UintValue(task.VideoProjectID)
+	if projectID == 0 {
+		projectID = ext.VideoProjectID
+	}
+	if projectID == 0 {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("任务缺少 video_project_id"))
 	}
 
-	project, err := w.videoProjectRepo.GetByID(ctx, ext.VideoProjectID)
+	project, err := w.videoProjectRepo.GetByID(ctx, projectID)
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询剪辑项目失败: %w", err))
 	}

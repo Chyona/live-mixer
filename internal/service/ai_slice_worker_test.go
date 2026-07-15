@@ -85,10 +85,11 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 		LiveID: material.ID, VideoProjectID: project.ID, TargetDurationMs: 60000,
 	})
 	task := &model.Task{
-		Type:      model.TaskTypeAISlice,
-		Status:    model.TaskStatusPending,
-		CreatedBy: 1,
-		Ext:       ext,
+		Type:           model.TaskTypeAISlice,
+		Status:         model.TaskStatusPending,
+		CreatedBy:      1,
+		VideoProjectID: model.NewUintPtr(project.ID),
+		Ext:            ext,
 	}
 	if err := taskRepo.Create(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -151,7 +152,10 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 	project := &model.VideoProject{Name: "p", LiveID: material.ID, CreatedBy: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}}
 	_ = projectRepo.Create(ctx, project)
 	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
-	task := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: ext}
+	task := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
 

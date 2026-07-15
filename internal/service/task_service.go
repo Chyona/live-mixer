@@ -152,12 +152,13 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	}
 
 	task := &model.Task{
-		Type:      model.TaskTypeAISlice,
-		Status:    model.TaskStatusPending,
-		Progress:  0,
-		SysPrompt: sysPrompt,
-		CreatedBy: createdBy,
-		Ext:       ext,
+		Type:           model.TaskTypeAISlice,
+		Status:         model.TaskStatusPending,
+		Progress:       0,
+		SysPrompt:      sysPrompt,
+		VideoProjectID: model.NewUintPtr(project.ID),
+		CreatedBy:      createdBy,
+		Ext:            ext,
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
@@ -219,11 +220,12 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	}
 
 	task := &model.Task{
-		Type:      model.TaskTypeDraft,
-		Status:    model.TaskStatusPending,
-		Progress:  0,
-		CreatedBy: createdBy,
-		Ext:       ext,
+		Type:           model.TaskTypeDraft,
+		Status:         model.TaskStatusPending,
+		Progress:       0,
+		VideoProjectID: model.NewUintPtr(project.ID),
+		CreatedBy:      createdBy,
+		Ext:            ext,
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err

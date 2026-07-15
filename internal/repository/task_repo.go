@@ -38,8 +38,10 @@ type TaskRepository interface {
 	MarkCompleted(ctx context.Context, id uint, progress int16, ext string) error
 	// MarkFailed 标记任务失败，写入错误信息与当前进度。
 	MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
-	// UpdateExt 仅更新 ext 字段（例如写入 video_project_id）。
+	// UpdateExt 仅更新 ext 字段。
 	UpdateExt(ctx context.Context, id uint, ext string) error
+	// UpdateVideoProjectID 更新关联的剪辑项目 ID。
+	UpdateVideoProjectID(ctx context.Context, id uint, videoProjectID uint) error
 	// CountProcessingByTypes 统计指定类型中处于 processing 的任务数（供 draft 槽位限流复用）。
 	CountProcessingByTypes(ctx context.Context, types []string) (int64, error)
 }
@@ -90,17 +92,17 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 	return tasks, total, nil
 }
 
-// withTaskKeywordJoins 通过 task.ext 中的 video_project_id / live_id 关联项目与直播素材。
+// withTaskKeywordJoins 通过 task.video_project_id（及 ext.live_id 兜底）关联项目与直播素材。
 func withTaskKeywordJoins(query *gorm.DB) *gorm.DB {
 	if query.Dialector.Name() == "postgres" {
 		return query.
-			Joins(`LEFT JOIN video_project AS vp ON vp.id = NULLIF(task.ext::jsonb->>'video_project_id', '')::bigint`).
-			Joins(`LEFT JOIN live_material AS lm ON lm.id = COALESCE(NULLIF(task.ext::jsonb->>'live_id', '')::bigint, vp.live_id)`)
+			Joins(`LEFT JOIN video_project AS vp ON vp.id = task.video_project_id`).
+			Joins(`LEFT JOIN live_material AS lm ON lm.id = COALESCE(vp.live_id, NULLIF(task.ext::jsonb->>'live_id', '')::bigint)`)
 	}
-	// SQLite（单测）：用 json_extract 解析 ext。
+	// SQLite（单测）：项目用列关联；素材优先项目 live_id，否则回退 ext.live_id。
 	return query.
-		Joins(`LEFT JOIN video_project AS vp ON vp.id = CAST(json_extract(task.ext, '$.video_project_id') AS INTEGER)`).
-		Joins(`LEFT JOIN live_material AS lm ON lm.id = COALESCE(CAST(json_extract(task.ext, '$.live_id') AS INTEGER), vp.live_id)`)
+		Joins(`LEFT JOIN video_project AS vp ON vp.id = task.video_project_id`).
+		Joins(`LEFT JOIN live_material AS lm ON lm.id = COALESCE(vp.live_id, CAST(json_extract(task.ext, '$.live_id') AS INTEGER))`)
 }
 
 // applyTaskListFilter 将列表筛选条件应用到 GORM 查询（列名带表前缀，避免 JOIN 歧义）。
@@ -245,6 +247,25 @@ func (r *taskRepository) UpdateExt(ctx context.Context, id uint, ext string) err
 		Updates(map[string]interface{}{
 			"ext":        ext,
 			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *taskRepository) UpdateVideoProjectID(ctx context.Context, id uint, videoProjectID uint) error {
+	if videoProjectID == 0 {
+		return r.db.WithContext(ctx).
+			Model(&model.Task{}).
+			Where("id = ?", id).
+			Updates(map[string]interface{}{
+				"video_project_id": nil,
+				"updated_at":       time.Now(),
+			}).Error
+	}
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"video_project_id": videoProjectID,
+			"updated_at":       time.Now(),
 		}).Error
 }
 

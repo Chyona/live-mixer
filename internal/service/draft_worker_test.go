@@ -136,7 +136,10 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 		LiveID: material.ID, VideoProjectID: project.ID,
 		CanvasWidth: 1080, CanvasHeight: 1920,
 	})
-	task := &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1, Ext: ext}
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
 	if err := taskRepo.Create(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -200,7 +203,10 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 	}
 	_ = projectRepo.Create(ctx, project)
 	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
-	task := &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1, Ext: ext}
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
 
