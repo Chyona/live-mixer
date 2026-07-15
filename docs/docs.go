@@ -900,7 +900,7 @@ const docTemplate = `{
         },
         "/v1/tasks/ai-slice": {
             "post": {
-                "description": "异步：LLM 分析直播 ASR，提取合计约 1 分钟的高光时间段；立即返回 task，请轮询 GET /v1/tasks/:id",
+                "description": "异步：根据 video_project.id 读取关联直播 ASR，由 LLM 选取高光片段并回写 video_project.clips0/clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
                 "consumes": [
                     "application/json"
                 ],
@@ -992,7 +992,7 @@ const docTemplate = `{
         },
         "/v1/tasks/draft": {
             "post": {
-                "description": "异步：按已有 clips0 对直播视频切片并调用 capcut-mate 组装剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id",
+                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
                 "consumes": [
                     "application/json"
                 ],
@@ -1141,7 +1141,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户",
+                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组",
                 "consumes": [
                     "application/json"
                 ],
@@ -1226,7 +1226,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "更新 name、remark、clips0、clips1、draft_url、video_url，未传字段保持不变",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url）；未传字段保持不变",
                 "consumes": [
                     "application/json"
                 ],
@@ -1426,54 +1426,31 @@ const docTemplate = `{
         "internal_handler_v1.CreateAISliceTaskRequest": {
             "type": "object",
             "required": [
-                "live_id"
+                "video_project_id"
             ],
             "properties": {
-                "live_id": {
+                "video_project_id": {
+                    "description": "剪辑项目 ID；Worker 从关联 live_material 读取 ASR 并回写 clips0/clips1",
                     "type": "integer"
-                },
-                "name": {
-                    "type": "string",
-                    "maxLength": 64
-                },
-                "remark": {
-                    "type": "string",
-                    "maxLength": 256
-                },
-                "sys_prompt_id": {
-                    "type": "integer"
-                },
-                "target_duration_ms": {
-                    "type": "integer"
-                },
-                "usr_prompt": {
-                    "type": "string"
                 }
             }
         },
         "internal_handler_v1.CreateDraftTaskRequest": {
             "type": "object",
+            "required": [
+                "video_project_id"
+            ],
             "properties": {
                 "canvas_height": {
+                    "description": "剪映草稿画布高度，默认 1920",
                     "type": "integer"
                 },
                 "canvas_width": {
+                    "description": "剪映草稿画布宽度，默认 1080",
                     "type": "integer"
-                },
-                "clips0": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
-                    }
-                },
-                "live_id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string",
-                    "maxLength": 64
                 },
                 "video_project_id": {
+                    "description": "剪辑项目 ID；Worker 读取 live_url 与 clips1 后生成剪映草稿",
                     "type": "integer"
                 }
             }
@@ -1535,10 +1512,18 @@ const docTemplate = `{
             ],
             "properties": {
                 "clips0": {
-                    "type": "string"
+                    "description": "可选时间片段数组，未传时存为空数组",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
+                    }
                 },
                 "clips1": {
-                    "type": "string"
+                    "description": "可选带文本切片数组，未传时存为空数组",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
+                    }
                 },
                 "live_id": {
                     "type": "integer"
@@ -1546,6 +1531,10 @@ const docTemplate = `{
                 "name": {
                     "type": "string",
                     "maxLength": 64
+                },
+                "prompt_id": {
+                    "description": "提示词 ID，未传或为 0 时默认 1",
+                    "type": "integer"
                 },
                 "remark": {
                     "type": "string",
@@ -1680,10 +1669,18 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "clips0": {
-                    "type": "string"
+                    "description": "可选；传入且合法时更新（含空数组表示清空），未传则不更新",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
+                    }
                 },
                 "clips1": {
-                    "type": "string"
+                    "description": "可选；传入且合法时更新（含空数组表示清空），未传则不更新",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
+                    }
                 },
                 "draft_url": {
                     "type": "string",
@@ -1692,6 +1689,10 @@ const docTemplate = `{
                 "name": {
                     "type": "string",
                     "maxLength": 64
+                },
+                "prompt_id": {
+                    "description": "可选；传入时更新提示词 ID，为 0 时按默认值 1 处理",
+                    "type": "integer"
                 },
                 "remark": {
                     "type": "string",
@@ -1713,6 +1714,23 @@ const docTemplate = `{
                 "start_time": {
                     "description": "开始时间（毫秒）",
                     "type": "integer"
+                }
+            }
+        },
+        "live-mixer_internal_model.ClipWithText": {
+            "type": "object",
+            "properties": {
+                "end_time": {
+                    "description": "结束时间（毫秒）",
+                    "type": "integer"
+                },
+                "start_time": {
+                    "description": "开始时间（毫秒）",
+                    "type": "integer"
+                },
+                "text": {
+                    "description": "切片对应文本",
+                    "type": "string"
                 }
             }
         },
