@@ -57,7 +57,7 @@ func (m *mockVideoProjectService) Get(ctx context.Context, id uint) (*model.Vide
 	return nil, nil
 }
 
-// TestVideoProjectHandler_Create_Success 验证创建接口成功返回项目。
+// TestVideoProjectHandler_Create_Success 验证创建接口成功返回完整项目（含结构化 clips）。
 func TestVideoProjectHandler_Create_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewVideoProjectHandler(&mockVideoProjectService{
@@ -74,7 +74,16 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 			if len(input.Clips1) != 1 || input.Clips1[0].Text != "我是中国人" {
 				t.Errorf("Clips1 = %#v", input.Clips1)
 			}
-			return &model.VideoProject{ID: 1, Name: input.Name, LiveID: input.LiveID, PromptID: 1, CreatedBy: createdBy}, nil
+			return &model.VideoProject{
+				ID:        1,
+				Name:      input.Name,
+				Remark:    input.Remark,
+				LiveID:    input.LiveID,
+				PromptID:  1,
+				Clips0:    `[{"start_time":0,"end_time":1000}]`,
+				Clips1:    `[{"text":"我是中国人","start_time":0,"end_time":1000}]`,
+				CreatedBy: createdBy,
+			}, nil
 		},
 	})
 	r := newAuthedRouter(secret, handler.CreateVideoProject, http.MethodPost, "/video-projects")
@@ -95,6 +104,40 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			ID       uint            `json:"id"`
+			Name     string          `json:"name"`
+			Remark   string          `json:"remark"`
+			LiveID   uint            `json:"live_id"`
+			PromptID uint            `json:"prompt_id"`
+			Clips0   json.RawMessage `json:"clips0"`
+			Clips1   json.RawMessage `json:"clips1"`
+			DraftURL string          `json:"draft_url"`
+			VideoURL string          `json:"video_url"`
+			CreatedBy uint           `json:"created_by"`
+			Ext      string          `json:"ext"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Code != 0 || resp.Data.ID != 1 || resp.Data.Name != "剪辑项目" {
+		t.Fatalf("unexpected data: %+v", resp.Data)
+	}
+	if resp.Data.PromptID != 1 || resp.Data.CreatedBy != 3 || resp.Data.LiveID != 5 {
+		t.Fatalf("unexpected ids: %+v", resp.Data)
+	}
+	var clips0 []model.ClipRange
+	if err := json.Unmarshal(resp.Data.Clips0, &clips0); err != nil || len(clips0) != 1 || clips0[0].EndTime != 1000 {
+		t.Fatalf("clips0 = %s, err=%v", string(resp.Data.Clips0), err)
+	}
+	var clips1 []model.ClipWithText
+	if err := json.Unmarshal(resp.Data.Clips1, &clips1); err != nil || len(clips1) != 1 || clips1[0].Text != "我是中国人" {
+		t.Fatalf("clips1 = %s, err=%v", string(resp.Data.Clips1), err)
 	}
 }
 

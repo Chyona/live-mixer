@@ -1,7 +1,10 @@
 package v1
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
+	"time"
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
@@ -54,6 +57,57 @@ type UpdateVideoProjectRequest struct {
 	VideoURL *string               `json:"video_url" binding:"omitempty,max=1024"`
 }
 
+// VideoProjectResponse 剪辑项目 API 响应；clips0/clips1 以 JSON 数组原样返回。
+type VideoProjectResponse struct {
+	ID        uint            `json:"id"`
+	Name      string          `json:"name"`
+	Remark    string          `json:"remark"`
+	LiveID    uint            `json:"live_id"`
+	PromptID  uint            `json:"prompt_id"`
+	Clips0    json.RawMessage `json:"clips0"`
+	Clips1    json.RawMessage `json:"clips1"`
+	DraftURL  string          `json:"draft_url"`
+	VideoURL  string          `json:"video_url"`
+	CreatedBy uint            `json:"created_by"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	Ext       string          `json:"ext"`
+}
+
+func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
+	return VideoProjectResponse{
+		ID:        project.ID,
+		Name:      project.Name,
+		Remark:    project.Remark,
+		LiveID:    project.LiveID,
+		PromptID:  project.PromptID,
+		Clips0:    jsonArrayOrEmpty(project.Clips0),
+		Clips1:    jsonArrayOrEmpty(project.Clips1),
+		DraftURL:  project.DraftURL,
+		VideoURL:  project.VideoURL,
+		CreatedBy: project.CreatedBy,
+		CreatedAt: project.CreatedAt,
+		UpdatedAt: project.UpdatedAt,
+		Ext:       project.Ext,
+	}
+}
+
+func toVideoProjectResponseList(projects []model.VideoProject) []VideoProjectResponse {
+	out := make([]VideoProjectResponse, 0, len(projects))
+	for i := range projects {
+		out = append(out, toVideoProjectResponse(&projects[i]))
+	}
+	return out
+}
+
+// jsonArrayOrEmpty 将库内 JSON 文本转为 RawMessage；空串回退为 []。
+func jsonArrayOrEmpty(raw string) json.RawMessage {
+	if strings.TrimSpace(raw) == "" {
+		return json.RawMessage("[]")
+	}
+	return json.RawMessage(raw)
+}
+
 // ListVideoProjects 剪辑项目列表
 // @Summary      剪辑项目列表
 // @Description  分页查询剪辑项目，支持关键词与日期筛选
@@ -86,7 +140,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 		return
 	}
 	response.Success(c, response.PageData{
-		List:     projects,
+		List:     toVideoProjectResponseList(projects),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -95,7 +149,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
-// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组
+// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；成功后返回完整项目（含 id/默认 prompt_id/结构化 clips0/clips1 等）
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -129,7 +183,7 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, project)
+	response.Success(c, toVideoProjectResponse(project))
 }
 
 // GetVideoProject 获取剪辑项目详情
@@ -158,7 +212,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	response.Success(c, project)
+	response.Success(c, toVideoProjectResponse(project))
 }
 
 // UpdateVideoProject 更新剪辑项目
@@ -203,7 +257,7 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, project)
+	response.Success(c, toVideoProjectResponse(project))
 }
 
 // DeleteVideoProject 删除剪辑项目

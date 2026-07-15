@@ -1141,7 +1141,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组",
+                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；成功后返回完整项目（含 id/默认 prompt_id/结构化 clips0/clips1 等）",
                 "consumes": [
                     "application/json"
                 ],
@@ -1539,6 +1539,58 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
+                }
+            }
+        },
+        "internal_handler_v1.VideoProjectResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "remark": {
+                    "type": "string"
+                },
+                "live_id": {
+                    "type": "integer"
+                },
+                "prompt_id": {
+                    "type": "integer"
+                },
+                "clips0": {
+                    "description": "视频切片列表（毫秒时间段数组）",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
+                    }
+                },
+                "clips1": {
+                    "description": "带文本与词级时间戳的切片列表",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
+                    }
+                },
+                "draft_url": {
+                    "type": "string"
+                },
+                "video_url": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "ext": {
+                    "type": "string"
                 }
             }
         },
