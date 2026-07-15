@@ -338,7 +338,7 @@ func TestLiveMaterialRepository_Delete_CascadeVideoProjects(t *testing.T) {
 	}
 
 	project := &model.VideoProject{
-		Name: "关联项目", LiveID: material.ID, Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+		Name: "关联项目", LiveID: material.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
 	}
 	if err := db.Create(project).Error; err != nil {
 		t.Fatalf("create video_project: %v", err)

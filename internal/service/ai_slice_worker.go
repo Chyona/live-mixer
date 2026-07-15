@@ -244,21 +244,21 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 		return w.fail(ctx, task.ID, progress, err)
 	}
 
-	clips0JSON, err := marshalClips0JSON(ranges)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("序列化 clips0 失败: %w", err))
+	clips0 := ranges
+	if clips0 == nil {
+		clips0 = []model.ClipRange{}
 	}
-	clips1JSON, err := marshalClips1JSON(buildClips1(utterances, ranges))
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("序列化 clips1 失败: %w", err))
+	clips1 := buildClips1(utterances, ranges)
+	if clips1 == nil {
+		clips1 = []model.ClipWithText{}
 	}
 
 	progress = 85
 	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
 
 	// 回写已有剪辑项目的切片结果，不新建项目。
-	project.Clips0 = clips0JSON
-	project.Clips1 = clips1JSON
+	project.Clips0 = clips0
+	project.Clips1 = clips1
 	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("更新剪辑项目切片失败: %w", err))
 	}

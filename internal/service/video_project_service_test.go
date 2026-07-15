@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"live-mixer/internal/model"
@@ -127,8 +126,8 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	if project.Name != "项目" {
 		t.Errorf("Name = %q, want 项目", project.Name)
 	}
-	if project.Clips0 != "[]" || project.Clips1 != "[]" {
-		t.Errorf("clips defaults = %q/%q, want []/[]", project.Clips0, project.Clips1)
+	if len(project.Clips0) != 0 || len(project.Clips1) != 0 {
+		t.Errorf("clips defaults = %#v/%#v, want empty", project.Clips0, project.Clips1)
 	}
 	if project.PromptID != model.DefaultVideoProjectPromptID {
 		t.Errorf("PromptID = %d, want %d", project.PromptID, model.DefaultVideoProjectPromptID)
@@ -155,11 +154,11 @@ func TestVideoProjectService_Create_WithTypedClips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if !strings.Contains(project.Clips0, `"end_time":1000`) {
-		t.Errorf("Clips0 = %s", project.Clips0)
+	if len(project.Clips0) != 1 || project.Clips0[0].EndTime != 1000 {
+		t.Errorf("Clips0 = %#v", project.Clips0)
 	}
-	if !strings.Contains(project.Clips1, "我是中国人") {
-		t.Errorf("Clips1 = %s", project.Clips1)
+	if len(project.Clips1) != 1 || project.Clips1[0].Text != "我是中国人" {
+		t.Errorf("Clips1 = %#v", project.Clips1)
 	}
 }
 
@@ -194,7 +193,7 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 	draft := "https://draft.example.com"
 	projectRepo := &mockVideoProjectRepo{
 		projects: map[uint]*model.VideoProject{
-			1: {ID: 1, Name: "旧名称", Remark: "旧备注", LiveID: 1, Clips0: `[{"start_time":0,"end_time":1}]`, Clips1: `[{"text":"旧","start_time":0,"end_time":1}]`, CreatedBy: 1},
+			1: {ID: 1, Name: "旧名称", Remark: "旧备注", LiveID: 1, Clips0: []model.ClipRange{{StartTime: 0, EndTime: 1}}, Clips1: []model.ClipWithText{{Text: "旧", StartTime: 0, EndTime: 1}}, CreatedBy: 1},
 		},
 	}
 	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
@@ -209,8 +208,8 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 	if updated.Name != "旧名称" {
 		t.Errorf("Name should remain unchanged, got %q", updated.Name)
 	}
-	if !strings.Contains(updated.Clips0, `"end_time":1`) {
-		t.Errorf("Clips0 should remain unchanged, got %s", updated.Clips0)
+	if len(updated.Clips0) != 1 || updated.Clips0[0].EndTime != 1 {
+		t.Errorf("Clips0 should remain unchanged, got %#v", updated.Clips0)
 	}
 }
 
@@ -218,7 +217,7 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
 	projectRepo := &mockVideoProjectRepo{
 		projects: map[uint]*model.VideoProject{
-			1: {ID: 1, Name: "项目", LiveID: 1, Clips0: "[]", Clips1: "[]", CreatedBy: 1},
+			1: {ID: 1, Name: "项目", LiveID: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1},
 		},
 	}
 	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
@@ -232,11 +231,11 @@ func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if !strings.Contains(updated.Clips0, `"end_time":1000`) {
-		t.Errorf("Clips0 = %s", updated.Clips0)
+	if len(updated.Clips0) != 1 || updated.Clips0[0].EndTime != 1000 {
+		t.Errorf("Clips0 = %#v", updated.Clips0)
 	}
-	if !strings.Contains(updated.Clips1, "我是中国人") {
-		t.Errorf("Clips1 = %s", updated.Clips1)
+	if len(updated.Clips1) != 1 || updated.Clips1[0].Text != "我是中国人" {
+		t.Errorf("Clips1 = %#v", updated.Clips1)
 	}
 
 	// 传入空数组应清空切片。
@@ -245,11 +244,11 @@ func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear clips0 error = %v", err)
 	}
-	if cleared.Clips0 != "[]" {
-		t.Errorf("Clips0 after clear = %s, want []", cleared.Clips0)
+	if len(cleared.Clips0) != 0 {
+		t.Errorf("Clips0 after clear = %#v, want empty", cleared.Clips0)
 	}
-	if !strings.Contains(cleared.Clips1, "我是中国人") {
-		t.Errorf("Clips1 should remain, got %s", cleared.Clips1)
+	if len(cleared.Clips1) != 1 || cleared.Clips1[0].Text != "我是中国人" {
+		t.Errorf("Clips1 should remain, got %#v", cleared.Clips1)
 	}
 }
 

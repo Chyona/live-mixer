@@ -1,9 +1,7 @@
 package v1
 
 import (
-	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"live-mixer/internal/middleware"
@@ -57,32 +55,40 @@ type UpdateVideoProjectRequest struct {
 	VideoURL *string               `json:"video_url" binding:"omitempty,max=1024"`
 }
 
-// VideoProjectResponse 剪辑项目 API 响应；clips0/clips1 以 JSON 数组原样返回。
+// VideoProjectResponse 剪辑项目 API 响应。
 type VideoProjectResponse struct {
-	ID        uint            `json:"id"`
-	Name      string          `json:"name"`
-	Remark    string          `json:"remark"`
-	LiveID    uint            `json:"live_id"`
-	PromptID  uint            `json:"prompt_id"`
-	Clips0    json.RawMessage `json:"clips0"`
-	Clips1    json.RawMessage `json:"clips1"`
-	DraftURL  string          `json:"draft_url"`
-	VideoURL  string          `json:"video_url"`
-	CreatedBy uint            `json:"created_by"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Ext       string          `json:"ext"`
+	ID        uint                 `json:"id"`
+	Name      string               `json:"name"`
+	Remark    string               `json:"remark"`
+	LiveID    uint                 `json:"live_id"`
+	PromptID  uint                 `json:"prompt_id"`
+	Clips0    []model.ClipRange    `json:"clips0"`
+	Clips1    []model.ClipWithText `json:"clips1"`
+	DraftURL  string               `json:"draft_url"`
+	VideoURL  string               `json:"video_url"`
+	CreatedBy uint                 `json:"created_by"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
+	Ext       string               `json:"ext"`
 }
 
 func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
+	clips0 := project.Clips0
+	if clips0 == nil {
+		clips0 = []model.ClipRange{}
+	}
+	clips1 := project.Clips1
+	if clips1 == nil {
+		clips1 = []model.ClipWithText{}
+	}
 	return VideoProjectResponse{
 		ID:        project.ID,
 		Name:      project.Name,
 		Remark:    project.Remark,
 		LiveID:    project.LiveID,
 		PromptID:  project.PromptID,
-		Clips0:    jsonArrayOrEmpty(project.Clips0),
-		Clips1:    jsonArrayOrEmpty(project.Clips1),
+		Clips0:    clips0,
+		Clips1:    clips1,
 		DraftURL:  project.DraftURL,
 		VideoURL:  project.VideoURL,
 		CreatedBy: project.CreatedBy,
@@ -98,14 +104,6 @@ func toVideoProjectResponseList(projects []model.VideoProject) []VideoProjectRes
 		out = append(out, toVideoProjectResponse(&projects[i]))
 	}
 	return out
-}
-
-// jsonArrayOrEmpty 将库内 JSON 文本转为 RawMessage；空串回退为 []。
-func jsonArrayOrEmpty(raw string) json.RawMessage {
-	if strings.TrimSpace(raw) == "" {
-		return json.RawMessage("[]")
-	}
-	return json.RawMessage(raw)
 }
 
 // ListVideoProjects 剪辑项目列表

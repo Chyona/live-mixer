@@ -93,8 +93,8 @@ func setupDraftWorkerTestDB(t *testing.T) *gorm.DB {
 
 func TestResolveDraftClipRanges_PreferClips1(t *testing.T) {
 	project := &model.VideoProject{
-		Clips0: `[{"start_time":0,"end_time":100}]`,
-		Clips1: `[{"text":"hi","start_time":10,"end_time":50,"words":[]}]`,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 100}},
+		Clips1: []model.ClipWithText{{Text: "hi", StartTime: 10, EndTime: 50, Words: []model.ClipWord{}}},
 	}
 	clips, err := resolveDraftClipRanges(project)
 	if err != nil {
@@ -122,8 +122,11 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	}
 	project := &model.VideoProject{
 		Name: "项目", LiveID: material.ID, CreatedBy: 1,
-		Clips0: `[{"start_time":0,"end_time":1000}]`,
-		Clips1: `[{"text":"你好","start_time":0,"end_time":1000,"words":[]},{"text":"世界","start_time":2000,"end_time":3500,"words":[]}]`,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+		Clips1: []model.ClipWithText{
+			{Text: "你好", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
+			{Text: "世界", StartTime: 2000, EndTime: 3500, Words: []model.ClipWord{}},
+		},
 	}
 	if err := projectRepo.Create(ctx, project); err != nil {
 		t.Fatalf("create project: %v", err)
@@ -192,8 +195,8 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 	_ = liveRepo.Create(ctx, material)
 	project := &model.VideoProject{
 		LiveID: material.ID, CreatedBy: 1,
-		Clips1: `[{"text":"a","start_time":0,"end_time":500,"words":[]}]`,
-		Clips0: `[]`,
+		Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 500, Words: []model.ClipWord{}}},
+		Clips0: []model.ClipRange{},
 	}
 	_ = projectRepo.Create(ctx, project)
 	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})

@@ -3,7 +3,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -98,11 +97,11 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		promptID = model.DefaultVideoProjectPromptID
 	}
 
-	clips0JSON, err := marshalAndValidateClips0(input.Clips0)
+	clips0, err := normalizeAndValidateClips0(input.Clips0)
 	if err != nil {
 		return nil, err
 	}
-	clips1JSON, err := marshalAndValidateClips1(input.Clips1)
+	clips1, err := normalizeAndValidateClips1(input.Clips1)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +111,8 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		Remark:    input.Remark,
 		LiveID:    input.LiveID,
 		PromptID:  promptID,
-		Clips0:    clips0JSON,
-		Clips1:    clips1JSON,
+		Clips0:    clips0,
+		Clips1:    clips1,
 		CreatedBy: createdBy,
 	}
 	if err := s.videoProjectRepo.Create(ctx, project); err != nil {
@@ -150,18 +149,18 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 		project.PromptID = promptID
 	}
 	if input.Clips0 != nil {
-		clips0JSON, err := marshalAndValidateClips0(*input.Clips0)
+		clips0, err := normalizeAndValidateClips0(*input.Clips0)
 		if err != nil {
 			return nil, err
 		}
-		project.Clips0 = clips0JSON
+		project.Clips0 = clips0
 	}
 	if input.Clips1 != nil {
-		clips1JSON, err := marshalAndValidateClips1(*input.Clips1)
+		clips1, err := normalizeAndValidateClips1(*input.Clips1)
 		if err != nil {
 			return nil, err
 		}
-		project.Clips1 = clips1JSON
+		project.Clips1 = clips1
 	}
 	if input.DraftURL != nil {
 		project.DraftURL = *input.DraftURL
@@ -233,36 +232,28 @@ func buildVideoProjectListFilter(opts VideoProjectListOptions) (repository.Video
 	return filter, nil
 }
 
-// marshalAndValidateClips0 校验 clips0 时间段并序列化为 JSON 数组字符串。
-func marshalAndValidateClips0(clips []model.ClipRange) (string, error) {
+// normalizeAndValidateClips0 校验并规范化 clips0（nil 转为空切片）。
+func normalizeAndValidateClips0(clips []model.ClipRange) ([]model.ClipRange, error) {
 	if clips == nil {
 		clips = []model.ClipRange{}
 	}
 	for i, clip := range clips {
 		if clip.StartTime < 0 || clip.EndTime <= clip.StartTime {
-			return "", fmt.Errorf("clips0[%d] 时间段无效：start_time 须小于 end_time 且均非负", i)
+			return nil, fmt.Errorf("clips0[%d] 时间段无效：start_time 须小于 end_time 且均非负", i)
 		}
 	}
-	raw, err := json.Marshal(clips)
-	if err != nil {
-		return "", fmt.Errorf("序列化 clips0 失败: %w", err)
-	}
-	return string(raw), nil
+	return clips, nil
 }
 
-// marshalAndValidateClips1 校验 clips1 片段并序列化为 JSON 数组字符串。
-func marshalAndValidateClips1(clips []model.ClipWithText) (string, error) {
+// normalizeAndValidateClips1 校验并规范化 clips1（nil 转为空切片）。
+func normalizeAndValidateClips1(clips []model.ClipWithText) ([]model.ClipWithText, error) {
 	if clips == nil {
 		clips = []model.ClipWithText{}
 	}
 	for i, clip := range clips {
 		if clip.StartTime < 0 || clip.EndTime <= clip.StartTime {
-			return "", fmt.Errorf("clips1[%d] 时间段无效：start_time 须小于 end_time 且均非负", i)
+			return nil, fmt.Errorf("clips1[%d] 时间段无效：start_time 须小于 end_time 且均非负", i)
 		}
 	}
-	raw, err := json.Marshal(clips)
-	if err != nil {
-		return "", fmt.Errorf("序列化 clips1 失败: %w", err)
-	}
-	return string(raw), nil
+	return clips, nil
 }

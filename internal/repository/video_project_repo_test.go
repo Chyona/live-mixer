@@ -46,7 +46,7 @@ func TestVideoProjectRepository_CreateAndGetByID(t *testing.T) {
 
 	project := &model.VideoProject{
 		Name: "项目A", Remark: "备注", LiveID: material.ID,
-		Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
 	}
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -69,7 +69,7 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	material := seedLiveMaterialForProject(t, db)
 
 	project := &model.VideoProject{
-		Name: "旧名称", LiveID: material.ID, Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+		Name: "旧名称", LiveID: material.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
 	}
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -106,12 +106,12 @@ func TestVideoProjectRepository_List_KeywordAndDateFilter(t *testing.T) {
 
 	inRange := &model.VideoProject{
 		Name: "发布会剪辑", Remark: "2026春季", LiveID: material.ID,
-		Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
 		CreatedAt: time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC),
 	}
 	outRange := &model.VideoProject{
 		Name: "其它项目", Remark: "无关", LiveID: material.ID,
-		Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
 		CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
 	}
 	for _, p := range []*model.VideoProject{inRange, outRange} {
@@ -143,7 +143,7 @@ func TestVideoProjectRepository_Delete(t *testing.T) {
 	material := seedLiveMaterialForProject(t, db)
 
 	project := &model.VideoProject{
-		Name: "待删除", LiveID: material.ID, Clips0: "[]", Clips1: "[]", CreatedBy: 1,
+		Name: "待删除", LiveID: material.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
 	}
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create() error = %v", err)

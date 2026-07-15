@@ -80,8 +80,8 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 				Remark:    input.Remark,
 				LiveID:    input.LiveID,
 				PromptID:  1,
-				Clips0:    `[{"start_time":0,"end_time":1000}]`,
-				Clips1:    `[{"text":"我是中国人","start_time":0,"end_time":1000}]`,
+				Clips0:    []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+				Clips1:    []model.ClipWithText{{Text: "我是中国人", StartTime: 0, EndTime: 1000}},
 				CreatedBy: createdBy,
 			}, nil
 		},
@@ -109,17 +109,17 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			ID       uint            `json:"id"`
-			Name     string          `json:"name"`
-			Remark   string          `json:"remark"`
-			LiveID   uint            `json:"live_id"`
-			PromptID uint            `json:"prompt_id"`
-			Clips0   json.RawMessage `json:"clips0"`
-			Clips1   json.RawMessage `json:"clips1"`
-			DraftURL string          `json:"draft_url"`
-			VideoURL string          `json:"video_url"`
-			CreatedBy uint           `json:"created_by"`
-			Ext      string          `json:"ext"`
+			ID        uint                 `json:"id"`
+			Name      string               `json:"name"`
+			Remark    string               `json:"remark"`
+			LiveID    uint                 `json:"live_id"`
+			PromptID  uint                 `json:"prompt_id"`
+			Clips0    []model.ClipRange    `json:"clips0"`
+			Clips1    []model.ClipWithText `json:"clips1"`
+			DraftURL  string               `json:"draft_url"`
+			VideoURL  string               `json:"video_url"`
+			CreatedBy uint                 `json:"created_by"`
+			Ext       string               `json:"ext"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -131,13 +131,11 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 	if resp.Data.PromptID != 1 || resp.Data.CreatedBy != 3 || resp.Data.LiveID != 5 {
 		t.Fatalf("unexpected ids: %+v", resp.Data)
 	}
-	var clips0 []model.ClipRange
-	if err := json.Unmarshal(resp.Data.Clips0, &clips0); err != nil || len(clips0) != 1 || clips0[0].EndTime != 1000 {
-		t.Fatalf("clips0 = %s, err=%v", string(resp.Data.Clips0), err)
+	if len(resp.Data.Clips0) != 1 || resp.Data.Clips0[0].EndTime != 1000 {
+		t.Fatalf("clips0 = %#v", resp.Data.Clips0)
 	}
-	var clips1 []model.ClipWithText
-	if err := json.Unmarshal(resp.Data.Clips1, &clips1); err != nil || len(clips1) != 1 || clips1[0].Text != "我是中国人" {
-		t.Fatalf("clips1 = %s, err=%v", string(resp.Data.Clips1), err)
+	if len(resp.Data.Clips1) != 1 || resp.Data.Clips1[0].Text != "我是中国人" {
+		t.Fatalf("clips1 = %#v", resp.Data.Clips1)
 	}
 }
 

@@ -38,15 +38,6 @@ func TestBuildClips1(t *testing.T) {
 	if len(clips[0].Words) != 2 {
 		t.Errorf("words len = %d, want 2", len(clips[0].Words))
 	}
-
-	json0, err := marshalClips0JSON(ranges)
-	if err != nil || json0 == "" {
-		t.Fatalf("marshalClips0JSON = %q, err=%v", json0, err)
-	}
-	json1, err := marshalClips1JSON(clips)
-	if err != nil || json1 == "" {
-		t.Fatalf("marshalClips1JSON = %q, err=%v", json1, err)
-	}
 }
 
 func TestBuildClips1_FallbackUtteranceText(t *testing.T) {

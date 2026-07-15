@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -421,35 +420,20 @@ func resolveDraftClipRanges(project *model.VideoProject) ([]model.ClipRange, err
 	if project == nil {
 		return nil, fmt.Errorf("video_project 不能为空")
 	}
-	if clips, err := parseClips1Ranges(project.Clips1); err == nil && len(clips) > 0 {
+	if clips := clips1ToRanges(project.Clips1); len(clips) > 0 {
 		return clips, nil
 	}
-	var clips0 []model.ClipRange
-	if err := json.Unmarshal([]byte(emptyJSONArrayIfBlank(project.Clips0)), &clips0); err != nil {
-		return nil, fmt.Errorf("video_project.clips0 格式无效: %w", err)
-	}
-	if len(clips0) == 0 {
+	if len(project.Clips0) == 0 {
 		return nil, fmt.Errorf("video_project.clips1/clips0 均为空，无法生成草稿")
 	}
-	return clips0, nil
+	return project.Clips0, nil
 }
 
-// parseClips1Ranges 解析 clips1 JSON，提取各片段的 start_time/end_time（毫秒）。
-func parseClips1Ranges(raw string) ([]model.ClipRange, error) {
-	var clips []clipWithWords
-	if err := json.Unmarshal([]byte(emptyJSONArrayIfBlank(raw)), &clips); err != nil {
-		return nil, err
-	}
+// clips1ToRanges 从 clips1 提取各片段的 start_time/end_time（毫秒）。
+func clips1ToRanges(clips []model.ClipWithText) []model.ClipRange {
 	out := make([]model.ClipRange, 0, len(clips))
 	for _, c := range clips {
 		out = append(out, model.ClipRange{StartTime: c.StartTime, EndTime: c.EndTime})
 	}
-	return out, nil
-}
-
-func emptyJSONArrayIfBlank(raw string) string {
-	if raw == "" {
-		return "[]"
-	}
-	return raw
+	return out
 }

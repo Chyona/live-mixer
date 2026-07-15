@@ -47,9 +47,18 @@ type ClipRange struct {
 	EndTime   int64 `json:"end_time"`
 }
 
-// ClipWithText 带文本的切片片段（毫秒），对应 video_project.clips1 的 API 入参形态。
-type ClipWithText struct {
+// ClipWord 词级时间戳（毫秒），用于 clips1 中可选的 words 列表。
+type ClipWord struct {
 	Text      string `json:"text"`
 	StartTime int64  `json:"start_time"`
 	EndTime   int64  `json:"end_time"`
+}
+
+// ClipWithText 带文本的切片片段（毫秒），对应 video_project.clips1。
+// Words 可选：创建/更新接口可不传；AI 切片 Worker 会写入词级时间戳。
+type ClipWithText struct {
+	Text      string     `json:"text"`
+	StartTime int64      `json:"start_time"`
+	EndTime   int64      `json:"end_time"`
+	Words     []ClipWord `json:"words,omitempty"`
 }

@@ -151,7 +151,7 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 		ID: 1, ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
-		ID: 5, LiveID: 1, Clips0: `[]`, Clips1: `[]`,
+		ID: 5, LiveID: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
 	}}
 	tasks := &mockTaskRepo{}
 	worker := &mockAISliceWorkerEnqueue{}
@@ -200,8 +200,8 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 3, LiveID: 9,
-		Clips1: `[{"text":"a","start_time":0,"end_time":1000,"words":[]}]`,
-		Clips0: `[]`,
+		Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}}},
+		Clips0: []model.ClipRange{},
 	}}
 	tasks := &mockTaskRepo{}
 	draftWorker := &mockDraftWorkerEnqueue{}
@@ -233,7 +233,7 @@ func TestTaskService_CreateDraft_MissingProjectID(t *testing.T) {
 func TestTaskService_CreateDraft_EmptyClips(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 1}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
-		ID: 1, LiveID: 1, Clips0: `[]`, Clips1: `[]`,
+		ID: 1, LiveID: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
 	}}
 	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil)
 	_, err := svc.CreateDraft(context.Background(), 1, CreateDraftInput{VideoProjectID: 1})

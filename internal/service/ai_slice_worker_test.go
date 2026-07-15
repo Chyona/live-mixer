@@ -75,7 +75,7 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 
 	project := &model.VideoProject{
 		Name: "项目A", LiveID: material.ID, CreatedBy: 1,
-		Clips0: `[]`, Clips1: `[]`,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
 	}
 	if err := projectRepo.Create(ctx, project); err != nil {
 		t.Fatalf("create project: %v", err)
@@ -127,11 +127,11 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get project: %v", err)
 	}
-	if !strings.Contains(updated.Clips1, "今天") {
-		t.Errorf("clips1 = %s, want contain 今天", updated.Clips1)
+	if len(updated.Clips1) == 0 || !strings.Contains(updated.Clips1[0].Text, "今天") {
+		t.Errorf("clips1 = %#v, want contain 今天", updated.Clips1)
 	}
-	if updated.Clips0 == "" || updated.Clips0 == "[]" {
-		t.Errorf("clips0 should be non-empty ranges, got %s", updated.Clips0)
+	if len(updated.Clips0) == 0 {
+		t.Errorf("clips0 should be non-empty ranges, got %#v", updated.Clips0)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
-	project := &model.VideoProject{Name: "p", LiveID: material.ID, CreatedBy: 1, Clips0: `[]`, Clips1: `[]`}
+	project := &model.VideoProject{Name: "p", LiveID: material.ID, CreatedBy: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}}
 	_ = projectRepo.Create(ctx, project)
 	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
 	task := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: ext}
