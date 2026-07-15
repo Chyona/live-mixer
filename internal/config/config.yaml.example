@@ -55,3 +55,9 @@ asr:
   resource_id: "volc.seedasr.auc"
   poll_interval_sec: 10        # 轮询间隔（秒）
   max_polls: 360               # 最大轮询次数
+
+# OpenAI 兼容协议大模型（AI 切片）；生产环境通过 APP_LLM_* 注入密钥
+llm:
+  api_key: ""
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "doubao-seed-2-1-pro-260628"

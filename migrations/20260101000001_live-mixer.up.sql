@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS task (
     id                     BIGSERIAL PRIMARY KEY,
     type                   VARCHAR(32) NOT NULL,
     status                 VARCHAR(32) NOT NULL DEFAULT 'pending',
+    progress               SMALLINT    NOT NULL DEFAULT 0,
     sys_prompt             TEXT,
     usr_prompt             TEXT,
     error_message          TEXT,
@@ -153,13 +154,15 @@ CREATE TABLE IF NOT EXISTS task (
     completed_at           TIMESTAMPTZ,
     ext                    VARCHAR(1024),
     CONSTRAINT chk_task_type CHECK (type IN ('ai_slice', 'draft', 'ai_slice_draft')),
-    CONSTRAINT chk_task_status CHECK (status IN ('pending', 'processing', 'completed', 'failed'))
+    CONSTRAINT chk_task_status CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    CONSTRAINT chk_task_progress CHECK (progress BETWEEN 0 AND 100)
 );
 
 COMMENT ON TABLE task IS '任务表';
 COMMENT ON COLUMN task.id IS '主键';
 COMMENT ON COLUMN task.type IS '任务类型：ai_slice AI切片 draft 剪映草稿 ai_slice_draft AI切片+剪映草稿';
 COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执行中 completed已完成 failed失败';
+COMMENT ON COLUMN task.progress IS '任务进度（0-100），供客户端轮询展示';
 COMMENT ON COLUMN task.sys_prompt IS '系统提示词';
 COMMENT ON COLUMN task.usr_prompt IS '用户提示词';
 COMMENT ON COLUMN task.error_message IS '失败原因';
@@ -173,3 +176,5 @@ COMMENT ON COLUMN task.ext IS '扩展字段';
 CREATE INDEX IF NOT EXISTS idx_task_type ON task (type);
 CREATE INDEX IF NOT EXISTS idx_task_status ON task (status);
 CREATE INDEX IF NOT EXISTS idx_task_created_by ON task (created_by);
+-- 多实例 Worker 按类型抢占 pending 任务时使用
+CREATE INDEX IF NOT EXISTS idx_task_type_status_id ON task (type, status, id);

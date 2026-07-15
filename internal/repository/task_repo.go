@@ -3,10 +3,13 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"live-mixer/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // TaskListFilter 任务列表查询筛选条件。
@@ -23,6 +26,19 @@ type TaskRepository interface {
 	GetByID(ctx context.Context, id uint) (*model.Task, error)
 	// List 分页查询任务列表，按 id 倒序。
 	List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.Task, int64, error)
+	// ClaimPendingByType 多实例安全地抢占一条指定类型的 pending 任务。
+	// 使用事务 + FOR UPDATE SKIP LOCKED（Postgres），将状态改为 processing 并返回；无待处理任务时返回 nil。
+	ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error)
+	// UpdateProgress 更新任务进度（0-100），仅 processing 状态时生效。
+	UpdateProgress(ctx context.Context, id uint, progress int16) error
+	// MarkCompleted 标记任务成功完成，并写入最终进度与扩展字段。
+	MarkCompleted(ctx context.Context, id uint, progress int16, ext string) error
+	// MarkFailed 标记任务失败，写入错误信息与当前进度。
+	MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
+	// UpdateExt 仅更新 ext 字段（例如写入 video_project_id）。
+	UpdateExt(ctx context.Context, id uint, ext string) error
+	// CountProcessingByTypes 统计指定类型中处于 processing 的任务数（供 draft 槽位限流复用）。
+	CountProcessingByTypes(ctx context.Context, types []string) (int64, error)
 }
 
 type taskRepository struct {
@@ -66,4 +82,136 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 		return nil, 0, err
 	}
 	return tasks, total, nil
+}
+
+// ClaimPendingByType 原子抢占：选最早一条 pending 任务并改为 processing。
+// 多实例下依赖 SKIP LOCKED 避免重复领取；SQLite 单测无 SKIP LOCKED 时退化为行锁。
+func (r *taskRepository) ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error) {
+	var claimed *model.Task
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var task model.Task
+		q := tx.Where("status = ? AND type = ?", model.TaskStatusPending, taskType).
+			Order("id ASC").
+			Limit(1)
+		// Postgres 使用 SKIP LOCKED，保证多 Worker 互不阻塞、不重复抢占。
+		if tx.Dialector.Name() == "postgres" {
+			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		if err := q.First(&task).Error; err != nil {
+			return err
+		}
+
+		now := time.Now()
+		result := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", task.ID, model.TaskStatusPending).
+			Updates(map[string]interface{}{
+				"status":     model.TaskStatusProcessing,
+				"progress":   int16(0),
+				"started_at": now,
+				"updated_at": now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		// 并发下若已被其它实例抢走则视为本次未抢到。
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+
+		task.Status = model.TaskStatusProcessing
+		task.Progress = 0
+		task.StartedAt = &now
+		task.UpdatedAt = now
+		claimed = &task
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+func (r *taskRepository) UpdateProgress(ctx context.Context, id uint, progress int16) error {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ? AND status = ?", id, model.TaskStatusProcessing).
+		Updates(map[string]interface{}{
+			"progress":   progress,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *taskRepository) MarkCompleted(ctx context.Context, id uint, progress int16, ext string) error {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	now := time.Now()
+	updates := map[string]interface{}{
+		"status":       model.TaskStatusCompleted,
+		"progress":     progress,
+		"completed_at": now,
+		"updated_at":   now,
+		"error_message": "",
+	}
+	if ext != "" {
+		updates["ext"] = ext
+	}
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+func (r *taskRepository) MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	now := time.Now()
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":        model.TaskStatusFailed,
+			"progress":      progress,
+			"error_message": errorMsg,
+			"completed_at":  now,
+			"updated_at":    now,
+		}).Error
+}
+
+func (r *taskRepository) UpdateExt(ctx context.Context, id uint, ext string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"ext":        ext,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *taskRepository) CountProcessingByTypes(ctx context.Context, types []string) (int64, error) {
+	if len(types) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("status = ? AND type IN ?", model.TaskStatusProcessing, types).
+		Count(&count).Error
+	return count, err
 }

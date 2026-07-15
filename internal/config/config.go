@@ -22,6 +22,7 @@ type Config struct {
 	JWT      JWTConfig      `mapstructure:"jwt"`
 	Storage  StorageConfig  `mapstructure:"storage"`
 	ASR      ASRConfig      `mapstructure:"asr"`
+	LLM      LLMConfig      `mapstructure:"llm"`
 }
 
 // ServerConfig HTTP 服务相关配置。
@@ -91,6 +92,13 @@ type ASRConfig struct {
 	ResourceID      string `mapstructure:"resource_id"`
 	PollIntervalSec int    `mapstructure:"poll_interval_sec"`
 	MaxPolls        int    `mapstructure:"max_polls"`
+}
+
+// LLMConfig OpenAI 兼容协议大模型配置（用于 AI 切片等）。
+type LLMConfig struct {
+	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
+	Model   string `mapstructure:"model"`
 }
 
 // TOSStorageConfig 火山引擎对象存储（TOS）连接配置。
@@ -291,5 +299,15 @@ func applyEnvOverrides(cfg *Config) {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.ASR.MaxPolls = n
 		}
+	}
+
+	if val, ok := os.LookupEnv("APP_LLM_API_KEY"); ok {
+		cfg.LLM.APIKey = val
+	}
+	if val, ok := os.LookupEnv("APP_LLM_BASE_URL"); ok {
+		cfg.LLM.BaseURL = val
+	}
+	if val, ok := os.LookupEnv("APP_LLM_MODEL"); ok {
+		cfg.LLM.Model = val
 	}
 }

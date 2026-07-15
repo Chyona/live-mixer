@@ -83,24 +83,28 @@ type TaskService interface {
 }
 
 type taskService struct {
-	taskRepo             repository.TaskRepository
-	liveMaterialRepo     repository.LiveMaterialRepository
-	videoProjectRepo     repository.VideoProjectRepository
-	llmSystemPromptRepo  repository.LLMSystemPromptRepository
+	taskRepo            repository.TaskRepository
+	liveMaterialRepo    repository.LiveMaterialRepository
+	videoProjectRepo    repository.VideoProjectRepository
+	llmSystemPromptRepo repository.LLMSystemPromptRepository
+	aiSliceWorker       AISliceWorker // 可选；为 nil 时仅落库不调度
 }
 
 // NewTaskService 创建任务业务服务实例。
+// aiSliceWorker 可为 nil（例如纯单测场景）；生产环境应注入并 Start。
 func NewTaskService(
 	taskRepo repository.TaskRepository,
 	liveMaterialRepo repository.LiveMaterialRepository,
 	videoProjectRepo repository.VideoProjectRepository,
 	llmSystemPromptRepo repository.LLMSystemPromptRepository,
+	aiSliceWorker AISliceWorker,
 ) TaskService {
 	return &taskService{
 		taskRepo:            taskRepo,
 		liveMaterialRepo:    liveMaterialRepo,
 		videoProjectRepo:    videoProjectRepo,
 		llmSystemPromptRepo: llmSystemPromptRepo,
+		aiSliceWorker:       aiSliceWorker,
 	}
 }
 
@@ -136,6 +140,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	task := &model.Task{
 		Type:      model.TaskTypeAISlice,
 		Status:    model.TaskStatusPending,
+		Progress:  0,
 		SysPrompt: sysPrompt,
 		UsrPrompt: input.UsrPrompt,
 		CreatedBy: createdBy,
@@ -144,7 +149,10 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
 	}
-	// TODO: 入队 Worker，调用 LLM 分析 ASR 并写入 video_project.clips0/clips1。
+	// 唤醒 AI 切片 Worker；多实例下由 DB 原子抢占领取，进度/状态写入数据库供轮询。
+	if s.aiSliceWorker != nil {
+		s.aiSliceWorker.Enqueue()
+	}
 	return task, nil
 }
 
@@ -218,6 +226,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	task := &model.Task{
 		Type:      model.TaskTypeDraft,
 		Status:    model.TaskStatusPending,
+		Progress:  0,
 		CreatedBy: createdBy,
 		Ext:       ext,
 	}
@@ -269,6 +278,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 	task := &model.Task{
 		Type:      model.TaskTypeAISliceDraft,
 		Status:    model.TaskStatusPending,
+		Progress:  0,
 		SysPrompt: sysPrompt,
 		UsrPrompt: input.UsrPrompt,
 		CreatedBy: createdBy,

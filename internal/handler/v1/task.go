@@ -68,6 +68,7 @@ type TaskCreateResponse struct {
 	ID        uint      `json:"id"`
 	Type      string    `json:"type"`
 	Status    string    `json:"status"`
+	Progress  int16     `json:"progress"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -76,13 +77,14 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 		ID:        task.ID,
 		Type:      task.Type,
 		Status:    task.Status,
+		Progress:  task.Progress,
 		CreatedAt: task.CreatedAt,
 	}
 }
 
 // CreateAISliceTask 创建 AI 切片任务
 // @Summary      创建 AI 切片任务
-// @Description  异步：LLM 分析直播 ASR，提取合计约 1 分钟的高光时间段；立即返回 task，请轮询 GET /v1/tasks/:id
+// @Description  异步：LLM（doubao-seed-2-1-pro）分析直播 ASR 选取高光片段并写入 video_project.clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -235,7 +237,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 
 // GetTask 获取任务详情
 // @Summary      获取任务详情
-// @Description  根据 ID 查询任务状态；异步任务完成后在此查看结果字段（当前业务执行逻辑待实现）
+// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress 等字段，用于轮询异步任务进度
 // @Tags         异步任务
 // @Produce      json
 // @Param        id   path  int  true  "任务 ID"

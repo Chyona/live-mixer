@@ -14,6 +14,7 @@ import (
 	v1handler "live-mixer/internal/handler/v1"
 	v2handler "live-mixer/internal/handler/v2"
 	"live-mixer/internal/middleware"
+	"live-mixer/internal/pkg/llm"
 	"live-mixer/internal/pkg/storage"
 	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
@@ -66,11 +67,16 @@ func main() {
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 	llmSystemPromptService := service.NewLLMSystemPromptService(llmSystemPromptRepo)
 	videoProjectService := service.NewVideoProjectService(videoProjectRepo, liveMaterialRepo)
-	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo)
+
+	// OpenAI 兼容协议 LLM 客户端，供 AI 切片 Worker 调用大模型选取高光片段。
+	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
+	aiSliceWorker := service.NewAISliceWorker(taskRepo, liveMaterialRepo, videoProjectRepo, llmClient, logger)
+	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	liveMaterialASRWorker.Start(ctx)
+	aiSliceWorker.Start(ctx)
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
 	v1ASRHandler := v1handler.NewASRHandler(asrService)
