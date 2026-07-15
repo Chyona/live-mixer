@@ -162,7 +162,7 @@ func (w *aiSliceWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 执行单条 AI 切片：读 ASR → 调 LLM → 写 video_project.clips1 → 更新任务状态/进度。
+// Process 执行单条 AI 切片：读 ASR → 调 LLM → 回写已有 video_project.clips0/clips1 → 更新任务状态/进度。
 func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
@@ -174,11 +174,24 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("解析任务 ext 失败: %w", err))
 	}
-	if ext.LiveID == 0 {
+	if ext.VideoProjectID == 0 {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("任务缺少 video_project_id"))
+	}
+
+	project, err := w.videoProjectRepo.GetByID(ctx, ext.VideoProjectID)
+	if err != nil {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询剪辑项目失败: %w", err))
+	}
+
+	liveID := ext.LiveID
+	if liveID == 0 {
+		liveID = project.LiveID
+	}
+	if liveID == 0 {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("任务缺少 live_id"))
 	}
 
-	material, err := w.liveMaterialRepo.GetByID(ctx, ext.LiveID)
+	material, err := w.liveMaterialRepo.GetByID(ctx, liveID)
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询直播素材失败: %w", err))
 	}
@@ -243,27 +256,19 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	progress = 85
 	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
 
-	projectName := strings.TrimSpace(ext.Name)
-	if projectName == "" {
-		projectName = fmt.Sprintf("AI切片-%d", task.ID)
-	}
-	project := &model.VideoProject{
-		Name:      projectName,
-		Remark:    ext.Remark,
-		LiveID:    ext.LiveID,
-		Clips0:    clips0JSON,
-		Clips1:    clips1JSON,
-		CreatedBy: task.CreatedBy,
-	}
-	if err := w.videoProjectRepo.Create(ctx, project); err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("创建剪辑项目失败: %w", err))
+	// 回写已有剪辑项目的切片结果，不新建项目。
+	project.Clips0 = clips0JSON
+	project.Clips1 = clips1JSON
+	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("更新剪辑项目切片失败: %w", err))
 	}
 
+	ext.LiveID = liveID
 	ext.VideoProjectID = project.ID
 	extRaw, err := marshalTaskExt(ext)
 	if err != nil {
-		// 项目已创建，仍尽量标记完成并回写精简 ext。
-		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, ext.LiveID, project.ID)
+		// 项目已更新，仍尽量标记完成并回写精简 ext。
+		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, liveID, project.ID)
 	}
 
 	if err := w.taskRepo.MarkCompleted(ctx, task.ID, 100, extRaw); err != nil {

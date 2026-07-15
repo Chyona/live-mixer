@@ -150,12 +150,15 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, ASRStatus: model.ASRStatusCompleted,
 	}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 5, LiveID: 1, Clips0: `[]`, Clips1: `[]`,
+	}}
 	tasks := &mockTaskRepo{}
 	worker := &mockAISliceWorkerEnqueue{}
-	svc := NewTaskService(tasks, live, stubVideoProjectRepo{}, &mockPromptRepo{}, worker, nil)
+	svc := NewTaskService(tasks, live, projects, &mockPromptRepo{}, worker, nil)
 
 	got, err := svc.CreateAISlice(context.Background(), 7, CreateAISliceInput{
-		LiveID: 1, Name: "n", TargetDurationMs: 30000,
+		VideoProjectID: 5,
 	})
 	if err != nil {
 		t.Fatalf("CreateAISlice() error = %v", err)
@@ -166,16 +169,30 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	if worker.enqueued != 1 {
 		t.Errorf("enqueued = %d, want 1", worker.enqueued)
 	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":5`) {
+		t.Errorf("ext = %v", tasks.created)
+	}
 }
 
 func TestTaskService_CreateAISlice_ASRNotReady(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, ASRStatus: model.ASRStatusProcessing,
 	}}
-	svc := NewTaskService(&mockTaskRepo{}, live, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
-	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{LiveID: 1})
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 1, LiveID: 1,
+	}}
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil)
+	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{VideoProjectID: 1})
 	if !errors.Is(err, ErrTaskASRNotReady) {
 		t.Fatalf("error = %v, want ErrTaskASRNotReady", err)
+	}
+}
+
+func TestTaskService_CreateAISlice_MissingProjectID(t *testing.T) {
+	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{})
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 

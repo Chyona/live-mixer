@@ -73,7 +73,17 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 		t.Fatalf("create material: %v", err)
 	}
 
-	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, Name: "项目A", TargetDurationMs: 60000})
+	project := &model.VideoProject{
+		Name: "项目A", LiveID: material.ID, CreatedBy: 1,
+		Clips0: `[]`, Clips1: `[]`,
+	}
+	if err := projectRepo.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	ext, _ := marshalTaskExt(TaskExt{
+		LiveID: material.ID, VideoProjectID: project.ID, TargetDurationMs: 60000,
+	})
 	task := &model.Task{
 		Type:      model.TaskTypeAISlice,
 		Status:    model.TaskStatusPending,
@@ -110,18 +120,18 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.Ext), &gotExt); err != nil {
 		t.Fatalf("ext unmarshal: %v", err)
 	}
-	if gotExt.VideoProjectID == 0 {
-		t.Fatal("video_project_id should be set")
+	if gotExt.VideoProjectID != project.ID {
+		t.Fatalf("video_project_id = %d, want %d", gotExt.VideoProjectID, project.ID)
 	}
-	project, err := projectRepo.GetByID(ctx, gotExt.VideoProjectID)
+	updated, err := projectRepo.GetByID(ctx, project.ID)
 	if err != nil {
 		t.Fatalf("Get project: %v", err)
 	}
-	if !strings.Contains(project.Clips1, "今天") {
-		t.Errorf("clips1 = %s, want contain 今天", project.Clips1)
+	if !strings.Contains(updated.Clips1, "今天") {
+		t.Errorf("clips1 = %s, want contain 今天", updated.Clips1)
 	}
-	if project.Clips0 == "" || project.Clips0 == "[]" {
-		t.Errorf("clips0 should be non-empty ranges, got %s", project.Clips0)
+	if updated.Clips0 == "" || updated.Clips0 == "[]" {
+		t.Errorf("clips0 should be non-empty ranges, got %s", updated.Clips0)
 	}
 }
 
@@ -138,7 +148,9 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
-	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID})
+	project := &model.VideoProject{Name: "p", LiveID: material.ID, CreatedBy: 1, Clips0: `[]`, Clips1: `[]`}
+	_ = projectRepo.Create(ctx, project)
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
 	task := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: ext}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)

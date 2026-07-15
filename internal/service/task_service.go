@@ -28,14 +28,9 @@ type TaskListOptions struct {
 	Status string
 }
 
-// CreateAISliceInput AI 切片任务创建入参。
+// CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。
 type CreateAISliceInput struct {
-	LiveID            uint
-	Name              string
-	Remark            string
-	SysPromptID       uint
-	UsrPrompt         string
-	TargetDurationMs  int64
+	VideoProjectID uint
 }
 
 // CreateDraftInput 剪映草稿任务创建入参（仅需 video_project_id；切片与直播 URL 由 Worker 读取）。
@@ -109,29 +104,29 @@ func NewTaskService(
 }
 
 func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) (*model.Task, error) {
-	if input.LiveID == 0 {
-		return nil, errors.New("live_id 不能为空")
+	// /ai-slice 仅接受 video_project_id：关联直播与 ASR 由 Worker 从库中读取。
+	if input.VideoProjectID == 0 {
+		return nil, errors.New("video_project_id 不能为空")
 	}
-	if err := s.requireASRCompleted(ctx, input.LiveID); err != nil {
+
+	project, err := s.videoProjectRepo.GetByID(ctx, input.VideoProjectID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrVideoProjectNotFound
+		}
 		return nil, err
 	}
-
-	targetMs := input.TargetDurationMs
-	if targetMs <= 0 {
-		targetMs = 60000
+	if project.LiveID == 0 {
+		return nil, errors.New("video_project 未关联直播素材")
 	}
-
-	sysPrompt, err := s.resolveSysPrompt(ctx, input.SysPromptID)
-	if err != nil {
+	if err := s.requireASRCompleted(ctx, project.LiveID); err != nil {
 		return nil, err
 	}
 
 	ext, err := marshalTaskExt(TaskExt{
-		LiveID:           input.LiveID,
-		Name:             strings.TrimSpace(input.Name),
-		Remark:           strings.TrimSpace(input.Remark),
-		SysPromptID:      input.SysPromptID,
-		TargetDurationMs: targetMs,
+		LiveID:           project.LiveID,
+		VideoProjectID:   project.ID,
+		TargetDurationMs: 60000, // 默认目标成片时长 60 秒
 	})
 	if err != nil {
 		return nil, err
@@ -141,8 +136,6 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 		Type:      model.TaskTypeAISlice,
 		Status:    model.TaskStatusPending,
 		Progress:  0,
-		SysPrompt: sysPrompt,
-		UsrPrompt: input.UsrPrompt,
 		CreatedBy: createdBy,
 		Ext:       ext,
 	}

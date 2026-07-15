@@ -23,14 +23,9 @@ func NewTaskHandler(taskService service.TaskService) *TaskHandler {
 	return &TaskHandler{taskService: taskService}
 }
 
-// CreateAISliceTaskRequest AI 切片任务请求体。
+// CreateAISliceTaskRequest AI 切片任务请求体（仅需 video_project_id）。
 type CreateAISliceTaskRequest struct {
-	LiveID           uint   `json:"live_id" binding:"required"`
-	Name             string `json:"name" binding:"max=64"`
-	Remark           string `json:"remark" binding:"max=256"`
-	SysPromptID      uint   `json:"sys_prompt_id"`
-	UsrPrompt        string `json:"usr_prompt"`
-	TargetDurationMs int64  `json:"target_duration_ms"`
+	VideoProjectID uint `json:"video_project_id" binding:"required"`
 }
 
 // CreateDraftTaskRequest 剪映草稿任务请求体（仅需 video_project_id）。
@@ -81,7 +76,7 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 
 // CreateAISliceTask 创建 AI 切片任务
 // @Summary      创建 AI 切片任务
-// @Description  异步：LLM（doubao-seed-2-1-pro）分析直播 ASR 选取高光片段并写入 video_project.clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
+// @Description  异步：根据 video_project.id 读取关联直播 ASR，由 LLM 选取高光片段并回写 video_project.clips0/clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -103,12 +98,7 @@ func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 	}
 
 	task, err := h.taskService.CreateAISlice(c.Request.Context(), user.ID, service.CreateAISliceInput{
-		LiveID:           req.LiveID,
-		Name:             req.Name,
-		Remark:           req.Remark,
-		SysPromptID:      req.SysPromptID,
-		UsrPrompt:        req.UsrPrompt,
-		TargetDurationMs: req.TargetDurationMs,
+		VideoProjectID: req.VideoProjectID,
 	})
 	if err != nil {
 		writeTaskCreateError(c, err)
