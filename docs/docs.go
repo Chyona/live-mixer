@@ -1226,7 +1226,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url）；未传字段保持不变",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url/project_source）；未传字段保持不变",
                 "consumes": [
                     "application/json"
                 ],
@@ -1539,6 +1539,11 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
+                },
+                "project_source": {
+                    "description": "项目来源，未传默认为空",
+                    "type": "string",
+                    "maxLength": 32
                 }
             }
         },
@@ -1578,6 +1583,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "video_url": {
+                    "type": "string"
+                },
+                "project_source": {
+                    "description": "项目来源",
                     "type": "string"
                 },
                 "created_by": {
@@ -1753,6 +1762,11 @@ const docTemplate = `{
                 "video_url": {
                     "type": "string",
                     "maxLength": 1024
+                },
+                "project_source": {
+                    "description": "可选；传入时更新项目来源（空字符串表示清空），未传则不更新",
+                    "type": "string",
+                    "maxLength": 32
                 }
             }
         },

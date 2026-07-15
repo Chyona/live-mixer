@@ -135,6 +135,9 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	if project.CreatedBy != 2 || project.LiveID != 1 {
 		t.Errorf("unexpected project: %+v", project)
 	}
+	if project.ProjectSource != "" {
+		t.Errorf("ProjectSource = %q, want empty", project.ProjectSource)
+	}
 }
 
 // TestVideoProjectService_Create_WithTypedClips 验证按结构化 clips 创建并落库。

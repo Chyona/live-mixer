@@ -7,18 +7,19 @@ import (
 // VideoProjectListItem 剪辑项目列表项。
 // 在 live_id 之外额外带上关联直播素材名称 live_name。
 type VideoProjectListItem struct {
-	ID        uint           `json:"id"`
-	Name      string         `json:"name"`
-	Remark    string         `json:"remark"`
-	LiveID    uint           `json:"live_id"`
-	LiveName  string         `gorm:"column:live_name" json:"live_name"`
-	PromptID  uint           `json:"prompt_id"`
-	Clips0    []ClipRange    `gorm:"serializer:json" json:"clips0"`
-	Clips1    []ClipWithText `gorm:"serializer:json" json:"clips1"`
-	DraftURL  string         `json:"draft_url"`
-	VideoURL  string         `json:"video_url"`
-	CreatedBy uint           `json:"created_by"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	Ext       string         `json:"ext"`
+	ID            uint           `json:"id"`
+	Name          string         `json:"name"`
+	Remark        string         `json:"remark"`
+	LiveID        uint           `json:"live_id"`
+	LiveName      string         `gorm:"column:live_name" json:"live_name"`
+	PromptID      uint           `json:"prompt_id"`
+	Clips0        []ClipRange    `gorm:"serializer:json" json:"clips0"`
+	Clips1        []ClipWithText `gorm:"serializer:json" json:"clips1"`
+	DraftURL      string         `json:"draft_url"`
+	VideoURL      string         `json:"video_url"`
+	ProjectSource string         `json:"project_source"`
+	CreatedBy     uint           `json:"created_by"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	Ext           string         `json:"ext"`
 }

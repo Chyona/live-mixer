@@ -79,6 +79,7 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	project.Remark = "新备注"
 	project.PromptID = 8
 	project.DraftURL = "https://draft.example.com"
+	project.ProjectSource = "manual"
 	project.LiveID = 999
 	project.CreatedBy = 99
 	if err := repo.Update(ctx, project); err != nil {
@@ -91,6 +92,9 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	}
 	if got.PromptID != 8 {
 		t.Errorf("PromptID = %d, want 8", got.PromptID)
+	}
+	if got.ProjectSource != "manual" {
+		t.Errorf("ProjectSource = %q, want manual", got.ProjectSource)
 	}
 	if got.LiveID != material.ID || got.CreatedBy != 1 {
 		t.Errorf("live_id/created_by should remain unchanged: %+v", got)

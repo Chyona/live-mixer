@@ -35,41 +35,44 @@ func NewVideoProjectHandler(videoProjectService service.VideoProjectService) *Vi
 // CreateVideoProjectRequest 创建剪辑项目请求体。
 // Clips0 / Clips1 为可选 JSON 数组；未传时存为空数组。
 type CreateVideoProjectRequest struct {
-	Name     string               `json:"name" binding:"required,max=64"`
-	Remark   string               `json:"remark" binding:"max=256"`
-	LiveID   uint                 `json:"live_id" binding:"required"`
-	PromptID uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
-	Clips0   []model.ClipRange    `json:"clips0"`
-	Clips1   []model.ClipWithText `json:"clips1"`
+	Name          string               `json:"name" binding:"required,max=64"`
+	Remark        string               `json:"remark" binding:"max=256"`
+	LiveID        uint                 `json:"live_id" binding:"required"`
+	PromptID      uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
+	Clips0        []model.ClipRange    `json:"clips0"`
+	Clips1        []model.ClipWithText `json:"clips1"`
+	ProjectSource string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
 }
 
 // UpdateVideoProjectRequest 更新剪辑项目请求体。
 // 指针字段为 nil 表示未传，不更新；非 nil（含空数组/空字符串）表示要更新为该值。
 type UpdateVideoProjectRequest struct {
-	Name     *string               `json:"name" binding:"omitempty,max=64"`
-	Remark   *string               `json:"remark" binding:"omitempty,max=256"`
-	PromptID *uint                 `json:"prompt_id"`
-	Clips0   *[]model.ClipRange    `json:"clips0"`
-	Clips1   *[]model.ClipWithText `json:"clips1"`
-	DraftURL *string               `json:"draft_url" binding:"omitempty,max=1024"`
-	VideoURL *string               `json:"video_url" binding:"omitempty,max=1024"`
+	Name          *string               `json:"name" binding:"omitempty,max=64"`
+	Remark        *string               `json:"remark" binding:"omitempty,max=256"`
+	PromptID      *uint                 `json:"prompt_id"`
+	Clips0        *[]model.ClipRange    `json:"clips0"`
+	Clips1        *[]model.ClipWithText `json:"clips1"`
+	DraftURL      *string               `json:"draft_url" binding:"omitempty,max=1024"`
+	VideoURL      *string               `json:"video_url" binding:"omitempty,max=1024"`
+	ProjectSource *string               `json:"project_source" binding:"omitempty,max=32"`
 }
 
 // VideoProjectResponse 剪辑项目 API 响应。
 type VideoProjectResponse struct {
-	ID        uint                 `json:"id"`
-	Name      string               `json:"name"`
-	Remark    string               `json:"remark"`
-	LiveID    uint                 `json:"live_id"`
-	PromptID  uint                 `json:"prompt_id"`
-	Clips0    []model.ClipRange    `json:"clips0"`
-	Clips1    []model.ClipWithText `json:"clips1"`
-	DraftURL  string               `json:"draft_url"`
-	VideoURL  string               `json:"video_url"`
-	CreatedBy uint                 `json:"created_by"`
-	CreatedAt time.Time            `json:"created_at"`
-	UpdatedAt time.Time            `json:"updated_at"`
-	Ext       string               `json:"ext"`
+	ID            uint                 `json:"id"`
+	Name          string               `json:"name"`
+	Remark        string               `json:"remark"`
+	LiveID        uint                 `json:"live_id"`
+	PromptID      uint                 `json:"prompt_id"`
+	Clips0        []model.ClipRange    `json:"clips0"`
+	Clips1        []model.ClipWithText `json:"clips1"`
+	DraftURL      string               `json:"draft_url"`
+	VideoURL      string               `json:"video_url"`
+	ProjectSource string               `json:"project_source"`
+	CreatedBy     uint                 `json:"created_by"`
+	CreatedAt     time.Time            `json:"created_at"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+	Ext           string               `json:"ext"`
 }
 
 func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
@@ -82,19 +85,20 @@ func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
 		clips1 = []model.ClipWithText{}
 	}
 	return VideoProjectResponse{
-		ID:        project.ID,
-		Name:      project.Name,
-		Remark:    project.Remark,
-		LiveID:    project.LiveID,
-		PromptID:  project.PromptID,
-		Clips0:    clips0,
-		Clips1:    clips1,
-		DraftURL:  project.DraftURL,
-		VideoURL:  project.VideoURL,
-		CreatedBy: project.CreatedBy,
-		CreatedAt: project.CreatedAt,
-		UpdatedAt: project.UpdatedAt,
-		Ext:       project.Ext,
+		ID:            project.ID,
+		Name:          project.Name,
+		Remark:        project.Remark,
+		LiveID:        project.LiveID,
+		PromptID:      project.PromptID,
+		Clips0:        clips0,
+		Clips1:        clips1,
+		DraftURL:      project.DraftURL,
+		VideoURL:      project.VideoURL,
+		ProjectSource: project.ProjectSource,
+		CreatedBy:     project.CreatedBy,
+		CreatedAt:     project.CreatedAt,
+		UpdatedAt:     project.UpdatedAt,
+		Ext:           project.Ext,
 	}
 }
 
@@ -108,20 +112,21 @@ func toVideoProjectResponseList(items []model.VideoProjectListItem) []VideoProje
 
 // VideoProjectListResponse 剪辑项目列表项响应；含 live_id 与关联素材名称 live_name。
 type VideoProjectListResponse struct {
-	ID        uint                 `json:"id"`
-	Name      string               `json:"name"`
-	Remark    string               `json:"remark"`
-	LiveID    uint                 `json:"live_id"`
-	LiveName  string               `json:"live_name"`
-	PromptID  uint                 `json:"prompt_id"`
-	Clips0    []model.ClipRange    `json:"clips0"`
-	Clips1    []model.ClipWithText `json:"clips1"`
-	DraftURL  string               `json:"draft_url"`
-	VideoURL  string               `json:"video_url"`
-	CreatedBy uint                 `json:"created_by"`
-	CreatedAt time.Time            `json:"created_at"`
-	UpdatedAt time.Time            `json:"updated_at"`
-	Ext       string               `json:"ext"`
+	ID            uint                 `json:"id"`
+	Name          string               `json:"name"`
+	Remark        string               `json:"remark"`
+	LiveID        uint                 `json:"live_id"`
+	LiveName      string               `json:"live_name"`
+	PromptID      uint                 `json:"prompt_id"`
+	Clips0        []model.ClipRange    `json:"clips0"`
+	Clips1        []model.ClipWithText `json:"clips1"`
+	DraftURL      string               `json:"draft_url"`
+	VideoURL      string               `json:"video_url"`
+	ProjectSource string               `json:"project_source"`
+	CreatedBy     uint                 `json:"created_by"`
+	CreatedAt     time.Time            `json:"created_at"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+	Ext           string               `json:"ext"`
 }
 
 func toVideoProjectListResponse(item *model.VideoProjectListItem) VideoProjectListResponse {
@@ -134,20 +139,21 @@ func toVideoProjectListResponse(item *model.VideoProjectListItem) VideoProjectLi
 		clips1 = []model.ClipWithText{}
 	}
 	return VideoProjectListResponse{
-		ID:        item.ID,
-		Name:      item.Name,
-		Remark:    item.Remark,
-		LiveID:    item.LiveID,
-		LiveName:  item.LiveName,
-		PromptID:  item.PromptID,
-		Clips0:    clips0,
-		Clips1:    clips1,
-		DraftURL:  item.DraftURL,
-		VideoURL:  item.VideoURL,
-		CreatedBy: item.CreatedBy,
-		CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt,
-		Ext:       item.Ext,
+		ID:            item.ID,
+		Name:          item.Name,
+		Remark:        item.Remark,
+		LiveID:        item.LiveID,
+		LiveName:      item.LiveName,
+		PromptID:      item.PromptID,
+		Clips0:        clips0,
+		Clips1:        clips1,
+		DraftURL:      item.DraftURL,
+		VideoURL:      item.VideoURL,
+		ProjectSource: item.ProjectSource,
+		CreatedBy:     item.CreatedBy,
+		CreatedAt:     item.CreatedAt,
+		UpdatedAt:     item.UpdatedAt,
+		Ext:           item.Ext,
 	}
 }
 
@@ -215,12 +221,13 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 	}
 
 	project, err := h.videoProjectService.Create(c.Request.Context(), user.ID, service.CreateVideoProjectInput{
-		Name:     req.Name,
-		Remark:   req.Remark,
-		LiveID:   req.LiveID,
-		PromptID: req.PromptID,
-		Clips0:   req.Clips0,
-		Clips1:   req.Clips1,
+		Name:          req.Name,
+		Remark:        req.Remark,
+		LiveID:        req.LiveID,
+		PromptID:      req.PromptID,
+		Clips0:        req.Clips0,
+		Clips1:        req.Clips1,
+		ProjectSource: req.ProjectSource,
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -260,7 +267,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url）；未传字段保持不变
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url/project_source）；未传字段保持不变
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -284,13 +291,14 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 	}
 
 	project, err := h.videoProjectService.Update(c.Request.Context(), id, service.VideoProjectUpdateInput{
-		Name:     req.Name,
-		Remark:   req.Remark,
-		PromptID: req.PromptID,
-		Clips0:   req.Clips0,
-		Clips1:   req.Clips1,
-		DraftURL: req.DraftURL,
-		VideoURL: req.VideoURL,
+		Name:          req.Name,
+		Remark:        req.Remark,
+		PromptID:      req.PromptID,
+		Clips0:        req.Clips0,
+		Clips1:        req.Clips1,
+		DraftURL:      req.DraftURL,
+		VideoURL:      req.VideoURL,
+		ProjectSource: req.ProjectSource,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrVideoProjectNotFound) {

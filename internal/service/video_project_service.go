@@ -29,25 +29,28 @@ type VideoProjectListOptions struct {
 
 // CreateVideoProjectInput 创建剪辑项目入参。
 // Clips0 / Clips1 为可选：nil 或空切片均写入 JSON 空数组 []。
+// ProjectSource 可选，未传时为空字符串。
 type CreateVideoProjectInput struct {
-	Name     string
-	Remark   string
-	LiveID   uint
-	PromptID uint
-	Clips0   []model.ClipRange
-	Clips1   []model.ClipWithText
+	Name          string
+	Remark        string
+	LiveID        uint
+	PromptID      uint
+	Clips0        []model.ClipRange
+	Clips1        []model.ClipWithText
+	ProjectSource string
 }
 
 // VideoProjectUpdateInput 剪辑项目更新入参。
 // 指针字段为 nil 表示「请求未传该字段，保持原值」；非 nil 则校验通过后写入。
 type VideoProjectUpdateInput struct {
-	Name     *string
-	Remark   *string
-	PromptID *uint
-	Clips0   *[]model.ClipRange
-	Clips1   *[]model.ClipWithText
-	DraftURL *string
-	VideoURL *string
+	Name          *string
+	Remark        *string
+	PromptID      *uint
+	Clips0        *[]model.ClipRange
+	Clips1        *[]model.ClipWithText
+	DraftURL      *string
+	VideoURL      *string
+	ProjectSource *string
 }
 
 // VideoProjectService 剪辑项目业务接口。
@@ -107,13 +110,14 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 	}
 
 	project := &model.VideoProject{
-		Name:      name,
-		Remark:    input.Remark,
-		LiveID:    input.LiveID,
-		PromptID:  promptID,
-		Clips0:    clips0,
-		Clips1:    clips1,
-		CreatedBy: createdBy,
+		Name:          name,
+		Remark:        input.Remark,
+		LiveID:        input.LiveID,
+		PromptID:      promptID,
+		Clips0:        clips0,
+		Clips1:        clips1,
+		ProjectSource: strings.TrimSpace(input.ProjectSource),
+		CreatedBy:     createdBy,
 	}
 	if err := s.videoProjectRepo.Create(ctx, project); err != nil {
 		return nil, err
@@ -167,6 +171,9 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 	}
 	if input.VideoURL != nil {
 		project.VideoURL = *input.VideoURL
+	}
+	if input.ProjectSource != nil {
+		project.ProjectSource = strings.TrimSpace(*input.ProjectSource)
 	}
 
 	if err := s.videoProjectRepo.Update(ctx, project); err != nil {

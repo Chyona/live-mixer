@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS video_project (
     clips1          JSONB       NOT NULL DEFAULT '[]',
     draft_url       VARCHAR(1024),
     video_url       VARCHAR(1024),
+    -- 项目来源标识，默认为空
+    project_source  VARCHAR(32) NOT NULL DEFAULT '',
     created_by      BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -106,6 +108,7 @@ COMMENT ON COLUMN video_project.clips0 IS '视频切片列表（毫秒），格�
 COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片列表（毫秒），格式：[{"text":"...","start_time":0,"end_time":10,"words":[{"text":"...","start_time":0,"end_time":160}]}]';
 COMMENT ON COLUMN video_project.draft_url IS '剪映草稿 URL';
 COMMENT ON COLUMN video_project.video_url IS '视频地址 URL';
+COMMENT ON COLUMN video_project.project_source IS '项目来源，默认为空';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
 COMMENT ON COLUMN video_project.updated_at IS '最后编辑时间';
