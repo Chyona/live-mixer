@@ -27,9 +27,10 @@ type Task struct {
 	Progress       int16      `gorm:"not null;default:0;comment:任务进度0-100" json:"progress"`
 	SysPrompt      string     `gorm:"column:sys_prompt;type:text;comment:系统提示词" json:"sys_prompt,omitempty"`
 	UsrPrompt      string     `gorm:"column:usr_prompt;type:text;comment:用户提示词" json:"usr_prompt,omitempty"`
-	ErrorMessage   string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
-	VideoProjectID *uint      `gorm:"column:video_project_id;index;comment:关联剪辑项目ID" json:"video_project_id,omitempty"`
-	CreatedBy      uint       `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
+	ErrorMessage     string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
+	VideoProjectID   *uint      `gorm:"column:video_project_id;index;comment:关联剪辑项目ID" json:"video_project_id,omitempty"`
+	VideoProjectName string     `gorm:"column:video_project_name;size:64;not null;default:'';comment:关联剪辑项目名称" json:"video_project_name"`
+	CreatedBy        uint       `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
 	CreatedAt      time.Time  `gorm:"comment:创建时间" json:"created_at"`
 	UpdatedAt      time.Time  `gorm:"comment:更新时间" json:"updated_at"`
 	StartedAt      *time.Time `gorm:"comment:开始执行时间" json:"started_at,omitempty"`

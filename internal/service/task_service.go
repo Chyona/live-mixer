@@ -29,7 +29,7 @@ type TaskListOptions struct {
 	Status    string
 	StartDate string   // YYYY-MM-DD，按 created_at 筛选
 	EndDate   string   // YYYY-MM-DD，按 created_at 筛选
-	Keywords  []string // 模糊匹配 video_project.name / live_material.name，多词 AND
+	Keywords  []string // 模糊匹配 task.video_project_name / video_project.name / live_material.name，多词 AND
 }
 
 // CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。
@@ -152,13 +152,14 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	}
 
 	task := &model.Task{
-		Type:           model.TaskTypeAISlice,
-		Status:         model.TaskStatusPending,
-		Progress:       0,
-		SysPrompt:      sysPrompt,
-		VideoProjectID: model.NewUintPtr(project.ID),
-		CreatedBy:      createdBy,
-		Ext:            ext,
+		Type:             model.TaskTypeAISlice,
+		Status:           model.TaskStatusPending,
+		Progress:         0,
+		SysPrompt:        sysPrompt,
+		VideoProjectID:   model.NewUintPtr(project.ID),
+		VideoProjectName: project.Name,
+		CreatedBy:        createdBy,
+		Ext:              ext,
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
@@ -220,12 +221,13 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	}
 
 	task := &model.Task{
-		Type:           model.TaskTypeDraft,
-		Status:         model.TaskStatusPending,
-		Progress:       0,
-		VideoProjectID: model.NewUintPtr(project.ID),
-		CreatedBy:      createdBy,
-		Ext:            ext,
+		Type:             model.TaskTypeDraft,
+		Status:           model.TaskStatusPending,
+		Progress:         0,
+		VideoProjectID:   model.NewUintPtr(project.ID),
+		VideoProjectName: project.Name,
+		CreatedBy:        createdBy,
+		Ext:              ext,
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
@@ -276,13 +278,14 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 	}
 
 	task := &model.Task{
-		Type:      model.TaskTypeAISliceDraft,
-		Status:    model.TaskStatusPending,
-		Progress:  0,
-		SysPrompt: sysPrompt,
-		UsrPrompt: input.UsrPrompt,
-		CreatedBy: createdBy,
-		Ext:       ext,
+		Type:             model.TaskTypeAISliceDraft,
+		Status:           model.TaskStatusPending,
+		Progress:         0,
+		SysPrompt:        sysPrompt,
+		UsrPrompt:        input.UsrPrompt,
+		VideoProjectName: strings.TrimSpace(input.Name),
+		CreatedBy:        createdBy,
+		Ext:              ext,
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err

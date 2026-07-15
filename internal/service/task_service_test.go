@@ -151,7 +151,7 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 		ID: 1, ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
-		ID: 5, LiveID: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		ID: 5, Name: "切片项目A", LiveID: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
 	}}
 	tasks := &mockTaskRepo{}
 	worker := &mockAISliceWorkerEnqueue{}
@@ -171,6 +171,9 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	}
 	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 5 {
 		t.Errorf("VideoProjectID = %v, want 5", tasks.created.VideoProjectID)
+	}
+	if tasks.created == nil || tasks.created.VideoProjectName != "切片项目A" {
+		t.Errorf("VideoProjectName = %q, want 切片项目A", tasks.created.VideoProjectName)
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":5`) {
 		t.Errorf("ext = %v", tasks.created)
@@ -202,7 +205,7 @@ func TestTaskService_CreateAISlice_MissingProjectID(t *testing.T) {
 func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
-		ID: 3, LiveID: 9,
+		ID: 3, Name: "草稿项目B", LiveID: 9,
 		Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}}},
 		Clips0: []model.ClipRange{},
 	}}
@@ -222,6 +225,9 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	}
 	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 3 {
 		t.Errorf("VideoProjectID = %v, want 3", tasks.created.VideoProjectID)
+	}
+	if tasks.created == nil || tasks.created.VideoProjectName != "草稿项目B" {
+		t.Errorf("VideoProjectName = %q, want 草稿项目B", tasks.created.VideoProjectName)
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":3`) {
 		t.Errorf("ext = %v", tasks.created)

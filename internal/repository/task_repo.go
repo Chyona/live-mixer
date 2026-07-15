@@ -122,8 +122,9 @@ func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
 	}
 	for _, kw := range filter.Keywords {
 		pattern := "%" + kw + "%"
+		// 优先匹配任务上冗余的项目名，并兼容 JOIN 的项目名 / 直播素材名。
 		query = query.Where(
-			"LOWER(COALESCE(vp.name, '')) LIKE ? OR LOWER(COALESCE(lm.name, '')) LIKE ?",
+			"LOWER(COALESCE(NULLIF("+table+".video_project_name, ''), vp.name, '')) LIKE ? OR LOWER(COALESCE(lm.name, '')) LIKE ?",
 			pattern, pattern,
 		)
 	}
