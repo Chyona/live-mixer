@@ -98,17 +98,62 @@ func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
 	}
 }
 
-func toVideoProjectResponseList(projects []model.VideoProject) []VideoProjectResponse {
-	out := make([]VideoProjectResponse, 0, len(projects))
-	for i := range projects {
-		out = append(out, toVideoProjectResponse(&projects[i]))
+func toVideoProjectResponseList(items []model.VideoProjectListItem) []VideoProjectListResponse {
+	out := make([]VideoProjectListResponse, 0, len(items))
+	for i := range items {
+		out = append(out, toVideoProjectListResponse(&items[i]))
 	}
 	return out
 }
 
+// VideoProjectListResponse 剪辑项目列表项响应；含 live_id 与关联素材名称 live_name。
+type VideoProjectListResponse struct {
+	ID        uint                 `json:"id"`
+	Name      string               `json:"name"`
+	Remark    string               `json:"remark"`
+	LiveID    uint                 `json:"live_id"`
+	LiveName  string               `json:"live_name"`
+	PromptID  uint                 `json:"prompt_id"`
+	Clips0    []model.ClipRange    `json:"clips0"`
+	Clips1    []model.ClipWithText `json:"clips1"`
+	DraftURL  string               `json:"draft_url"`
+	VideoURL  string               `json:"video_url"`
+	CreatedBy uint                 `json:"created_by"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
+	Ext       string               `json:"ext"`
+}
+
+func toVideoProjectListResponse(item *model.VideoProjectListItem) VideoProjectListResponse {
+	clips0 := item.Clips0
+	if clips0 == nil {
+		clips0 = []model.ClipRange{}
+	}
+	clips1 := item.Clips1
+	if clips1 == nil {
+		clips1 = []model.ClipWithText{}
+	}
+	return VideoProjectListResponse{
+		ID:        item.ID,
+		Name:      item.Name,
+		Remark:    item.Remark,
+		LiveID:    item.LiveID,
+		LiveName:  item.LiveName,
+		PromptID:  item.PromptID,
+		Clips0:    clips0,
+		Clips1:    clips1,
+		DraftURL:  item.DraftURL,
+		VideoURL:  item.VideoURL,
+		CreatedBy: item.CreatedBy,
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
+		Ext:       item.Ext,
+	}
+}
+
 // ListVideoProjects 剪辑项目列表
 // @Summary      剪辑项目列表
-// @Description  分页查询剪辑项目，支持关键词与日期筛选
+// @Description  分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id 与 live_name（关联 live_material.name）
 // @Tags         剪辑项目
 // @Produce      json
 // @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/remark"

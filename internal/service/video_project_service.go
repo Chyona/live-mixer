@@ -58,8 +58,8 @@ type VideoProjectService interface {
 	Update(ctx context.Context, id uint, input VideoProjectUpdateInput) (*model.VideoProject, error)
 	// Delete 删除剪辑项目。
 	Delete(ctx context.Context, id uint) error
-	// List 分页查询剪辑项目列表。
-	List(ctx context.Context, page, pageSize int, opts VideoProjectListOptions) ([]model.VideoProject, int64, error)
+	// List 分页查询剪辑项目列表（含关联直播素材名称 live_name）。
+	List(ctx context.Context, page, pageSize int, opts VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error)
 	// Get 根据 ID 获取剪辑项目详情。
 	Get(ctx context.Context, id uint) (*model.VideoProject, error)
 }
@@ -185,7 +185,7 @@ func (s *videoProjectService) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (s *videoProjectService) List(ctx context.Context, page, pageSize int, opts VideoProjectListOptions) ([]model.VideoProject, int64, error) {
+func (s *videoProjectService) List(ctx context.Context, page, pageSize int, opts VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error) {
 	filter, err := buildVideoProjectListFilter(opts)
 	if err != nil {
 		return nil, 0, err

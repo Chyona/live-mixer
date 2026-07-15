@@ -27,8 +27,8 @@ type VideoProjectRepository interface {
 	Update(ctx context.Context, project *model.VideoProject) error
 	// Delete 物理删除剪辑项目记录。
 	Delete(ctx context.Context, id uint) error
-	// List 分页查询剪辑项目，支持日期与关键词筛选，按更新时间倒序。
-	List(ctx context.Context, filter VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error)
+	// List 分页查询剪辑项目，LEFT JOIN live_material 取素材名称，支持日期与关键词筛选，按更新时间倒序。
+	List(ctx context.Context, filter VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error)
 }
 
 type videoProjectRepository struct {
@@ -71,33 +71,39 @@ func (r *videoProjectRepository) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (r *videoProjectRepository) List(ctx context.Context, filter VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error) {
-	var projects []model.VideoProject
+func (r *videoProjectRepository) List(ctx context.Context, filter VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error) {
+	var items []model.VideoProjectListItem
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&model.VideoProject{})
-	query = applyVideoProjectListFilter(query, filter)
+	countQuery := r.db.WithContext(ctx).Model(&model.VideoProject{})
+	countQuery = applyVideoProjectListFilter(countQuery, filter)
+	if err := countQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
-	if err := query.Count(&total).Error; err != nil {
+	query := r.db.WithContext(ctx).
+		Table("video_project").
+		Select("video_project.*, live_material.name AS live_name").
+		Joins("LEFT JOIN live_material ON live_material.id = video_project.live_id")
+	query = applyVideoProjectListFilter(query, filter)
+	if err := query.Offset(offset).Limit(limit).Order("video_project.updated_at DESC, video_project.id DESC").Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Offset(offset).Limit(limit).Order("updated_at DESC, id DESC").Find(&projects).Error; err != nil {
-		return nil, 0, err
-	}
-	return projects, total, nil
+	return items, total, nil
 }
 
-// applyVideoProjectListFilter 将列表筛选条件应用到 GORM 查询。
+// applyVideoProjectListFilter 将列表筛选条件应用到 GORM 查询（列名带表前缀，避免 JOIN 歧义）。
 func applyVideoProjectListFilter(query *gorm.DB, filter VideoProjectListFilter) *gorm.DB {
+	const table = "video_project"
 	if filter.StartAt != nil {
-		query = query.Where("created_at >= ?", *filter.StartAt)
+		query = query.Where(table+".created_at >= ?", *filter.StartAt)
 	}
 	if filter.EndAt != nil {
-		query = query.Where("created_at < ?", *filter.EndAt)
+		query = query.Where(table+".created_at < ?", *filter.EndAt)
 	}
 	for _, kw := range filter.Keywords {
 		pattern := "%" + kw + "%"
-		query = query.Where("LOWER(name) LIKE ? OR LOWER(remark) LIKE ?", pattern, pattern)
+		query = query.Where("LOWER("+table+".name) LIKE ? OR LOWER("+table+".remark) LIKE ?", pattern, pattern)
 	}
 	return query
 }

@@ -133,6 +133,12 @@ func TestVideoProjectRepository_List_KeywordAndDateFilter(t *testing.T) {
 	if total != 1 || len(projects) != 1 || projects[0].Name != "发布会剪辑" {
 		t.Errorf("unexpected result: total=%d projects=%+v", total, projects)
 	}
+	if projects[0].LiveName != "素材" {
+		t.Errorf("LiveName = %q, want 素材", projects[0].LiveName)
+	}
+	if projects[0].LiveID != material.ID {
+		t.Errorf("LiveID = %d, want %d", projects[0].LiveID, material.ID)
+	}
 }
 
 // TestVideoProjectRepository_Delete 验证物理删除。

@@ -1079,7 +1079,7 @@ const docTemplate = `{
         },
         "/v1/video-projects": {
             "get": {
-                "description": "分页查询剪辑项目，支持关键词与日期筛选",
+                "description": "分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id 与 live_name（关联 live_material.name）",
                 "produces": [
                     "application/json"
                 ],

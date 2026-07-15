@@ -107,7 +107,7 @@ func (stubVideoProjectRepo) Update(ctx context.Context, project *model.VideoProj
 	return nil
 }
 func (stubVideoProjectRepo) Delete(ctx context.Context, id uint) error { return nil }
-func (stubVideoProjectRepo) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error) {
+func (stubVideoProjectRepo) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error) {
 	return nil, 0, nil
 }
 
@@ -132,7 +132,7 @@ func (m *mockVideoProjectRepoForDraft) Update(ctx context.Context, project *mode
 	return nil
 }
 func (m *mockVideoProjectRepoForDraft) Delete(ctx context.Context, id uint) error { return nil }
-func (m *mockVideoProjectRepoForDraft) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error) {
+func (m *mockVideoProjectRepoForDraft) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error) {
 	return nil, 0, nil
 }
 

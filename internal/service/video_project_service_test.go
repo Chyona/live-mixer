@@ -17,7 +17,7 @@ type mockVideoProjectRepo struct {
 	createFn func(ctx context.Context, project *model.VideoProject) error
 	updateFn func(ctx context.Context, project *model.VideoProject) error
 	deleteFn func(ctx context.Context, id uint) error
-	listFn   func(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error)
+	listFn   func(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error)
 }
 
 func (m *mockVideoProjectRepo) Create(ctx context.Context, project *model.VideoProject) error {
@@ -63,7 +63,7 @@ func (m *mockVideoProjectRepo) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (m *mockVideoProjectRepo) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error) {
+func (m *mockVideoProjectRepo) List(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, filter, offset, limit)
 	}
@@ -256,7 +256,7 @@ func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
 func TestVideoProjectService_List_PassesFilter(t *testing.T) {
 	var gotFilter repository.VideoProjectListFilter
 	projectRepo := &mockVideoProjectRepo{
-		listFn: func(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProject, int64, error) {
+		listFn: func(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error) {
 			gotFilter = filter
 			return nil, 0, nil
 		},

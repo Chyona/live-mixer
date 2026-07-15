@@ -18,7 +18,7 @@ type mockVideoProjectService struct {
 	createFn func(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error)
 	updateFn func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error)
 	deleteFn func(ctx context.Context, id uint) error
-	listFn   func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProject, int64, error)
+	listFn   func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error)
 	getFn    func(ctx context.Context, id uint) (*model.VideoProject, error)
 }
 
@@ -43,7 +43,7 @@ func (m *mockVideoProjectService) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (m *mockVideoProjectService) List(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProject, int64, error) {
+func (m *mockVideoProjectService) List(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, page, pageSize, opts)
 	}
@@ -143,11 +143,14 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewVideoProjectHandler(&mockVideoProjectService{
-		listFn: func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProject, int64, error) {
+		listFn: func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error) {
 			if opts.Keywords != "发布会,2026" || opts.StartDate != "2026-01-01" {
 				t.Errorf("unexpected opts: %+v", opts)
 			}
-			return nil, 0, nil
+			return []model.VideoProjectListItem{{
+				ID: 1, Name: "项目", LiveID: 5, LiveName: "春季发布会", PromptID: 1,
+				Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+			}}, 1, nil
 		},
 	})
 	r := newAuthedRouter(secret, handler.ListVideoProjects, http.MethodGet, "/video-projects")
@@ -160,6 +163,23 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Data struct {
+			List []struct {
+				LiveName string `json:"live_name"`
+				LiveID   uint   `json:"live_id"`
+			} `json:"list"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Data.List) != 1 {
+		t.Fatalf("list = %+v", resp.Data.List)
+	}
+	if resp.Data.List[0].LiveID != 5 || resp.Data.List[0].LiveName != "春季发布会" {
+		t.Fatalf("live fields = %+v", resp.Data.List[0])
 	}
 }
 
