@@ -842,7 +842,7 @@ const docTemplate = `{
         },
         "/v1/tasks": {
             "get": {
-                "description": "分页查询异步任务，支持按 type、status 与创建日期（start_date/end_date）筛选",
+                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配关联的 video_project.name / live_material.name，多个关键词为 AND",
                 "produces": [
                     "application/json"
                 ],
@@ -873,6 +873,16 @@ const docTemplate = `{
                         "type": "string",
                         "description": "结束日期 YYYY-MM-DD，按 created_at 筛选",
                         "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "关键词数组，模糊匹配 video_project.name / live_material.name，多词 AND；如 keywords=发布会&keywords=春季",
+                        "name": "keywords",
                         "in": "query"
                     },
                     {

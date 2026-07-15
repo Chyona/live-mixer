@@ -27,8 +27,9 @@ var ErrTaskInvalidType = errors.New("任务类型无效")
 type TaskListOptions struct {
 	Type      string
 	Status    string
-	StartDate string // YYYY-MM-DD，按 created_at 筛选
-	EndDate   string // YYYY-MM-DD，按 created_at 筛选
+	StartDate string   // YYYY-MM-DD，按 created_at 筛选
+	EndDate   string   // YYYY-MM-DD，按 created_at 筛选
+	Keywords  []string // 模糊匹配 video_project.name / live_material.name，多词 AND
 }
 
 // CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。
@@ -317,8 +318,9 @@ func (s *taskService) List(ctx context.Context, page, pageSize int, opts TaskLis
 // buildTaskListFilter 解析列表筛选参数并转换为仓储层筛选条件。
 func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error) {
 	filter := repository.TaskListFilter{
-		Type:   opts.Type,
-		Status: opts.Status,
+		Type:     opts.Type,
+		Status:   opts.Status,
+		Keywords: normalizeTaskKeywords(opts.Keywords),
 	}
 
 	if raw := strings.TrimSpace(opts.StartDate); raw != "" {
@@ -340,6 +342,24 @@ func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error
 		return filter, errors.New("start_date 不能晚于 end_date")
 	}
 	return filter, nil
+}
+
+// normalizeTaskKeywords 去空白并转小写，忽略空项。
+func normalizeTaskKeywords(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, part := range raw {
+		kw := strings.ToLower(strings.TrimSpace(part))
+		if kw != "" {
+			out = append(out, kw)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *taskService) requireASRCompleted(ctx context.Context, liveID uint) error {

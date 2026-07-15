@@ -49,12 +49,13 @@ type CreateAISliceDraftTaskRequest struct {
 
 // ListTasksRequest 任务列表查询参数。
 type ListTasksRequest struct {
-	Type      string `form:"type"`
-	Status    string `form:"status"`
-	StartDate string `form:"start_date"` // 开始日期 YYYY-MM-DD，按 created_at 筛选
-	EndDate   string `form:"end_date"`   // 结束日期 YYYY-MM-DD，按 created_at 筛选
-	Page      int    `form:"page" binding:"omitempty,min=1"`
-	PageSize  int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+	Type      string   `form:"type"`
+	Status    string   `form:"status"`
+	StartDate string   `form:"start_date"` // 开始日期 YYYY-MM-DD，按 created_at 筛选
+	EndDate   string   `form:"end_date"`   // 结束日期 YYYY-MM-DD，按 created_at 筛选
+	Keywords  []string `form:"keywords"`   // 可选；模糊匹配 video_project.name / live_material.name，多词 AND
+	Page      int      `form:"page" binding:"omitempty,min=1"`
+	PageSize  int      `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
 // TaskCreateResponse 创建任务立即返回的摘要。
@@ -186,13 +187,14 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status 与创建日期（start_date/end_date）筛选
+// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配关联的 video_project.name / live_material.name，多个关键词为 AND
 // @Tags         异步任务
 // @Produce      json
 // @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
 // @Param        status      query  string  false  "任务状态：pending / processing / completed / failed"
 // @Param        start_date  query  string  false  "开始日期 YYYY-MM-DD，按 created_at 筛选"
 // @Param        end_date    query  string  false  "结束日期 YYYY-MM-DD，按 created_at 筛选"
+// @Param        keywords    query  []string  false  "关键词数组，模糊匹配 video_project.name / live_material.name，多词 AND；如 keywords=发布会&keywords=春季"
 // @Param        page        query  int     false  "页码"
 // @Param        page_size   query  int     false  "每页数量，默认 10"
 // @Success      200         {object}  response.Body
@@ -212,6 +214,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		Status:    req.Status,
 		StartDate: req.StartDate,
 		EndDate:   req.EndDate,
+		Keywords:  req.Keywords,
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())

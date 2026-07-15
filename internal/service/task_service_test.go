@@ -267,6 +267,7 @@ func TestBuildTaskListFilter_DateRange(t *testing.T) {
 	filter, err := buildTaskListFilter(TaskListOptions{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending,
 		StartDate: "2026-01-01", EndDate: "2026-01-31",
+		Keywords: []string{" 发布会 ", "", "春季"},
 	})
 	if err != nil {
 		t.Fatalf("buildTaskListFilter() error = %v", err)
@@ -283,6 +284,9 @@ func TestBuildTaskListFilter_DateRange(t *testing.T) {
 	// end_date 含当日整天：次日零点（不含）
 	if filter.EndAt.Format("2006-01-02") != "2026-02-01" {
 		t.Errorf("EndAt = %v, want 2026-02-01", filter.EndAt)
+	}
+	if len(filter.Keywords) != 2 || filter.Keywords[0] != "发布会" || filter.Keywords[1] != "春季" {
+		t.Errorf("Keywords = %v", filter.Keywords)
 	}
 }
 
