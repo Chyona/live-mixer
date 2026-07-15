@@ -25,7 +25,7 @@ logger:
 
 jwt:
   secret: "live-mixer-jwt-secret-change-in-production"
-  expires_in: 7200             # Token 过期时间（秒）
+  expires_in: 86400             # Token 过期时间（秒）
 
 # 对象存储（COS > OSS > TOS；密钥生产环境由 APP_STORAGE_* 环境变量注入）
 storage:
