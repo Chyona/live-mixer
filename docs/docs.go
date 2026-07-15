@@ -900,7 +900,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "OK；data.list 为 Task 数组（含 video_project_name）",
                         "schema": {
                             "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
@@ -1060,7 +1060,7 @@ const docTemplate = `{
         },
         "/v1/tasks/{id}": {
             "get": {
-                "description": "根据 ID 查询任务状态；异步任务完成后在此查看结果字段（当前业务执行逻辑待实现）",
+                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、video_project_name 等字段，用于轮询异步任务进度",
                 "produces": [
                     "application/json"
                 ],
@@ -1079,7 +1079,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "OK；data 为 live-mixer_internal_model.Task（含 video_project_name）",
                         "schema": {
                             "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
@@ -1477,6 +1477,29 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_handler_v1.TaskCreateResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "任务类型：ai_slice / draft / ai_slice_draft",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "任务状态：pending / processing / completed / failed",
+                    "type": "string"
+                },
+                "progress": {
+                    "description": "任务进度 0-100",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_handler_v1.CreateLLMSystemPromptRequest": {
             "type": "object",
             "required": [
@@ -1818,6 +1841,84 @@ const docTemplate = `{
                 },
                 "text": {
                     "description": "切片对应文本",
+                    "type": "string"
+                },
+                "words": {
+                    "description": "词级时间戳列表（可选）",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/live-mixer_internal_model.ClipWord"
+                    }
+                }
+            }
+        },
+        "live-mixer_internal_model.ClipWord": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string"
+                },
+                "start_time": {
+                    "description": "开始时间（毫秒）",
+                    "type": "integer"
+                },
+                "end_time": {
+                    "description": "结束时间（毫秒）",
+                    "type": "integer"
+                }
+            }
+        },
+        "live-mixer_internal_model.Task": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "任务类型：ai_slice / draft / ai_slice_draft",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "任务状态：pending / processing / completed / failed",
+                    "type": "string"
+                },
+                "progress": {
+                    "description": "任务进度 0-100",
+                    "type": "integer"
+                },
+                "sys_prompt": {
+                    "type": "string"
+                },
+                "usr_prompt": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "video_project_id": {
+                    "description": "关联剪辑项目 ID（可空）",
+                    "type": "integer"
+                },
+                "video_project_name": {
+                    "description": "关联剪辑项目名称（冗余字段，列表筛选与展示用）",
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "ext": {
                     "type": "string"
                 }
             }
