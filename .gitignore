@@ -16,3 +16,6 @@ envinit
 /docs/swagger.yaml
 /docs/swagger.json
 /envinit.exe
+/webserver.exe
+/envinit.exe
+/live_asr.json
