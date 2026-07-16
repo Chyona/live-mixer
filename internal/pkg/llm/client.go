@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	// DefaultBaseURL 火山方舟 OpenAI 兼容接口默认地址。
-	DefaultBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
-	// DefaultModel AI 切片默认模型（用户要求的 doubao-seed-2-1-pro）。
-	DefaultModel = "doubao-seed-2-1-pro-260628"
+	// DefaultBaseURL 阿里云 DashScope OpenAI 兼容接口默认地址。
+	DefaultBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	// DefaultModel AI 切片默认模型。
+	DefaultModel = "qwen3.7-plus"
 	// DefaultTimeout 单次 Chat Completions 超时。
 	DefaultTimeout = 120 * time.Second
 )
