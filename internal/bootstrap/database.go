@@ -15,7 +15,12 @@ import (
 func InitDatabase(cfg config.DatabaseConfig, logger *zap.Logger) (*gorm.DB, error) {
 	gormLog := gormlogger.Default.LogMode(gormlogger.Info)
 
-	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
+	// PreferSimpleProtocol 关闭隐式预处理语句缓存，避免表结构变更后出现
+	// "cached plan must not change result type (SQLSTATE 0A000)"。
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  cfg.DSN(),
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{
 		Logger: gormLog,
 	})
 	if err != nil {
