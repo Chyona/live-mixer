@@ -14,14 +14,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// setupSeederTestDB 创建内存库并迁移账号表。
+// setupSeederTestDB 创建内存库并迁移账号与系统提示词表。
 func setupSeederTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Account{}); err != nil {
+	if err := db.AutoMigrate(&model.Account{}, &model.LLMSystemPrompt{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
 	return db
@@ -64,7 +64,7 @@ func TestSeedAccounts(t *testing.T) {
 	}
 }
 
-// TestSeedAll 验证 SeedAll 能正常完成账号种子填充。
+// TestSeedAll 验证 SeedAll 能正常完成账号与系统提示词种子填充。
 func TestSeedAll(t *testing.T) {
 	db := setupSeederTestDB(t)
 	logger := zap.NewNop()
@@ -72,12 +72,19 @@ func TestSeedAll(t *testing.T) {
 	if err := SeedAll(db, logger); err != nil {
 		t.Fatalf("SeedAll() error = %v", err)
 	}
-	var count int64
-	if err := db.Model(&model.Account{}).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
+	var accountCount int64
+	if err := db.Model(&model.Account{}).Count(&accountCount).Error; err != nil {
+		t.Fatalf("count accounts: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("count = %d, want 1", count)
+	if accountCount != 1 {
+		t.Fatalf("account count = %d, want 1", accountCount)
+	}
+	var promptCount int64
+	if err := db.Model(&model.LLMSystemPrompt{}).Count(&promptCount).Error; err != nil {
+		t.Fatalf("count prompts: %v", err)
+	}
+	if promptCount != 1 {
+		t.Fatalf("prompt count = %d, want 1", promptCount)
 	}
 }
 

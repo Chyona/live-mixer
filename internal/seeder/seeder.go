@@ -12,6 +12,9 @@ func SeedAll(db *gorm.DB, logger *zap.Logger) error {
 	if err := SeedAccounts(db, logger); err != nil {
 		return err
 	}
+	if err := SeedLLMSystemPrompts(db, logger); err != nil {
+		return err
+	}
 	logger.Info("种子数据填充完成")
 	return nil
 }
