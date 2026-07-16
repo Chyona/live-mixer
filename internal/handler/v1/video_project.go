@@ -1,11 +1,13 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"time"
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
+	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
 	"live-mixer/pkg/utils"
@@ -25,11 +27,16 @@ type ListVideoProjectsRequest struct {
 // VideoProjectHandler 剪辑项目 HTTP 处理器。
 type VideoProjectHandler struct {
 	videoProjectService service.VideoProjectService
+	createdBy           createdByResolver
 }
 
 // NewVideoProjectHandler 创建剪辑项目处理器实例。
-func NewVideoProjectHandler(videoProjectService service.VideoProjectService) *VideoProjectHandler {
-	return &VideoProjectHandler{videoProjectService: videoProjectService}
+// accountRepo 用于将 created_by 账号 ID 解析为 nickname/username 展示名。
+func NewVideoProjectHandler(videoProjectService service.VideoProjectService, accountRepo repository.AccountRepository) *VideoProjectHandler {
+	return &VideoProjectHandler{
+		videoProjectService: videoProjectService,
+		createdBy:           newCreatedByResolver(accountRepo),
+	}
 }
 
 // CreateVideoProjectRequest 创建剪辑项目请求体。
@@ -56,6 +63,7 @@ type UpdateVideoProjectRequest struct {
 }
 
 // VideoProjectResponse 剪辑项目 API 响应。
+// created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
 type VideoProjectResponse struct {
 	ID            uint                 `json:"id"`
 	Name          string               `json:"name"`
@@ -65,13 +73,13 @@ type VideoProjectResponse struct {
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
 	ProjectSource string               `json:"project_source"`
-	CreatedBy     uint                 `json:"created_by"`
+	CreatedBy     string               `json:"created_by"`
 	CreatedAt     time.Time            `json:"created_at"`
 	UpdatedAt     time.Time            `json:"updated_at"`
 	Ext           string               `json:"ext"`
 }
 
-func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
+func (h *VideoProjectHandler) toVideoProjectResponse(ctx context.Context, project *model.VideoProject) VideoProjectResponse {
 	clips0 := project.Clips0
 	if clips0 == nil {
 		clips0 = []model.ClipRange{}
@@ -89,17 +97,22 @@ func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
 		Clips0:        clips0,
 		Clips1:        clips1,
 		ProjectSource: project.ProjectSource,
-		CreatedBy:     project.CreatedBy,
+		CreatedBy:     h.createdBy.nameOf(ctx, project.CreatedBy),
 		CreatedAt:     project.CreatedAt,
 		UpdatedAt:     project.UpdatedAt,
 		Ext:           project.Ext,
 	}
 }
 
-func toVideoProjectResponseList(items []model.VideoProjectListItem) []VideoProjectListResponse {
+func (h *VideoProjectHandler) toVideoProjectResponseList(ctx context.Context, items []model.VideoProjectListItem) []VideoProjectListResponse {
+	ids := make([]uint, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].CreatedBy)
+	}
+	names := h.createdBy.namesOf(ctx, uniqueAccountIDs(ids))
 	out := make([]VideoProjectListResponse, 0, len(items))
 	for i := range items {
-		out = append(out, toVideoProjectListResponse(&items[i]))
+		out = append(out, h.toVideoProjectListResponse(&items[i], names[items[i].CreatedBy]))
 	}
 	return out
 }
@@ -115,13 +128,13 @@ type VideoProjectListResponse struct {
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
 	ProjectSource string               `json:"project_source"`
-	CreatedBy     uint                 `json:"created_by"`
+	CreatedBy     string               `json:"created_by"`
 	CreatedAt     time.Time            `json:"created_at"`
 	UpdatedAt     time.Time            `json:"updated_at"`
 	Ext           string               `json:"ext"`
 }
 
-func toVideoProjectListResponse(item *model.VideoProjectListItem) VideoProjectListResponse {
+func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjectListItem, createdByName string) VideoProjectListResponse {
 	clips0 := item.Clips0
 	if clips0 == nil {
 		clips0 = []model.ClipRange{}
@@ -140,7 +153,7 @@ func toVideoProjectListResponse(item *model.VideoProjectListItem) VideoProjectLi
 		Clips0:        clips0,
 		Clips1:        clips1,
 		ProjectSource: item.ProjectSource,
-		CreatedBy:     item.CreatedBy,
+		CreatedBy:     createdByName,
 		CreatedAt:     item.CreatedAt,
 		UpdatedAt:     item.UpdatedAt,
 		Ext:           item.Ext,
@@ -179,7 +192,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 		return
 	}
 	response.Success(c, response.PageData{
-		List:     toVideoProjectResponseList(projects),
+		List:     h.toVideoProjectResponseList(c.Request.Context(), projects),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -223,7 +236,7 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, toVideoProjectResponse(project))
+	response.Success(c, h.toVideoProjectResponse(c.Request.Context(), project))
 }
 
 // GetVideoProject 获取剪辑项目详情
@@ -252,7 +265,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	response.Success(c, toVideoProjectResponse(project))
+	response.Success(c, h.toVideoProjectResponse(c.Request.Context(), project))
 }
 
 // UpdateVideoProject 更新剪辑项目
@@ -296,7 +309,7 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, toVideoProjectResponse(project))
+	response.Success(c, h.toVideoProjectResponse(c.Request.Context(), project))
 }
 
 // DeleteVideoProject 删除剪辑项目

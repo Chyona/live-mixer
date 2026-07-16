@@ -85,7 +85,7 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 				CreatedBy: createdBy,
 			}, nil
 		},
-	})
+	}, accountsStub(&model.Account{ID: 3, Username: "admin", Nickname: "AdminNick"}))
 	r := newAuthedRouter(secret, handler.CreateVideoProject, http.MethodPost, "/video-projects")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 3, Username: "admin"})
 
@@ -116,7 +116,7 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 			PromptID  uint                 `json:"prompt_id"`
 			Clips0    []model.ClipRange    `json:"clips0"`
 			Clips1    []model.ClipWithText `json:"clips1"`
-			CreatedBy uint                 `json:"created_by"`
+			CreatedBy string               `json:"created_by"`
 			Ext       string               `json:"ext"`
 		} `json:"data"`
 	}
@@ -126,7 +126,7 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 	if resp.Code != 0 || resp.Data.ID != 1 || resp.Data.Name != "剪辑项目" {
 		t.Fatalf("unexpected data: %+v", resp.Data)
 	}
-	if resp.Data.PromptID != 1 || resp.Data.CreatedBy != 3 || resp.Data.LiveID != 5 {
+	if resp.Data.PromptID != 1 || resp.Data.CreatedBy != "AdminNick" || resp.Data.LiveID != 5 {
 		t.Fatalf("unexpected ids: %+v", resp.Data)
 	}
 	if len(resp.Data.Clips0) != 1 || resp.Data.Clips0[0].EndTime != 1000 {
@@ -150,7 +150,7 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 				Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
 			}}, 1, nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.ListVideoProjects, http.MethodGet, "/video-projects")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -194,7 +194,7 @@ func TestVideoProjectHandler_Update_Partial(t *testing.T) {
 			}
 			return &model.VideoProject{ID: 2, ProjectSource: *input.ProjectSource}, nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.UpdateVideoProject, http.MethodPut, "/video-projects/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -223,7 +223,7 @@ func TestVideoProjectHandler_Update_WithClips(t *testing.T) {
 			}
 			return &model.VideoProject{ID: id}, nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.UpdateVideoProject, http.MethodPut, "/video-projects/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -252,7 +252,7 @@ func TestVideoProjectHandler_Delete_Success(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DeleteVideoProject, http.MethodDelete, "/video-projects/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -280,7 +280,7 @@ func TestVideoProjectHandler_Get_NotFound(t *testing.T) {
 		getFn: func(ctx context.Context, id uint) (*model.VideoProject, error) {
 			return nil, service.ErrVideoProjectNotFound
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.GetVideoProject, http.MethodGet, "/video-projects/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 

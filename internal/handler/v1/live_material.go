@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
+	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
 	"live-mixer/pkg/utils"
@@ -20,11 +22,16 @@ import (
 // LiveMaterialHandler 直播素材相关 HTTP 处理器。
 type LiveMaterialHandler struct {
 	liveMaterialService service.LiveMaterialService
+	createdBy           createdByResolver
 }
 
 // NewLiveMaterialHandler 创建直播素材处理器实例。
-func NewLiveMaterialHandler(liveMaterialService service.LiveMaterialService) *LiveMaterialHandler {
-	return &LiveMaterialHandler{liveMaterialService: liveMaterialService}
+// accountRepo 用于将 created_by 账号 ID 解析为 nickname/username 展示名。
+func NewLiveMaterialHandler(liveMaterialService service.LiveMaterialService, accountRepo repository.AccountRepository) *LiveMaterialHandler {
+	return &LiveMaterialHandler{
+		liveMaterialService: liveMaterialService,
+		createdBy:           newCreatedByResolver(accountRepo),
+	}
 }
 
 // CreateLiveMaterialRequest 创建直播素材请求体。
@@ -47,6 +54,7 @@ type RetryASRRequest struct {
 }
 
 // LiveMaterialDetailResponse 直播素材详情响应，live_asr 为分句数组格式。
+// created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
 type LiveMaterialDetailResponse struct {
 	ID           uint            `json:"id"`
 	Name         string          `json:"name"`
@@ -59,13 +67,13 @@ type LiveMaterialDetailResponse struct {
 	ASRErrorMsg  string          `json:"asr_error_msg,omitempty"`
 	ASRStartedAt *time.Time      `json:"asr_started_at,omitempty"`
 	ASRUpdatedAt *time.Time      `json:"asr_updated_at,omitempty"`
-	CreatedBy    uint            `json:"created_by"`
+	CreatedBy    string          `json:"created_by"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
 	Ext          string          `json:"ext"`
 }
 
-func toLiveMaterialDetailResponse(material *model.LiveMaterial) LiveMaterialDetailResponse {
+func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, material *model.LiveMaterial) LiveMaterialDetailResponse {
 	return LiveMaterialDetailResponse{
 		ID:           material.ID,
 		Name:         material.Name,
@@ -78,11 +86,58 @@ func toLiveMaterialDetailResponse(material *model.LiveMaterial) LiveMaterialDeta
 		ASRErrorMsg:  material.ASRErrorMsg,
 		ASRStartedAt: material.ASRStartedAt,
 		ASRUpdatedAt: material.ASRUpdatedAt,
-		CreatedBy:    material.CreatedBy,
+		CreatedBy:    h.createdBy.nameOf(ctx, material.CreatedBy),
 		CreatedAt:    material.CreatedAt,
 		UpdatedAt:    material.UpdatedAt,
 		Ext:          material.Ext,
 	}
+}
+
+// LiveMaterialListResponse 直播素材列表项响应（不含 live_asr）。
+type LiveMaterialListResponse struct {
+	ID           uint       `json:"id"`
+	Name         string     `json:"name"`
+	Remark       string     `json:"remark"`
+	LiveURL      string     `json:"live_url"`
+	Duration     int64      `json:"duration"`
+	ASRStatus    string     `json:"asr_status"`
+	ASRProgress  int16      `json:"asr_progress"`
+	ASRErrorMsg  string     `json:"asr_error_msg,omitempty"`
+	ASRStartedAt *time.Time `json:"asr_started_at,omitempty"`
+	ASRUpdatedAt *time.Time `json:"asr_updated_at,omitempty"`
+	CreatedBy    string     `json:"created_by"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	Ext          string     `json:"ext"`
+}
+
+func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, items []model.LiveMaterialListItem) []LiveMaterialListResponse {
+	ids := make([]uint, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].CreatedBy)
+	}
+	names := h.createdBy.namesOf(ctx, uniqueAccountIDs(ids))
+	out := make([]LiveMaterialListResponse, 0, len(items))
+	for i := range items {
+		item := items[i]
+		out = append(out, LiveMaterialListResponse{
+			ID:           item.ID,
+			Name:         item.Name,
+			Remark:       item.Remark,
+			LiveURL:      item.LiveURL,
+			Duration:     item.Duration,
+			ASRStatus:    item.ASRStatus,
+			ASRProgress:  item.ASRProgress,
+			ASRErrorMsg:  item.ASRErrorMsg,
+			ASRStartedAt: item.ASRStartedAt,
+			ASRUpdatedAt: item.ASRUpdatedAt,
+			CreatedBy:    names[item.CreatedBy],
+			CreatedAt:    item.CreatedAt,
+			UpdatedAt:    item.UpdatedAt,
+			Ext:          item.Ext,
+		})
+	}
+	return out
 }
 
 // ListLiveMaterialsRequest 直播素材列表查询参数。
@@ -129,7 +184,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 		return
 	}
 	response.Success(c, response.PageData{
-		List:     materials,
+		List:     h.toLiveMaterialListResponse(c.Request.Context(), materials),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -168,7 +223,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, material)
+	response.Success(c, h.toLiveMaterialDetailResponse(c.Request.Context(), material))
 }
 
 // GetLiveMaterial 获取直播素材详情
@@ -197,7 +252,7 @@ func (h *LiveMaterialHandler) GetLiveMaterial(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	response.Success(c, toLiveMaterialDetailResponse(material))
+	response.Success(c, h.toLiveMaterialDetailResponse(c.Request.Context(), material))
 }
 
 // UpdateLiveMaterial 更新直播素材
@@ -234,7 +289,7 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, material)
+	response.Success(c, h.toLiveMaterialDetailResponse(c.Request.Context(), material))
 }
 
 // DeleteLiveMaterial 删除直播素材

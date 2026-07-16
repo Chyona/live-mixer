@@ -1,11 +1,13 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"time"
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
+	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
 	"live-mixer/pkg/utils"
@@ -16,11 +18,16 @@ import (
 // TaskHandler 异步任务 HTTP 处理器。
 type TaskHandler struct {
 	taskService service.TaskService
+	createdBy   createdByResolver
 }
 
 // NewTaskHandler 创建任务处理器实例。
-func NewTaskHandler(taskService service.TaskService) *TaskHandler {
-	return &TaskHandler{taskService: taskService}
+// accountRepo 用于将 created_by 账号 ID 解析为 nickname/username 展示名。
+func NewTaskHandler(taskService service.TaskService, accountRepo repository.AccountRepository) *TaskHandler {
+	return &TaskHandler{
+		taskService: taskService,
+		createdBy:   newCreatedByResolver(accountRepo),
+	}
 }
 
 // CreateAISliceTaskRequest AI 切片任务请求体（仅需 video_project_id）。
@@ -70,6 +77,82 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 		Progress:  task.Progress,
 		CreatedAt: task.CreatedAt,
 	}
+}
+
+// TaskResponse 任务详情/列表 API 响应。
+// created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
+type TaskResponse struct {
+	ID               uint       `json:"id"`
+	Type             string     `json:"type"`
+	Status           string     `json:"status"`
+	Progress         int16      `json:"progress"`
+	SysPrompt        string     `json:"sys_prompt,omitempty"`
+	UsrPrompt        string     `json:"usr_prompt,omitempty"`
+	ErrorMessage     string     `json:"error_message,omitempty"`
+	VideoProjectID   *uint      `json:"video_project_id,omitempty"`
+	VideoProjectName string     `json:"video_project_name"`
+	DraftURL         string     `json:"draft_url"`
+	VideoURL         string     `json:"video_url"`
+	CreatedBy        string     `json:"created_by"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	Ext              string     `json:"ext"`
+}
+
+func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) TaskResponse {
+	return TaskResponse{
+		ID:               task.ID,
+		Type:             task.Type,
+		Status:           task.Status,
+		Progress:         task.Progress,
+		SysPrompt:        task.SysPrompt,
+		UsrPrompt:        task.UsrPrompt,
+		ErrorMessage:     task.ErrorMessage,
+		VideoProjectID:   task.VideoProjectID,
+		VideoProjectName: task.VideoProjectName,
+		DraftURL:         task.DraftURL,
+		VideoURL:         task.VideoURL,
+		CreatedBy:        h.createdBy.nameOf(ctx, task.CreatedBy),
+		CreatedAt:        task.CreatedAt,
+		UpdatedAt:        task.UpdatedAt,
+		StartedAt:        task.StartedAt,
+		CompletedAt:      task.CompletedAt,
+		Ext:              task.Ext,
+	}
+}
+
+func (h *TaskHandler) toTaskResponseList(ctx context.Context, tasks []model.Task) []TaskResponse {
+	ids := make([]uint, 0, len(tasks))
+	for i := range tasks {
+		ids = append(ids, tasks[i].CreatedBy)
+	}
+	names := h.createdBy.namesOf(ctx, uniqueAccountIDs(ids))
+	out := make([]TaskResponse, 0, len(tasks))
+	for i := range tasks {
+		task := tasks[i]
+		out = append(out, TaskResponse{
+			ID:               task.ID,
+			Type:             task.Type,
+			Status:           task.Status,
+			Progress:         task.Progress,
+			SysPrompt:        task.SysPrompt,
+			UsrPrompt:        task.UsrPrompt,
+			ErrorMessage:     task.ErrorMessage,
+			VideoProjectID:   task.VideoProjectID,
+			VideoProjectName: task.VideoProjectName,
+			DraftURL:         task.DraftURL,
+			VideoURL:         task.VideoURL,
+			CreatedBy:        names[task.CreatedBy],
+			CreatedAt:        task.CreatedAt,
+			UpdatedAt:        task.UpdatedAt,
+			StartedAt:        task.StartedAt,
+			CompletedAt:      task.CompletedAt,
+			Ext:              task.Ext,
+		})
+	}
+	return out
 }
 
 // CreateAISliceTask 创建 AI 切片任务
@@ -211,7 +294,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		return
 	}
 	response.Success(c, response.PageData{
-		List:     tasks,
+		List:     h.toTaskResponseList(c.Request.Context(), tasks),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -220,7 +303,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 
 // GetTask 获取任务详情
 // @Summary      获取任务详情
-// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度
+// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名
 // @Tags         异步任务
 // @Produce      json
 // @Param        id   path  int  true  "任务 ID"
@@ -244,7 +327,7 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	response.Success(c, task)
+	response.Success(c, h.toTaskResponse(c.Request.Context(), task))
 }
 
 func writeTaskCreateError(c *gin.Context, err error) {

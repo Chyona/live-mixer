@@ -1,9 +1,13 @@
 package v1
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	"live-mixer/internal/middleware"
+	"live-mixer/internal/model"
+	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
 	"live-mixer/pkg/response"
 	"live-mixer/pkg/utils"
@@ -13,9 +17,9 @@ import (
 
 // ListLLMSystemPromptsRequest 系统提示词列表查询参数。
 type ListLLMSystemPromptsRequest struct {
-	Keywords  string `form:"keywords"`   // 原始字符串，如 "直播,话术"
-	StartDate string `form:"start_date"` // 开始日期 YYYY-MM-DD
-	EndDate   string `form:"end_date"`   // 结束日期 YYYY-MM-DD
+	Keywords  string `form:"keywords"`
+	StartDate string `form:"start_date"`
+	EndDate   string `form:"end_date"`
 	Page      int    `form:"page" binding:"omitempty,min=1"`
 	PageSize  int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
@@ -23,11 +27,16 @@ type ListLLMSystemPromptsRequest struct {
 // LLMSystemPromptHandler 大模型系统提示词 HTTP 处理器。
 type LLMSystemPromptHandler struct {
 	llmSystemPromptService service.LLMSystemPromptService
+	createdBy              createdByResolver
 }
 
 // NewLLMSystemPromptHandler 创建系统提示词处理器实例。
-func NewLLMSystemPromptHandler(llmSystemPromptService service.LLMSystemPromptService) *LLMSystemPromptHandler {
-	return &LLMSystemPromptHandler{llmSystemPromptService: llmSystemPromptService}
+// accountRepo 用于将 created_by 账号 ID 解析为 nickname/username 展示名。
+func NewLLMSystemPromptHandler(llmSystemPromptService service.LLMSystemPromptService, accountRepo repository.AccountRepository) *LLMSystemPromptHandler {
+	return &LLMSystemPromptHandler{
+		llmSystemPromptService: llmSystemPromptService,
+		createdBy:              newCreatedByResolver(accountRepo),
+	}
 }
 
 // CreateLLMSystemPromptRequest 创建系统提示词请求体。
@@ -46,9 +55,60 @@ type UpdateLLMSystemPromptRequest struct {
 	Ext     string `json:"ext" binding:"max=1024"`
 }
 
+// LLMSystemPromptResponse 系统提示词 API 响应。
+// created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
+type LLMSystemPromptResponse struct {
+	ID         uint      `json:"id"`
+	Name       string    `json:"name"`
+	Content    string    `json:"content"`
+	Remark     string    `json:"remark"`
+	IsEditable int8      `json:"is_editable"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Ext        string    `json:"ext"`
+}
+
+func (h *LLMSystemPromptHandler) toLLMSystemPromptResponse(ctx context.Context, prompt *model.LLMSystemPrompt) LLMSystemPromptResponse {
+	return LLMSystemPromptResponse{
+		ID:         prompt.ID,
+		Name:       prompt.Name,
+		Content:    prompt.Content,
+		Remark:     prompt.Remark,
+		IsEditable: prompt.IsEditable,
+		CreatedBy:  h.createdBy.nameOf(ctx, prompt.CreatedBy),
+		CreatedAt:  prompt.CreatedAt,
+		UpdatedAt:  prompt.UpdatedAt,
+		Ext:        prompt.Ext,
+	}
+}
+
+func (h *LLMSystemPromptHandler) toLLMSystemPromptListResponse(ctx context.Context, items []model.LLMSystemPromptListItem) []LLMSystemPromptResponse {
+	ids := make([]uint, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].CreatedBy)
+	}
+	names := h.createdBy.namesOf(ctx, uniqueAccountIDs(ids))
+	out := make([]LLMSystemPromptResponse, 0, len(items))
+	for i := range items {
+		item := items[i]
+		out = append(out, LLMSystemPromptResponse{
+			ID:         item.ID,
+			Name:       item.Name,
+			Content:    item.Content,
+			Remark:     item.Remark,
+			IsEditable: item.IsEditable,
+			CreatedBy:  names[item.CreatedBy],
+			CreatedAt:  item.CreatedAt,
+			UpdatedAt:  item.UpdatedAt,
+		})
+	}
+	return out
+}
+
 // ListLLMSystemPrompts 系统提示词列表
 // @Summary      系统提示词列表
-// @Description  分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content
+// @Description  分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content；created_by 为创建人展示名
 // @Tags         大模型系统提示词
 // @Produce      json
 // @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/content/remark"
@@ -78,7 +138,7 @@ func (h *LLMSystemPromptHandler) ListLLMSystemPrompts(c *gin.Context) {
 		return
 	}
 	response.Success(c, response.PageData{
-		List:     items,
+		List:     h.toLLMSystemPromptListResponse(c.Request.Context(), items),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -116,7 +176,7 @@ func (h *LLMSystemPromptHandler) CreateLLMSystemPrompt(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, prompt)
+	response.Success(c, h.toLLMSystemPromptResponse(c.Request.Context(), prompt))
 }
 
 // GetLLMSystemPrompt 获取系统提示词详情
@@ -145,7 +205,7 @@ func (h *LLMSystemPromptHandler) GetLLMSystemPrompt(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	response.Success(c, prompt)
+	response.Success(c, h.toLLMSystemPromptResponse(c.Request.Context(), prompt))
 }
 
 // UpdateLLMSystemPrompt 更新系统提示词
@@ -189,7 +249,7 @@ func (h *LLMSystemPromptHandler) UpdateLLMSystemPrompt(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	response.Success(c, prompt)
+	response.Success(c, h.toLLMSystemPromptResponse(c.Request.Context(), prompt))
 }
 
 // DeleteLLMSystemPrompt 删除系统提示词

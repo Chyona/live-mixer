@@ -49,11 +49,11 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 				t.Errorf("id = %d, want 7", id)
 			}
 			return &model.Task{
-				ID: 7, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted,
+				ID: 7, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
 				DraftURL: "http://example.com/draft", VideoURL: "https://video.example.com/a.mp4",
 			}, nil
 		},
-	})
+	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
 	r := newAuthedRouter(secret, handler.GetTask, http.MethodGet, "/tasks/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -67,8 +67,9 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 	var resp struct {
 		Data struct {
-			DraftURL string `json:"draft_url"`
-			VideoURL string `json:"video_url"`
+			DraftURL  string `json:"draft_url"`
+			VideoURL  string `json:"video_url"`
+			CreatedBy string `json:"created_by"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -79,5 +80,8 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 	if resp.Data.VideoURL != "https://video.example.com/a.mp4" {
 		t.Errorf("video_url = %q", resp.Data.VideoURL)
+	}
+	if resp.Data.CreatedBy != "AdminNick" {
+		t.Errorf("created_by = %q, want AdminNick", resp.Data.CreatedBy)
 	}
 }

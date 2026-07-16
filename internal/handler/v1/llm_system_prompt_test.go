@@ -74,7 +74,7 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 				{ID: 1, Name: "直播话术", Content: "完整提示词内容", IsEditable: 1},
 			}, 1, nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.ListLLMSystemPrompts, http.MethodGet, "/llm-system-prompts")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
@@ -92,7 +92,7 @@ func TestLLMSystemPromptHandler_List_Success(t *testing.T) {
 // TestLLMSystemPromptHandler_List_InvalidPageSize 验证非法 page_size 返回 400。
 func TestLLMSystemPromptHandler_List_InvalidPageSize(t *testing.T) {
 	secret := "handler-test-secret"
-	handler := NewLLMSystemPromptHandler(&mockLLMSystemPromptService{})
+	handler := NewLLMSystemPromptHandler(&mockLLMSystemPromptService{}, nil)
 	r := newAuthedRouter(secret, handler.ListLLMSystemPrompts, http.MethodGet, "/llm-system-prompts")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -116,7 +116,7 @@ func TestLLMSystemPromptHandler_Create_Success(t *testing.T) {
 			}
 			return &model.LLMSystemPrompt{ID: 1, Name: name, Content: content, CreatedBy: createdBy, IsEditable: 1}, nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.CreateLLMSystemPrompt, http.MethodPost, "/llm-system-prompts")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 8, Username: "admin"})
@@ -135,7 +135,7 @@ func TestLLMSystemPromptHandler_Create_Success(t *testing.T) {
 
 // TestLLMSystemPromptHandler_Create_Unauthorized 验证未登录时返回 401。
 func TestLLMSystemPromptHandler_Create_Unauthorized(t *testing.T) {
-	handler := NewLLMSystemPromptHandler(&mockLLMSystemPromptService{})
+	handler := NewLLMSystemPromptHandler(&mockLLMSystemPromptService{}, nil)
 	r := gin.New()
 	r.POST("/llm-system-prompts", handler.CreateLLMSystemPrompt)
 
@@ -157,7 +157,7 @@ func TestLLMSystemPromptHandler_Get_NotFound(t *testing.T) {
 		getFn: func(ctx context.Context, id uint) (*model.LLMSystemPrompt, error) {
 			return nil, service.ErrLLMSystemPromptNotFound
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.GetLLMSystemPrompt, http.MethodGet, "/llm-system-prompts/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -178,7 +178,7 @@ func TestLLMSystemPromptHandler_Update_Forbidden(t *testing.T) {
 		updateFn: func(ctx context.Context, id uint, name, content, remark, ext string) (*model.LLMSystemPrompt, error) {
 			return nil, service.ErrLLMSystemPromptNotEditable
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.UpdateLLMSystemPrompt, http.MethodPut, "/llm-system-prompts/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -204,7 +204,7 @@ func TestLLMSystemPromptHandler_Delete_Success(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DeleteLLMSystemPrompt, http.MethodDelete, "/llm-system-prompts/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -234,7 +234,7 @@ func TestLLMSystemPromptHandler_Delete_Forbidden(t *testing.T) {
 		deleteFn: func(ctx context.Context, id uint) error {
 			return service.ErrLLMSystemPromptNotDeletable
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DeleteLLMSystemPrompt, http.MethodDelete, "/llm-system-prompts/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 

@@ -2,6 +2,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 )
 
@@ -26,4 +27,20 @@ type Account struct {
 // TableName 指定账号表名。
 func (Account) TableName() string {
 	return "account"
+}
+
+// AccountDisplayName 返回账号对外展示名：优先 nickname，为空则回退 username。
+func AccountDisplayName(username, nickname string) string {
+	if name := strings.TrimSpace(nickname); name != "" {
+		return name
+	}
+	return strings.TrimSpace(username)
+}
+
+// DisplayName 返回当前账号的对外展示名。
+func (a *Account) DisplayName() string {
+	if a == nil {
+		return ""
+	}
+	return AccountDisplayName(a.Username, a.Nickname)
 }

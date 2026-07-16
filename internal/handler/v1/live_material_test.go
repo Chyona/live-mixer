@@ -97,7 +97,7 @@ func TestLiveMaterialHandler_Get_Success(t *testing.T) {
 				ASRStatus: model.ASRStatusCompleted,
 			}, nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
@@ -136,7 +136,7 @@ func TestLiveMaterialHandler_Get_NotFound(t *testing.T) {
 		getFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
 			return nil, service.ErrLiveMaterialNotFound
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -153,7 +153,7 @@ func TestLiveMaterialHandler_Get_NotFound(t *testing.T) {
 // TestLiveMaterialHandler_Get_InvalidID 验证非法 ID 返回 400。
 func TestLiveMaterialHandler_Get_InvalidID(t *testing.T) {
 	secret := "handler-test-secret"
-	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{}, nil)
 	r := newAuthedRouter(secret, handler.GetLiveMaterial, http.MethodGet, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -184,7 +184,7 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 				},
 			}, 1, nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
@@ -201,7 +201,10 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			List     []model.LiveMaterialListItem `json:"list"`
+			List     []struct {
+				Name      string `json:"name"`
+				CreatedBy string `json:"created_by"`
+			} `json:"list"`
 			Total    int64                        `json:"total"`
 			Page     int                          `json:"page"`
 			PageSize int                          `json:"page_size"`
@@ -234,7 +237,7 @@ func TestLiveMaterialHandler_List_CustomPageSize(t *testing.T) {
 			}
 			return nil, 0, nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
@@ -266,7 +269,7 @@ func TestLiveMaterialHandler_Create_Success(t *testing.T) {
 				ASRStatus: model.ASRStatusPending,
 			}, nil
 		},
-	})
+	}, accountsStub(&model.Account{ID: 5, Username: "admin", Nickname: "AdminNick"}))
 
 	r := newAuthedRouter(secret, handler.CreateLiveMaterial, http.MethodPost, "/live-materials")
 	token, err := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 5, Username: "admin"})
@@ -286,8 +289,11 @@ func TestLiveMaterialHandler_Create_Success(t *testing.T) {
 	}
 
 	var resp struct {
-		Code int                 `json:"code"`
-		Data model.LiveMaterial `json:"data"`
+		Code int `json:"code"`
+		Data struct {
+			Name      string `json:"name"`
+			CreatedBy string `json:"created_by"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
@@ -298,15 +304,15 @@ func TestLiveMaterialHandler_Create_Success(t *testing.T) {
 	if resp.Data.Name != "测试素材" {
 		t.Errorf("data.name = %q, want 测试素材", resp.Data.Name)
 	}
-	if resp.Data.CreatedBy != 5 {
-		t.Errorf("data.created_by = %d, want 5", resp.Data.CreatedBy)
+	if resp.Data.CreatedBy != "AdminNick" {
+		t.Errorf("data.created_by = %q, want AdminNick", resp.Data.CreatedBy)
 	}
 }
 
 // TestLiveMaterialHandler_Create_MissingRequired 验证缺少必填字段返回 400。
 func TestLiveMaterialHandler_Create_MissingRequired(t *testing.T) {
 	secret := "handler-test-secret"
-	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{}, nil)
 	r := newAuthedRouter(secret, handler.CreateLiveMaterial, http.MethodPost, "/live-materials")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -323,7 +329,7 @@ func TestLiveMaterialHandler_Create_MissingRequired(t *testing.T) {
 
 // TestLiveMaterialHandler_Create_Unauthorized 验证未登录时返回 401。
 func TestLiveMaterialHandler_Create_Unauthorized(t *testing.T) {
-	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{}, nil)
 	r := gin.New()
 	r.POST("/live-materials", handler.CreateLiveMaterial)
 
@@ -353,7 +359,7 @@ func TestLiveMaterialHandler_Update_Success(t *testing.T) {
 				LiveURL: "https://example.com/unchanged.mp4",
 			}, nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.UpdateLiveMaterial, http.MethodPut, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
@@ -370,8 +376,12 @@ func TestLiveMaterialHandler_Update_Success(t *testing.T) {
 	}
 
 	var resp struct {
-		Code int                 `json:"code"`
-		Data model.LiveMaterial `json:"data"`
+		Code int `json:"code"`
+		Data struct {
+			Name    string `json:"name"`
+			Remark  string `json:"remark"`
+			LiveURL string `json:"live_url"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
@@ -391,7 +401,7 @@ func TestLiveMaterialHandler_Update_NotFound(t *testing.T) {
 		updateFn: func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {
 			return nil, service.ErrLiveMaterialNotFound
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.UpdateLiveMaterial, http.MethodPut, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -410,7 +420,7 @@ func TestLiveMaterialHandler_Update_NotFound(t *testing.T) {
 // TestLiveMaterialHandler_Update_InvalidID 验证非法 ID 返回 400。
 func TestLiveMaterialHandler_Update_InvalidID(t *testing.T) {
 	secret := "handler-test-secret"
-	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{}, nil)
 	r := newAuthedRouter(secret, handler.UpdateLiveMaterial, http.MethodPut, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -439,7 +449,7 @@ func TestLiveMaterialHandler_List_WithFilters(t *testing.T) {
 			}
 			return nil, 0, nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -456,7 +466,7 @@ func TestLiveMaterialHandler_List_WithFilters(t *testing.T) {
 // TestLiveMaterialHandler_List_InvalidPageSize 验证非法 page_size 返回 400。
 func TestLiveMaterialHandler_List_InvalidPageSize(t *testing.T) {
 	secret := "handler-test-secret"
-	handler := NewLiveMaterialHandler(&mockLiveMaterialService{})
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{}, nil)
 	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -480,7 +490,7 @@ func TestLiveMaterialHandler_Delete_Success(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DeleteLiveMaterial, http.MethodDelete, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -510,7 +520,7 @@ func TestLiveMaterialHandler_Delete_NotFound(t *testing.T) {
 		deleteFn: func(ctx context.Context, id uint) error {
 			return service.ErrLiveMaterialNotFound
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DeleteLiveMaterial, http.MethodDelete, "/live-materials/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -540,7 +550,7 @@ func TestLiveMaterialHandler_DownloadASRSubtitle_Success(t *testing.T) {
 			}
 			return []byte(rawASR), "asr_subtitle_12.json", nil
 		},
-	})
+	}, nil)
 
 	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
@@ -571,7 +581,7 @@ func TestLiveMaterialHandler_DownloadASRSubtitle_NotReady(t *testing.T) {
 		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
 			return nil, "", service.ErrASRSubtitleNotReady
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
@@ -592,7 +602,7 @@ func TestLiveMaterialHandler_DownloadASRSubtitle_NotFound(t *testing.T) {
 		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
 			return nil, "", service.ErrLiveMaterialNotFound
 		},
-	})
+	}, nil)
 	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 

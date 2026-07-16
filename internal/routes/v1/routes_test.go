@@ -33,8 +33,8 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	accountHandler := v1handler.NewAccountHandler(nil)
 	authHandler := v1handler.NewAuthHandler(routeMockAuthService{})
 	asrHandler := v1handler.NewASRHandler(nil)
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
-	llmSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
+	llmSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, nil, secret)
@@ -145,7 +145,7 @@ func TestRegisterRoutes_ChatPublic(t *testing.T) {
 // TestRegisterRoutes_LiveMaterialsProtected 验证直播素材写接口需要 JWT 鉴权。
 func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 	secret := "route-test-secret"
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
@@ -163,7 +163,7 @@ func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 // TestRegisterRoutes_LiveMaterialsListProtected 验证直播素材列表接口需要 JWT 鉴权。
 func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
 	secret := "route-test-secret"
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
@@ -180,7 +180,7 @@ func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
 // TestRegisterRoutes_LiveMaterialsGetByIDProtected 验证直播素材详情接口需要 JWT 鉴权。
 func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 	secret := "route-test-secret"
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
@@ -197,7 +197,7 @@ func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 // TestRegisterRoutes_LiveMaterialsDeleteProtected 验证直播素材删除接口需要 JWT 鉴权。
 func TestRegisterRoutes_LiveMaterialsDeleteProtected(t *testing.T) {
 	secret := "route-test-secret"
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
@@ -214,7 +214,7 @@ func TestRegisterRoutes_LiveMaterialsDeleteProtected(t *testing.T) {
 // TestRegisterRoutes_LLMSystemPromptsProtected 验证系统提示词接口需要 JWT 鉴权。
 func TestRegisterRoutes_LLMSystemPromptsProtected(t *testing.T) {
 	secret := "route-test-secret"
-	llmHandler := v1handler.NewLLMSystemPromptHandler(nil)
+	llmHandler := v1handler.NewLLMSystemPromptHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, llmHandler, nil, nil, nil, secret)
@@ -245,7 +245,7 @@ func TestRegisterRoutes_LLMSystemPromptsProtected(t *testing.T) {
 // TestRegisterRoutes_VideoProjectsProtected 验证剪辑项目接口需要 JWT 鉴权。
 func TestRegisterRoutes_VideoProjectsProtected(t *testing.T) {
 	secret := "route-test-secret"
-	videoHandler := v1handler.NewVideoProjectHandler(nil)
+	videoHandler := v1handler.NewVideoProjectHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, videoHandler, nil, nil, secret)
@@ -276,7 +276,7 @@ func TestRegisterRoutes_VideoProjectsProtected(t *testing.T) {
 // TestRegisterRoutes_TasksProtected 验证异步任务接口需要 JWT 鉴权。
 func TestRegisterRoutes_TasksProtected(t *testing.T) {
 	secret := "route-test-secret"
-	taskHandler := v1handler.NewTaskHandler(nil)
+	taskHandler := v1handler.NewTaskHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, nil, taskHandler, nil, secret)
@@ -307,7 +307,7 @@ func TestRegisterRoutes_TasksProtected(t *testing.T) {
 // TestRegisterRoutes_ASRRetryProtected 验证重新 ASR 接口需要 JWT 鉴权。
 func TestRegisterRoutes_ASRRetryProtected(t *testing.T) {
 	secret := "route-test-secret"
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
@@ -325,7 +325,7 @@ func TestRegisterRoutes_ASRRetryProtected(t *testing.T) {
 // TestRegisterRoutes_ASRSubtitleProtected 验证 ASR 字幕下载接口需要 JWT 鉴权。
 func TestRegisterRoutes_ASRSubtitleProtected(t *testing.T) {
 	secret := "route-test-secret"
-	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)

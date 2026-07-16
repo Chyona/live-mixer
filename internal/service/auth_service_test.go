@@ -32,6 +32,19 @@ func (m *mockAccountRepo) GetByUsername(ctx context.Context, username string) (*
 	return account, nil
 }
 
+func (m *mockAccountRepo) ListByIDs(ctx context.Context, ids []uint) (map[uint]*model.Account, error) {
+	out := make(map[uint]*model.Account, len(ids))
+	for _, id := range ids {
+		for _, acc := range m.accounts {
+			if acc != nil && acc.ID == id {
+				out[id] = acc
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (m *mockAccountRepo) List(ctx context.Context, offset, limit int) ([]model.Account, int64, error) {
 	return nil, 0, nil
 }
