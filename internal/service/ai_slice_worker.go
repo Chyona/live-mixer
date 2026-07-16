@@ -21,16 +21,13 @@ const (
 	aiSliceDefaultConcurrency = 2
 	// aiSlicePollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
 	aiSlicePollInterval = 3 * time.Second
-	// aiSliceDefaultSysPrompt 未指定系统提示词时的默认指令。
-	aiSliceDefaultSysPrompt = `你是直播高光切片助手。根据用户提供的 ASR 分句（含毫秒级时间戳）与目标成片时长，选出最适合成片的高光片段。
-只输出 JSON，不要输出其它说明文字。格式严格为：
-{"clips":[{"start_time":毫秒整数,"end_time":毫秒整数},...]}
-要求：
-1. start_time < end_time，且时间落在 ASR 覆盖范围内；
-2. 各片段尽量不重叠；
-3. 所有片段合计时长尽量接近目标时长；
-4. 优先选择话术完整、情绪高、转化感强的片段。`
 )
+
+// aiSliceUserPromptOutputFormat 内置用户提示词中的「输出格式」固定段落。
+const aiSliceUserPromptOutputFormat = `## 输出格式
+- 仅输出一个 JSON 数组，包含选中的句段索引（整数），按原顺序递增。例如：[2, 5, 9, 13]。
+- 索引必须来自 视频ASR 列表的行号（从 0 开始）。
+- 不要输出任何额外文字、注释或角色标记。`
 
 // AISliceWorker AI 切片任务后台调度器：通过 DB 原子抢占实现多实例安全调度。
 type AISliceWorker interface {
@@ -162,7 +159,10 @@ func (w *aiSliceWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 执行单条 AI 切片：读 ASR → 调 LLM → 回写已有 video_project.clips0/clips1 → 更新任务状态/进度。
+// Process 执行单条 AI 切片：
+// 1. 读取 video_project.clips0 与 live_material.live_asr，筛选待分析句段；
+// 2. 组装内置用户提示词并回写 task.usr_prompt（系统提示词已在创建时写入 task.sys_prompt）；
+// 3. 调用 LLM 解析索引，写入 video_project.clips1（不覆盖 clips0）。
 func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
@@ -186,6 +186,9 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询剪辑项目失败: %w", err))
 	}
+	if len(project.Clips0) == 0 {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("video_project.clips0 为空，无法确定待分析时间段"))
+	}
 
 	liveID := ext.LiveID
 	if liveID == 0 {
@@ -206,27 +209,27 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	progress = 20
 	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
 
-	utterances := asr.FormatUtterancesForAPI(material.LiveASR)
-	if len(utterances) == 0 {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("ASR 分句为空，无法进行 AI 切片"))
+	// 完整 ASR → 按 clips0 时间段筛选 → 得到带下标的待分析句段列表。
+	allUtterances := asr.FormatUtterancesForAPI(material.LiveASR)
+	segments := filterUtterancesByClips0(allUtterances, project.Clips0)
+	if len(segments) == 0 {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("clips0 时间段内无可用 ASR 分句"))
 	}
 
-	targetMs := ext.TargetDurationMs
-	if targetMs <= 0 {
-		targetMs = 60000
+	// 系统提示词必须在创建任务时已从 llm_system_prompt 写入；Worker 不再回退默认文案。
+	sysPrompt := strings.TrimSpace(task.SysPrompt)
+	if sysPrompt == "" {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("任务系统提示词为空"))
+	}
+
+	// 组装内置用户提示词，并持久化到 task.usr_prompt。
+	userContent := buildAISliceUserPrompt(segments)
+	if err := w.taskRepo.UpdatePrompts(ctx, task.ID, sysPrompt, userContent); err != nil {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写任务提示词失败: %w", err))
 	}
 
 	progress = 40
 	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
-
-	sysPrompt := strings.TrimSpace(task.SysPrompt)
-	if sysPrompt == "" {
-		sysPrompt = aiSliceDefaultSysPrompt
-	}
-	userContent, err := buildAISliceUserPrompt(task.UsrPrompt, targetMs, utterances)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, err)
-	}
 
 	if w.llmClient == nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("LLM 客户端未配置"))
@@ -243,16 +246,12 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	progress = 70
 	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
 
-	ranges, err := llm.ParseClipRanges(content)
+	// LLM 输出句段下标；越界下标在组装 clips1 时跳过。
+	indices, err := llm.ParseIndices(content)
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, err)
 	}
-
-	clips0 := ranges
-	if clips0 == nil {
-		clips0 = []model.ClipRange{}
-	}
-	clips1 := buildClips1(utterances, ranges)
+	clips1 := buildClips1FromIndices(segments, indices)
 	if clips1 == nil {
 		clips1 = []model.ClipWithText{}
 	}
@@ -260,8 +259,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	progress = 85
 	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
 
-	// 回写已有剪辑项目的切片结果，不新建项目。
-	project.Clips0 = clips0
+	// 仅回写 clips1，保留用户预先配置的 clips0 分析窗口。
 	project.Clips1 = clips1
 	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("更新剪辑项目切片失败: %w", err))
@@ -281,7 +279,9 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 	w.logger.Info("AI 切片任务完成",
 		zap.Uint("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
-		zap.Int("clips", len(ranges)),
+		zap.Int("segments", len(segments)),
+		zap.Int("indices", len(indices)),
+		zap.Int("clips1", len(clips1)),
 	)
 	return nil
 }
@@ -311,20 +311,15 @@ func parseTaskExt(raw string) (TaskExt, error) {
 	return ext, nil
 }
 
-// buildAISliceUserPrompt 组装发给大模型的用户侧提示（含目标时长与 ASR 分句）。
-func buildAISliceUserPrompt(usrPrompt string, targetMs int64, utterances []asr.Utterance) (string, error) {
-	asrJSON, err := json.Marshal(utterances)
-	if err != nil {
-		return "", fmt.Errorf("序列化 ASR 分句失败: %w", err)
-	}
+// buildAISliceUserPrompt 按内置模板组装用户提示词（视频 ASR + 输出格式）。
+func buildAISliceUserPrompt(segments []asr.Utterance) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("目标成片总时长约 %d 毫秒。\n", targetMs))
-	if strings.TrimSpace(usrPrompt) != "" {
-		b.WriteString("附加要求：\n")
-		b.WriteString(strings.TrimSpace(usrPrompt))
-		b.WriteString("\n")
+	b.WriteString("## 视频ASR\n")
+	for i, u := range segments {
+		b.WriteString(formatASRSegmentLine(i, u))
+		b.WriteByte('\n')
 	}
-	b.WriteString("以下是完整 ASR 分句 JSON（时间单位为毫秒）：\n")
-	b.Write(asrJSON)
-	return b.String(), nil
+	b.WriteByte('\n')
+	b.WriteString(aiSliceUserPromptOutputFormat)
+	return b.String()
 }

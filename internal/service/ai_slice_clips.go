@@ -1,30 +1,56 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 )
 
-// buildClips1 根据高光时间段与完整 ASR 分句组装 clips1。
-// 将落在每个时间段内的词拼接为文本；无词级数据时回退使用分句文本。
-func buildClips1(utterances []asr.Utterance, ranges []model.ClipRange) []model.ClipWithText {
-	out := make([]model.ClipWithText, 0, len(ranges))
-	for _, r := range ranges {
-		words := collectWordsInRange(utterances, r.StartTime, r.EndTime)
-		text := joinWordTexts(words)
-		if text == "" {
-			text = collectUtteranceTextInRange(utterances, r.StartTime, r.EndTime)
+// filterUtterancesByClips0 按 video_project.clips0 时间段筛选 ASR 分句。
+// 分句与任一 clips0 区间有时间重叠即纳入；保持原 ASR 顺序，同一分句只出现一次。
+func filterUtterancesByClips0(utterances []asr.Utterance, clips0 []model.ClipRange) []asr.Utterance {
+	if len(utterances) == 0 || len(clips0) == 0 {
+		return nil
+	}
+	out := make([]asr.Utterance, 0)
+	for _, u := range utterances {
+		for _, r := range clips0 {
+			// 分句与区间有重叠即可纳入待分析列表。
+			if u.EndTime > r.StartTime && u.StartTime < r.EndTime {
+				out = append(out, u)
+				break
+			}
 		}
-		out = append(out, model.ClipWithText{
-			Text:      text,
-			StartTime: r.StartTime,
-			EndTime:   r.EndTime,
-			Words:     toClipWords(words),
-		})
 	}
 	return out
+}
+
+// buildClips1FromIndices 根据 LLM 返回的句段下标，从筛选后的 ASR 列表组装 clips1。
+// 下标越界或为负数时跳过，不中断整体流程。
+func buildClips1FromIndices(segments []asr.Utterance, indices []int) []model.ClipWithText {
+	if len(segments) == 0 || len(indices) == 0 {
+		return []model.ClipWithText{}
+	}
+	out := make([]model.ClipWithText, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(segments) {
+			continue
+		}
+		out = append(out, utteranceToClipWithText(segments[idx]))
+	}
+	return out
+}
+
+// utteranceToClipWithText 将单条 ASR 分句转为 clips1 条目（含词级时间戳）。
+func utteranceToClipWithText(u asr.Utterance) model.ClipWithText {
+	return model.ClipWithText{
+		Text:      u.Text,
+		StartTime: u.StartTime,
+		EndTime:   u.EndTime,
+		Words:     toClipWords(u.Words),
+	}
 }
 
 func toClipWords(words []asr.Word) []model.ClipWord {
@@ -38,36 +64,10 @@ func toClipWords(words []asr.Word) []model.ClipWord {
 	return out
 }
 
-func collectWordsInRange(utterances []asr.Utterance, start, end int64) []asr.Word {
-	var words []asr.Word
-	for _, u := range utterances {
-		for _, w := range u.Words {
-			// 词与区间有重叠即可纳入该高光片段。
-			if w.EndTime > start && w.StartTime < end {
-				words = append(words, w)
-			}
-		}
-	}
-	return words
-}
-
-func collectUtteranceTextInRange(utterances []asr.Utterance, start, end int64) string {
-	var parts []string
-	for _, u := range utterances {
-		if u.EndTime > start && u.StartTime < end && strings.TrimSpace(u.Text) != "" {
-			parts = append(parts, strings.TrimSpace(u.Text))
-		}
-	}
-	return strings.Join(parts, "")
-}
-
-func joinWordTexts(words []asr.Word) string {
-	if len(words) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, w := range words {
-		b.WriteString(w.Text)
-	}
-	return b.String()
+// formatASRSegmentLine 格式化单条 ASR 行：`[i] (开始秒 - 结束秒) 文本`。
+// 时间由毫秒转为秒，保留两位小数，与内置用户提示词示例一致。
+func formatASRSegmentLine(index int, u asr.Utterance) string {
+	startSec := float64(u.StartTime) / 1000.0
+	endSec := float64(u.EndTime) / 1000.0
+	return fmt.Sprintf("[%d] (%.2f - %.2f) %s", index, startSec, endSec, strings.TrimSpace(u.Text))
 }

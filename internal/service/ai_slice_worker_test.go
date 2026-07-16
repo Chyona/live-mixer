@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
 	"live-mixer/internal/repository"
 
@@ -17,13 +18,15 @@ import (
 )
 
 type mockLLMChat struct {
-	content string
-	err     error
-	calls   int
+	content  string
+	err      error
+	calls    int
+	lastMsgs []llm.ChatMessage
 }
 
 func (m *mockLLMChat) Chat(ctx context.Context, messages []llm.ChatMessage) (string, error) {
 	m.calls++
+	m.lastMsgs = messages
 	if m.err != nil {
 		return "", m.err
 	}
@@ -51,14 +54,31 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 
 	liveASR := `{
 		"result":{
-			"utterances":[{
-				"additions":{"speaker":"1"},
-				"start_time":0,"end_time":2000,"text":"今天上新很好看",
-				"words":[
-					{"start_time":0,"end_time":800,"text":"今天"},
-					{"start_time":800,"end_time":2000,"text":"上新很好看"}
-				]
-			}]
+			"utterances":[
+				{
+					"additions":{"speaker":"1"},
+					"start_time":0,"end_time":1000,"text":"开场闲聊",
+					"words":[{"start_time":0,"end_time":1000,"text":"开场闲聊"}]
+				},
+				{
+					"additions":{"speaker":"1"},
+					"start_time":5000,"end_time":7000,"text":"今天上新很好看",
+					"words":[
+						{"start_time":5000,"end_time":5800,"text":"今天"},
+						{"start_time":5800,"end_time":7000,"text":"上新很好看"}
+					]
+				},
+				{
+					"additions":{"speaker":"1"},
+					"start_time":7100,"end_time":8000,"text":"面料垂感特别好",
+					"words":[{"start_time":7100,"end_time":8000,"text":"面料垂感特别好"}]
+				},
+				{
+					"additions":{"speaker":"1"},
+					"start_time":20000,"end_time":21000,"text":"窗外闲话",
+					"words":[{"start_time":20000,"end_time":21000,"text":"窗外闲话"}]
+				}
+			]
 		}
 	}`
 	material := &model.LiveMaterial{
@@ -73,21 +93,22 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 		t.Fatalf("create material: %v", err)
 	}
 
+	// clips0 仅覆盖中间两句（下标 0/1 对应筛选后列表）。
 	project := &model.VideoProject{
-		Name: "项目A", LiveID: material.ID, CreatedBy: 1,
-		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		Name: "项目A", LiveID: material.ID, CreatedBy: 1, PromptID: 1,
+		Clips0: []model.ClipRange{{StartTime: 4500, EndTime: 8500}},
+		Clips1: []model.ClipWithText{},
 	}
 	if err := projectRepo.Create(ctx, project); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
 
-	ext, _ := marshalTaskExt(TaskExt{
-		LiveID: material.ID, VideoProjectID: project.ID, TargetDurationMs: 60000,
-	})
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
 	task := &model.Task{
 		Type:           model.TaskTypeAISlice,
 		Status:         model.TaskStatusPending,
 		CreatedBy:      1,
+		SysPrompt:      "你是切片助手",
 		VideoProjectID: model.NewUintPtr(project.ID),
 		Ext:            ext,
 	}
@@ -99,7 +120,7 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 		t.Fatalf("claim: %v %#v", err, claimed)
 	}
 
-	mock := &mockLLMChat{content: `{"clips":[{"start_time":0,"end_time":2000}]}`}
+	mock := &mockLLMChat{content: `[0, 1]`}
 	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop())
 
 	if err := worker.Process(ctx, claimed); err != nil {
@@ -108,6 +129,25 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	if mock.calls != 1 {
 		t.Errorf("llm calls = %d, want 1", mock.calls)
 	}
+	if len(mock.lastMsgs) != 2 || mock.lastMsgs[0].Role != "system" || mock.lastMsgs[1].Role != "user" {
+		t.Fatalf("messages = %#v", mock.lastMsgs)
+	}
+	if mock.lastMsgs[0].Content != "你是切片助手" {
+		t.Errorf("sys = %q", mock.lastMsgs[0].Content)
+	}
+	usr := mock.lastMsgs[1].Content
+	if !strings.Contains(usr, "## 视频ASR") || !strings.Contains(usr, "## 输出格式") {
+		t.Errorf("usr prompt missing sections: %s", usr)
+	}
+	if !strings.Contains(usr, "[0] (5.00 - 7.00) 今天上新很好看") {
+		t.Errorf("usr missing segment0: %s", usr)
+	}
+	if !strings.Contains(usr, "[1] (7.10 - 8.00) 面料垂感特别好") {
+		t.Errorf("usr missing segment1: %s", usr)
+	}
+	if strings.Contains(usr, "开场闲聊") || strings.Contains(usr, "窗外闲话") {
+		t.Errorf("usr should not include out-of-range ASR: %s", usr)
+	}
 
 	got, err := taskRepo.GetByID(ctx, claimed.ID)
 	if err != nil {
@@ -115,6 +155,12 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	}
 	if got.Status != model.TaskStatusCompleted || got.Progress != 100 {
 		t.Errorf("task status/progress = %s/%d", got.Status, got.Progress)
+	}
+	if got.UsrPrompt == "" || !strings.Contains(got.UsrPrompt, "## 视频ASR") {
+		t.Errorf("usr_prompt not persisted: %q", got.UsrPrompt)
+	}
+	if got.SysPrompt != "你是切片助手" {
+		t.Errorf("sys_prompt = %q", got.SysPrompt)
 	}
 
 	var gotExt TaskExt
@@ -128,11 +174,57 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get project: %v", err)
 	}
-	if len(updated.Clips1) == 0 || !strings.Contains(updated.Clips1[0].Text, "今天") {
-		t.Errorf("clips1 = %#v, want contain 今天", updated.Clips1)
+	// clips0 作为输入窗口，不应被 Worker 覆盖。
+	if len(updated.Clips0) != 1 || updated.Clips0[0].StartTime != 4500 {
+		t.Errorf("clips0 mutated: %#v", updated.Clips0)
 	}
-	if len(updated.Clips0) == 0 {
-		t.Errorf("clips0 should be non-empty ranges, got %#v", updated.Clips0)
+	if len(updated.Clips1) != 2 {
+		t.Fatalf("clips1 len = %d, want 2", len(updated.Clips1))
+	}
+	if updated.Clips1[0].Text != "今天上新很好看" || updated.Clips1[1].Text != "面料垂感特别好" {
+		t.Errorf("clips1 = %#v", updated.Clips1)
+	}
+}
+
+func TestAISliceWorker_Process_SkipOutOfRangeIndices(t *testing.T) {
+	db := setupAISliceWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/a.mp4",
+		LiveASR: `{"result":{"utterances":[
+			{"additions":{},"start_time":0,"end_time":100,"text":"A","words":[]},
+			{"additions":{},"start_time":200,"end_time":300,"text":"B","words":[]}
+		]}}`,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
+	}
+	_ = liveRepo.Create(ctx, material)
+	project := &model.VideoProject{
+		Name: "p", LiveID: material.ID, CreatedBy: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 500}},
+		Clips1: []model.ClipWithText{},
+	}
+	_ = projectRepo.Create(ctx, project)
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
+	task := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	_ = taskRepo.Create(ctx, task)
+	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
+
+	// 下标 0 有效，99 越界应跳过。
+	mock := &mockLLMChat{content: `[0, 99]`}
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop())
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	updated, _ := projectRepo.GetByID(ctx, project.ID)
+	if len(updated.Clips1) != 1 || updated.Clips1[0].Text != "A" {
+		t.Fatalf("clips1 = %#v", updated.Clips1)
 	}
 }
 
@@ -149,12 +241,16 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
-	project := &model.VideoProject{Name: "p", LiveID: material.ID, CreatedBy: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}}
+	project := &model.VideoProject{
+		Name: "p", LiveID: material.ID, CreatedBy: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 200}},
+		Clips1: []model.ClipWithText{},
+	}
 	_ = projectRepo.Create(ctx, project)
 	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
 	task := &model.Task{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
 	}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
@@ -167,5 +263,56 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 	got, _ := taskRepo.GetByID(ctx, claimed.ID)
 	if got.Status != model.TaskStatusFailed {
 		t.Errorf("status = %s, want failed", got.Status)
+	}
+}
+
+func TestAISliceWorker_Process_EmptyClips0(t *testing.T) {
+	db := setupAISliceWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/a.mp4",
+		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
+	}
+	_ = liveRepo.Create(ctx, material)
+	project := &model.VideoProject{
+		Name: "p", LiveID: material.ID, CreatedBy: 1,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+	}
+	_ = projectRepo.Create(ctx, project)
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
+	task := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	_ = taskRepo.Create(ctx, task)
+	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
+
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop())
+	if err := worker.Process(ctx, claimed); err == nil {
+		t.Fatal("expected empty clips0 error")
+	}
+}
+
+func TestBuildAISliceUserPrompt(t *testing.T) {
+	got := buildAISliceUserPrompt([]asr.Utterance{
+		{StartTime: 1000, EndTime: 2000, Text: "第一句"},
+		{StartTime: 3000, EndTime: 4000, Text: "第二句"},
+	})
+	if !strings.HasPrefix(got, "## 视频ASR\n") {
+		t.Fatalf("prefix = %q", got[:20])
+	}
+	if !strings.Contains(got, "[0] (1.00 - 2.00) 第一句\n") {
+		t.Errorf("missing line0: %s", got)
+	}
+	if !strings.Contains(got, "[1] (3.00 - 4.00) 第二句\n") {
+		t.Errorf("missing line1: %s", got)
+	}
+	if !strings.Contains(got, "## 输出格式") || !strings.Contains(got, `[2, 5, 9, 13]`) {
+		t.Errorf("missing output format: %s", got)
 	}
 }

@@ -40,6 +40,8 @@ type TaskRepository interface {
 	MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
 	// UpdateExt 仅更新 ext 字段。
 	UpdateExt(ctx context.Context, id uint, ext string) error
+	// UpdatePrompts 回写本次任务实际使用的系统/用户提示词。
+	UpdatePrompts(ctx context.Context, id uint, sysPrompt, usrPrompt string) error
 	// UpdateVideoProjectID 更新关联的剪辑项目 ID。
 	UpdateVideoProjectID(ctx context.Context, id uint, videoProjectID uint) error
 	// CountProcessingByTypes 统计指定类型中处于 processing 的任务数（供 draft 槽位限流复用）。
@@ -221,6 +223,18 @@ func (r *taskRepository) UpdateExt(ctx context.Context, id uint, ext string) err
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"ext":        ext,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// UpdatePrompts 将本次任务使用的系统提示词与用户提示词写入 task 表。
+func (r *taskRepository) UpdatePrompts(ctx context.Context, id uint, sysPrompt, usrPrompt string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"sys_prompt": sysPrompt,
+			"usr_prompt": usrPrompt,
 			"updated_at": time.Now(),
 		}).Error
 }

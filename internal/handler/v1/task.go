@@ -79,7 +79,7 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 
 // CreateAISliceTask 创建 AI 切片任务
 // @Summary      创建 AI 切片任务
-// @Description  异步：根据 video_project.id 读取关联直播 ASR，由 LLM 选取高光片段并回写 video_project.clips0/clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
+// @Description  异步：按 video_project.prompt_id 加载系统提示词，用 clips0 时间段从 live_asr 筛选句段组装用户提示词，LLM 返回句段索引后回写 video_project.clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -260,7 +260,8 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 func writeTaskCreateError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrLiveMaterialNotFound),
-		errors.Is(err, service.ErrVideoProjectNotFound):
+		errors.Is(err, service.ErrVideoProjectNotFound),
+		errors.Is(err, service.ErrLLMSystemPromptNotFound):
 		response.NotFound(c, err.Error())
 	case errors.Is(err, service.ErrTaskASRNotReady):
 		response.BadRequest(c, err.Error())

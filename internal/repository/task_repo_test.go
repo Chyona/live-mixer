@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,6 +195,29 @@ func TestTaskRepository_ProgressCompleteFail(t *testing.T) {
 	got, _ = repo.GetByID(ctx, claimedFail.ID)
 	if got.Status != model.TaskStatusFailed || got.Progress != 40 || got.ErrorMessage != "LLM 超时" {
 		t.Errorf("failed task = %#v", got)
+	}
+}
+
+func TestTaskRepository_UpdatePrompts(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+
+	task := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing, CreatedBy: 1}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.UpdatePrompts(ctx, task.ID, "系统提示", "## 视频ASR\n[0] (1.00 - 2.00) 你好"); err != nil {
+		t.Fatalf("UpdatePrompts: %v", err)
+	}
+	got, err := repo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.SysPrompt != "系统提示" {
+		t.Errorf("SysPrompt = %q", got.SysPrompt)
+	}
+	if !strings.Contains(got.UsrPrompt, "## 视频ASR") {
+		t.Errorf("UsrPrompt = %q", got.UsrPrompt)
 	}
 }
 

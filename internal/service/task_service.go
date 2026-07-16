@@ -123,29 +123,34 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	if project.LiveID == 0 {
 		return nil, errors.New("video_project 未关联直播素材")
 	}
+	// clips0 为待分析时间窗口；为空则无法从 live_asr 筛选句段。
+	if len(project.Clips0) == 0 {
+		return nil, errors.New("video_project.clips0 不能为空，请先设置待分析时间段")
+	}
+	if err := validateClipRanges(project.Clips0); err != nil {
+		return nil, err
+	}
 	if err := s.requireASRCompleted(ctx, project.LiveID); err != nil {
 		return nil, err
 	}
 
-	// 从项目上的 prompt_id 解析系统提示词（默认 1）；找不到时仍允许创建，Worker 回退内置默认提示词。
+	// 系统提示词必须来自 llm_system_prompt（按 video_project.prompt_id 查询）；查不到则任务直接失败。
 	promptID := project.PromptID
 	if promptID == 0 {
 		promptID = model.DefaultVideoProjectPromptID
 	}
 	sysPrompt, err := s.resolveSysPrompt(ctx, promptID)
 	if err != nil {
-		// prompt_id 无外键约束，提示词可能尚未入库；回退空内容，由 Worker 使用内置默认提示词。
-		if !strings.Contains(err.Error(), "不存在") {
-			return nil, err
-		}
-		sysPrompt = ""
+		return nil, err
+	}
+	if strings.TrimSpace(sysPrompt) == "" {
+		return nil, errors.New("系统提示词内容为空")
 	}
 
 	ext, err := marshalTaskExt(TaskExt{
-		LiveID:           project.LiveID,
-		VideoProjectID:   project.ID,
-		SysPromptID:      promptID,
-		TargetDurationMs: 60000, // 默认目标成片时长 60 秒
+		LiveID:         project.LiveID,
+		VideoProjectID: project.ID,
+		SysPromptID:    promptID,
 	})
 	if err != nil {
 		return nil, err
@@ -156,6 +161,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 		Status:           model.TaskStatusPending,
 		Progress:         0,
 		SysPrompt:        sysPrompt,
+		// usr_prompt 由 Worker 根据 clips0 + live_asr 组装内置模板后回写。
 		VideoProjectID:   model.NewUintPtr(project.ID),
 		VideoProjectName: project.Name,
 		CreatedBy:        createdBy,
@@ -388,7 +394,7 @@ func (s *taskService) resolveSysPrompt(ctx context.Context, sysPromptID uint) (s
 	prompt, err := s.llmSystemPromptRepo.GetByID(ctx, sysPromptID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", errors.New("系统提示词不存在")
+			return "", ErrLLMSystemPromptNotFound
 		}
 		return "", err
 	}
