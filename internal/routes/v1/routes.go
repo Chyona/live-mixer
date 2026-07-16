@@ -18,12 +18,15 @@ func RegisterRoutes(
 	llmSystemPromptHandler *v1handler.LLMSystemPromptHandler,
 	videoProjectHandler *v1handler.VideoProjectHandler,
 	taskHandler *v1handler.TaskHandler,
+	chatHandler *v1handler.ChatHandler,
 	jwtSecret string,
 ) {
 	// 登录接口无需 JWT 鉴权
 	rg.POST("/auth/login", authHandler.Login)
 	// ASR 同步识别接口无需 JWT 鉴权
 	rg.POST("/asr", asrHandler.Transcribe)
+	// 大模型同步对话接口无需 JWT 鉴权
+	rg.POST("/chat", chatHandler.Chat)
 
 	// 其余 v1 接口均需 JWT 鉴权
 	authorized := rg.Group("", middleware.JWTAuth(jwtSecret))

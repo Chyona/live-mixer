@@ -120,3 +120,48 @@ func TestClient_Chat_APIError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// TestClient_ChatCompletions 验证返回上游完整 JSON，且保留 choices 等字段。
+func TestClient_ChatCompletions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"model":   DefaultModel,
+			"choices": []map[string]interface{}{
+				{"message": map[string]string{"role": "assistant", "content": "你好"}},
+			},
+			"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{APIKey: "test-key", BaseURL: srv.URL, Model: DefaultModel, HTTPClient: srv.Client()})
+	raw, err := client.ChatCompletions(context.Background(), []ChatMessage{
+		{Role: "system", Content: "你是助手"},
+		{Role: "user", Content: "你好"},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletions() error = %v", err)
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if data["id"] != "chatcmpl-test" {
+		t.Errorf("id = %v, want chatcmpl-test", data["id"])
+	}
+	if data["usage"] == nil {
+		t.Error("usage missing in full response")
+	}
+}
+
+// TestClient_ChatCompletions_EmptyMessages 验证空 messages 被拒绝。
+func TestClient_ChatCompletions_EmptyMessages(t *testing.T) {
+	client := NewClient(Config{APIKey: "k", BaseURL: "http://example.com"})
+	_, err := client.ChatCompletions(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for empty messages")
+	}
+}

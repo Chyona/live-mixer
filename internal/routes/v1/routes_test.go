@@ -37,7 +37,7 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	llmSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, nil, secret)
 
 	// 未携带 Token 访问账号列表应被 JWT 中间件拦截
 	req := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
@@ -76,7 +76,7 @@ func TestRegisterRoutes_LoginPublicAndAccountsProtected(t *testing.T) {
 	}
 	rWithRecovery := gin.New()
 	rWithRecovery.Use(gin.Recovery())
-	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, secret)
+	RegisterRoutes(rWithRecovery.Group("/v1"), accountHandler, authHandler, asrHandler, liveMaterialHandler, llmSystemPromptHandler, nil, nil, nil, secret)
 
 	authReq := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
 	authReq.Header.Set("Authorization", "Bearer "+token)
@@ -93,7 +93,7 @@ func TestRegisterRoutes_ASRPublic(t *testing.T) {
 	asrHandler := v1handler.NewASRHandler(&routeMockASRService{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, asrHandler, nil, nil, nil, nil, nil, secret)
 
 	body := []byte(`{"audio_url":"https://example.com/test.wav"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/asr", bytes.NewReader(body))
@@ -116,13 +116,39 @@ func (routeMockASRService) TranscribeWithProgress(_ context.Context, _ string, _
 	return json.RawMessage(`{"result":{"text":"ok"}}`), nil
 }
 
+// routeMockChatService 路由测试用的对话服务 mock。
+type routeMockChatService struct{}
+
+func (routeMockChatService) Chat(_ context.Context, _, _ string) (json.RawMessage, error) {
+	return json.RawMessage(`{"id":"ok","choices":[]}`), nil
+}
+
+// TestRegisterRoutes_ChatPublic 验证大模型同步对话接口无需 JWT 鉴权。
+func TestRegisterRoutes_ChatPublic(t *testing.T) {
+	secret := "route-test-secret"
+	chatHandler := v1handler.NewChatHandler(routeMockChatService{})
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, nil, nil, chatHandler, secret)
+
+	body := []byte(`{"usr_prompt":"hello"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Error("POST /v1/chat should not require JWT")
+	}
+}
+
 // TestRegisterRoutes_LiveMaterialsProtected 验证直播素材写接口需要 JWT 鉴权。
 func TestRegisterRoutes_LiveMaterialsProtected(t *testing.T) {
 	secret := "route-test-secret"
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -140,7 +166,7 @@ func TestRegisterRoutes_LiveMaterialsListProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials", nil)
 	w := httptest.NewRecorder()
@@ -157,7 +183,7 @@ func TestRegisterRoutes_LiveMaterialsGetByIDProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials/1", nil)
 	w := httptest.NewRecorder()
@@ -174,7 +200,7 @@ func TestRegisterRoutes_LiveMaterialsDeleteProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/live-materials/1", nil)
 	w := httptest.NewRecorder()
@@ -191,7 +217,7 @@ func TestRegisterRoutes_LLMSystemPromptsProtected(t *testing.T) {
 	llmHandler := v1handler.NewLLMSystemPromptHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, llmHandler, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, llmHandler, nil, nil, nil, secret)
 
 	cases := []struct {
 		method string
@@ -222,7 +248,7 @@ func TestRegisterRoutes_VideoProjectsProtected(t *testing.T) {
 	videoHandler := v1handler.NewVideoProjectHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, videoHandler, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, videoHandler, nil, nil, secret)
 
 	cases := []struct {
 		method string
@@ -253,7 +279,7 @@ func TestRegisterRoutes_TasksProtected(t *testing.T) {
 	taskHandler := v1handler.NewTaskHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, nil, taskHandler, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, nil, taskHandler, nil, secret)
 
 	cases := []struct {
 		method string
@@ -284,7 +310,7 @@ func TestRegisterRoutes_ASRRetryProtected(t *testing.T) {
 	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, secret)
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials/1/asr/retry", nil)
 	req.Header.Set("Content-Type", "application/json")

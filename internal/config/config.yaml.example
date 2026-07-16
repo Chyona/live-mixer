@@ -61,3 +61,13 @@ llm:
   api_key: ""
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   model: "qwen3.7-plus"
+
+# 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖
+capcut_mate:
+  base_url: "http://192.168.3.219:81"
+
+# WEB 静态根目录：切片落盘到 root_dir/staging/{task_id}，对外 URL 为 root_url/...
+# 可用 APP_WEB_ROOT_DIR / APP_WEB_ROOT_URL 或 WEB_ROOT_DIR / WEB_ROOT_URL 覆盖
+web:
+  root_dir: "docker/html"
+  root_url: "http://192.168.3.219:81"

@@ -77,13 +77,13 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
-// Chat 调用 /chat/completions，返回助手文本内容。
-func (c *Client) Chat(ctx context.Context, messages []ChatMessage) (string, error) {
+// ChatCompletions 调用 /chat/completions，返回上游模型的完整 JSON 响应体。
+func (c *Client) ChatCompletions(ctx context.Context, messages []ChatMessage) (json.RawMessage, error) {
 	if c.cfg.APIKey == "" {
-		return "", fmt.Errorf("LLM API Key 未配置")
+		return nil, fmt.Errorf("LLM API Key 未配置")
 	}
 	if len(messages) == 0 {
-		return "", fmt.Errorf("messages 不能为空")
+		return nil, fmt.Errorf("messages 不能为空")
 	}
 
 	body, err := json.Marshal(chatRequest{
@@ -91,40 +91,54 @@ func (c *Client) Chat(ctx context.Context, messages []ChatMessage) (string, erro
 		Messages: messages,
 	})
 	if err != nil {
-		return "", fmt.Errorf("序列化请求失败: %w", err)
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
 	url := c.cfg.BaseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
+		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("请求 LLM 失败: %w", err)
+		return nil, fmt.Errorf("请求 LLM 失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("读取 LLM 响应失败: %w", err)
+		return nil, fmt.Errorf("读取 LLM 响应失败: %w", err)
+	}
+
+	var parsed chatResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("解析 LLM 响应失败: %w; body=%s", err, truncate(string(raw), 512))
+	}
+	if parsed.Error != nil && parsed.Error.Message != "" {
+		return nil, fmt.Errorf("LLM 返回错误: %s", parsed.Error.Message)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncate(string(raw), 512))
+	}
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("LLM 响应无 choices")
+	}
+	return json.RawMessage(raw), nil
+}
+
+// Chat 调用 /chat/completions，返回助手文本内容。
+func (c *Client) Chat(ctx context.Context, messages []ChatMessage) (string, error) {
+	raw, err := c.ChatCompletions(ctx, messages)
+	if err != nil {
+		return "", err
 	}
 
 	var parsed chatResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", fmt.Errorf("解析 LLM 响应失败: %w; body=%s", err, truncate(string(raw), 512))
-	}
-	if parsed.Error != nil && parsed.Error.Message != "" {
-		return "", fmt.Errorf("LLM 返回错误: %s", parsed.Error.Message)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncate(string(raw), 512))
-	}
-	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("LLM 响应无 choices")
 	}
 	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
 	if content == "" {

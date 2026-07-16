@@ -70,8 +70,9 @@ func main() {
 	llmSystemPromptService := service.NewLLMSystemPromptService(llmSystemPromptRepo)
 	videoProjectService := service.NewVideoProjectService(videoProjectRepo, liveMaterialRepo)
 
-	// OpenAI 兼容协议 LLM 客户端，供 AI 切片 Worker 调用大模型选取高光片段。
+	// OpenAI 兼容协议 LLM 客户端，供 AI 切片 Worker 与同步对话接口共用。
 	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
+	chatService := service.NewChatService(llmClient, logger)
 	aiSliceWorker := service.NewAISliceWorker(taskRepo, liveMaterialRepo, videoProjectRepo, llmClient, logger)
 
 	// 剪映草稿 Worker：ffmpeg 切片 + capcut-mate 组装草稿，进度写入 task 表。
@@ -97,6 +98,7 @@ func main() {
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
 	v1ASRHandler := v1handler.NewASRHandler(asrService)
+	v1ChatHandler := v1handler.NewChatHandler(chatService)
 	v1LiveMaterialHandler := v1handler.NewLiveMaterialHandler(liveMaterialService)
 	v1LLMSystemPromptHandler := v1handler.NewLLMSystemPromptHandler(llmSystemPromptService)
 	v1VideoProjectHandler := v1handler.NewVideoProjectHandler(videoProjectService)
@@ -112,7 +114,7 @@ func main() {
 	})
 
 	api := r.Group("/openapi/live-mixer")
-	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, v1ASRHandler, v1LiveMaterialHandler, v1LLMSystemPromptHandler, v1VideoProjectHandler, v1TaskHandler, cfg.JWT.Secret)
+	routesv1.RegisterRoutes(api.Group("/v1"), v1AccountHandler, v1AuthHandler, v1ASRHandler, v1LiveMaterialHandler, v1LLMSystemPromptHandler, v1VideoProjectHandler, v1TaskHandler, v1ChatHandler, cfg.JWT.Secret)
 	routesv2.RegisterRoutes(api.Group("/v2"), v2AccountHandler, cfg.JWT.Secret)
 
 	docs.SwaggerInfo.Host = cfg.Server.Addr()
