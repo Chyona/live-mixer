@@ -15,8 +15,6 @@ type VideoProjectListItem struct {
 	PromptID      uint           `json:"prompt_id"`
 	Clips0        []ClipRange    `gorm:"serializer:json" json:"clips0"`
 	Clips1        []ClipWithText `gorm:"serializer:json" json:"clips1"`
-	DraftURL      string         `json:"draft_url"`
-	VideoURL      string         `json:"video_url"`
 	ProjectSource string         `json:"project_source"`
 	CreatedBy     uint           `json:"created_by"`
 	CreatedAt     time.Time      `json:"created_at"`

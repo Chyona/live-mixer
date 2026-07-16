@@ -174,9 +174,9 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	if got.Status != model.TaskStatusCompleted || got.Progress != 100 {
 		t.Errorf("task = %s/%d", got.Status, got.Progress)
 	}
-	updated, _ := projectRepo.GetByID(ctx, project.ID)
-	if updated.DraftURL != "http://example.com/draft" {
-		t.Errorf("draft_url = %s", updated.DraftURL)
+	// 草稿地址应写入 task.draft_url，而非 video_project。
+	if got.DraftURL != "http://example.com/draft" {
+		t.Errorf("task.draft_url = %s", got.DraftURL)
 	}
 
 	// 切片应落在 staging/{task_id}

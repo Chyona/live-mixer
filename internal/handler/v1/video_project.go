@@ -52,8 +52,6 @@ type UpdateVideoProjectRequest struct {
 	PromptID      *uint                 `json:"prompt_id"`
 	Clips0        *[]model.ClipRange    `json:"clips0"`
 	Clips1        *[]model.ClipWithText `json:"clips1"`
-	DraftURL      *string               `json:"draft_url" binding:"omitempty,max=1024"`
-	VideoURL      *string               `json:"video_url" binding:"omitempty,max=1024"`
 	ProjectSource *string               `json:"project_source" binding:"omitempty,max=32"`
 }
 
@@ -66,8 +64,6 @@ type VideoProjectResponse struct {
 	PromptID      uint                 `json:"prompt_id"`
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
-	DraftURL      string               `json:"draft_url"`
-	VideoURL      string               `json:"video_url"`
 	ProjectSource string               `json:"project_source"`
 	CreatedBy     uint                 `json:"created_by"`
 	CreatedAt     time.Time            `json:"created_at"`
@@ -92,8 +88,6 @@ func toVideoProjectResponse(project *model.VideoProject) VideoProjectResponse {
 		PromptID:      project.PromptID,
 		Clips0:        clips0,
 		Clips1:        clips1,
-		DraftURL:      project.DraftURL,
-		VideoURL:      project.VideoURL,
 		ProjectSource: project.ProjectSource,
 		CreatedBy:     project.CreatedBy,
 		CreatedAt:     project.CreatedAt,
@@ -120,8 +114,6 @@ type VideoProjectListResponse struct {
 	PromptID      uint                 `json:"prompt_id"`
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
-	DraftURL      string               `json:"draft_url"`
-	VideoURL      string               `json:"video_url"`
 	ProjectSource string               `json:"project_source"`
 	CreatedBy     uint                 `json:"created_by"`
 	CreatedAt     time.Time            `json:"created_at"`
@@ -147,8 +139,6 @@ func toVideoProjectListResponse(item *model.VideoProjectListItem) VideoProjectLi
 		PromptID:      item.PromptID,
 		Clips0:        clips0,
 		Clips1:        clips1,
-		DraftURL:      item.DraftURL,
-		VideoURL:      item.VideoURL,
 		ProjectSource: item.ProjectSource,
 		CreatedBy:     item.CreatedBy,
 		CreatedAt:     item.CreatedAt,
@@ -267,7 +257,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url/project_source）；未传字段保持不变
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/project_source）；未传字段保持不变
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -296,8 +286,6 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 		PromptID:      req.PromptID,
 		Clips0:        req.Clips0,
 		Clips1:        req.Clips1,
-		DraftURL:      req.DraftURL,
-		VideoURL:      req.VideoURL,
 		ProjectSource: req.ProjectSource,
 	})
 	if err != nil {

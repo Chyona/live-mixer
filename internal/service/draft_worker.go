@@ -195,7 +195,7 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 // 2) 下载直播视频到 staging/{task_id}；
 // 3) ffmpeg 精确裁剪各片段；
 // 4) 调用 capcut-mate create_draft + add_videos；
-// 5) 回写 video_project.draft_url；按 opts 决定是否 MarkCompleted。
+// 5) 回写 task.draft_url；按 opts 决定是否 MarkCompleted。
 func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
@@ -333,9 +333,9 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 
 	progress = setProgress(90)
 
-	project.DraftURL = draftURL
-	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写 video_project.draft_url 失败: %w", err))
+	// 草稿地址挂在任务上：独立草稿任务与一键成片共用同一回写路径。
+	if err := w.taskRepo.UpdateDraftURL(ctx, task.ID, draftURL); err != nil {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写 task.draft_url 失败: %w", err))
 	}
 
 	ext.LiveID = liveID

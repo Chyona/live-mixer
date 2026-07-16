@@ -93,6 +93,10 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 	if got.UsrPrompt == "" {
 		t.Error("usr_prompt should be persisted by AI slice phase")
 	}
+	// 一键成片完成后同样回写 task.draft_url。
+	if got.DraftURL == "" {
+		t.Error("task.draft_url should be written")
+	}
 
 	updated, err := projectRepo.GetByID(ctx, project.ID)
 	if err != nil {
@@ -100,9 +104,6 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 	}
 	if len(updated.Clips1) != 1 || updated.Clips1[0].Text != "今天上新很好看" {
 		t.Errorf("clips1 = %#v", updated.Clips1)
-	}
-	if updated.DraftURL == "" {
-		t.Error("draft_url should be written")
 	}
 	if capcut.createCalls != 1 || capcut.addCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d", capcut.createCalls, capcut.addCalls)
@@ -151,8 +152,7 @@ func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
 	if got.Status != model.TaskStatusFailed {
 		t.Errorf("status = %s, want failed", got.Status)
 	}
-	updated, _ := projectRepo.GetByID(ctx, project.ID)
-	if updated.DraftURL != "" {
+	if got.DraftURL != "" {
 		t.Error("draft should not run after slice failure")
 	}
 }

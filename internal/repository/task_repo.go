@@ -40,6 +40,10 @@ type TaskRepository interface {
 	MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
 	// UpdateExt 仅更新 ext 字段。
 	UpdateExt(ctx context.Context, id uint, ext string) error
+	// UpdateDraftURL 回写剪映草稿 URL（草稿生成/一键成片成功后调用）。
+	UpdateDraftURL(ctx context.Context, id uint, draftURL string) error
+	// UpdateURLs 按需更新 draft_url / video_url；指针为 nil 表示不更新该字段。
+	UpdateURLs(ctx context.Context, id uint, draftURL, videoURL *string) error
 	// UpdatePrompts 回写本次任务实际使用的系统/用户提示词。
 	UpdatePrompts(ctx context.Context, id uint, sysPrompt, usrPrompt string) error
 	// UpdateVideoProjectID 更新关联的剪辑项目 ID。
@@ -225,6 +229,38 @@ func (r *taskRepository) UpdateExt(ctx context.Context, id uint, ext string) err
 			"ext":        ext,
 			"updated_at": time.Now(),
 		}).Error
+}
+
+// UpdateDraftURL 将草稿生成结果写入 task.draft_url。
+func (r *taskRepository) UpdateDraftURL(ctx context.Context, id uint, draftURL string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"draft_url":  draftURL,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// UpdateURLs 仅更新请求中显式传入的 URL 字段。
+func (r *taskRepository) UpdateURLs(ctx context.Context, id uint, draftURL, videoURL *string) error {
+	updates := map[string]interface{}{
+		"updated_at": time.Now(),
+	}
+	if draftURL != nil {
+		updates["draft_url"] = *draftURL
+	}
+	if videoURL != nil {
+		updates["video_url"] = *videoURL
+	}
+	// 未传任何 URL 时无需写库。
+	if len(updates) == 1 {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(updates).Error
 }
 
 // UpdatePrompts 将本次任务使用的系统提示词与用户提示词写入 task 表。

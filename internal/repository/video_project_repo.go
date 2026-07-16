@@ -56,7 +56,7 @@ func (r *videoProjectRepository) GetByID(ctx context.Context, id uint) (*model.V
 func (r *videoProjectRepository) Update(ctx context.Context, project *model.VideoProject) error {
 	return r.db.WithContext(ctx).
 		Model(project).
-		Select("name", "remark", "prompt_id", "clips0", "clips1", "draft_url", "video_url", "project_source").
+		Select("name", "remark", "prompt_id", "clips0", "clips1", "project_source").
 		Updates(project).Error
 }
 

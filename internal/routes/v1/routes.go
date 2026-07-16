@@ -77,5 +77,6 @@ func RegisterRoutes(
 		tasks.POST("/ai-slice-draft", taskHandler.CreateAISliceDraftTask)
 		tasks.GET("", taskHandler.ListTasks)
 		tasks.GET("/:id", taskHandler.GetTask)
+		tasks.PUT("/:id", taskHandler.UpdateTask)
 	}
 }

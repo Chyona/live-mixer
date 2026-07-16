@@ -48,8 +48,6 @@ type VideoProjectUpdateInput struct {
 	PromptID      *uint
 	Clips0        *[]model.ClipRange
 	Clips1        *[]model.ClipWithText
-	DraftURL      *string
-	VideoURL      *string
 	ProjectSource *string
 }
 
@@ -165,12 +163,6 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 			return nil, err
 		}
 		project.Clips1 = clips1
-	}
-	if input.DraftURL != nil {
-		project.DraftURL = *input.DraftURL
-	}
-	if input.VideoURL != nil {
-		project.VideoURL = *input.VideoURL
 	}
 	if input.ProjectSource != nil {
 		project.ProjectSource = strings.TrimSpace(*input.ProjectSource)

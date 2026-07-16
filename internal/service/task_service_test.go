@@ -379,6 +379,70 @@ func TestTaskService_GetFromDB(t *testing.T) {
 	}
 }
 
+// TestTaskService_Update_URLs verifies only provided draft_url / video_url are updated.
+func TestTaskService_Update_URLs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.AutoMigrate(&model.Task{})
+	repo := repository.NewTaskRepository(db)
+	ctx := context.Background()
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
+		DraftURL: "http://old-draft",
+	}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
+	video := "https://video.example.com/out.mp4"
+	updated, err := svc.Update(ctx, task.ID, TaskUpdateInput{VideoURL: &video})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.DraftURL != "http://old-draft" {
+		t.Errorf("DraftURL should remain, got %q", updated.DraftURL)
+	}
+	if updated.VideoURL != video {
+		t.Errorf("VideoURL = %q, want %q", updated.VideoURL, video)
+	}
+}
+
+// TestTaskService_Update_Empty rejects updates with no URL fields.
+func TestTaskService_Update_Empty(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.AutoMigrate(&model.Task{})
+	repo := repository.NewTaskRepository(db)
+	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
+
+	_, err = svc.Update(context.Background(), 1, TaskUpdateInput{})
+	if err == nil {
+		t.Fatal("expected error when no URL fields provided")
+	}
+}
+
+// TestTaskService_Update_NotFound returns ErrTaskNotFound for missing tasks.
+func TestTaskService_Update_NotFound(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.AutoMigrate(&model.Task{})
+	repo := repository.NewTaskRepository(db)
+	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
+
+	video := "https://video.example.com/a.mp4"
+	_, err = svc.Update(context.Background(), 999, TaskUpdateInput{VideoURL: &video})
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("error = %v, want ErrTaskNotFound", err)
+	}
+}
+
 func TestBuildTaskListFilter_DateRange(t *testing.T) {
 	filter, err := buildTaskListFilter(TaskListOptions{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending,

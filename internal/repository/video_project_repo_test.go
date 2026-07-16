@@ -78,7 +78,6 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	project.Name = "新名称"
 	project.Remark = "新备注"
 	project.PromptID = 8
-	project.DraftURL = "https://draft.example.com"
 	project.ProjectSource = "manual"
 	project.LiveID = 999
 	project.CreatedBy = 99
@@ -87,7 +86,7 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	}
 
 	got, _ := repo.GetByID(ctx, project.ID)
-	if got.Name != "新名称" || got.Remark != "新备注" || got.DraftURL != "https://draft.example.com" {
+	if got.Name != "新名称" || got.Remark != "新备注" {
 		t.Errorf("unexpected updated fields: %+v", got)
 	}
 	if got.PromptID != 8 {

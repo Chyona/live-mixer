@@ -116,8 +116,6 @@ func TestVideoProjectHandler_Create_Success(t *testing.T) {
 			PromptID  uint                 `json:"prompt_id"`
 			Clips0    []model.ClipRange    `json:"clips0"`
 			Clips1    []model.ClipWithText `json:"clips1"`
-			DraftURL  string               `json:"draft_url"`
-			VideoURL  string               `json:"video_url"`
 			CreatedBy uint                 `json:"created_by"`
 			Ext       string               `json:"ext"`
 		} `json:"data"`
@@ -188,19 +186,19 @@ func TestVideoProjectHandler_Update_Partial(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewVideoProjectHandler(&mockVideoProjectService{
 		updateFn: func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error) {
-			if id != 2 || input.VideoURL == nil || *input.VideoURL != "https://video.example.com/a.mp4" {
+			if id != 2 || input.ProjectSource == nil || *input.ProjectSource != "manual" {
 				t.Errorf("unexpected update input: id=%d input=%+v", id, input)
 			}
 			if input.Clips0 != nil || input.Clips1 != nil {
 				t.Errorf("clips should be nil when omitted, got clips0=%v clips1=%v", input.Clips0, input.Clips1)
 			}
-			return &model.VideoProject{ID: 2, VideoURL: *input.VideoURL}, nil
+			return &model.VideoProject{ID: 2, ProjectSource: *input.ProjectSource}, nil
 		},
 	})
 	r := newAuthedRouter(secret, handler.UpdateVideoProject, http.MethodPut, "/video-projects/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
-	body := []byte(`{"video_url":"https://video.example.com/a.mp4"}`)
+	body := []byte(`{"project_source":"manual"}`)
 	req := httptest.NewRequest(http.MethodPut, "/video-projects/2", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)

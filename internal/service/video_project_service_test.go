@@ -193,7 +193,7 @@ func TestVideoProjectService_Create_LiveMaterialNotFound(t *testing.T) {
 
 // TestVideoProjectService_Update_PartialFields 验证仅更新传入字段。
 func TestVideoProjectService_Update_PartialFields(t *testing.T) {
-	draft := "https://draft.example.com"
+	remark := "新备注"
 	projectRepo := &mockVideoProjectRepo{
 		projects: map[uint]*model.VideoProject{
 			1: {ID: 1, Name: "旧名称", Remark: "旧备注", LiveID: 1, Clips0: []model.ClipRange{{StartTime: 0, EndTime: 1}}, Clips1: []model.ClipWithText{{Text: "旧", StartTime: 0, EndTime: 1}}, CreatedBy: 1},
@@ -201,12 +201,12 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 	}
 	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
 
-	updated, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{DraftURL: &draft})
+	updated, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{Remark: &remark})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if updated.DraftURL != draft {
-		t.Errorf("DraftURL = %q, want %q", updated.DraftURL, draft)
+	if updated.Remark != remark {
+		t.Errorf("Remark = %q, want %q", updated.Remark, remark)
 	}
 	if updated.Name != "旧名称" {
 		t.Errorf("Name should remain unchanged, got %q", updated.Name)

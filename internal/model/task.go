@@ -30,7 +30,11 @@ type Task struct {
 	ErrorMessage     string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
 	VideoProjectID   *uint      `gorm:"column:video_project_id;index;comment:关联剪辑项目ID" json:"video_project_id,omitempty"`
 	VideoProjectName string     `gorm:"column:video_project_name;size:64;not null;default:'';comment:关联剪辑项目名称" json:"video_project_name"`
-	CreatedBy        uint       `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
+	// DraftURL 剪映草稿地址：草稿生成与一键成片 Worker 成功后回写。
+	DraftURL string `gorm:"column:draft_url;size:1024;comment:剪映草稿URL" json:"draft_url"`
+	// VideoURL 成片/导出视频地址，可由客户端通过更新接口写入。
+	VideoURL  string `gorm:"column:video_url;size:1024;comment:视频地址URL" json:"video_url"`
+	CreatedBy uint   `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
 	CreatedAt      time.Time  `gorm:"comment:创建时间" json:"created_at"`
 	UpdatedAt      time.Time  `gorm:"comment:更新时间" json:"updated_at"`
 	StartedAt      *time.Time `gorm:"comment:开始执行时间" json:"started_at,omitempty"`

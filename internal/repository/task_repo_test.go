@@ -237,3 +237,62 @@ func TestTaskRepository_CountProcessingByTypes(t *testing.T) {
 		t.Errorf("count = %d, want 2", n)
 	}
 }
+
+// TestTaskRepository_UpdateDraftURL 验证草稿 URL 回写。
+func TestTaskRepository_UpdateDraftURL(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+
+	task := &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing, CreatedBy: 1}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.UpdateDraftURL(ctx, task.ID, "http://example.com/draft"); err != nil {
+		t.Fatalf("UpdateDraftURL: %v", err)
+	}
+	got, err := repo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.DraftURL != "http://example.com/draft" {
+		t.Errorf("DraftURL = %q", got.DraftURL)
+	}
+	if got.VideoURL != "" {
+		t.Errorf("VideoURL should remain empty, got %q", got.VideoURL)
+	}
+}
+
+// TestTaskRepository_UpdateURLs 验证按需更新 draft_url / video_url。
+func TestTaskRepository_UpdateURLs(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
+		DraftURL: "http://old-draft",
+	}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	video := "https://video.example.com/a.mp4"
+	if err := repo.UpdateURLs(ctx, task.ID, nil, &video); err != nil {
+		t.Fatalf("UpdateURLs: %v", err)
+	}
+	got, _ := repo.GetByID(ctx, task.ID)
+	if got.DraftURL != "http://old-draft" {
+		t.Errorf("DraftURL should remain, got %q", got.DraftURL)
+	}
+	if got.VideoURL != video {
+		t.Errorf("VideoURL = %q, want %q", got.VideoURL, video)
+	}
+
+	draft := "http://new-draft"
+	if err := repo.UpdateURLs(ctx, task.ID, &draft, nil); err != nil {
+		t.Fatalf("UpdateURLs draft: %v", err)
+	}
+	got, _ = repo.GetByID(ctx, task.ID)
+	if got.DraftURL != draft || got.VideoURL != video {
+		t.Errorf("after draft update: draft=%q video=%q", got.DraftURL, got.VideoURL)
+	}
+}
