@@ -2,6 +2,8 @@ package v1
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -301,4 +303,39 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 		"asr_progress":  material.ASRProgress,
 		"asr_error_msg": material.ASRErrorMsg,
 	})
+}
+
+// DownloadASRSubtitle 下载直播素材 ASR 字幕（JSON 文件）
+// @Summary      下载 ASR 字幕
+// @Description  同步返回 live_asr 原始 JSON 文件；仅 asr_status=completed 且内容非空时可下载
+// @Tags         直播素材
+// @Produce      application/json
+// @Param        id   path  int  true  "素材 ID"
+// @Success      200  {file}    file  "ASR 字幕 JSON 文件"
+// @Failure      400  {object}  response.Body
+// @Failure      404  {object}  response.Body
+// @Router       /v1/live-materials/{id}/asr/subtitle [get]
+func (h *LiveMaterialHandler) DownloadASRSubtitle(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的素材 ID")
+		return
+	}
+
+	content, fileName, err := h.liveMaterialService.DownloadASRSubtitle(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrASRSubtitleNotReady) || errors.Is(err, service.ErrASRSubtitleEmpty) {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	c.Data(http.StatusOK, "application/json; charset=utf-8", content)
 }

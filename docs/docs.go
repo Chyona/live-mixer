@@ -589,6 +589,47 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/live-materials/{id}/asr/subtitle": {
+            "get": {
+                "description": "同步返回 live_asr 原始 JSON 文件；仅 asr_status=completed 且内容非空时可下载",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "下载 ASR 字幕",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "素材 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ASR 字幕 JSON 文件",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/llm-system-prompts": {
             "get": {
                 "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content",

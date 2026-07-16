@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -36,6 +37,12 @@ var ErrASRAlreadyProcessing = errors.New("ASR 进行中，请勿重复提交")
 // ErrASRCompletedNeedForce ASR 已完成，需传 force=true 才能重试。
 var ErrASRCompletedNeedForce = errors.New("ASR 已完成，如需重新识别请设置 force=true")
 
+// ErrASRSubtitleNotReady ASR 未完成，无法导出字幕。
+var ErrASRSubtitleNotReady = errors.New("ASR 未完成，无法导出字幕")
+
+// ErrASRSubtitleEmpty ASR 字幕内容为空。
+var ErrASRSubtitleEmpty = errors.New("ASR 字幕为空，无法导出")
+
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
 	// Create 创建直播素材，createdBy 来自 JWT 当前用户。
@@ -50,6 +57,8 @@ type LiveMaterialService interface {
 	Delete(ctx context.Context, id uint) error
 	// RetryASR 将素材 ASR 重置为 pending 并重新入队；force 允许在 completed 时覆盖。
 	RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error)
+	// DownloadASRSubtitle 返回可用于直接下载的 ASR JSON 内容与建议文件名。
+	DownloadASRSubtitle(ctx context.Context, id uint) (content []byte, fileName string, err error)
 }
 
 type liveMaterialService struct {
@@ -231,4 +240,25 @@ func (s *liveMaterialService) RetryASR(ctx context.Context, id uint, force bool)
 		s.asrWorker.Enqueue(id)
 	}
 	return material, nil
+}
+
+func (s *liveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) ([]byte, string, error) {
+	material, err := s.liveMaterialRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", ErrLiveMaterialNotFound
+		}
+		return nil, "", err
+	}
+
+	if material.ASRStatus != model.ASRStatusCompleted {
+		return nil, "", ErrASRSubtitleNotReady
+	}
+	liveASR := strings.TrimSpace(material.LiveASR)
+	if liveASR == "" || liveASR == "{}" {
+		return nil, "", ErrASRSubtitleEmpty
+	}
+
+	fileName := fmt.Sprintf("asr_subtitle_%d.json", material.ID)
+	return []byte(liveASR), fileName, nil
 }

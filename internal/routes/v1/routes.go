@@ -48,6 +48,7 @@ func RegisterRoutes(
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
 		liveMaterials.DELETE("/:id", liveMaterialHandler.DeleteLiveMaterial)
 		liveMaterials.POST("/:id/asr/retry", liveMaterialHandler.RetryASR)
+		liveMaterials.GET("/:id/asr/subtitle", liveMaterialHandler.DownloadASRSubtitle)
 	}
 
 	llmSystemPrompts := authorized.Group("/llm-system-prompts")

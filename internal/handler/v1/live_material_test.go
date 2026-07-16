@@ -19,11 +19,12 @@ import (
 
 // mockLiveMaterialService 用于 handler 单元测试。
 type mockLiveMaterialService struct {
-	createFn func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
-	updateFn func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
-	deleteFn func(ctx context.Context, id uint) error
-	listFn   func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
-	getFn    func(ctx context.Context, id uint) (*model.LiveMaterial, error)
+	createFn               func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
+	updateFn               func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
+	deleteFn               func(ctx context.Context, id uint) error
+	listFn                 func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
+	getFn                  func(ctx context.Context, id uint) (*model.LiveMaterial, error)
+	downloadASRSubtitleFn  func(ctx context.Context, id uint) ([]byte, string, error)
 }
 
 func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
@@ -63,6 +64,13 @@ func (m *mockLiveMaterialService) Delete(ctx context.Context, id uint) error {
 
 func (m *mockLiveMaterialService) RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error) {
 	return nil, nil
+}
+
+func (m *mockLiveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) ([]byte, string, error) {
+	if m.downloadASRSubtitleFn != nil {
+		return m.downloadASRSubtitleFn(ctx, id)
+	}
+	return nil, "", nil
 }
 
 // newAuthedRouter 创建带 JWT 鉴权的测试路由。
@@ -519,4 +527,81 @@ func TestLiveMaterialHandler_Delete_NotFound(t *testing.T) {
 // errLiveMaterialNotFound 模拟 service 返回的「不存在」错误。
 func errLiveMaterialNotFound() error {
 	return service.ErrLiveMaterialNotFound
+}
+
+// TestLiveMaterialHandler_DownloadASRSubtitle_Success 验证字幕接口直接返回 JSON 文件。
+func TestLiveMaterialHandler_DownloadASRSubtitle_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	rawASR := `{"result":{"utterances":[{"text":"你好"}]}}`
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
+			if id != 12 {
+				t.Errorf("id = %d, want 12", id)
+			}
+			return []byte(rawASR), "asr_subtitle_12.json", nil
+		},
+	})
+
+	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/12/asr/subtitle", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Disposition"); got != `attachment; filename="asr_subtitle_12.json"` {
+		t.Errorf("Content-Disposition = %q", got)
+	}
+	if !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", w.Header().Get("Content-Type"))
+	}
+	if w.Body.String() != rawASR {
+		t.Errorf("body = %q, want %q", w.Body.String(), rawASR)
+	}
+}
+
+// TestLiveMaterialHandler_DownloadASRSubtitle_NotReady 验证 ASR 未完成时返回 400。
+func TestLiveMaterialHandler_DownloadASRSubtitle_NotReady(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
+			return nil, "", service.ErrASRSubtitleNotReady
+		},
+	})
+	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/1/asr/subtitle", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestLiveMaterialHandler_DownloadASRSubtitle_NotFound 验证素材不存在时返回 404。
+func TestLiveMaterialHandler_DownloadASRSubtitle_NotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
+			return nil, "", service.ErrLiveMaterialNotFound
+		},
+	})
+	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/999/asr/subtitle", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
 }

@@ -321,3 +321,20 @@ func TestRegisterRoutes_ASRRetryProtected(t *testing.T) {
 		t.Errorf("POST /v1/live-materials/1/asr/retry without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
+
+// TestRegisterRoutes_ASRSubtitleProtected 验证 ASR 字幕下载接口需要 JWT 鉴权。
+func TestRegisterRoutes_ASRSubtitleProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials/1/asr/subtitle", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /v1/live-materials/1/asr/subtitle without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}

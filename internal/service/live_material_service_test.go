@@ -439,3 +439,66 @@ func TestLiveMaterialService_Delete_NotFound(t *testing.T) {
 		t.Errorf("Delete() error = %v, want %v", err, ErrLiveMaterialNotFound)
 	}
 }
+
+// TestLiveMaterialService_DownloadASRSubtitle_Success 验证导出已完成的 ASR JSON。
+func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
+	rawASR := `{"result":{"utterances":[{"text":"你好"}]}}`
+	repo := &mockLiveMaterialRepo{
+		materials: map[uint]*model.LiveMaterial{
+			5: {
+				ID:        5,
+				ASRStatus: model.ASRStatusCompleted,
+				LiveASR:   rawASR,
+			},
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+
+	content, fileName, err := svc.DownloadASRSubtitle(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("DownloadASRSubtitle() error = %v", err)
+	}
+	if string(content) != rawASR {
+		t.Errorf("content = %q, want %q", content, rawASR)
+	}
+	if fileName != "asr_subtitle_5.json" {
+		t.Errorf("fileName = %q, want asr_subtitle_5.json", fileName)
+	}
+}
+
+// TestLiveMaterialService_DownloadASRSubtitle_NotReady 验证未完成 ASR 时拒绝导出。
+func TestLiveMaterialService_DownloadASRSubtitle_NotReady(t *testing.T) {
+	repo := &mockLiveMaterialRepo{
+		materials: map[uint]*model.LiveMaterial{
+			1: {ID: 1, ASRStatus: model.ASRStatusProcessing, LiveASR: `{"result":{}}`},
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+	_, _, err := svc.DownloadASRSubtitle(context.Background(), 1)
+	if !errors.Is(err, ErrASRSubtitleNotReady) {
+		t.Errorf("error = %v, want %v", err, ErrASRSubtitleNotReady)
+	}
+}
+
+// TestLiveMaterialService_DownloadASRSubtitle_Empty 验证空字幕拒绝导出。
+func TestLiveMaterialService_DownloadASRSubtitle_Empty(t *testing.T) {
+	repo := &mockLiveMaterialRepo{
+		materials: map[uint]*model.LiveMaterial{
+			1: {ID: 1, ASRStatus: model.ASRStatusCompleted, LiveASR: "{}"},
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+	_, _, err := svc.DownloadASRSubtitle(context.Background(), 1)
+	if !errors.Is(err, ErrASRSubtitleEmpty) {
+		t.Errorf("error = %v, want %v", err, ErrASRSubtitleEmpty)
+	}
+}
+
+// TestLiveMaterialService_DownloadASRSubtitle_NotFound 验证素材不存在。
+func TestLiveMaterialService_DownloadASRSubtitle_NotFound(t *testing.T) {
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}}, nil)
+	_, _, err := svc.DownloadASRSubtitle(context.Background(), 99)
+	if !errors.Is(err, ErrLiveMaterialNotFound) {
+		t.Errorf("error = %v, want %v", err, ErrLiveMaterialNotFound)
+	}
+}
