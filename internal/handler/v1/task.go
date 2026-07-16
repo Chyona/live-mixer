@@ -35,16 +35,11 @@ type CreateDraftTaskRequest struct {
 	CanvasHeight   int  `json:"canvas_height"`
 }
 
-// CreateAISliceDraftTaskRequest 一键成片任务请求体。
+// CreateAISliceDraftTaskRequest 一键成片任务请求体（先 AI 切片再生成草稿）。
 type CreateAISliceDraftTaskRequest struct {
-	LiveID           uint   `json:"live_id" binding:"required"`
-	Name             string `json:"name" binding:"max=64"`
-	Remark           string `json:"remark" binding:"max=256"`
-	SysPromptID      uint   `json:"sys_prompt_id"`
-	UsrPrompt        string `json:"usr_prompt"`
-	TargetDurationMs int64  `json:"target_duration_ms"`
-	CanvasWidth      int    `json:"canvas_width"`
-	CanvasHeight     int    `json:"canvas_height"`
+	VideoProjectID uint `json:"video_project_id" binding:"required"`
+	CanvasWidth    int  `json:"canvas_width"`
+	CanvasHeight   int  `json:"canvas_height"`
 }
 
 // ListTasksRequest 任务列表查询参数。
@@ -147,7 +142,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 
 // CreateAISliceDraftTask 创建一键成片任务
 // @Summary      创建一键成片任务
-// @Description  异步：先 AI 切片再 ffmpeg+capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id
+// @Description  异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿生成；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -169,14 +164,9 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 	}
 
 	task, err := h.taskService.CreateAISliceDraft(c.Request.Context(), user.ID, service.CreateAISliceDraftInput{
-		LiveID:           req.LiveID,
-		Name:             req.Name,
-		Remark:           req.Remark,
-		SysPromptID:      req.SysPromptID,
-		UsrPrompt:        req.UsrPrompt,
-		TargetDurationMs: req.TargetDurationMs,
-		CanvasWidth:      req.CanvasWidth,
-		CanvasHeight:     req.CanvasHeight,
+		VideoProjectID: req.VideoProjectID,
+		CanvasWidth:    req.CanvasWidth,
+		CanvasHeight:   req.CanvasHeight,
 	})
 	if err != nil {
 		writeTaskCreateError(c, err)

@@ -44,16 +44,11 @@ type CreateDraftInput struct {
 	CanvasHeight   int
 }
 
-// CreateAISliceDraftInput 一键成片任务创建入参。
+// CreateAISliceDraftInput 一键成片任务创建入参（先 AI 切片再生成草稿；等价于 ai-slice + draft）。
 type CreateAISliceDraftInput struct {
-	LiveID           uint
-	Name             string
-	Remark           string
-	SysPromptID      uint
-	UsrPrompt        string
-	TargetDurationMs int64
-	CanvasWidth      int
-	CanvasHeight     int
+	VideoProjectID uint
+	CanvasWidth    int
+	CanvasHeight   int
 }
 
 // TaskExt 写入 task.ext 的结构化元数据。
@@ -83,12 +78,13 @@ type taskService struct {
 	liveMaterialRepo    repository.LiveMaterialRepository
 	videoProjectRepo    repository.VideoProjectRepository
 	llmSystemPromptRepo repository.LLMSystemPromptRepository
-	aiSliceWorker       AISliceWorker // 可选；为 nil 时仅落库不调度
-	draftWorker         DraftWorker   // 可选；为 nil 时仅落库不调度
+	aiSliceWorker       AISliceWorker      // 可选；为 nil 时仅落库不调度
+	draftWorker         DraftWorker        // 可选；为 nil 时仅落库不调度
+	aiSliceDraftWorker  AISliceDraftWorker // 可选；为 nil 时仅落库不调度
 }
 
 // NewTaskService 创建任务业务服务实例。
-// aiSliceWorker / draftWorker 可为 nil（例如纯单测场景）；生产环境应注入并 Start。
+// 各 Worker 可为 nil（例如纯单测场景）；生产环境应注入并 Start。
 func NewTaskService(
 	taskRepo repository.TaskRepository,
 	liveMaterialRepo repository.LiveMaterialRepository,
@@ -96,6 +92,7 @@ func NewTaskService(
 	llmSystemPromptRepo repository.LLMSystemPromptRepository,
 	aiSliceWorker AISliceWorker,
 	draftWorker DraftWorker,
+	aiSliceDraftWorker AISliceDraftWorker,
 ) TaskService {
 	return &taskService{
 		taskRepo:            taskRepo,
@@ -104,6 +101,7 @@ func NewTaskService(
 		llmSystemPromptRepo: llmSystemPromptRepo,
 		aiSliceWorker:       aiSliceWorker,
 		draftWorker:         draftWorker,
+		aiSliceDraftWorker:  aiSliceDraftWorker,
 	}
 }
 
@@ -246,38 +244,57 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 }
 
 func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error) {
-	if input.LiveID == 0 {
-		return nil, errors.New("live_id 不能为空")
+	// 一键成片 = AI 切片 + 草稿：创建校验与 ai-slice 对齐，画布参数与 draft 对齐。
+	if input.VideoProjectID == 0 {
+		return nil, errors.New("video_project_id 不能为空")
 	}
-	if err := s.requireASRCompleted(ctx, input.LiveID); err != nil {
+
+	project, err := s.videoProjectRepo.GetByID(ctx, input.VideoProjectID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrVideoProjectNotFound
+		}
+		return nil, err
+	}
+	if project.LiveID == 0 {
+		return nil, errors.New("video_project 未关联直播素材")
+	}
+	if len(project.Clips0) == 0 {
+		return nil, errors.New("video_project.clips0 不能为空，请先设置待分析时间段")
+	}
+	if err := validateClipRanges(project.Clips0); err != nil {
+		return nil, err
+	}
+	if err := s.requireASRCompleted(ctx, project.LiveID); err != nil {
 		return nil, err
 	}
 
-	targetMs := input.TargetDurationMs
-	if targetMs <= 0 {
-		targetMs = 60000
+	promptID := project.PromptID
+	if promptID == 0 {
+		promptID = model.DefaultVideoProjectPromptID
 	}
-	width, height := input.CanvasWidth, input.CanvasHeight
-	if width <= 0 {
-		width = 1080
-	}
-	if height <= 0 {
-		height = 1920
-	}
-
-	sysPrompt, err := s.resolveSysPrompt(ctx, input.SysPromptID)
+	sysPrompt, err := s.resolveSysPrompt(ctx, promptID)
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(sysPrompt) == "" {
+		return nil, errors.New("系统提示词内容为空")
+	}
+
+	width, height := input.CanvasWidth, input.CanvasHeight
+	if width <= 0 {
+		width = draftDefaultCanvasWidth
+	}
+	if height <= 0 {
+		height = draftDefaultCanvasHeight
+	}
 
 	ext, err := marshalTaskExt(TaskExt{
-		LiveID:           input.LiveID,
-		Name:             strings.TrimSpace(input.Name),
-		Remark:           strings.TrimSpace(input.Remark),
-		SysPromptID:      input.SysPromptID,
-		TargetDurationMs: targetMs,
-		CanvasWidth:      width,
-		CanvasHeight:     height,
+		LiveID:         project.LiveID,
+		VideoProjectID: project.ID,
+		SysPromptID:    promptID,
+		CanvasWidth:    width,
+		CanvasHeight:   height,
 	})
 	if err != nil {
 		return nil, err
@@ -288,15 +305,17 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		Status:           model.TaskStatusPending,
 		Progress:         0,
 		SysPrompt:        sysPrompt,
-		UsrPrompt:        input.UsrPrompt,
-		VideoProjectName: strings.TrimSpace(input.Name),
+		VideoProjectID:   model.NewUintPtr(project.ID),
+		VideoProjectName: project.Name,
 		CreatedBy:        createdBy,
 		Ext:              ext,
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
 	}
-	// TODO: 入队 Worker，先 AI 切片再 ffmpeg + capcut-mate 生成草稿。
+	if s.aiSliceDraftWorker != nil {
+		s.aiSliceDraftWorker.Enqueue()
+	}
 	return task, nil
 }
 

@@ -35,6 +35,8 @@ type AISliceWorker interface {
 	Enqueue()
 	// Process 执行已抢占（processing）的 AI 切片任务完整流程。
 	Process(ctx context.Context, task *model.Task) error
+	// ProcessWithOptions 执行 AI 切片阶段；可由一键成片编排复用（不 MarkCompleted）。
+	ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error
 	// Start 启动后台 Worker 循环。
 	Start(ctx context.Context)
 }
@@ -159,16 +161,27 @@ func (w *aiSliceWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 执行单条 AI 切片：
+// Process 执行单条 AI 切片完整流程（成功后 MarkCompleted）。
+func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
+	return w.ProcessWithOptions(ctx, task, standalonePhaseOptions())
+}
+
+// ProcessWithOptions 执行 AI 切片阶段：
 // 1. 读取 video_project.clips0 与 live_material.live_asr，筛选待分析句段；
 // 2. 组装内置用户提示词并回写 task.usr_prompt（系统提示词已在创建时写入 task.sys_prompt）；
 // 3. 调用 LLM 解析索引，写入 video_project.clips1（不覆盖 clips0）。
-func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
+// opts.MarkComplete=false 时仅更新进度/ext，供一键成片继续执行草稿阶段。
+func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
 	}
-	progress := int16(5)
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	setProgress := func(local int16) int16 {
+		p := mapPhaseProgress(opts, local)
+		_ = w.taskRepo.UpdateProgress(ctx, task.ID, p)
+		return p
+	}
+
+	progress := setProgress(5)
 
 	ext, err := parseTaskExt(task.Ext)
 	if err != nil {
@@ -206,8 +219,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材 ASR 尚未完成"))
 	}
 
-	progress = 20
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(20)
 
 	// 完整 ASR → 按 clips0 时间段筛选 → 得到带下标的待分析句段列表。
 	allUtterances := asr.FormatUtterancesForAPI(material.LiveASR)
@@ -228,8 +240,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写任务提示词失败: %w", err))
 	}
 
-	progress = 40
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(40)
 
 	if w.llmClient == nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("LLM 客户端未配置"))
@@ -243,8 +254,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("调用大模型失败: %w", err))
 	}
 
-	progress = 70
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(70)
 
 	// LLM 输出句段下标；越界下标在组装 clips1 时跳过。
 	indices, err := llm.ParseIndices(content)
@@ -256,8 +266,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 		clips1 = []model.ClipWithText{}
 	}
 
-	progress = 85
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(85)
 
 	// 仅回写 clips1，保留用户预先配置的 clips0 分析窗口。
 	project.Clips1 = clips1
@@ -273,15 +282,21 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, liveID, project.ID)
 	}
 
-	if err := w.taskRepo.MarkCompleted(ctx, task.ID, 100, extRaw); err != nil {
-		return fmt.Errorf("标记任务完成失败: %w", err)
+	if opts.MarkComplete {
+		if err := w.taskRepo.MarkCompleted(ctx, task.ID, mapPhaseProgress(opts, 100), extRaw); err != nil {
+			return fmt.Errorf("标记任务完成失败: %w", err)
+		}
+	} else {
+		_ = w.taskRepo.UpdateExt(ctx, task.ID, extRaw)
+		_ = setProgress(100)
 	}
-	w.logger.Info("AI 切片任务完成",
+	w.logger.Info("AI 切片阶段完成",
 		zap.Uint("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.Int("segments", len(segments)),
 		zap.Int("indices", len(indices)),
 		zap.Int("clips1", len(clips1)),
+		zap.Bool("mark_complete", opts.MarkComplete),
 	)
 	return nil
 }

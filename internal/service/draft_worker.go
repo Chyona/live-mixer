@@ -33,6 +33,8 @@ type DraftWorker interface {
 	Enqueue()
 	// Process 执行已抢占（processing）的草稿任务完整流程。
 	Process(ctx context.Context, task *model.Task) error
+	// ProcessWithOptions 执行草稿阶段；可由一键成片编排复用。
+	ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error
 	// Start 启动后台 Worker 循环。
 	Start(ctx context.Context)
 }
@@ -183,18 +185,28 @@ func (w *draftWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 执行单条草稿任务：
+// Process 执行单条草稿任务完整流程（成功后 MarkCompleted）。
+func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
+	return w.ProcessWithOptions(ctx, task, standalonePhaseOptions())
+}
+
+// ProcessWithOptions 执行草稿阶段：
 // 1) 读 video_project.clips1 与 live_material.live_url；
 // 2) 下载直播视频到 staging/{task_id}；
 // 3) ffmpeg 精确裁剪各片段；
 // 4) 调用 capcut-mate create_draft + add_videos；
-// 5) 回写 video_project.draft_url 与任务状态/进度。
-func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
+// 5) 回写 video_project.draft_url；按 opts 决定是否 MarkCompleted。
+func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
 	}
-	progress := int16(5)
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	setProgress := func(local int16) int16 {
+		p := mapPhaseProgress(opts, local)
+		_ = w.taskRepo.UpdateProgress(ctx, task.ID, p)
+		return p
+	}
+
+	progress := setProgress(5)
 
 	ext, err := parseTaskExt(task.Ext)
 	if err != nil {
@@ -247,24 +259,21 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 		zap.String("live_url", material.LiveURL),
 		zap.String("staging_dir", stagingDir),
 	)
-	progress = 15
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(15)
 
 	sourcePath := filepath.Join(stagingDir, "source.mp4")
 	if _, err := w.downloader.Download(material.LiveURL, sourcePath); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("下载直播视频失败: %w", err))
 	}
 
-	progress = 25
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(25)
 
-	clipPaths, err := w.cutClips(ctx, task.ID, sourcePath, stagingDir, clips)
+	clipPaths, err := w.cutClips(ctx, task.ID, sourcePath, stagingDir, clips, opts)
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, err)
 	}
 
-	progress = 50
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(50)
 
 	width := ext.CanvasWidth
 	height := ext.CanvasHeight
@@ -289,8 +298,7 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("创建剪映草稿失败: %w", err))
 	}
 
-	progress = 70
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(70)
 
 	videoInfos, err := w.buildVideoInfos(clipPaths, clips)
 	if err != nil {
@@ -323,8 +331,7 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 		draftURL = createResp.DraftURL
 	}
 
-	progress = 90
-	_ = w.taskRepo.UpdateProgress(ctx, task.ID, progress)
+	progress = setProgress(90)
 
 	project.DraftURL = draftURL
 	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
@@ -342,20 +349,26 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 			liveID, project.ID, width, height)
 	}
 
-	if err := w.taskRepo.MarkCompleted(ctx, task.ID, 100, extRaw); err != nil {
-		return fmt.Errorf("标记任务完成失败: %w", err)
+	if opts.MarkComplete {
+		if err := w.taskRepo.MarkCompleted(ctx, task.ID, mapPhaseProgress(opts, 100), extRaw); err != nil {
+			return fmt.Errorf("标记任务完成失败: %w", err)
+		}
+	} else {
+		_ = w.taskRepo.UpdateExt(ctx, task.ID, extRaw)
+		_ = setProgress(100)
 	}
-	w.logger.Info("剪映草稿任务完成",
+	w.logger.Info("剪映草稿阶段完成",
 		zap.Uint("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.String("draft_url", draftURL),
 		zap.Int("clips", len(clips)),
+		zap.Bool("mark_complete", opts.MarkComplete),
 	)
 	return nil
 }
 
 // cutClips 按 clips 时间段（毫秒）裁剪出本地切片文件。
-func (w *draftWorker) cutClips(ctx context.Context, taskID uint, sourcePath, stagingDir string, clips []model.ClipRange) ([]string, error) {
+func (w *draftWorker) cutClips(ctx context.Context, taskID uint, sourcePath, stagingDir string, clips []model.ClipRange, opts PhaseOptions) ([]string, error) {
 	paths := make([]string, 0, len(clips))
 	for i, clip := range clips {
 		outPath := filepath.Join(stagingDir, fmt.Sprintf("clip_%03d.mp4", i))
@@ -373,10 +386,10 @@ func (w *draftWorker) cutClips(ctx context.Context, taskID uint, sourcePath, sta
 		}
 		paths = append(paths, outPath)
 
-		// 裁剪阶段进度：25 → 50，按片段数线性推进。
+		// 裁剪阶段本地进度：25 → 50，按片段数线性推进后再映射到父任务。
 		if len(clips) > 0 {
-			p := int16(25 + int(25*float64(i+1)/float64(len(clips))))
-			_ = w.taskRepo.UpdateProgress(ctx, taskID, p)
+			local := int16(25 + int(25*float64(i+1)/float64(len(clips))))
+			_ = w.taskRepo.UpdateProgress(ctx, taskID, mapPhaseProgress(opts, local))
 		}
 	}
 	return paths, nil

@@ -1,0 +1,207 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/webroot"
+	"live-mixer/internal/repository"
+
+	"go.uber.org/zap"
+)
+
+func TestMapPhaseProgress(t *testing.T) {
+	opts := PhaseOptions{ProgressBase: 50, ProgressSpan: 50}
+	if got := mapPhaseProgress(opts, 0); got != 50 {
+		t.Errorf("0 => %d, want 50", got)
+	}
+	if got := mapPhaseProgress(opts, 100); got != 100 {
+		t.Errorf("100 => %d, want 100", got)
+	}
+	if got := mapPhaseProgress(opts, 50); got != 75 {
+		t.Errorf("50 => %d, want 75", got)
+	}
+}
+
+func TestAISliceDraftWorker_Process_Success(t *testing.T) {
+	db := setupAISliceWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	webRoot := t.TempDir()
+
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":0,"end_time":1000,"text":"今天上新很好看",
+			"words":[{"start_time":0,"end_time":1000,"text":"今天上新很好看"}]}
+	]}}`
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/live.mp4",
+		LiveASR: liveASR, ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
+	}
+	if err := liveRepo.Create(ctx, material); err != nil {
+		t.Fatalf("create material: %v", err)
+	}
+	project := &model.VideoProject{
+		Name: "一键", LiveID: material.ID, CreatedBy: 1, PromptID: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 2000}},
+		Clips1: []model.ClipWithText{},
+	}
+	if err := projectRepo.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	ext, _ := marshalTaskExt(TaskExt{
+		LiveID: material.ID, VideoProjectID: project.ID,
+		CanvasWidth: 1080, CanvasHeight: 1920,
+	})
+	task := &model.Task{
+		Type: model.TaskTypeAISliceDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		SysPrompt: "系统提示", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	if err := taskRepo.Create(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %#v", err, claimed)
+	}
+
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop())
+	capcut := &mockCapCutAPI{}
+	draft := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
+		Web: webroot.Config{RootDir: webRoot, RootURL: "http://localhost/static"},
+		Logger: zap.NewNop(),
+	})
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop())
+
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	got, err := taskRepo.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != model.TaskStatusCompleted || got.Progress != 100 {
+		t.Errorf("status/progress = %s/%d", got.Status, got.Progress)
+	}
+	if got.UsrPrompt == "" {
+		t.Error("usr_prompt should be persisted by AI slice phase")
+	}
+
+	updated, err := projectRepo.GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("Get project: %v", err)
+	}
+	if len(updated.Clips1) != 1 || updated.Clips1[0].Text != "今天上新很好看" {
+		t.Errorf("clips1 = %#v", updated.Clips1)
+	}
+	if updated.DraftURL == "" {
+		t.Error("draft_url should be written")
+	}
+	if capcut.createCalls != 1 || capcut.addCalls != 1 {
+		t.Errorf("capcut calls create=%d add=%d", capcut.createCalls, capcut.addCalls)
+	}
+}
+
+func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
+	db := setupAISliceWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/a.mp4",
+		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
+	}
+	_ = liveRepo.Create(ctx, material)
+	project := &model.VideoProject{
+		Name: "p", LiveID: material.ID, CreatedBy: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 200}},
+		Clips1: []model.ClipWithText{},
+	}
+	_ = projectRepo.Create(ctx, project)
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
+	task := &model.Task{
+		Type: model.TaskTypeAISliceDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	_ = taskRepo.Create(ctx, task)
+	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
+
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{err: errors.New("llm down")}, zap.NewNop())
+	draft := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		CapCut: &mockCapCutAPI{}, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
+		Web: webroot.Config{RootDir: t.TempDir(), RootURL: "http://localhost/static"},
+		Logger: zap.NewNop(),
+	})
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop())
+	if err := worker.Process(ctx, claimed); err == nil {
+		t.Fatal("expected error")
+	}
+	got, _ := taskRepo.GetByID(ctx, claimed.ID)
+	if got.Status != model.TaskStatusFailed {
+		t.Errorf("status = %s, want failed", got.Status)
+	}
+	updated, _ := projectRepo.GetByID(ctx, project.ID)
+	if updated.DraftURL != "" {
+		t.Error("draft should not run after slice failure")
+	}
+}
+
+func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
+	db := setupAISliceWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/a.mp4",
+		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
+	}
+	_ = liveRepo.Create(ctx, material)
+	project := &model.VideoProject{
+		Name: "p", LiveID: material.ID, CreatedBy: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 200}},
+		Clips1: []model.ClipWithText{},
+	}
+	_ = projectRepo.Create(ctx, project)
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID, CanvasWidth: 1080, CanvasHeight: 1920})
+	task := &model.Task{
+		Type: model.TaskTypeAISliceDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	_ = taskRepo.Create(ctx, task)
+	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
+
+	// LLM 返回空数组 → clips1 为空 → 编排器应失败且不调用草稿。
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop())
+	capcut := &mockCapCutAPI{}
+	draft := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
+		Web: webroot.Config{RootDir: t.TempDir(), RootURL: "http://localhost/static"},
+		Logger: zap.NewNop(),
+	})
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop())
+	if err := worker.Process(ctx, claimed); err == nil {
+		t.Fatal("expected empty clips1 error")
+	}
+	got, _ := taskRepo.GetByID(ctx, claimed.ID)
+	if got.Status != model.TaskStatusFailed {
+		t.Errorf("status = %s, want failed", got.Status)
+	}
+	if capcut.createCalls != 0 {
+		t.Errorf("draft should not run, createCalls=%d", capcut.createCalls)
+	}
+}

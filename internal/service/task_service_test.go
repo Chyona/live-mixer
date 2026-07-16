@@ -93,6 +93,9 @@ func (m *mockAISliceWorkerEnqueue) Enqueue() { m.enqueued++ }
 func (m *mockAISliceWorkerEnqueue) Process(ctx context.Context, task *model.Task) error {
 	return nil
 }
+func (m *mockAISliceWorkerEnqueue) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
+	return nil
+}
 func (m *mockAISliceWorkerEnqueue) Start(ctx context.Context) {}
 
 type stubVideoProjectRepo struct{}
@@ -144,21 +147,34 @@ func (m *mockDraftWorkerEnqueue) Enqueue() { m.enqueued++ }
 func (m *mockDraftWorkerEnqueue) Process(ctx context.Context, task *model.Task) error {
 	return nil
 }
+func (m *mockDraftWorkerEnqueue) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
+	return nil
+}
 func (m *mockDraftWorkerEnqueue) Start(ctx context.Context) {}
+
+type mockAISliceDraftWorkerEnqueue struct {
+	enqueued int
+}
+
+func (m *mockAISliceDraftWorkerEnqueue) Enqueue() { m.enqueued++ }
+func (m *mockAISliceDraftWorkerEnqueue) Process(ctx context.Context, task *model.Task) error {
+	return nil
+}
+func (m *mockAISliceDraftWorkerEnqueue) Start(ctx context.Context) {}
 
 func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
-		ID: 5, Name: "切片项目A", LiveID: 1, PromptID: 1,
+		ID: 5, Name: "slice-project-A", LiveID: 1, PromptID: 1,
 		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
 		Clips1: []model.ClipWithText{},
 	}}
 	tasks := &mockTaskRepo{}
 	worker := &mockAISliceWorkerEnqueue{}
-	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "系统提示词内容"}}
-	svc := NewTaskService(tasks, live, projects, prompts, worker, nil)
+	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}}
+	svc := NewTaskService(tasks, live, projects, prompts, worker, nil, nil)
 
 	got, err := svc.CreateAISlice(context.Background(), 7, CreateAISliceInput{
 		VideoProjectID: 5,
@@ -175,10 +191,10 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 5 {
 		t.Errorf("VideoProjectID = %v, want 5", tasks.created.VideoProjectID)
 	}
-	if tasks.created == nil || tasks.created.VideoProjectName != "切片项目A" {
-		t.Errorf("VideoProjectName = %q, want 切片项目A", tasks.created.VideoProjectName)
+	if tasks.created == nil || tasks.created.VideoProjectName != "slice-project-A" {
+		t.Errorf("VideoProjectName = %q, want slice-project-A", tasks.created.VideoProjectName)
 	}
-	if tasks.created == nil || tasks.created.SysPrompt != "系统提示词内容" {
+	if tasks.created == nil || tasks.created.SysPrompt != "sys-prompt" {
 		t.Errorf("SysPrompt = %q", tasks.created.SysPrompt)
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":5`) {
@@ -194,7 +210,7 @@ func TestTaskService_CreateAISlice_PromptNotFound(t *testing.T) {
 		ID: 1, LiveID: 1, PromptID: 99,
 		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 100}},
 	}}
-	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil, nil)
 	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{VideoProjectID: 1})
 	if !errors.Is(err, ErrLLMSystemPromptNotFound) {
 		t.Fatalf("error = %v, want ErrLLMSystemPromptNotFound", err)
@@ -208,9 +224,7 @@ func TestTaskService_CreateAISlice_EmptyClips0(t *testing.T) {
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 1, LiveID: 1, PromptID: 1, Clips0: []model.ClipRange{},
 	}}
-	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{
-		prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys"},
-	}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys"}}, nil, nil, nil)
 	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{VideoProjectID: 1})
 	if err == nil || !strings.Contains(err.Error(), "clips0") {
 		t.Fatalf("error = %v, want clips0 error", err)
@@ -225,9 +239,7 @@ func TestTaskService_CreateAISlice_ASRNotReady(t *testing.T) {
 		ID: 1, LiveID: 1, PromptID: 1,
 		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 100}},
 	}}
-	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{
-		prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys"},
-	}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys"}}, nil, nil, nil)
 	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{VideoProjectID: 1})
 	if !errors.Is(err, ErrTaskASRNotReady) {
 		t.Fatalf("error = %v, want ErrTaskASRNotReady", err)
@@ -235,7 +247,7 @@ func TestTaskService_CreateAISlice_ASRNotReady(t *testing.T) {
 }
 
 func TestTaskService_CreateAISlice_MissingProjectID(t *testing.T) {
-	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
 	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -245,13 +257,13 @@ func TestTaskService_CreateAISlice_MissingProjectID(t *testing.T) {
 func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
-		ID: 3, Name: "草稿项目B", LiveID: 9,
+		ID: 3, Name: "draft-project-B", LiveID: 9,
 		Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}}},
 		Clips0: []model.ClipRange{},
 	}}
 	tasks := &mockTaskRepo{}
 	draftWorker := &mockDraftWorkerEnqueue{}
-	svc := NewTaskService(tasks, live, projects, &mockPromptRepo{}, nil, draftWorker)
+	svc := NewTaskService(tasks, live, projects, &mockPromptRepo{}, nil, draftWorker, nil)
 
 	got, err := svc.CreateDraft(context.Background(), 7, CreateDraftInput{VideoProjectID: 3})
 	if err != nil {
@@ -266,8 +278,8 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 3 {
 		t.Errorf("VideoProjectID = %v, want 3", tasks.created.VideoProjectID)
 	}
-	if tasks.created == nil || tasks.created.VideoProjectName != "草稿项目B" {
-		t.Errorf("VideoProjectName = %q, want 草稿项目B", tasks.created.VideoProjectName)
+	if tasks.created == nil || tasks.created.VideoProjectName != "draft-project-B" {
+		t.Errorf("VideoProjectName = %q, want draft-project-B", tasks.created.VideoProjectName)
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":3`) {
 		t.Errorf("ext = %v", tasks.created)
@@ -275,7 +287,7 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 }
 
 func TestTaskService_CreateDraft_MissingProjectID(t *testing.T) {
-	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
 	_, err := svc.CreateDraft(context.Background(), 1, CreateDraftInput{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -287,10 +299,62 @@ func TestTaskService_CreateDraft_EmptyClips(t *testing.T) {
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 1, LiveID: 1, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
 	}}
-	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil, nil)
 	_, err := svc.CreateDraft(context.Background(), 1, CreateDraftInput{VideoProjectID: 1})
 	if err == nil {
 		t.Fatal("expected empty clips error")
+	}
+}
+
+func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID: 1, ASRStatus: model.ASRStatusCompleted,
+	}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 2000}},
+		Clips1: []model.ClipWithText{},
+	}}
+	tasks := &mockTaskRepo{}
+	worker := &mockAISliceDraftWorkerEnqueue{}
+	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}}
+	svc := NewTaskService(tasks, live, projects, prompts, nil, nil, worker)
+
+	got, err := svc.CreateAISliceDraft(context.Background(), 3, CreateAISliceDraftInput{
+		VideoProjectID: 8,
+		CanvasWidth:    720,
+		CanvasHeight:   1280,
+	})
+	if err != nil {
+		t.Fatalf("CreateAISliceDraft() error = %v", err)
+	}
+	if got.Type != model.TaskTypeAISliceDraft || got.Status != model.TaskStatusPending {
+		t.Errorf("task = %#v", got)
+	}
+	if worker.enqueued != 1 {
+		t.Errorf("enqueued = %d, want 1", worker.enqueued)
+	}
+	if tasks.created == nil || model.UintValue(tasks.created.VideoProjectID) != 8 {
+		t.Errorf("VideoProjectID = %v", tasks.created.VideoProjectID)
+	}
+	if tasks.created == nil || tasks.created.SysPrompt != "sys-prompt" {
+		t.Errorf("SysPrompt = %q", tasks.created.SysPrompt)
+	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_width":720`) {
+		t.Errorf("ext = %v", tasks.created.Ext)
+	}
+}
+
+func TestTaskService_CreateAISliceDraft_PromptNotFound(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 1, ASRStatus: model.ASRStatusCompleted}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 1, LiveID: 1, PromptID: 9,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 100}},
+	}}
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{}, nil, nil, nil)
+	_, err := svc.CreateAISliceDraft(context.Background(), 1, CreateAISliceDraftInput{VideoProjectID: 1})
+	if !errors.Is(err, ErrLLMSystemPromptNotFound) {
+		t.Fatalf("error = %v, want ErrLLMSystemPromptNotFound", err)
 	}
 }
 
@@ -305,7 +369,7 @@ func TestTaskService_GetFromDB(t *testing.T) {
 	task := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing, Progress: 66, CreatedBy: 1}
 	_ = repo.Create(ctx, task)
 
-	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	svc := NewTaskService(repo, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
 	got, err := svc.Get(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
@@ -319,7 +383,7 @@ func TestBuildTaskListFilter_DateRange(t *testing.T) {
 	filter, err := buildTaskListFilter(TaskListOptions{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending,
 		StartDate: "2026-01-01", EndDate: "2026-01-31",
-		Keywords: []string{" 发布会 ", "", "春季"},
+		Keywords: []string{" launch ", "", "spring"},
 	})
 	if err != nil {
 		t.Fatalf("buildTaskListFilter() error = %v", err)
@@ -333,17 +397,17 @@ func TestBuildTaskListFilter_DateRange(t *testing.T) {
 	if filter.StartAt.Format("2006-01-02") != "2026-01-01" {
 		t.Errorf("StartAt = %v", filter.StartAt)
 	}
-	// end_date 含当日整天：次日零点（不含）
+	// end_date includes the whole day: next day 00:00 exclusive
 	if filter.EndAt.Format("2006-01-02") != "2026-02-01" {
 		t.Errorf("EndAt = %v, want 2026-02-01", filter.EndAt)
 	}
-	if len(filter.Keywords) != 2 || filter.Keywords[0] != "发布会" || filter.Keywords[1] != "春季" {
+	if len(filter.Keywords) != 2 || filter.Keywords[0] != "launch" || filter.Keywords[1] != "spring" {
 		t.Errorf("Keywords = %v", filter.Keywords)
 	}
 }
 
 func TestTaskService_List_InvalidDate(t *testing.T) {
-	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil)
+	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
 	_, _, err := svc.List(context.Background(), 1, 10, TaskListOptions{StartDate: "2026/01/01"})
 	if err == nil || !strings.Contains(err.Error(), "start_date") {
 		t.Fatalf("error = %v, want start_date format error", err)

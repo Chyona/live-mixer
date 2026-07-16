@@ -88,13 +88,15 @@ func main() {
 		},
 		Logger: logger,
 	})
-	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker, draftWorker)
+	aiSliceDraftWorker := service.NewAISliceDraftWorker(taskRepo, videoProjectRepo, aiSliceWorker, draftWorker, logger)
+	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker, draftWorker, aiSliceDraftWorker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	liveMaterialASRWorker.Start(ctx)
 	aiSliceWorker.Start(ctx)
 	draftWorker.Start(ctx)
+	aiSliceDraftWorker.Start(ctx)
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
 	v1ASRHandler := v1handler.NewASRHandler(asrService)
