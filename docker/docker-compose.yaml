@@ -13,6 +13,7 @@ services:
       - "30000:30000"
     volumes:
       - ./logs:/app/logs
+      - ./html:/app/html
     env_file:
       - .env
     environment:
