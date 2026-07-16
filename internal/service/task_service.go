@@ -64,21 +64,12 @@ type TaskExt struct {
 	Clips0           []model.ClipRange `json:"clips0,omitempty"`
 }
 
-// TaskUpdateInput 任务可更新字段入参。
-// 指针为 nil 表示未传该字段；非 nil（含空字符串）表示写入该值。
-type TaskUpdateInput struct {
-	DraftURL *string
-	VideoURL *string
-}
-
 // TaskService 异步任务业务接口。
 type TaskService interface {
 	CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) (*model.Task, error)
 	CreateDraft(ctx context.Context, createdBy uint, input CreateDraftInput) (*model.Task, error)
 	CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error)
 	Get(ctx context.Context, id uint) (*model.Task, error)
-	// Update 仅更新请求中显式传入的 draft_url / video_url。
-	Update(ctx context.Context, id uint, input TaskUpdateInput) (*model.Task, error)
 	List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.Task, int64, error)
 }
 
@@ -337,23 +328,6 @@ func (s *taskService) Get(ctx context.Context, id uint) (*model.Task, error) {
 		return nil, err
 	}
 	return task, nil
-}
-
-// Update 更新任务结果 URL（draft_url / video_url）；未传字段保持不变。
-func (s *taskService) Update(ctx context.Context, id uint, input TaskUpdateInput) (*model.Task, error) {
-	if input.DraftURL == nil && input.VideoURL == nil {
-		return nil, errors.New("至少需要传入 draft_url 或 video_url 之一")
-	}
-	if _, err := s.taskRepo.GetByID(ctx, id); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrTaskNotFound
-		}
-		return nil, err
-	}
-	if err := s.taskRepo.UpdateURLs(ctx, id, input.DraftURL, input.VideoURL); err != nil {
-		return nil, err
-	}
-	return s.taskRepo.GetByID(ctx, id)
 }
 
 func (s *taskService) List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.Task, int64, error) {

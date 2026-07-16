@@ -1138,57 +1138,6 @@ const docTemplate = `{
                         }
                     }
                 }
-            },
-            "put": {
-                "description": "仅更新请求中显式传入的 draft_url / video_url；未传字段保持不变。草稿生成完成后系统会自动写入 draft_url，客户端也可通过本接口回写 video_url",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "异步任务"
-                ],
-                "summary": "更新任务结果 URL",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "任务 ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "更新内容",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.UpdateTaskRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
-                        }
-                    }
-                }
             }
         },
         "/v1/video-projects": {
@@ -1890,19 +1839,6 @@ const docTemplate = `{
                     "description": "可选；传入时更新项目来源（空字符串表示清空），未传则不更新",
                     "type": "string",
                     "maxLength": 32
-                }
-            }
-        },
-        "internal_handler_v1.UpdateTaskRequest": {
-            "type": "object",
-            "properties": {
-                "draft_url": {
-                    "type": "string",
-                    "maxLength": 1024
-                },
-                "video_url": {
-                    "type": "string",
-                    "maxLength": 1024
                 }
             }
         },

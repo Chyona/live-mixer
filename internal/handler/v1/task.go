@@ -247,53 +247,6 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 	response.Success(c, task)
 }
 
-// UpdateTaskRequest 更新任务请求体（仅 draft_url / video_url）。
-// 指针为 nil 表示未传；非 nil（含空字符串）表示写入该值。
-type UpdateTaskRequest struct {
-	DraftURL *string `json:"draft_url" binding:"omitempty,max=1024"`
-	VideoURL *string `json:"video_url" binding:"omitempty,max=1024"`
-}
-
-// UpdateTask 更新任务结果 URL
-// @Summary      更新任务结果 URL
-// @Description  仅更新请求中显式传入的 draft_url / video_url；未传字段保持不变。草稿生成完成后系统会自动写入 draft_url，客户端也可通过本接口回写 video_url
-// @Tags         异步任务
-// @Accept       json
-// @Produce      json
-// @Param        id    path      int                true  "任务 ID"
-// @Param        body  body      UpdateTaskRequest  true  "更新内容"
-// @Success      200   {object}  response.Body
-// @Failure      400   {object}  response.Body
-// @Failure      404   {object}  response.Body
-// @Router       /v1/tasks/{id} [put]
-func (h *TaskHandler) UpdateTask(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.BadRequest(c, "无效的任务 ID")
-		return
-	}
-
-	var req UpdateTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
-		return
-	}
-
-	task, err := h.taskService.Update(c.Request.Context(), id, service.TaskUpdateInput{
-		DraftURL: req.DraftURL,
-		VideoURL: req.VideoURL,
-	})
-	if err != nil {
-		if errors.Is(err, service.ErrTaskNotFound) {
-			response.NotFound(c, err.Error())
-			return
-		}
-		response.BadRequest(c, err.Error())
-		return
-	}
-	response.Success(c, task)
-}
-
 func writeTaskCreateError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrLiveMaterialNotFound),
