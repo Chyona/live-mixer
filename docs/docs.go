@@ -1009,7 +1009,7 @@ const docTemplate = `{
         },
         "/v1/tasks/ai-slice-draft": {
             "post": {
-                "description": "异步：先 AI 切片再 ffmpeg+capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id",
+                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿生成并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1055,7 +1055,7 @@ const docTemplate = `{
         },
         "/v1/tasks/draft": {
             "post": {
-                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate 生成剪映草稿；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
+                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate 生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1101,7 +1101,7 @@ const docTemplate = `{
         },
         "/v1/tasks/{id}": {
             "get": {
-                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、video_project_name 等字段，用于轮询异步任务进度",
+                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度",
                 "produces": [
                     "application/json"
                 ],
@@ -1120,7 +1120,58 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK；data 为 live-mixer_internal_model.Task（含 video_project_name）",
+                        "description": "OK；data 为 live-mixer_internal_model.Task（含 draft_url/video_url）",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "仅更新请求中显式传入的 draft_url / video_url；未传字段保持不变。草稿生成完成后系统会自动写入 draft_url，客户端也可通过本接口回写 video_url",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "更新任务结果 URL",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新内容",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_v1.UpdateTaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/live-mixer_pkg_response.Body"
                         }
@@ -1289,7 +1340,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/draft_url/video_url/project_source）；未传字段保持不变",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/project_source）；未传字段保持不变",
                 "consumes": [
                     "application/json"
                 ],
@@ -1665,12 +1716,6 @@ const docTemplate = `{
                         "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
                     }
                 },
-                "draft_url": {
-                    "type": "string"
-                },
-                "video_url": {
-                    "type": "string"
-                },
                 "project_source": {
                     "description": "项目来源",
                     "type": "string"
@@ -1829,10 +1874,6 @@ const docTemplate = `{
                         "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
                     }
                 },
-                "draft_url": {
-                    "type": "string",
-                    "maxLength": 1024
-                },
                 "name": {
                     "type": "string",
                     "maxLength": 64
@@ -1845,14 +1886,23 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 256
                 },
-                "video_url": {
-                    "type": "string",
-                    "maxLength": 1024
-                },
                 "project_source": {
                     "description": "可选；传入时更新项目来源（空字符串表示清空），未传则不更新",
                     "type": "string",
                     "maxLength": 32
+                }
+            }
+        },
+        "internal_handler_v1.UpdateTaskRequest": {
+            "type": "object",
+            "properties": {
+                "draft_url": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "video_url": {
+                    "type": "string",
+                    "maxLength": 1024
                 }
             }
         },
@@ -1942,6 +1992,14 @@ const docTemplate = `{
                 },
                 "video_project_name": {
                     "description": "关联剪辑项目名称（冗余字段，列表筛选与展示用）",
+                    "type": "string"
+                },
+                "draft_url": {
+                    "description": "剪映草稿 URL（草稿生成/一键成片完成后写入）",
+                    "type": "string"
+                },
+                "video_url": {
+                    "description": "视频地址 URL",
                     "type": "string"
                 },
                 "created_by": {

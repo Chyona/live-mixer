@@ -88,8 +88,6 @@ CREATE TABLE IF NOT EXISTS video_project (
     prompt_id       BIGINT      NOT NULL DEFAULT 1,
     clips0          JSONB       NOT NULL DEFAULT '[]',
     clips1          JSONB       NOT NULL DEFAULT '[]',
-    draft_url       VARCHAR(1024),
-    video_url       VARCHAR(1024),
     -- 项目来源标识，默认为空
     project_source  VARCHAR(32) NOT NULL DEFAULT '',
     created_by      BIGINT      NOT NULL REFERENCES account (id),
@@ -106,8 +104,6 @@ COMMENT ON COLUMN video_project.live_id IS '关联直播素材 ID（live_materia
 COMMENT ON COLUMN video_project.prompt_id IS '提示词 ID（llm_system_prompt.id），无外键约束，默认 1';
 COMMENT ON COLUMN video_project.clips0 IS '视频切片列表（毫秒），格式：[{"start_time":0,"end_time":10}]';
 COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片列表（毫秒），格式：[{"text":"...","start_time":0,"end_time":10,"words":[{"text":"...","start_time":0,"end_time":160}]}]';
-COMMENT ON COLUMN video_project.draft_url IS '剪映草稿 URL';
-COMMENT ON COLUMN video_project.video_url IS '视频地址 URL';
 COMMENT ON COLUMN video_project.project_source IS '项目来源，默认为空';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
@@ -158,6 +154,9 @@ CREATE TABLE IF NOT EXISTS task (
     video_project_id       BIGINT REFERENCES video_project (id) ON DELETE SET NULL,
     -- 冗余存项目名称，便于列表展示与删除项目后仍可检索（与 video_project.name 同长）
     video_project_name     VARCHAR(64) NOT NULL DEFAULT '',
+    -- 草稿/成片结果 URL：草稿生成与一键成片完成后写入 draft_url；video_url 可由客户端回写
+    draft_url              VARCHAR(1024),
+    video_url              VARCHAR(1024),
     created_by             BIGINT      NOT NULL REFERENCES account (id),
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -179,6 +178,8 @@ COMMENT ON COLUMN task.usr_prompt IS '用户提示词';
 COMMENT ON COLUMN task.error_message IS '失败原因';
 COMMENT ON COLUMN task.video_project_id IS '关联剪辑项目 ID（video_project.id），可为空';
 COMMENT ON COLUMN task.video_project_name IS '关联剪辑项目名称（冗余自 video_project.name），默认为空';
+COMMENT ON COLUMN task.draft_url IS '剪映草稿 URL（草稿生成/一键成片完成后写入）';
+COMMENT ON COLUMN task.video_url IS '视频地址 URL';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';
 COMMENT ON COLUMN task.created_at IS '创建时间';
 COMMENT ON COLUMN task.updated_at IS '更新时间';
