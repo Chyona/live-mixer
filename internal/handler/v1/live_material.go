@@ -48,9 +48,9 @@ type UpdateLiveMaterialRequest struct {
 	Remark string `json:"remark" binding:"max=256"`
 }
 
-// RetryASRRequest 重新触发 ASR 请求体。
+// RetryASRRequest 重新触发 ASR 请求体（仅 failed 可重试；force 字段保留兼容，已忽略）。
 type RetryASRRequest struct {
-	Force bool `json:"force"` // 为 true 时允许覆盖已完成的 ASR
+	Force bool `json:"force"`
 }
 
 // LiveMaterialDetailResponse 直播素材详情响应，live_asr 为分句数组格式。
@@ -322,12 +322,12 @@ func (h *LiveMaterialHandler) DeleteLiveMaterial(c *gin.Context) {
 
 // RetryASR 重新触发直播素材 ASR
 // @Summary      重新 ASR
-// @Description  将素材 ASR 重置为 pending 并后台重新识别；processing 中不可提交；completed 需 force=true
+// @Description  仅 asr_status=failed 时可重试：重置为 pending，由后台 Worker 扫库自动执行
 // @Tags         直播素材
 // @Accept       json
 // @Produce      json
 // @Param        id    path  int              true  "素材 ID"
-// @Param        body  body  RetryASRRequest  false "是否强制覆盖已完成结果"
+// @Param        body  body  RetryASRRequest  false "兼容字段，可空"
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      404   {object}  response.Body

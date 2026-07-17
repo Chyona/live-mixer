@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
@@ -13,25 +14,36 @@ import (
 	"go.uber.org/zap"
 )
 
-const liveMaterialASRQueueSize = 256
+const (
+	// liveMaterialASRDefaultConcurrency 单实例内并行抢占/执行 ASR 的 Worker 数。
+	liveMaterialASRDefaultConcurrency = 1
+	// liveMaterialASRPollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
+	liveMaterialASRPollInterval = 3 * time.Second
+	// liveMaterialASRStaleTimeout processing 超时未更新进度则自动改回 pending。
+	liveMaterialASRStaleTimeout = 60 * time.Minute
+)
 
-// LiveMaterialASRWorker 直播素材 ASR 后台识别调度器。
+// LiveMaterialASRWorker 直播素材 ASR 后台识别调度器：DB 原子抢占 + 定时 poll。
 type LiveMaterialASRWorker interface {
-	// Enqueue 非阻塞入队，创建素材后触发后台识别。
-	Enqueue(materialID uint)
-	// Process 执行单条素材的 ASR 识别流程。
-	Process(ctx context.Context, materialID uint) error
+	// Enqueue 非阻塞唤醒调度循环尝试领取任务。
+	Enqueue()
+	// Process 执行已抢占（processing）的 ASR 识别流程。
+	Process(ctx context.Context, material *model.LiveMaterial) error
 	// Start 启动后台调度循环。
 	Start(ctx context.Context)
 }
 
 type liveMaterialASRWorker struct {
-	repo           repository.LiveMaterialRepository
-	asrService     ASRService
-	audioPreparer  LiveMaterialASRAudioPreparer
-	logger         *zap.Logger
-	queue          chan uint
-	startOnce      sync.Once
+	repo          repository.LiveMaterialRepository
+	asrService    ASRService
+	audioPreparer LiveMaterialASRAudioPreparer
+	logger        *zap.Logger
+	concurrency   int
+	pollInterval  time.Duration
+	staleTimeout  time.Duration
+
+	wake      chan struct{}
+	startOnce sync.Once
 }
 
 // NewLiveMaterialASRWorker 创建直播素材 ASR 后台 worker。
@@ -49,53 +61,111 @@ func NewLiveMaterialASRWorker(
 		asrService:    asrService,
 		audioPreparer: audioPreparer,
 		logger:        logger,
-		queue:         make(chan uint, liveMaterialASRQueueSize),
+		concurrency:   liveMaterialASRDefaultConcurrency,
+		pollInterval:  liveMaterialASRPollInterval,
+		staleTimeout:  liveMaterialASRStaleTimeout,
+		wake:          make(chan struct{}, 1),
 	}
 }
 
-func (w *liveMaterialASRWorker) Enqueue(materialID uint) {
+// Enqueue 非阻塞唤醒调度器，创建/重试后调用以尽快领取。
+func (w *liveMaterialASRWorker) Enqueue() {
 	select {
-	case w.queue <- materialID:
+	case w.wake <- struct{}{}:
 	default:
-		// 队列满时异步等待入队，保证 Enqueue 对调用方非阻塞。
-		go func() { w.queue <- materialID }()
+		// 已有唤醒信号在队列中，无需重复投递。
 	}
 }
 
+// Start 启动若干并发领取循环 + 定时 poll，保证重启后 pending 任务仍会被处理。
 func (w *liveMaterialASRWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
-		go w.run(ctx)
+		n := w.concurrency
+		if n <= 0 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			go w.loop(ctx, i)
+		}
+		go w.pollLoop(ctx)
+		w.logger.Info("直播素材 ASR Worker 已启动", zap.Int("concurrency", n))
 	})
 }
 
-func (w *liveMaterialASRWorker) run(ctx context.Context) {
+func (w *liveMaterialASRWorker) pollLoop(ctx context.Context) {
+	ticker := time.NewTicker(w.pollInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case materialID := <-w.queue:
-			if err := w.Process(ctx, materialID); err != nil {
-				// 常见失败场景已在 Process / failASR 内记录，此处仅兜底未显式打日志的错误。
-				w.logger.Error("直播素材 ASR 任务结束（失败）",
-					zap.Uint("material_id", materialID),
-					zap.Error(err),
-				)
-			}
+		case <-ticker.C:
+			w.requeueStale(ctx)
+			w.Enqueue()
 		}
 	}
 }
 
-func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) error {
-	material, err := w.repo.GetByID(ctx, materialID)
+func (w *liveMaterialASRWorker) requeueStale(ctx context.Context) {
+	n, err := w.repo.RequeueStaleProcessingASR(ctx, w.staleTimeout)
 	if err != nil {
-		w.logger.Error("直播素材 ASR 查询失败",
-			zap.Uint("material_id", materialID),
-			zap.Error(err),
-		)
-		return fmt.Errorf("查询素材失败: %w", err)
+		w.logger.Warn("回收超时 ASR 任务失败", zap.Error(err))
+		return
 	}
-	if material.ASRStatus != model.ASRStatusPending {
-		w.logger.Debug("跳过非待处理素材的 ASR 任务",
+	if n > 0 {
+		w.logger.Warn("已将超时 ASR 任务重新排队", zap.Int64("count", n))
+	}
+}
+
+func (w *liveMaterialASRWorker) loop(ctx context.Context, workerID int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.wake:
+			w.drain(ctx, workerID)
+		}
+	}
+}
+
+// drain 循环抢占并处理，直到当前没有更多 pending ASR。
+func (w *liveMaterialASRWorker) drain(ctx context.Context, workerID int) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		material, err := w.repo.ClaimPendingASR(ctx)
+		if err != nil {
+			w.logger.Error("抢占直播素材 ASR 任务失败",
+				zap.Int("worker_id", workerID),
+				zap.Error(err),
+			)
+			return
+		}
+		if material == nil {
+			return
+		}
+		w.logger.Info("已抢占直播素材 ASR 任务",
+			zap.Int("worker_id", workerID),
+			zap.Uint("material_id", material.ID),
+		)
+		if err := w.Process(ctx, material); err != nil {
+			w.logger.Error("直播素材 ASR 任务执行失败",
+				zap.Uint("material_id", material.ID),
+				zap.Error(err),
+			)
+		}
+	}
+}
+
+// Process 执行已抢占素材的 ASR：音频预处理 → 识别 → 写回结果。
+func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.LiveMaterial) error {
+	if material == nil {
+		return fmt.Errorf("素材不能为空")
+	}
+	materialID := material.ID
+	if material.ASRStatus != model.ASRStatusProcessing {
+		w.logger.Debug("跳过非处理中素材的 ASR 任务",
 			zap.Uint("material_id", materialID),
 			zap.String("asr_status", string(material.ASRStatus)),
 		)
@@ -106,10 +176,6 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, materialID uint) er
 		zap.Uint("material_id", materialID),
 		zap.String("live_url", material.LiveURL),
 	)
-
-	if err := w.repo.UpdateASRProcessing(ctx, materialID); err != nil {
-		return fmt.Errorf("更新 ASR 处理中状态失败: %w", err)
-	}
 
 	var lastProgress int16 = 5
 	updateProgress := func(progress int16) {

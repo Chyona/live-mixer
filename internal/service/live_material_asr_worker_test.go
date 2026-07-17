@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
@@ -34,6 +35,25 @@ func (m *workerMockRepo) List(ctx context.Context, filter repository.LiveMateria
 }
 
 func (m *workerMockRepo) Delete(ctx context.Context, id uint) error { return nil }
+
+func (m *workerMockRepo) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
+	for id := uint(1); id <= 1000; id++ {
+		material, ok := m.materials[id]
+		if !ok || material.ASRStatus != model.ASRStatusPending {
+			continue
+		}
+		material.ASRStatus = model.ASRStatusProcessing
+		material.ASRProgress = 5
+		material.ASRErrorMsg = ""
+		stored := *material
+		return &stored, nil
+	}
+	return nil, nil
+}
+
+func (m *workerMockRepo) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return 0, nil
+}
 
 func (m *workerMockRepo) UpdateASRProcessing(ctx context.Context, id uint) error {
 	material := m.materials[id]
@@ -120,7 +140,7 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 			1: {
 				ID:        1,
 				LiveURL:   "https://example.com/live.mp4",
-				ASRStatus: model.ASRStatusPending,
+				ASRStatus: model.ASRStatusProcessing,
 			},
 		},
 	}
@@ -147,7 +167,7 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 	}
 	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, nil)
 
-	if err := worker.Process(context.Background(), 1); err != nil {
+	if err := worker.Process(context.Background(), repo.materials[1]); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 
@@ -175,7 +195,7 @@ func TestLiveMaterialASRWorker_Process_Failed(t *testing.T) {
 			2: {
 				ID:        2,
 				LiveURL:   "https://example.com/live.mp3",
-				ASRStatus: model.ASRStatusPending,
+				ASRStatus: model.ASRStatusProcessing,
 			},
 		},
 	}
@@ -193,7 +213,7 @@ func TestLiveMaterialASRWorker_Process_Failed(t *testing.T) {
 		},
 	}, nil)
 
-	if err := worker.Process(context.Background(), 2); err == nil {
+	if err := worker.Process(context.Background(), repo.materials[2]); err == nil {
 		t.Fatal("Process() error = nil, want error")
 	}
 
@@ -206,7 +226,7 @@ func TestLiveMaterialASRWorker_Process_Failed(t *testing.T) {
 	}
 }
 
-func TestLiveMaterialASRWorker_Process_SkipNonPending(t *testing.T) {
+func TestLiveMaterialASRWorker_Process_SkipNonProcessing(t *testing.T) {
 	repo := &workerMockRepo{
 		materials: map[uint]*model.LiveMaterial{
 			3: {ID: 3, ASRStatus: model.ASRStatusCompleted},
@@ -227,18 +247,18 @@ func TestLiveMaterialASRWorker_Process_SkipNonPending(t *testing.T) {
 		},
 	}, nil)
 
-	if err := worker.Process(context.Background(), 3); err != nil {
+	if err := worker.Process(context.Background(), repo.materials[3]); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 	if called || prepareCalled {
-		t.Error("ASR and preparer should not be called for non-pending material")
+		t.Error("ASR and preparer should not be called for non-processing material")
 	}
 }
 
 func TestLiveMaterialASRWorker_Process_PrepareFailed(t *testing.T) {
 	repo := &workerMockRepo{
 		materials: map[uint]*model.LiveMaterial{
-			4: {ID: 4, LiveURL: "https://example.com/live.mp4", ASRStatus: model.ASRStatusPending},
+			4: {ID: 4, LiveURL: "https://example.com/live.mp4", ASRStatus: model.ASRStatusProcessing},
 		},
 	}
 	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, &mockASRAudioPreparer{
@@ -247,7 +267,7 @@ func TestLiveMaterialASRWorker_Process_PrepareFailed(t *testing.T) {
 		},
 	}, nil)
 
-	if err := worker.Process(context.Background(), 4); err == nil {
+	if err := worker.Process(context.Background(), repo.materials[4]); err == nil {
 		t.Fatal("Process() error = nil, want prepare error")
 	}
 	if repo.materials[4].ASRStatus != model.ASRStatusFailed {
@@ -258,7 +278,7 @@ func TestLiveMaterialASRWorker_Process_PrepareFailed(t *testing.T) {
 func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 	repo := &workerMockRepo{
 		materials: map[uint]*model.LiveMaterial{
-			5: {ID: 5, LiveURL: "https://example.com/direct.mp3", ASRStatus: model.ASRStatusPending},
+			5: {ID: 5, LiveURL: "https://example.com/direct.mp3", ASRStatus: model.ASRStatusProcessing},
 		},
 	}
 	var asrURL string
@@ -269,7 +289,7 @@ func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 		},
 	}, nil, nil)
 
-	if err := worker.Process(context.Background(), 5); err != nil {
+	if err := worker.Process(context.Background(), repo.materials[5]); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 	if asrURL != "https://example.com/direct.mp3" {

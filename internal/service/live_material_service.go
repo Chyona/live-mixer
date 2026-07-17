@@ -34,8 +34,8 @@ var ErrLiveMaterialNotFound = errors.New("直播素材不存在")
 // ErrASRAlreadyProcessing ASR 正在识别中，不允许重复提交。
 var ErrASRAlreadyProcessing = errors.New("ASR 进行中，请勿重复提交")
 
-// ErrASRCompletedNeedForce ASR 已完成，需传 force=true 才能重试。
-var ErrASRCompletedNeedForce = errors.New("ASR 已完成，如需重新识别请设置 force=true")
+// ErrASRRetryOnlyFailed 仅失败状态允许重试 ASR。
+var ErrASRRetryOnlyFailed = errors.New("仅 ASR 失败状态可重试")
 
 // ErrASRSubtitleNotReady ASR 未完成，无法导出字幕。
 var ErrASRSubtitleNotReady = errors.New("ASR 未完成，无法导出字幕")
@@ -55,7 +55,7 @@ type LiveMaterialService interface {
 	Get(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// Delete 删除直播素材，并级联删除关联剪辑项目。
 	Delete(ctx context.Context, id uint) error
-	// RetryASR 将素材 ASR 重置为 pending 并重新入队；force 允许在 completed 时覆盖。
+	// RetryASR 将失败的 ASR 重置为 pending，由后台 Worker 扫库重试；force 保留兼容，已忽略。
 	RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error)
 	// DownloadASRSubtitle 返回可用于直接下载的 ASR JSON 内容与建议文件名。
 	DownloadASRSubtitle(ctx context.Context, id uint) (content []byte, fileName string, err error)
@@ -102,8 +102,9 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 	if err := s.liveMaterialRepo.Create(ctx, material); err != nil {
 		return nil, err
 	}
+	// 仅写库为 pending；唤醒 Worker 尽快扫库抢占（即使无唤醒，定时 poll 也会兜底）。
 	if s.asrWorker != nil {
-		s.asrWorker.Enqueue(material.ID)
+		s.asrWorker.Enqueue()
 	}
 	return material, nil
 }
@@ -208,6 +209,7 @@ func (s *liveMaterialService) Delete(ctx context.Context, id uint) error {
 }
 
 func (s *liveMaterialService) RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error) {
+	_ = force // 兼容旧请求体；仅 failed 可重试。
 	material, err := s.liveMaterialRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -217,19 +219,18 @@ func (s *liveMaterialService) RetryASR(ctx context.Context, id uint, force bool)
 	}
 
 	switch material.ASRStatus {
+	case model.ASRStatusFailed:
+		// 仅失败可重试：改回 pending，由 Worker 扫库领取。
 	case model.ASRStatusProcessing:
 		return nil, ErrASRAlreadyProcessing
-	case model.ASRStatusCompleted:
-		if !force {
-			return nil, ErrASRCompletedNeedForce
-		}
-	case model.ASRStatusPending, model.ASRStatusFailed:
-		// 允许重试
 	default:
-		return nil, errors.New("当前 ASR 状态不允许重试")
+		return nil, ErrASRRetryOnlyFailed
 	}
 
 	if err := s.liveMaterialRepo.ResetASRToPending(ctx, id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrASRRetryOnlyFailed
+		}
 		return nil, err
 	}
 	material, err = s.liveMaterialRepo.GetByID(ctx, id)
@@ -237,7 +238,7 @@ func (s *liveMaterialService) RetryASR(ctx context.Context, id uint, force bool)
 		return nil, err
 	}
 	if s.asrWorker != nil {
-		s.asrWorker.Enqueue(id)
+		s.asrWorker.Enqueue()
 	}
 	return material, nil
 }

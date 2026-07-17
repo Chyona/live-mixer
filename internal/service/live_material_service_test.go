@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
@@ -65,6 +66,12 @@ func (m *mockLiveMaterialRepo) List(ctx context.Context, filter repository.LiveM
 	return nil, 0, nil
 }
 
+func (m *mockLiveMaterialRepo) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
+	return nil, nil
+}
+func (m *mockLiveMaterialRepo) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return 0, nil
+}
 func (m *mockLiveMaterialRepo) UpdateASRProcessing(ctx context.Context, id uint) error { return nil }
 func (m *mockLiveMaterialRepo) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
 	return nil
@@ -81,6 +88,9 @@ func (m *mockLiveMaterialRepo) ResetASRToPending(ctx context.Context, id uint) e
 	}
 	material, ok := m.materials[id]
 	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	if material.ASRStatus != model.ASRStatusFailed {
 		return gorm.ErrRecordNotFound
 	}
 	material.ASRStatus = model.ASRStatusPending
@@ -297,11 +307,11 @@ func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_Create_EnqueuesASR 验证创建成功后入队 ASR。
-func TestLiveMaterialService_Create_EnqueuesASR(t *testing.T) {
-	var enqueued uint
+// TestLiveMaterialService_Create_WakesASRWorker 验证创建成功后唤醒 ASR Worker。
+func TestLiveMaterialService_Create_WakesASRWorker(t *testing.T) {
+	enqueued := 0
 	worker := &mockASRWorker{
-		enqueueFn: func(materialID uint) { enqueued = materialID },
+		enqueueFn: func() { enqueued++ },
 	}
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, worker)
@@ -310,22 +320,58 @@ func TestLiveMaterialService_Create_EnqueuesASR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if enqueued != material.ID {
-		t.Errorf("enqueued = %d, want %d", enqueued, material.ID)
+	if material.ASRStatus != model.ASRStatusPending {
+		t.Errorf("ASRStatus = %q, want pending", material.ASRStatus)
+	}
+	if enqueued != 1 {
+		t.Errorf("enqueued = %d, want 1", enqueued)
+	}
+}
+
+func TestLiveMaterialService_RetryASR_OnlyFailed(t *testing.T) {
+	repo := &mockLiveMaterialRepo{
+		materials: map[uint]*model.LiveMaterial{
+			1: {ID: 1, ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "boom"},
+			2: {ID: 2, ASRStatus: model.ASRStatusCompleted},
+			3: {ID: 3, ASRStatus: model.ASRStatusProcessing},
+		},
+		nextID: 3,
+	}
+	enqueued := 0
+	svc := NewLiveMaterialService(repo, &mockASRWorker{enqueueFn: func() { enqueued++ }})
+
+	got, err := svc.RetryASR(context.Background(), 1, false)
+	if err != nil {
+		t.Fatalf("RetryASR(failed) error = %v", err)
+	}
+	if got.ASRStatus != model.ASRStatusPending {
+		t.Errorf("ASRStatus = %q, want pending", got.ASRStatus)
+	}
+	if enqueued != 1 {
+		t.Errorf("enqueued = %d, want 1", enqueued)
+	}
+
+	if _, err := svc.RetryASR(context.Background(), 2, true); !errors.Is(err, ErrASRRetryOnlyFailed) {
+		t.Errorf("RetryASR(completed) error = %v, want ErrASRRetryOnlyFailed", err)
+	}
+	if _, err := svc.RetryASR(context.Background(), 3, false); !errors.Is(err, ErrASRAlreadyProcessing) {
+		t.Errorf("RetryASR(processing) error = %v, want ErrASRAlreadyProcessing", err)
 	}
 }
 
 type mockASRWorker struct {
-	enqueueFn func(materialID uint)
+	enqueueFn func()
 }
 
-func (m *mockASRWorker) Enqueue(materialID uint) {
+func (m *mockASRWorker) Enqueue() {
 	if m.enqueueFn != nil {
-		m.enqueueFn(materialID)
+		m.enqueueFn()
 	}
 }
-func (m *mockASRWorker) Process(ctx context.Context, materialID uint) error { return nil }
-func (m *mockASRWorker) Start(ctx context.Context)                             {}
+func (m *mockASRWorker) Process(ctx context.Context, material *model.LiveMaterial) error {
+	return nil
+}
+func (m *mockASRWorker) Start(ctx context.Context) {}
 
 // TestLiveMaterialService_Get_NotFound 验证素材不存在时返回错误。
 func TestLiveMaterialService_Get_NotFound(t *testing.T) {

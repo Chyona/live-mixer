@@ -152,6 +152,122 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 	}
 }
 
+// TestLiveMaterialRepository_ClaimPendingASR 验证悲观锁抢占 pending → processing。
+func TestLiveMaterialRepository_ClaimPendingASR(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	first := &model.LiveMaterial{
+		Name: "先创建", LiveURL: "https://example.com/a.mp4",
+		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	second := &model.LiveMaterial{
+		Name: "后创建", LiveURL: "https://example.com/b.mp4",
+		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, first); err != nil {
+		t.Fatalf("Create first error = %v", err)
+	}
+	if err := repo.Create(ctx, second); err != nil {
+		t.Fatalf("Create second error = %v", err)
+	}
+
+	claimed, err := repo.ClaimPendingASR(ctx)
+	if err != nil {
+		t.Fatalf("ClaimPendingASR() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != first.ID {
+		t.Fatalf("claimed = %#v, want id=%d", claimed, first.ID)
+	}
+	if claimed.ASRStatus != model.ASRStatusProcessing || claimed.ASRProgress != 5 {
+		t.Errorf("claimed state = %s/%d, want processing/5", claimed.ASRStatus, claimed.ASRProgress)
+	}
+
+	claimed2, err := repo.ClaimPendingASR(ctx)
+	if err != nil {
+		t.Fatalf("second ClaimPendingASR() error = %v", err)
+	}
+	if claimed2 == nil || claimed2.ID != second.ID {
+		t.Fatalf("second claimed = %#v, want id=%d", claimed2, second.ID)
+	}
+
+	none, err := repo.ClaimPendingASR(ctx)
+	if err != nil {
+		t.Fatalf("empty ClaimPendingASR() error = %v", err)
+	}
+	if none != nil {
+		t.Fatalf("empty claim = %#v, want nil", none)
+	}
+}
+
+// TestLiveMaterialRepository_RequeueStaleProcessingASR 验证超时 processing 回收为 pending。
+func TestLiveMaterialRepository_RequeueStaleProcessingASR(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "卡死素材", LiveURL: "https://example.com/stuck.mp4",
+		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, material); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	claimed, err := repo.ClaimPendingASR(ctx)
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimPendingASR() = %#v, err=%v", claimed, err)
+	}
+
+	stale := time.Now().Add(-2 * time.Hour)
+	if err := db.Model(&model.LiveMaterial{}).Where("id = ?", material.ID).
+		Update("asr_updated_at", stale).Error; err != nil {
+		t.Fatalf("backdate asr_updated_at error = %v", err)
+	}
+
+	n, err := repo.RequeueStaleProcessingASR(ctx, time.Hour)
+	if err != nil {
+		t.Fatalf("RequeueStaleProcessingASR() error = %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("requeued = %d, want 1", n)
+	}
+	got, _ := repo.GetByID(ctx, material.ID)
+	if got.ASRStatus != model.ASRStatusPending {
+		t.Errorf("ASRStatus = %q, want pending", got.ASRStatus)
+	}
+}
+
+// TestLiveMaterialRepository_ResetASRToPending_OnlyFailed 验证仅 failed 可重置。
+func TestLiveMaterialRepository_ResetASRToPending_OnlyFailed(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	failed := &model.LiveMaterial{
+		Name: "失败", LiveURL: "https://example.com/f.mp4",
+		LiveASR: "{}", ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "x", CreatedBy: 1,
+	}
+	completed := &model.LiveMaterial{
+		Name: "完成", LiveURL: "https://example.com/c.mp4",
+		LiveASR: `{"ok":true}`, ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
+	}
+	_ = repo.Create(ctx, failed)
+	_ = repo.Create(ctx, completed)
+
+	if err := repo.ResetASRToPending(ctx, failed.ID); err != nil {
+		t.Fatalf("ResetASRToPending(failed) error = %v", err)
+	}
+	got, _ := repo.GetByID(ctx, failed.ID)
+	if got.ASRStatus != model.ASRStatusPending {
+		t.Errorf("failed reset status = %q, want pending", got.ASRStatus)
+	}
+
+	if err := repo.ResetASRToPending(ctx, completed.ID); err == nil {
+		t.Fatal("ResetASRToPending(completed) error = nil, want error")
+	}
+}
+
 // TestLiveMaterialRepository_UpdateASRStates 验证 ASR 状态更新方法。
 func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)

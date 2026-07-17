@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
@@ -88,6 +89,12 @@ func (m *mockLiveMaterialRepoForProject) GetByID(ctx context.Context, id uint) (
 }
 func (m *mockLiveMaterialRepoForProject) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
+}
+func (m *mockLiveMaterialRepoForProject) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
+	return nil, nil
+}
+func (m *mockLiveMaterialRepoForProject) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return 0, nil
 }
 func (m *mockLiveMaterialRepoForProject) UpdateASRProcessing(ctx context.Context, id uint) error {
 	return nil

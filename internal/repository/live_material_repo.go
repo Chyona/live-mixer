@@ -3,11 +3,13 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"live-mixer/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // LiveMaterialRepository 直播素材数据访问接口。
@@ -18,6 +20,11 @@ type LiveMaterialRepository interface {
 	GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
+	// ClaimPendingASR 多实例安全地抢占一条 pending ASR 任务。
+	// 使用事务 + FOR UPDATE SKIP LOCKED（Postgres），将状态改为 processing 并返回；无待处理时返回 nil。
+	ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error)
+	// RequeueStaleProcessingASR 将超时未更新的 processing 任务重置为 pending，供崩溃恢复。
+	RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error)
 	// UpdateASRProcessing 标记 ASR 开始识别。
 	UpdateASRProcessing(ctx context.Context, id uint) error
 	// UpdateASRProgress 更新 ASR 识别进度。
@@ -26,7 +33,7 @@ type LiveMaterialRepository interface {
 	UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error
 	// UpdateASRFailed 标记 ASR 识别失败。
 	UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
-	// ResetASRToPending 将 ASR 重置为待处理，供重试入队。
+	// ResetASRToPending 将失败的 ASR 重置为待处理（仅 failed 生效）。
 	ResetASRToPending(ctx context.Context, id uint) error
 	// List 分页查询直播素材列表，支持日期与关键词筛选，按 id 倒序，不含 live_asr 字段。
 	List(ctx context.Context, filter LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error)
@@ -70,6 +77,78 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 		Model(material).
 		Select("name", "remark").
 		Updates(material).Error
+}
+
+// ClaimPendingASR 原子抢占：选最早一条 pending 素材并改为 processing。
+// 多实例下依赖 SKIP LOCKED 避免重复领取；SQLite 单测无 SKIP LOCKED 时退化为行锁。
+func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
+	var claimed *model.LiveMaterial
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var material model.LiveMaterial
+		q := tx.Where("asr_status = ?", model.ASRStatusPending).
+			Order("id ASC").
+			Limit(1)
+		// Postgres 使用 SKIP LOCKED，保证多 Worker 互不阻塞、不重复抢占。
+		if tx.Dialector.Name() == "postgres" {
+			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		if err := q.First(&material).Error; err != nil {
+			return err
+		}
+
+		now := time.Now()
+		result := tx.Model(&model.LiveMaterial{}).
+			Where("id = ? AND asr_status = ?", material.ID, model.ASRStatusPending).
+			Updates(map[string]interface{}{
+				"asr_status":     model.ASRStatusProcessing,
+				"asr_progress":   int16(5),
+				"asr_error_msg":  "",
+				"asr_started_at": now,
+				"asr_updated_at": now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		// 并发下若已被其它实例抢走则视为本次未抢到。
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+
+		material.ASRStatus = model.ASRStatusProcessing
+		material.ASRProgress = 5
+		material.ASRErrorMsg = ""
+		material.ASRStartedAt = &now
+		material.ASRUpdatedAt = &now
+		claimed = &material
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+// RequeueStaleProcessingASR 将 asr_updated_at 早于阈值的 processing 任务改回 pending。
+func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan)
+	now := time.Now()
+	result := r.db.WithContext(ctx).
+		Model(&model.LiveMaterial{}).
+		Where("asr_status = ? AND asr_updated_at IS NOT NULL AND asr_updated_at < ?", model.ASRStatusProcessing, cutoff).
+		Updates(map[string]interface{}{
+			"asr_status":     model.ASRStatusPending,
+			"asr_progress":   int16(0),
+			"asr_error_msg":  "ASR 处理超时，已自动重新排队",
+			"asr_started_at": nil,
+			"asr_updated_at": now,
+		})
+	return result.RowsAffected, result.Error
 }
 
 func (r *liveMaterialRepository) UpdateASRProcessing(ctx context.Context, id uint) error {
@@ -125,9 +204,9 @@ func (r *liveMaterialRepository) UpdateASRFailed(ctx context.Context, id uint, p
 
 func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint) error {
 	now := time.Now()
-	return r.db.WithContext(ctx).
+	result := r.db.WithContext(ctx).
 		Model(&model.LiveMaterial{}).
-		Where("id = ?", id).
+		Where("id = ? AND asr_status = ?", id, model.ASRStatusFailed).
 		Updates(map[string]interface{}{
 			"asr_status":     model.ASRStatusPending,
 			"asr_progress":   int16(0),
@@ -135,7 +214,14 @@ func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint)
 			"asr_error_msg":  "",
 			"asr_started_at": nil,
 			"asr_updated_at": now,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {

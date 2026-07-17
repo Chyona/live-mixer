@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
@@ -47,6 +48,12 @@ func (m *mockLiveRepoForTask) GetByID(ctx context.Context, id uint) (*model.Live
 }
 func (m *mockLiveRepoForTask) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
+}
+func (m *mockLiveRepoForTask) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
+	return nil, nil
+}
+func (m *mockLiveRepoForTask) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return 0, nil
 }
 func (m *mockLiveRepoForTask) UpdateASRProcessing(ctx context.Context, id uint) error  { return nil }
 func (m *mockLiveRepoForTask) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
