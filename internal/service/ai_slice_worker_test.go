@@ -121,7 +121,7 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	}
 
 	mock := &mockLLMChat{content: `[0, 1]`}
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop())
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0)
 
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -218,7 +218,7 @@ func TestAISliceWorker_Process_SkipOutOfRangeIndices(t *testing.T) {
 
 	// 下标 0 有效，99 越界应跳过。
 	mock := &mockLLMChat{content: `[0, 99]`}
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop())
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0)
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
 
 	mock := &mockLLMChat{err: errors.New("timeout")}
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop())
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected error")
 	}
@@ -292,7 +292,7 @@ func TestAISliceWorker_Process_EmptyClips0(t *testing.T) {
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
 
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop())
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected empty clips0 error")
 	}
@@ -314,5 +314,22 @@ func TestBuildAISliceUserPrompt(t *testing.T) {
 	}
 	if !strings.Contains(got, "## 输出格式") || !strings.Contains(got, `[2, 5, 9, 13]`) {
 		t.Errorf("missing output format: %s", got)
+	}
+}
+
+func TestAISliceWorker_DefaultConcurrencyIsSix(t *testing.T) {
+	w := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 0).(*aiSliceWorker)
+	if w.concurrency != 6 {
+		t.Fatalf("concurrency = %d, want 6", w.concurrency)
+	}
+	if aiSliceDefaultConcurrency != 6 {
+		t.Fatalf("aiSliceDefaultConcurrency = %d, want 6", aiSliceDefaultConcurrency)
+	}
+}
+
+func TestAISliceWorker_UsesConfiguredConcurrency(t *testing.T) {
+	w := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 3).(*aiSliceWorker)
+	if w.concurrency != 3 {
+		t.Fatalf("concurrency = %d, want 3", w.concurrency)
 	}
 }

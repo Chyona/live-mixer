@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	// aiSliceDefaultConcurrency 单实例内并行抢占/执行 AI 切片的 Worker 数。
-	aiSliceDefaultConcurrency = 2
+	// aiSliceDefaultConcurrency 单实例内并行抢占/执行 AI 切片的 Worker 数（配置缺失时回落）。
+	aiSliceDefaultConcurrency = 6
 	// aiSlicePollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
 	aiSlicePollInterval = 3 * time.Second
 )
@@ -60,15 +60,20 @@ type aiSliceWorker struct {
 }
 
 // NewAISliceWorker 创建 AI 切片后台 Worker。
+// concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
 func NewAISliceWorker(
 	taskRepo repository.TaskRepository,
 	liveMaterialRepo repository.LiveMaterialRepository,
 	videoProjectRepo repository.VideoProjectRepository,
 	llmClient LLMChatClient,
 	logger *zap.Logger,
+	concurrency int,
 ) AISliceWorker {
 	if logger == nil {
 		logger = zap.NewNop()
+	}
+	if concurrency <= 0 {
+		concurrency = aiSliceDefaultConcurrency
 	}
 	return &aiSliceWorker{
 		taskRepo:         taskRepo,
@@ -76,7 +81,7 @@ func NewAISliceWorker(
 		videoProjectRepo: videoProjectRepo,
 		llmClient:        llmClient,
 		logger:           logger,
-		concurrency:      aiSliceDefaultConcurrency,
+		concurrency:      concurrency,
 		pollInterval:     aiSlicePollInterval,
 		wake:             make(chan struct{}, 1),
 	}

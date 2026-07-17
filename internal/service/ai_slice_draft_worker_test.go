@@ -69,7 +69,7 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 		t.Fatalf("claim: %v %#v", err, claimed)
 	}
 
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop())
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop(), 0)
 	capcut := &mockCapCutAPI{}
 	draft := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
@@ -137,7 +137,7 @@ func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
 
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{err: errors.New("llm down")}, zap.NewNop())
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{err: errors.New("llm down")}, zap.NewNop(), 0)
 	draft := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
 		CapCut: &mockCapCutAPI{}, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
@@ -185,7 +185,7 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
 
 	// LLM 返回空数组 → clips1 为空 → 编排器应失败且不调用草稿。
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop())
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0)
 	capcut := &mockCapCutAPI{}
 	draft := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,

@@ -73,7 +73,14 @@ func main() {
 	// OpenAI 兼容协议 LLM 客户端，供 AI 切片 Worker 与同步对话接口共用。
 	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
 	chatService := service.NewChatService(llmClient, logger)
-	aiSliceWorker := service.NewAISliceWorker(taskRepo, liveMaterialRepo, videoProjectRepo, llmClient, logger)
+	aiSliceWorker := service.NewAISliceWorker(
+		taskRepo,
+		liveMaterialRepo,
+		videoProjectRepo,
+		llmClient,
+		logger,
+		cfg.Worker.AISliceConcurrencyOrDefault(),
+	)
 
 	// 剪映草稿 Worker：ffmpeg 切片 + capcut-mate 组装草稿，进度写入 task 表。
 	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())

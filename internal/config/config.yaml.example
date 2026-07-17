@@ -71,3 +71,7 @@ capcut_mate:
 web:
   root_dir: "docker/html"
   root_url: "http://192.168.3.219:81"
+
+# 后台 Worker 调度；可用 APP_WORKER_AI_SLICE_CONCURRENCY 覆盖
+worker:
+  ai_slice_concurrency: 6      # 单实例同时执行的 AI 切片任务数

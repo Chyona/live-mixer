@@ -41,6 +41,10 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.ASR.PollIntervalSec != 10 {
 		t.Errorf("ASR.PollIntervalSec = %d, want 10", cfg.ASR.PollIntervalSec)
 	}
+
+	if cfg.Worker.AISliceConcurrency != 6 {
+		t.Errorf("Worker.AISliceConcurrency = %d, want 6", cfg.Worker.AISliceConcurrency)
+	}
 }
 
 func TestLoad_StorageEnvOverride(t *testing.T) {
@@ -156,5 +160,41 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	}
 	if cfg.Web.RootURL != "http://10.0.0.1:81" {
 		t.Errorf("Web.RootURL = %q", cfg.Web.RootURL)
+	}
+}
+
+func TestLoad_WorkerAISliceConcurrencyEnvOverride(t *testing.T) {
+	t.Setenv("APP_WORKER_AI_SLICE_CONCURRENCY", "3")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.AISliceConcurrency != 3 {
+		t.Errorf("Worker.AISliceConcurrency = %d, want 3", cfg.Worker.AISliceConcurrency)
+	}
+}
+
+func TestLoad_WorkerAISliceConcurrencyInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_WORKER_AI_SLICE_CONCURRENCY", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.AISliceConcurrency != DefaultAISliceConcurrency {
+		t.Errorf("Worker.AISliceConcurrency = %d, want %d", cfg.Worker.AISliceConcurrency, DefaultAISliceConcurrency)
+	}
+}
+
+func TestWorkerConfig_AISliceConcurrencyOrDefault(t *testing.T) {
+	if got := (WorkerConfig{AISliceConcurrency: 8}).AISliceConcurrencyOrDefault(); got != 8 {
+		t.Errorf("got %d, want 8", got)
+	}
+	if got := (WorkerConfig{}).AISliceConcurrencyOrDefault(); got != DefaultAISliceConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultAISliceConcurrency)
+	}
+	if got := (WorkerConfig{AISliceConcurrency: -1}).AISliceConcurrencyOrDefault(); got != DefaultAISliceConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultAISliceConcurrency)
 	}
 }

@@ -25,6 +25,13 @@ type Config struct {
 	LLM        LLMConfig        `mapstructure:"llm"`
 	CapCutMate CapCutMateConfig `mapstructure:"capcut_mate"`
 	Web        WebConfig        `mapstructure:"web"`
+	Worker     WorkerConfig     `mapstructure:"worker"`
+}
+
+// WorkerConfig 后台任务 Worker 并发等调度配置。
+type WorkerConfig struct {
+	// AISliceConcurrency 单实例内并行执行 AI 切片任务的 Worker 数；默认 6。
+	AISliceConcurrency int `mapstructure:"ai_slice_concurrency"`
 }
 
 // CapCutMateConfig 剪映草稿服务（capcut-mate）连接配置。
@@ -169,7 +176,26 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	normalizeWorkerConfig(&cfg.Worker)
 	return &cfg, nil
+}
+
+// DefaultAISliceConcurrency AI 切片 Worker 默认并发数。
+const DefaultAISliceConcurrency = 6
+
+// normalizeWorkerConfig 将未配置或非法的 Worker 并发回落到内置默认值。
+func normalizeWorkerConfig(w *WorkerConfig) {
+	if w.AISliceConcurrency <= 0 {
+		w.AISliceConcurrency = DefaultAISliceConcurrency
+	}
+}
+
+// AISliceConcurrencyOrDefault 返回可用的 AI 切片并发（<=0 时回落默认 6）。
+func (w WorkerConfig) AISliceConcurrencyOrDefault() int {
+	if w.AISliceConcurrency <= 0 {
+		return DefaultAISliceConcurrency
+	}
+	return w.AISliceConcurrency
 }
 
 // applyEnvOverrides 用已设置的环境变量 APP_* 覆盖配置（仅当环境变量存在时生效）。
@@ -325,6 +351,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_LLM_MODEL"); ok {
 		cfg.LLM.Model = val
+	}
+
+	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_CONCURRENCY"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.AISliceConcurrency = n
+		}
 	}
 
 	// 剪映草稿服务与 WEB 静态目录（也可兼容无 APP_ 前缀的环境变量名）
