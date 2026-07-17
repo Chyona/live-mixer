@@ -62,7 +62,7 @@ func (m *mockLiveMaterialService) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (m *mockLiveMaterialService) RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error) {
+func (m *mockLiveMaterialService) RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error) {
 	return nil, nil
 }
 

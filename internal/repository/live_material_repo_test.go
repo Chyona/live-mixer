@@ -153,8 +153,12 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 }
 
 // TestLiveMaterialRepository_ClaimPendingASR 验证悲观锁抢占 pending → processing。
+// 依赖 PostgreSQL FOR UPDATE SKIP LOCKED，内存 SQLite 单测环境跳过。
 func TestLiveMaterialRepository_ClaimPendingASR(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
+	if db.Dialector.Name() != "postgres" {
+		t.Skip("ClaimPendingASR 需要 PostgreSQL 15+（FOR UPDATE SKIP LOCKED）")
+	}
 	repo := NewLiveMaterialRepository(db)
 	ctx := context.Background()
 
@@ -214,9 +218,8 @@ func TestLiveMaterialRepository_RequeueStaleProcessingASR(t *testing.T) {
 	if err := repo.Create(ctx, material); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	claimed, err := repo.ClaimPendingASR(ctx)
-	if err != nil || claimed == nil {
-		t.Fatalf("ClaimPendingASR() = %#v, err=%v", claimed, err)
+	if err := repo.UpdateASRProcessing(ctx, material.ID); err != nil {
+		t.Fatalf("UpdateASRProcessing() error = %v", err)
 	}
 
 	stale := time.Now().Add(-2 * time.Hour)

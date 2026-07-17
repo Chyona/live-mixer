@@ -48,11 +48,6 @@ type UpdateLiveMaterialRequest struct {
 	Remark string `json:"remark" binding:"max=256"`
 }
 
-// RetryASRRequest 重新触发 ASR 请求体（仅 failed 可重试；force 字段保留兼容，已忽略）。
-type RetryASRRequest struct {
-	Force bool `json:"force"`
-}
-
 // LiveMaterialDetailResponse 直播素材详情响应，live_asr 为分句数组格式。
 // created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
 type LiveMaterialDetailResponse struct {
@@ -324,13 +319,11 @@ func (h *LiveMaterialHandler) DeleteLiveMaterial(c *gin.Context) {
 // @Summary      重新 ASR
 // @Description  仅 asr_status=failed 时可重试：重置为 pending，由后台 Worker 扫库自动执行
 // @Tags         直播素材
-// @Accept       json
 // @Produce      json
-// @Param        id    path  int              true  "素材 ID"
-// @Param        body  body  RetryASRRequest  false "兼容字段，可空"
-// @Success      200   {object}  response.Body
-// @Failure      400   {object}  response.Body
-// @Failure      404   {object}  response.Body
+// @Param        id   path  int  true  "素材 ID"
+// @Success      200  {object}  response.Body
+// @Failure      400  {object}  response.Body
+// @Failure      404  {object}  response.Body
 // @Router       /v1/live-materials/{id}/asr/retry [post]
 func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -339,11 +332,7 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 		return
 	}
 
-	var req RetryASRRequest
-	// 允许空 body
-	_ = c.ShouldBindJSON(&req)
-
-	material, err := h.liveMaterialService.RetryASR(c.Request.Context(), id, req.Force)
+	material, err := h.liveMaterialService.RetryASR(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, service.ErrLiveMaterialNotFound) {
 			response.NotFound(c, err.Error())

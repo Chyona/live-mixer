@@ -340,7 +340,7 @@ func TestLiveMaterialService_RetryASR_OnlyFailed(t *testing.T) {
 	enqueued := 0
 	svc := NewLiveMaterialService(repo, &mockASRWorker{enqueueFn: func() { enqueued++ }})
 
-	got, err := svc.RetryASR(context.Background(), 1, false)
+	got, err := svc.RetryASR(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("RetryASR(failed) error = %v", err)
 	}
@@ -351,10 +351,10 @@ func TestLiveMaterialService_RetryASR_OnlyFailed(t *testing.T) {
 		t.Errorf("enqueued = %d, want 1", enqueued)
 	}
 
-	if _, err := svc.RetryASR(context.Background(), 2, true); !errors.Is(err, ErrASRRetryOnlyFailed) {
+	if _, err := svc.RetryASR(context.Background(), 2); !errors.Is(err, ErrASRRetryOnlyFailed) {
 		t.Errorf("RetryASR(completed) error = %v, want ErrASRRetryOnlyFailed", err)
 	}
-	if _, err := svc.RetryASR(context.Background(), 3, false); !errors.Is(err, ErrASRAlreadyProcessing) {
+	if _, err := svc.RetryASR(context.Background(), 3); !errors.Is(err, ErrASRAlreadyProcessing) {
 		t.Errorf("RetryASR(processing) error = %v, want ErrASRAlreadyProcessing", err)
 	}
 }

@@ -539,10 +539,7 @@ const docTemplate = `{
         },
         "/v1/live-materials/{id}/asr/retry": {
             "post": {
-                "description": "将素材 ASR 重置为 pending 并后台重新识别；processing 中不可提交；completed 需 force=true",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "仅 asr_status=failed 时可重试：重置为 pending，由后台 Worker 扫库自动执行",
                 "produces": [
                     "application/json"
                 ],
@@ -557,14 +554,6 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "description": "是否强制覆盖已完成结果",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.RetryASRRequest"
-                        }
                     }
                 ],
                 "responses": {
@@ -1735,15 +1724,6 @@ const docTemplate = `{
                 "username": {
                     "type": "string",
                     "example": "admin"
-                }
-            }
-        },
-        "internal_handler_v1.RetryASRRequest": {
-            "type": "object",
-            "properties": {
-                "force": {
-                    "description": "为 true 时允许覆盖已完成的 ASR",
-                    "type": "boolean"
                 }
             }
         },

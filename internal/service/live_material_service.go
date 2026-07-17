@@ -55,8 +55,8 @@ type LiveMaterialService interface {
 	Get(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// Delete 删除直播素材，并级联删除关联剪辑项目。
 	Delete(ctx context.Context, id uint) error
-	// RetryASR 将失败的 ASR 重置为 pending，由后台 Worker 扫库重试；force 保留兼容，已忽略。
-	RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error)
+	// RetryASR 将失败的 ASR 重置为 pending，由后台 Worker 扫库重试。
+	RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	// DownloadASRSubtitle 返回可用于直接下载的 ASR JSON 内容与建议文件名。
 	DownloadASRSubtitle(ctx context.Context, id uint) (content []byte, fileName string, err error)
 }
@@ -208,8 +208,7 @@ func (s *liveMaterialService) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (s *liveMaterialService) RetryASR(ctx context.Context, id uint, force bool) (*model.LiveMaterial, error) {
-	_ = force // 兼容旧请求体；仅 failed 可重试。
+func (s *liveMaterialService) RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error) {
 	material, err := s.liveMaterialRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

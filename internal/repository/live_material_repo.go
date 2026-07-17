@@ -21,7 +21,7 @@ type LiveMaterialRepository interface {
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
 	// ClaimPendingASR 多实例安全地抢占一条 pending ASR 任务。
-	// 使用事务 + FOR UPDATE SKIP LOCKED（Postgres），将状态改为 processing 并返回；无待处理时返回 nil。
+	// 使用事务 + FOR UPDATE SKIP LOCKED（PostgreSQL 15+），将状态改为 processing 并返回；无待处理时返回 nil。
 	ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error)
 	// RequeueStaleProcessingASR 将超时未更新的 processing 任务重置为 pending，供崩溃恢复。
 	RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error)
@@ -80,19 +80,17 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 }
 
 // ClaimPendingASR 原子抢占：选最早一条 pending 素材并改为 processing。
-// 多实例下依赖 SKIP LOCKED 避免重复领取；SQLite 单测无 SKIP LOCKED 时退化为行锁。
+// 多实例下依赖 PostgreSQL FOR UPDATE SKIP LOCKED 避免重复领取。
 func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
 	var claimed *model.LiveMaterial
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var material model.LiveMaterial
-		q := tx.Where("asr_status = ?", model.ASRStatusPending).
+		err := tx.Where("asr_status = ?", model.ASRStatusPending).
 			Order("id ASC").
-			Limit(1)
-		// Postgres 使用 SKIP LOCKED，保证多 Worker 互不阻塞、不重复抢占。
-		if tx.Dialector.Name() == "postgres" {
-			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
-		}
-		if err := q.First(&material).Error; err != nil {
+			Limit(1).
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			First(&material).Error
+		if err != nil {
 			return err
 		}
 
