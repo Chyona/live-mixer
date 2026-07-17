@@ -92,7 +92,7 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 	}
 	downloader := deps.Downloader
 	if downloader == nil {
-		downloader = newLoggingResumableDownloader(logger)
+		downloader = NewFileDownloader(logger, nil)
 	}
 	concurrency := deps.Concurrency
 	if concurrency <= 0 {

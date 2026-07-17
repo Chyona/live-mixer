@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 	"live-mixer/pkg/utils"
+	"live-mixer/pkg/utils/urlrewrite"
 )
 
 // loggingResumableDownloader 带断点续传、重试与日志输出的默认下载实现。
@@ -13,11 +14,39 @@ type loggingResumableDownloader struct {
 	logger *zap.Logger
 }
 
-func newLoggingResumableDownloader(logger *zap.Logger) FileDownloader {
+// rewritingDownloader 在下载前将 URL Host 替换为内网地址。
+type rewritingDownloader struct {
+	inner    FileDownloader
+	rewriter *urlrewrite.Rewriter
+	logger   *zap.Logger
+}
+
+func newLoggingResumableDownloader(logger *zap.Logger, rewriter *urlrewrite.Rewriter) FileDownloader {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return loggingResumableDownloader{logger: logger}
+	base := loggingResumableDownloader{logger: logger}
+	if rewriter == nil || rewriter.Empty() {
+		return base
+	}
+	return rewritingDownloader{inner: base, rewriter: rewriter, logger: logger}
+}
+
+// NewFileDownloader 创建带可选内网 URL 转换的默认下载器。
+func NewFileDownloader(logger *zap.Logger, rewriter *urlrewrite.Rewriter) FileDownloader {
+	return newLoggingResumableDownloader(logger, rewriter)
+}
+
+func (d rewritingDownloader) Download(url, dest string) (string, error) {
+	downloadURL := url
+	if rewritten, ok := d.rewriter.Rewrite(url); ok {
+		downloadURL = rewritten
+		d.logger.Info("下载 URL 已转换为内网地址",
+			zap.String("original_url", url),
+			zap.String("download_url", downloadURL),
+		)
+	}
+	return d.inner.Download(downloadURL, dest)
 }
 
 func (d loggingResumableDownloader) Download(url, dest string) (string, error) {

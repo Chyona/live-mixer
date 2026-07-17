@@ -71,7 +71,7 @@ func NewLiveMaterialASRAudioPreparer(
 		logger = zap.NewNop()
 	}
 	if downloader == nil {
-		downloader = newLoggingResumableDownloader(logger)
+		downloader = NewFileDownloader(logger, nil)
 	}
 	if converter == nil {
 		converter = media.NewFFmpegConverter("")

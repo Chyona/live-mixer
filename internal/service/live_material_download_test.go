@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"live-mixer/pkg/utils/urlrewrite"
 )
 
 func TestLoggingResumableDownloader_Success(t *testing.T) {
@@ -20,7 +21,7 @@ func TestLoggingResumableDownloader_Success(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "ok.bin")
 	logger := zaptest.NewLogger(t)
-	downloader := newLoggingResumableDownloader(logger)
+	downloader := NewFileDownloader(logger, nil)
 
 	got, err := downloader.Download(server.URL, dest)
 	if err != nil {
@@ -51,7 +52,7 @@ func TestLoggingResumableDownloader_RetryUsesResume(t *testing.T) {
 	defer server.Close()
 
 	dest := filepath.Join(t.TempDir(), "retry.bin")
-	downloader := newLoggingResumableDownloader(zap.NewNop())
+	downloader := NewFileDownloader(zap.NewNop(), nil)
 
 	_, err := downloader.Download(server.URL, dest)
 	if err != nil {
@@ -67,5 +68,34 @@ func TestLoggingResumableDownloader_RetryUsesResume(t *testing.T) {
 	}
 	if attempts.Load() != 2 {
 		t.Fatalf("attempts = %d, want 2", attempts.Load())
+	}
+}
+
+type mockInnerDownloader struct {
+	lastURL string
+}
+
+func (m *mockInnerDownloader) Download(url, dest string) (string, error) {
+	m.lastURL = url
+	return dest, nil
+}
+
+func TestRewritingDownloader_RewritesURL(t *testing.T) {
+	inner := &mockInnerDownloader{}
+	rewriter := urlrewrite.New(urlrewrite.Options{
+		Exact: map[string]string{
+			"arkclaw-wxbpd.tos-cn-shanghai.volces.com": "arkclaw-wxbpd.tos-cn-shanghai.ivolces.com",
+		},
+	})
+	d := rewritingDownloader{inner: inner, rewriter: rewriter, logger: zap.NewNop()}
+
+	raw := "https://arkclaw-wxbpd.tos-cn-shanghai.volces.com/live/source.mp4"
+	dest := filepath.Join(t.TempDir(), "source.mp4")
+	if _, err := d.Download(raw, dest); err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	want := "https://arkclaw-wxbpd.tos-cn-shanghai.ivolces.com/live/source.mp4"
+	if inner.lastURL != want {
+		t.Fatalf("inner URL = %q, want %q", inner.lastURL, want)
 	}
 }

@@ -78,3 +78,9 @@ worker:
   asr_concurrency: 6           # 单实例同时执行的直播素材 ASR 任务数
   draft_concurrency: 3         # 单实例同时执行的剪映草稿任务数
   ai_slice_draft_concurrency: 3 # 单实例同时执行的一键成片任务数
+
+# 远程文件下载；仅影响服务端下载请求，不改数据库/API 中的原始 URL
+# 环境变量（覆盖 yaml 中同名字段）：
+#   APP_DOWNLOAD_HOST_MAPPINGS=host1.volces.com->host1.ivolces.com,host2.volces.com->host2.ivolces.com
+download:
+  host_mappings: []

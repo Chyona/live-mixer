@@ -26,6 +26,7 @@ type Config struct {
 	CapCutMate CapCutMateConfig `mapstructure:"capcut_mate"`
 	Web        WebConfig        `mapstructure:"web"`
 	Worker     WorkerConfig     `mapstructure:"worker"`
+	Download   DownloadConfig   `mapstructure:"download"`
 }
 
 // WorkerConfig 后台任务 Worker 并发等调度配置。
@@ -176,9 +177,19 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
+	// APP_DOWNLOAD_HOST_MAPPINGS 为自定义 from->to 规则字符串，须避免 viper AutomaticEnv 按 slice 解析失败。
+	downloadMappingsEnv, hasDownloadMappings := os.LookupEnv("APP_DOWNLOAD_HOST_MAPPINGS")
+	if hasDownloadMappings {
+		os.Unsetenv("APP_DOWNLOAD_HOST_MAPPINGS")
+	}
+
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("反序列化配置失败: %w", err)
+	}
+
+	if hasDownloadMappings {
+		os.Setenv("APP_DOWNLOAD_HOST_MAPPINGS", downloadMappingsEnv)
 	}
 
 	applyEnvOverrides(&cfg)
@@ -432,6 +443,19 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := lookupEnvPrefer("APP_WEB_ROOT_URL", "WEB_ROOT_URL"); ok {
 		cfg.Web.RootURL = val
 	}
+
+	if val, ok := os.LookupEnv("APP_DOWNLOAD_HOST_MAPPINGS"); ok {
+		cfg.Download.HostMappings = hostMappingsFromEnv(val)
+	}
+}
+
+func hostMappingsFromEnv(raw string) []HostMapping {
+	rules := parseRewriteRules(raw)
+	out := make([]HostMapping, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, HostMapping{From: rule[0], To: rule[1]})
+	}
+	return out
 }
 
 // lookupEnvPrefer 依次查找多个环境变量名，返回第一个已设置的值。
