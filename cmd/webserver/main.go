@@ -102,7 +102,14 @@ func main() {
 		Logger:      logger,
 		Concurrency: cfg.Worker.DraftConcurrencyOrDefault(),
 	})
-	aiSliceDraftWorker := service.NewAISliceDraftWorker(taskRepo, videoProjectRepo, aiSliceWorker, draftWorker, logger)
+	aiSliceDraftWorker := service.NewAISliceDraftWorker(
+		taskRepo,
+		videoProjectRepo,
+		aiSliceWorker,
+		draftWorker,
+		logger,
+		cfg.Worker.AISliceDraftConcurrencyOrDefault(),
+	)
 	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker, draftWorker, aiSliceDraftWorker)
 
 	ctx, cancel := context.WithCancel(context.Background())

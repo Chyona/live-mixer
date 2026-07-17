@@ -51,6 +51,9 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.Worker.DraftConcurrency != 3 {
 		t.Errorf("Worker.DraftConcurrency = %d, want 3", cfg.Worker.DraftConcurrency)
 	}
+	if cfg.Worker.AISliceDraftConcurrency != 3 {
+		t.Errorf("Worker.AISliceDraftConcurrency = %d, want 3", cfg.Worker.AISliceDraftConcurrency)
+	}
 }
 
 func TestLoad_StorageEnvOverride(t *testing.T) {
@@ -274,5 +277,41 @@ func TestWorkerConfig_DraftConcurrencyOrDefault(t *testing.T) {
 	}
 	if got := (WorkerConfig{DraftConcurrency: -1}).DraftConcurrencyOrDefault(); got != DefaultDraftConcurrency {
 		t.Errorf("got %d, want %d", got, DefaultDraftConcurrency)
+	}
+}
+
+func TestLoad_WorkerAISliceDraftConcurrencyEnvOverride(t *testing.T) {
+	t.Setenv("APP_WORKER_AI_SLICE_DRAFT_CONCURRENCY", "2")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.AISliceDraftConcurrency != 2 {
+		t.Errorf("Worker.AISliceDraftConcurrency = %d, want 2", cfg.Worker.AISliceDraftConcurrency)
+	}
+}
+
+func TestLoad_WorkerAISliceDraftConcurrencyInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_WORKER_AI_SLICE_DRAFT_CONCURRENCY", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.AISliceDraftConcurrency != DefaultAISliceDraftConcurrency {
+		t.Errorf("Worker.AISliceDraftConcurrency = %d, want %d", cfg.Worker.AISliceDraftConcurrency, DefaultAISliceDraftConcurrency)
+	}
+}
+
+func TestWorkerConfig_AISliceDraftConcurrencyOrDefault(t *testing.T) {
+	if got := (WorkerConfig{AISliceDraftConcurrency: 5}).AISliceDraftConcurrencyOrDefault(); got != 5 {
+		t.Errorf("got %d, want 5", got)
+	}
+	if got := (WorkerConfig{}).AISliceDraftConcurrencyOrDefault(); got != DefaultAISliceDraftConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultAISliceDraftConcurrency)
+	}
+	if got := (WorkerConfig{AISliceDraftConcurrency: -1}).AISliceDraftConcurrencyOrDefault(); got != DefaultAISliceDraftConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultAISliceDraftConcurrency)
 	}
 }

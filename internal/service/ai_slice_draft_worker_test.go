@@ -77,7 +77,7 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 		Web: webroot.Config{RootDir: webRoot, RootURL: "http://localhost/static"},
 		Logger: zap.NewNop(),
 	})
-	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop())
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop(), 0)
 
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -144,7 +144,7 @@ func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
 		Web: webroot.Config{RootDir: t.TempDir(), RootURL: "http://localhost/static"},
 		Logger: zap.NewNop(),
 	})
-	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop())
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop(), 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected error")
 	}
@@ -193,7 +193,7 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 		Web: webroot.Config{RootDir: t.TempDir(), RootURL: "http://localhost/static"},
 		Logger: zap.NewNop(),
 	})
-	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop())
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop(), 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected empty clips1 error")
 	}
@@ -203,5 +203,22 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 	}
 	if capcut.createCalls != 0 {
 		t.Errorf("draft should not run, createCalls=%d", capcut.createCalls)
+	}
+}
+
+func TestAISliceDraftWorker_DefaultConcurrencyIsThree(t *testing.T) {
+	w := NewAISliceDraftWorker(nil, nil, nil, nil, zap.NewNop(), 0).(*aiSliceDraftWorker)
+	if w.concurrency != 3 {
+		t.Fatalf("concurrency = %d, want 3", w.concurrency)
+	}
+	if aiSliceDraftDefaultConcurrency != 3 {
+		t.Fatalf("aiSliceDraftDefaultConcurrency = %d, want 3", aiSliceDraftDefaultConcurrency)
+	}
+}
+
+func TestAISliceDraftWorker_UsesConfiguredConcurrency(t *testing.T) {
+	w := NewAISliceDraftWorker(nil, nil, nil, nil, zap.NewNop(), 5).(*aiSliceDraftWorker)
+	if w.concurrency != 5 {
+		t.Fatalf("concurrency = %d, want 5", w.concurrency)
 	}
 }

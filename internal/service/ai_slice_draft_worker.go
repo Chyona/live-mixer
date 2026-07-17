@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	// aiSliceDraftDefaultConcurrency 单实例内并行抢占/执行一键成片的 Worker 数。
-	aiSliceDraftDefaultConcurrency = 1
+	// aiSliceDraftDefaultConcurrency 单实例内并行抢占/执行一键成片的 Worker 数（配置缺失时回落）。
+	aiSliceDraftDefaultConcurrency = 3
 	// aiSliceDraftPollInterval 无待处理任务时的 DB 轮询间隔。
 	aiSliceDraftPollInterval = 3 * time.Second
 )
@@ -43,15 +43,20 @@ type aiSliceDraftWorker struct {
 }
 
 // NewAISliceDraftWorker 创建一键成片编排 Worker，复用 AI 切片与草稿阶段实现。
+// concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（3）。
 func NewAISliceDraftWorker(
 	taskRepo repository.TaskRepository,
 	videoProjectRepo repository.VideoProjectRepository,
 	aiSlice AISliceWorker,
 	draft DraftWorker,
 	logger *zap.Logger,
+	concurrency int,
 ) AISliceDraftWorker {
 	if logger == nil {
 		logger = zap.NewNop()
+	}
+	if concurrency <= 0 {
+		concurrency = aiSliceDraftDefaultConcurrency
 	}
 	return &aiSliceDraftWorker{
 		taskRepo:         taskRepo,
@@ -59,7 +64,7 @@ func NewAISliceDraftWorker(
 		aiSlice:          aiSlice,
 		draft:            draft,
 		logger:           logger,
-		concurrency:      aiSliceDraftDefaultConcurrency,
+		concurrency:      concurrency,
 		pollInterval:     aiSliceDraftPollInterval,
 		wake:             make(chan struct{}, 1),
 	}
