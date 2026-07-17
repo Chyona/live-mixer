@@ -48,21 +48,26 @@ type liveMaterialASRWorker struct {
 }
 
 // NewLiveMaterialASRWorker 创建直播素材 ASR 后台 worker。
+// concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
 func NewLiveMaterialASRWorker(
 	repo repository.LiveMaterialRepository,
 	asrService ASRService,
 	audioPreparer LiveMaterialASRAudioPreparer,
 	logger *zap.Logger,
+	concurrency int,
 ) LiveMaterialASRWorker {
 	if logger == nil {
 		logger = zap.NewNop()
+	}
+	if concurrency <= 0 {
+		concurrency = liveMaterialASRDefaultConcurrency
 	}
 	return &liveMaterialASRWorker{
 		repo:          repo,
 		asrService:    asrService,
 		audioPreparer: audioPreparer,
 		logger:        logger,
-		concurrency:   liveMaterialASRDefaultConcurrency,
+		concurrency:   concurrency,
 		pollInterval:  liveMaterialASRPollInterval,
 		staleTimeout:  liveMaterialASRStaleTimeout,
 		wake:          make(chan struct{}, 1),

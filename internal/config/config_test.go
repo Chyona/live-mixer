@@ -45,6 +45,9 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.Worker.AISliceConcurrency != 6 {
 		t.Errorf("Worker.AISliceConcurrency = %d, want 6", cfg.Worker.AISliceConcurrency)
 	}
+	if cfg.Worker.ASRConcurrency != 6 {
+		t.Errorf("Worker.ASRConcurrency = %d, want 6", cfg.Worker.ASRConcurrency)
+	}
 }
 
 func TestLoad_StorageEnvOverride(t *testing.T) {
@@ -175,6 +178,18 @@ func TestLoad_WorkerAISliceConcurrencyEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoad_WorkerASRConcurrencyEnvOverride(t *testing.T) {
+	t.Setenv("APP_WORKER_ASR_CONCURRENCY", "4")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.ASRConcurrency != 4 {
+		t.Errorf("Worker.ASRConcurrency = %d, want 4", cfg.Worker.ASRConcurrency)
+	}
+}
+
 func TestLoad_WorkerAISliceConcurrencyInvalidEnvFallsBackToDefault(t *testing.T) {
 	t.Setenv("APP_WORKER_AI_SLICE_CONCURRENCY", "0")
 
@@ -187,6 +202,18 @@ func TestLoad_WorkerAISliceConcurrencyInvalidEnvFallsBackToDefault(t *testing.T)
 	}
 }
 
+func TestLoad_WorkerASRConcurrencyInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_WORKER_ASR_CONCURRENCY", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.ASRConcurrency != DefaultASRConcurrency {
+		t.Errorf("Worker.ASRConcurrency = %d, want %d", cfg.Worker.ASRConcurrency, DefaultASRConcurrency)
+	}
+}
+
 func TestWorkerConfig_AISliceConcurrencyOrDefault(t *testing.T) {
 	if got := (WorkerConfig{AISliceConcurrency: 8}).AISliceConcurrencyOrDefault(); got != 8 {
 		t.Errorf("got %d, want 8", got)
@@ -196,5 +223,17 @@ func TestWorkerConfig_AISliceConcurrencyOrDefault(t *testing.T) {
 	}
 	if got := (WorkerConfig{AISliceConcurrency: -1}).AISliceConcurrencyOrDefault(); got != DefaultAISliceConcurrency {
 		t.Errorf("got %d, want %d", got, DefaultAISliceConcurrency)
+	}
+}
+
+func TestWorkerConfig_ASRConcurrencyOrDefault(t *testing.T) {
+	if got := (WorkerConfig{ASRConcurrency: 5}).ASRConcurrencyOrDefault(); got != 5 {
+		t.Errorf("got %d, want 5", got)
+	}
+	if got := (WorkerConfig{}).ASRConcurrencyOrDefault(); got != DefaultASRConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultASRConcurrency)
+	}
+	if got := (WorkerConfig{ASRConcurrency: -2}).ASRConcurrencyOrDefault(); got != DefaultASRConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultASRConcurrency)
 	}
 }
