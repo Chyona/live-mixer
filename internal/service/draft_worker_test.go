@@ -225,3 +225,20 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 		t.Errorf("status = %s, want failed", got.Status)
 	}
 }
+
+func TestDraftWorker_DefaultConcurrencyIsThree(t *testing.T) {
+	w := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop()}).(*draftWorker)
+	if w.concurrency != 3 {
+		t.Fatalf("concurrency = %d, want 3", w.concurrency)
+	}
+	if draftDefaultConcurrency != 3 {
+		t.Fatalf("draftDefaultConcurrency = %d, want 3", draftDefaultConcurrency)
+	}
+}
+
+func TestDraftWorker_UsesConfiguredConcurrency(t *testing.T) {
+	w := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop(), Concurrency: 5}).(*draftWorker)
+	if w.concurrency != 5 {
+		t.Fatalf("concurrency = %d, want 5", w.concurrency)
+	}
+}

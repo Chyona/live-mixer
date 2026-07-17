@@ -48,6 +48,9 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	if cfg.Worker.ASRConcurrency != 6 {
 		t.Errorf("Worker.ASRConcurrency = %d, want 6", cfg.Worker.ASRConcurrency)
 	}
+	if cfg.Worker.DraftConcurrency != 3 {
+		t.Errorf("Worker.DraftConcurrency = %d, want 3", cfg.Worker.DraftConcurrency)
+	}
 }
 
 func TestLoad_StorageEnvOverride(t *testing.T) {
@@ -235,5 +238,41 @@ func TestWorkerConfig_ASRConcurrencyOrDefault(t *testing.T) {
 	}
 	if got := (WorkerConfig{ASRConcurrency: -2}).ASRConcurrencyOrDefault(); got != DefaultASRConcurrency {
 		t.Errorf("got %d, want %d", got, DefaultASRConcurrency)
+	}
+}
+
+func TestLoad_WorkerDraftConcurrencyEnvOverride(t *testing.T) {
+	t.Setenv("APP_WORKER_DRAFT_CONCURRENCY", "5")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.DraftConcurrency != 5 {
+		t.Errorf("Worker.DraftConcurrency = %d, want 5", cfg.Worker.DraftConcurrency)
+	}
+}
+
+func TestLoad_WorkerDraftConcurrencyInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_WORKER_DRAFT_CONCURRENCY", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.DraftConcurrency != DefaultDraftConcurrency {
+		t.Errorf("Worker.DraftConcurrency = %d, want %d", cfg.Worker.DraftConcurrency, DefaultDraftConcurrency)
+	}
+}
+
+func TestWorkerConfig_DraftConcurrencyOrDefault(t *testing.T) {
+	if got := (WorkerConfig{DraftConcurrency: 4}).DraftConcurrencyOrDefault(); got != 4 {
+		t.Errorf("got %d, want 4", got)
+	}
+	if got := (WorkerConfig{}).DraftConcurrencyOrDefault(); got != DefaultDraftConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultDraftConcurrency)
+	}
+	if got := (WorkerConfig{DraftConcurrency: -1}).DraftConcurrencyOrDefault(); got != DefaultDraftConcurrency {
+		t.Errorf("got %d, want %d", got, DefaultDraftConcurrency)
 	}
 }

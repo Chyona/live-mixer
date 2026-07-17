@@ -76,3 +76,4 @@ web:
 worker:
   ai_slice_concurrency: 6      # 单实例同时执行的 AI 切片任务数
   asr_concurrency: 6           # 单实例同时执行的直播素材 ASR 任务数
+  draft_concurrency: 3         # 单实例同时执行的剪映草稿任务数

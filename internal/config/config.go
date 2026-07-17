@@ -34,6 +34,8 @@ type WorkerConfig struct {
 	AISliceConcurrency int `mapstructure:"ai_slice_concurrency"`
 	// ASRConcurrency 单实例内并行执行直播素材 ASR 的 Worker 数；默认 6。
 	ASRConcurrency int `mapstructure:"asr_concurrency"`
+	// DraftConcurrency 单实例内并行执行剪映草稿任务的 Worker 数；默认 3。
+	DraftConcurrency int `mapstructure:"draft_concurrency"`
 }
 
 // CapCutMateConfig 剪映草稿服务（capcut-mate）连接配置。
@@ -188,6 +190,9 @@ const DefaultAISliceConcurrency = 6
 // DefaultASRConcurrency 直播素材 ASR Worker 默认并发数。
 const DefaultASRConcurrency = 6
 
+// DefaultDraftConcurrency 剪映草稿 Worker 默认并发数。
+const DefaultDraftConcurrency = 3
+
 // normalizeWorkerConfig 将未配置或非法的 Worker 并发回落到内置默认值。
 func normalizeWorkerConfig(w *WorkerConfig) {
 	if w.AISliceConcurrency <= 0 {
@@ -195,6 +200,9 @@ func normalizeWorkerConfig(w *WorkerConfig) {
 	}
 	if w.ASRConcurrency <= 0 {
 		w.ASRConcurrency = DefaultASRConcurrency
+	}
+	if w.DraftConcurrency <= 0 {
+		w.DraftConcurrency = DefaultDraftConcurrency
 	}
 }
 
@@ -212,6 +220,14 @@ func (w WorkerConfig) ASRConcurrencyOrDefault() int {
 		return DefaultASRConcurrency
 	}
 	return w.ASRConcurrency
+}
+
+// DraftConcurrencyOrDefault 返回可用的草稿并发（<=0 时回落默认 3）。
+func (w WorkerConfig) DraftConcurrencyOrDefault() int {
+	if w.DraftConcurrency <= 0 {
+		return DefaultDraftConcurrency
+	}
+	return w.DraftConcurrency
 }
 
 // applyEnvOverrides 用已设置的环境变量 APP_* 覆盖配置（仅当环境变量存在时生效）。
@@ -377,6 +393,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_WORKER_ASR_CONCURRENCY"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Worker.ASRConcurrency = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WORKER_DRAFT_CONCURRENCY"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.DraftConcurrency = n
 		}
 	}
 

@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	// draftDefaultConcurrency 单实例内并行抢占/执行草稿任务的 Worker 数。
-	draftDefaultConcurrency = 1
+	// draftDefaultConcurrency 单实例内并行抢占/执行草稿任务的 Worker 数（配置缺失时回落）。
+	draftDefaultConcurrency = 3
 	// draftPollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
 	draftPollInterval = 3 * time.Second
 	// draftDefaultCanvasWidth / draftDefaultCanvasHeight 剪映草稿默认画布尺寸。
@@ -76,6 +76,8 @@ type DraftWorkerDeps struct {
 	Downloader       FileDownloader
 	Web              webroot.Config
 	Logger           *zap.Logger
+	// Concurrency 单实例并行 Worker 数；<=0 时使用内置默认值（3）。
+	Concurrency int
 }
 
 // NewDraftWorker 创建剪映草稿后台 Worker。
@@ -92,6 +94,10 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 	if downloader == nil {
 		downloader = newLoggingResumableDownloader(logger)
 	}
+	concurrency := deps.Concurrency
+	if concurrency <= 0 {
+		concurrency = draftDefaultConcurrency
+	}
 	return &draftWorker{
 		taskRepo:         deps.TaskRepo,
 		liveMaterialRepo: deps.LiveMaterialRepo,
@@ -101,7 +107,7 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 		downloader:       downloader,
 		web:              deps.Web,
 		logger:           logger,
-		concurrency:      draftDefaultConcurrency,
+		concurrency:      concurrency,
 		pollInterval:     draftPollInterval,
 		wake:             make(chan struct{}, 1),
 	}

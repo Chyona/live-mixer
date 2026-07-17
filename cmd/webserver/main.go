@@ -99,7 +99,8 @@ func main() {
 			RootDir: cfg.Web.RootDir,
 			RootURL: cfg.Web.RootURL,
 		},
-		Logger: logger,
+		Logger:      logger,
+		Concurrency: cfg.Worker.DraftConcurrencyOrDefault(),
 	})
 	aiSliceDraftWorker := service.NewAISliceDraftWorker(taskRepo, videoProjectRepo, aiSliceWorker, draftWorker, logger)
 	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker, draftWorker, aiSliceDraftWorker)
