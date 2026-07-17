@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
@@ -313,5 +314,103 @@ func TestWorkerConfig_AISliceDraftConcurrencyOrDefault(t *testing.T) {
 	}
 	if got := (WorkerConfig{AISliceDraftConcurrency: -1}).AISliceDraftConcurrencyOrDefault(); got != DefaultAISliceDraftConcurrency {
 		t.Errorf("got %d, want %d", got, DefaultAISliceDraftConcurrency)
+	}
+}
+
+// TestLoad_WorkerStaleTimeoutDefaults 验证未配置时孤儿回收超时回落默认分钟数。
+func TestLoad_WorkerStaleTimeoutDefaults(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.ASRStaleTimeoutMin != DefaultASRStaleTimeoutMin {
+		t.Errorf("ASRStaleTimeoutMin = %d, want %d", cfg.Worker.ASRStaleTimeoutMin, DefaultASRStaleTimeoutMin)
+	}
+	if cfg.Worker.AISliceStaleTimeoutMin != DefaultAISliceStaleTimeoutMin {
+		t.Errorf("AISliceStaleTimeoutMin = %d, want %d", cfg.Worker.AISliceStaleTimeoutMin, DefaultAISliceStaleTimeoutMin)
+	}
+	if cfg.Worker.DraftStaleTimeoutMin != DefaultDraftStaleTimeoutMin {
+		t.Errorf("DraftStaleTimeoutMin = %d, want %d", cfg.Worker.DraftStaleTimeoutMin, DefaultDraftStaleTimeoutMin)
+	}
+	if cfg.Worker.AISliceDraftStaleTimeoutMin != DefaultAISliceDraftStaleTimeoutMin {
+		t.Errorf("AISliceDraftStaleTimeoutMin = %d, want %d", cfg.Worker.AISliceDraftStaleTimeoutMin, DefaultAISliceDraftStaleTimeoutMin)
+	}
+}
+
+// TestLoad_WorkerStaleTimeoutEnvOverride 验证环境变量可覆盖孤儿回收超时。
+func TestLoad_WorkerStaleTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("APP_WORKER_ASR_STALE_TIMEOUT_MIN", "45")
+	t.Setenv("APP_WORKER_AI_SLICE_STALE_TIMEOUT_MIN", "15")
+	t.Setenv("APP_WORKER_DRAFT_STALE_TIMEOUT_MIN", "75")
+	t.Setenv("APP_WORKER_AI_SLICE_DRAFT_STALE_TIMEOUT_MIN", "100")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.ASRStaleTimeoutMin != 45 {
+		t.Errorf("ASRStaleTimeoutMin = %d, want 45", cfg.Worker.ASRStaleTimeoutMin)
+	}
+	if cfg.Worker.AISliceStaleTimeoutMin != 15 {
+		t.Errorf("AISliceStaleTimeoutMin = %d, want 15", cfg.Worker.AISliceStaleTimeoutMin)
+	}
+	if cfg.Worker.DraftStaleTimeoutMin != 75 {
+		t.Errorf("DraftStaleTimeoutMin = %d, want 75", cfg.Worker.DraftStaleTimeoutMin)
+	}
+	if cfg.Worker.AISliceDraftStaleTimeoutMin != 100 {
+		t.Errorf("AISliceDraftStaleTimeoutMin = %d, want 100", cfg.Worker.AISliceDraftStaleTimeoutMin)
+	}
+}
+
+// TestLoad_WorkerStaleTimeoutInvalidEnvFallsBackToDefault 验证非法超时环境变量回落默认值。
+func TestLoad_WorkerStaleTimeoutInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_WORKER_ASR_STALE_TIMEOUT_MIN", "0")
+	t.Setenv("APP_WORKER_AI_SLICE_STALE_TIMEOUT_MIN", "-1")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Worker.ASRStaleTimeoutMin != DefaultASRStaleTimeoutMin {
+		t.Errorf("ASRStaleTimeoutMin = %d, want %d", cfg.Worker.ASRStaleTimeoutMin, DefaultASRStaleTimeoutMin)
+	}
+	if cfg.Worker.AISliceStaleTimeoutMin != DefaultAISliceStaleTimeoutMin {
+		t.Errorf("AISliceStaleTimeoutMin = %d, want %d", cfg.Worker.AISliceStaleTimeoutMin, DefaultAISliceStaleTimeoutMin)
+	}
+}
+
+// TestWorkerConfig_StaleTimeoutHelpers 验证分钟数转 Duration 的辅助方法。
+func TestWorkerConfig_StaleTimeoutHelpers(t *testing.T) {
+	cfg := WorkerConfig{
+		ASRStaleTimeoutMin:          45,
+		AISliceStaleTimeoutMin:      15,
+		DraftStaleTimeoutMin:        75,
+		AISliceDraftStaleTimeoutMin: 100,
+	}
+	if got := cfg.ASRStaleTimeout(); got != 45*time.Minute {
+		t.Errorf("ASRStaleTimeout = %v, want 45m", got)
+	}
+	if got := cfg.AISliceStaleTimeout(); got != 15*time.Minute {
+		t.Errorf("AISliceStaleTimeout = %v, want 15m", got)
+	}
+	if got := cfg.DraftStaleTimeout(); got != 75*time.Minute {
+		t.Errorf("DraftStaleTimeout = %v, want 75m", got)
+	}
+	if got := cfg.AISliceDraftStaleTimeout(); got != 100*time.Minute {
+		t.Errorf("AISliceDraftStaleTimeout = %v, want 100m", got)
+	}
+
+	empty := WorkerConfig{}
+	if got := empty.ASRStaleTimeout(); got != time.Duration(DefaultASRStaleTimeoutMin)*time.Minute {
+		t.Errorf("empty ASRStaleTimeout = %v", got)
+	}
+	if got := empty.AISliceStaleTimeout(); got != time.Duration(DefaultAISliceStaleTimeoutMin)*time.Minute {
+		t.Errorf("empty AISliceStaleTimeout = %v", got)
+	}
+	if got := empty.DraftStaleTimeout(); got != time.Duration(DefaultDraftStaleTimeoutMin)*time.Minute {
+		t.Errorf("empty DraftStaleTimeout = %v", got)
+	}
+	if got := empty.AISliceDraftStaleTimeout(); got != time.Duration(DefaultAISliceDraftStaleTimeoutMin)*time.Minute {
+		t.Errorf("empty AISliceDraftStaleTimeout = %v", got)
 	}
 }

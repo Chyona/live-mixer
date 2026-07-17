@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
@@ -121,7 +122,7 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	}
 
 	mock := &mockLLMChat{content: `[0, 1]`}
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0)
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0, 0)
 
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -218,7 +219,7 @@ func TestAISliceWorker_Process_SkipOutOfRangeIndices(t *testing.T) {
 
 	// 下标 0 有效，99 越界应跳过。
 	mock := &mockLLMChat{content: `[0, 99]`}
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0)
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0, 0)
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
@@ -256,7 +257,7 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
 
 	mock := &mockLLMChat{err: errors.New("timeout")}
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0)
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0, 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected error")
 	}
@@ -292,7 +293,7 @@ func TestAISliceWorker_Process_EmptyClips0(t *testing.T) {
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
 
-	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0)
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0, 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected empty clips0 error")
 	}
@@ -318,7 +319,7 @@ func TestBuildAISliceUserPrompt(t *testing.T) {
 }
 
 func TestAISliceWorker_DefaultConcurrencyIsSix(t *testing.T) {
-	w := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 0).(*aiSliceWorker)
+	w := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 0, 0).(*aiSliceWorker)
 	if w.concurrency != 6 {
 		t.Fatalf("concurrency = %d, want 6", w.concurrency)
 	}
@@ -328,8 +329,53 @@ func TestAISliceWorker_DefaultConcurrencyIsSix(t *testing.T) {
 }
 
 func TestAISliceWorker_UsesConfiguredConcurrency(t *testing.T) {
-	w := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 3).(*aiSliceWorker)
+	w := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 3, 0).(*aiSliceWorker)
 	if w.concurrency != 3 {
 		t.Fatalf("concurrency = %d, want 3", w.concurrency)
+	}
+}
+
+// TestAISliceWorker_DefaultAndConfiguredStaleTimeout 验证 AI 切片孤儿回收超时默认值与配置覆盖。
+func TestAISliceWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
+	defaultW := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 0, 0).(*aiSliceWorker)
+	if defaultW.staleTimeout != aiSliceStaleTimeout {
+		t.Fatalf("default staleTimeout = %v, want %v", defaultW.staleTimeout, aiSliceStaleTimeout)
+	}
+	custom := NewAISliceWorker(nil, nil, nil, nil, zap.NewNop(), 0, 12*time.Minute).(*aiSliceWorker)
+	if custom.staleTimeout != 12*time.Minute {
+		t.Fatalf("custom staleTimeout = %v, want 12m", custom.staleTimeout)
+	}
+}
+
+// TestAISliceWorker_RequeueStaleProcessing 验证将超时 processing 改回 pending。
+func TestAISliceWorker_RequeueStaleProcessing(t *testing.T) {
+	db := setupAISliceWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	ctx := context.Background()
+
+	stale := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing,
+		Progress: 30, CreatedBy: 1, SysPrompt: "sys",
+	}
+	if err := taskRepo.Create(ctx, stale); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	staleAt := time.Now().Add(-2 * time.Hour)
+	if err := db.Model(&model.Task{}).Where("id = ?", stale.ID).Update("updated_at", staleAt).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	worker := NewAISliceWorker(taskRepo, nil, nil, nil, zap.NewNop(), 1, time.Hour).(*aiSliceWorker)
+	worker.requeueStale(ctx)
+
+	got, err := taskRepo.GetByID(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != model.TaskStatusPending {
+		t.Fatalf("Status = %q, want pending", got.Status)
+	}
+	if got.Progress != 0 {
+		t.Errorf("Progress = %d, want 0", got.Progress)
 	}
 }

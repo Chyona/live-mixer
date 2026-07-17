@@ -238,6 +238,88 @@ func TestTaskRepository_CountProcessingByTypes(t *testing.T) {
 	}
 }
 
+// TestTaskRepository_RequeueStaleProcessingByType 验证超时 processing 按类型回收为 pending。
+func TestTaskRepository_RequeueStaleProcessingByType(t *testing.T) {
+	db := setupTaskTestDB(t)
+	repo := NewTaskRepository(db)
+	ctx := context.Background()
+
+	staleAI := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing,
+		Progress: 40, CreatedBy: 1,
+	}
+	freshAI := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing,
+		Progress: 20, CreatedBy: 1,
+	}
+	staleDraft := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing,
+		Progress: 50, CreatedBy: 1,
+	}
+	pendingAI := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending,
+		CreatedBy: 1,
+	}
+	for _, task := range []*model.Task{staleAI, freshAI, staleDraft, pendingAI} {
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	// 仅将 staleAI 的 updated_at 回拨到 2 小时前；freshAI 保持当前时间。
+	staleAt := time.Now().Add(-2 * time.Hour)
+	if err := db.Model(&model.Task{}).Where("id = ?", staleAI.ID).
+		Update("updated_at", staleAt).Error; err != nil {
+		t.Fatalf("backdate staleAI: %v", err)
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", staleDraft.ID).
+		Update("updated_at", staleAt).Error; err != nil {
+		t.Fatalf("backdate staleDraft: %v", err)
+	}
+
+	n, err := repo.RequeueStaleProcessingByType(ctx, model.TaskTypeAISlice, time.Hour)
+	if err != nil {
+		t.Fatalf("RequeueStaleProcessingByType() error = %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("requeued = %d, want 1", n)
+	}
+
+	got, _ := repo.GetByID(ctx, staleAI.ID)
+	if got.Status != model.TaskStatusPending {
+		t.Errorf("staleAI Status = %q, want pending", got.Status)
+	}
+	if got.Progress != 0 {
+		t.Errorf("staleAI Progress = %d, want 0", got.Progress)
+	}
+	if got.StartedAt != nil {
+		t.Errorf("staleAI StartedAt = %v, want nil", got.StartedAt)
+	}
+	if got.ErrorMessage != "任务处理超时，已自动重新排队" {
+		t.Errorf("staleAI ErrorMessage = %q", got.ErrorMessage)
+	}
+
+	// 未超时的同类型 processing 不应被回收。
+	gotFresh, _ := repo.GetByID(ctx, freshAI.ID)
+	if gotFresh.Status != model.TaskStatusProcessing {
+		t.Errorf("freshAI Status = %q, want processing", gotFresh.Status)
+	}
+
+	// 其它类型即使超时也不应被本类型回收影响。
+	gotDraft, _ := repo.GetByID(ctx, staleDraft.ID)
+	if gotDraft.Status != model.TaskStatusProcessing {
+		t.Errorf("staleDraft Status = %q, want processing (different type)", gotDraft.Status)
+	}
+
+	// olderThan <= 0 或空类型应 noop。
+	if n, err := repo.RequeueStaleProcessingByType(ctx, model.TaskTypeDraft, 0); err != nil || n != 0 {
+		t.Errorf("olderThan=0: n=%d err=%v, want 0/nil", n, err)
+	}
+	if n, err := repo.RequeueStaleProcessingByType(ctx, "", time.Hour); err != nil || n != 0 {
+		t.Errorf("empty type: n=%d err=%v, want 0/nil", n, err)
+	}
+}
+
 // TestTaskRepository_UpdateDraftURL 验证草稿 URL 回写。
 func TestTaskRepository_UpdateDraftURL(t *testing.T) {
 	repo := NewTaskRepository(setupTaskTestDB(t))

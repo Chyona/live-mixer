@@ -48,6 +48,9 @@ type TaskRepository interface {
 	UpdateVideoProjectID(ctx context.Context, id uint, videoProjectID uint) error
 	// CountProcessingByTypes 统计指定类型中处于 processing 的任务数（供 draft 槽位限流复用）。
 	CountProcessingByTypes(ctx context.Context, types []string) (int64, error)
+	// RequeueStaleProcessingByType 将指定类型下超时未更新的 processing 任务重置为 pending，供崩溃/重启恢复。
+	// 以 updated_at 为心跳：正常执行会通过 UpdateProgress 等刷新；超时未刷新则视为孤儿任务。
+	RequeueStaleProcessingByType(ctx context.Context, taskType string, olderThan time.Duration) (int64, error)
 }
 
 type taskRepository struct {
@@ -281,4 +284,25 @@ func (r *taskRepository) CountProcessingByTypes(ctx context.Context, types []str
 		Where("status = ? AND type IN ?", model.TaskStatusProcessing, types).
 		Count(&count).Error
 	return count, err
+}
+
+// RequeueStaleProcessingByType 将 type 匹配且 updated_at 早于阈值的 processing 任务改回 pending。
+// olderThan <= 0 或 taskType 为空时不执行任何更新，直接返回 0。
+func (r *taskRepository) RequeueStaleProcessingByType(ctx context.Context, taskType string, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 || taskType == "" {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan)
+	now := time.Now()
+	result := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("status = ? AND type = ? AND updated_at < ?", model.TaskStatusProcessing, taskType, cutoff).
+		Updates(map[string]interface{}{
+			"status":        model.TaskStatusPending,
+			"progress":      int16(0),
+			"error_message": "任务处理超时，已自动重新排队",
+			"started_at":    nil,
+			"updated_at":    now,
+		})
+	return result.RowsAffected, result.Error
 }

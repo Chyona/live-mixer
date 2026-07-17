@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/capcutmate"
@@ -240,5 +241,52 @@ func TestDraftWorker_UsesConfiguredConcurrency(t *testing.T) {
 	w := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop(), Concurrency: 5}).(*draftWorker)
 	if w.concurrency != 5 {
 		t.Fatalf("concurrency = %d, want 5", w.concurrency)
+	}
+}
+
+// TestDraftWorker_DefaultAndConfiguredStaleTimeout 验证草稿孤儿回收超时默认值与配置覆盖。
+func TestDraftWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
+	defaultW := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop()}).(*draftWorker)
+	if defaultW.staleTimeout != draftStaleTimeout {
+		t.Fatalf("default staleTimeout = %v, want %v", defaultW.staleTimeout, draftStaleTimeout)
+	}
+	custom := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop(), StaleTimeout: 45 * time.Minute}).(*draftWorker)
+	if custom.staleTimeout != 45*time.Minute {
+		t.Fatalf("custom staleTimeout = %v, want 45m", custom.staleTimeout)
+	}
+}
+
+// TestDraftWorker_RequeueStaleProcessing 验证将超时 processing 改回 pending。
+func TestDraftWorker_RequeueStaleProcessing(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	ctx := context.Background()
+
+	stale := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing,
+		Progress: 40, CreatedBy: 1,
+	}
+	if err := taskRepo.Create(ctx, stale); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	staleAt := time.Now().Add(-2 * time.Hour)
+	if err := db.Model(&model.Task{}).Where("id = ?", stale.ID).Update("updated_at", staleAt).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	worker := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo:     taskRepo,
+		Logger:       zap.NewNop(),
+		Concurrency:  1,
+		StaleTimeout: time.Hour,
+	}).(*draftWorker)
+	worker.requeueStale(ctx)
+
+	got, err := taskRepo.GetByID(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != model.TaskStatusPending {
+		t.Fatalf("Status = %q, want pending", got.Status)
 	}
 }

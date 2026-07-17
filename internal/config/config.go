@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -39,6 +40,15 @@ type WorkerConfig struct {
 	DraftConcurrency int `mapstructure:"draft_concurrency"`
 	// AISliceDraftConcurrency 单实例内并行执行一键成片任务的 Worker 数；默认 3。
 	AISliceDraftConcurrency int `mapstructure:"ai_slice_draft_concurrency"`
+
+	// ASRStaleTimeoutMin processing 孤儿回收阈值（分钟）：ASR 任务 asr_updated_at 超时未更新则改回 pending；默认 60。
+	ASRStaleTimeoutMin int `mapstructure:"asr_stale_timeout_min"`
+	// AISliceStaleTimeoutMin processing 孤儿回收阈值（分钟）：AI 切片任务 updated_at 超时未更新则改回 pending；默认 20。
+	AISliceStaleTimeoutMin int `mapstructure:"ai_slice_stale_timeout_min"`
+	// DraftStaleTimeoutMin processing 孤儿回收阈值（分钟）：草稿任务 updated_at 超时未更新则改回 pending；默认 60。
+	DraftStaleTimeoutMin int `mapstructure:"draft_stale_timeout_min"`
+	// AISliceDraftStaleTimeoutMin processing 孤儿回收阈值（分钟）：一键成片任务 updated_at 超时未更新则改回 pending；默认 90。
+	AISliceDraftStaleTimeoutMin int `mapstructure:"ai_slice_draft_stale_timeout_min"`
 }
 
 // CapCutMateConfig 剪映草稿服务（capcut-mate）连接配置。
@@ -209,7 +219,19 @@ const DefaultDraftConcurrency = 3
 // DefaultAISliceDraftConcurrency 一键成片 Worker 默认并发数。
 const DefaultAISliceDraftConcurrency = 3
 
-// normalizeWorkerConfig 将未配置或非法的 Worker 并发回落到内置默认值。
+// DefaultASRStaleTimeoutMin ASR processing 孤儿回收默认超时（分钟）。
+const DefaultASRStaleTimeoutMin = 60
+
+// DefaultAISliceStaleTimeoutMin AI 切片 processing 孤儿回收默认超时（分钟）。
+const DefaultAISliceStaleTimeoutMin = 20
+
+// DefaultDraftStaleTimeoutMin 草稿生成 processing 孤儿回收默认超时（分钟）。
+const DefaultDraftStaleTimeoutMin = 60
+
+// DefaultAISliceDraftStaleTimeoutMin 一键成片 processing 孤儿回收默认超时（分钟）。
+const DefaultAISliceDraftStaleTimeoutMin = 90
+
+// normalizeWorkerConfig 将未配置或非法的 Worker 并发/超时回落到内置默认值。
 func normalizeWorkerConfig(w *WorkerConfig) {
 	if w.AISliceConcurrency <= 0 {
 		w.AISliceConcurrency = DefaultAISliceConcurrency
@@ -222,6 +244,18 @@ func normalizeWorkerConfig(w *WorkerConfig) {
 	}
 	if w.AISliceDraftConcurrency <= 0 {
 		w.AISliceDraftConcurrency = DefaultAISliceDraftConcurrency
+	}
+	if w.ASRStaleTimeoutMin <= 0 {
+		w.ASRStaleTimeoutMin = DefaultASRStaleTimeoutMin
+	}
+	if w.AISliceStaleTimeoutMin <= 0 {
+		w.AISliceStaleTimeoutMin = DefaultAISliceStaleTimeoutMin
+	}
+	if w.DraftStaleTimeoutMin <= 0 {
+		w.DraftStaleTimeoutMin = DefaultDraftStaleTimeoutMin
+	}
+	if w.AISliceDraftStaleTimeoutMin <= 0 {
+		w.AISliceDraftStaleTimeoutMin = DefaultAISliceDraftStaleTimeoutMin
 	}
 }
 
@@ -255,6 +289,42 @@ func (w WorkerConfig) AISliceDraftConcurrencyOrDefault() int {
 		return DefaultAISliceDraftConcurrency
 	}
 	return w.AISliceDraftConcurrency
+}
+
+// ASRStaleTimeout 返回 ASR 孤儿回收超时；<=0 时回落默认 60 分钟。
+func (w WorkerConfig) ASRStaleTimeout() time.Duration {
+	min := w.ASRStaleTimeoutMin
+	if min <= 0 {
+		min = DefaultASRStaleTimeoutMin
+	}
+	return time.Duration(min) * time.Minute
+}
+
+// AISliceStaleTimeout 返回 AI 切片孤儿回收超时；<=0 时回落默认 20 分钟。
+func (w WorkerConfig) AISliceStaleTimeout() time.Duration {
+	min := w.AISliceStaleTimeoutMin
+	if min <= 0 {
+		min = DefaultAISliceStaleTimeoutMin
+	}
+	return time.Duration(min) * time.Minute
+}
+
+// DraftStaleTimeout 返回草稿生成孤儿回收超时；<=0 时回落默认 60 分钟。
+func (w WorkerConfig) DraftStaleTimeout() time.Duration {
+	min := w.DraftStaleTimeoutMin
+	if min <= 0 {
+		min = DefaultDraftStaleTimeoutMin
+	}
+	return time.Duration(min) * time.Minute
+}
+
+// AISliceDraftStaleTimeout 返回一键成片孤儿回收超时；<=0 时回落默认 90 分钟。
+func (w WorkerConfig) AISliceDraftStaleTimeout() time.Duration {
+	min := w.AISliceDraftStaleTimeoutMin
+	if min <= 0 {
+		min = DefaultAISliceDraftStaleTimeoutMin
+	}
+	return time.Duration(min) * time.Minute
 }
 
 // applyEnvOverrides 用已设置的环境变量 APP_* 覆盖配置（仅当环境变量存在时生效）。
@@ -430,6 +500,26 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_DRAFT_CONCURRENCY"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Worker.AISliceDraftConcurrency = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WORKER_ASR_STALE_TIMEOUT_MIN"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.ASRStaleTimeoutMin = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_STALE_TIMEOUT_MIN"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.AISliceStaleTimeoutMin = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WORKER_DRAFT_STALE_TIMEOUT_MIN"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.DraftStaleTimeoutMin = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_DRAFT_STALE_TIMEOUT_MIN"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.AISliceDraftStaleTimeoutMin = n
 		}
 	}
 

@@ -82,6 +82,7 @@ func main() {
 		audioPreparer,
 		logger,
 		cfg.Worker.ASRConcurrencyOrDefault(),
+		cfg.Worker.ASRStaleTimeout(),
 	)
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 	llmSystemPromptService := service.NewLLMSystemPromptService(llmSystemPromptRepo)
@@ -97,6 +98,7 @@ func main() {
 		llmClient,
 		logger,
 		cfg.Worker.AISliceConcurrencyOrDefault(),
+		cfg.Worker.AISliceStaleTimeout(),
 	)
 
 	// 剪映草稿 Worker：ffmpeg 切片 + capcut-mate 组装草稿，进度写入 task 表。
@@ -111,8 +113,9 @@ func main() {
 			RootDir: cfg.Web.RootDir,
 			RootURL: cfg.Web.RootURL,
 		},
-		Logger:      logger,
-		Concurrency: cfg.Worker.DraftConcurrencyOrDefault(),
+		Logger:       logger,
+		Concurrency:  cfg.Worker.DraftConcurrencyOrDefault(),
+		StaleTimeout: cfg.Worker.DraftStaleTimeout(),
 	})
 	aiSliceDraftWorker := service.NewAISliceDraftWorker(
 		taskRepo,
@@ -121,6 +124,7 @@ func main() {
 		draftWorker,
 		logger,
 		cfg.Worker.AISliceDraftConcurrencyOrDefault(),
+		cfg.Worker.AISliceDraftStaleTimeout(),
 	)
 	taskService := service.NewTaskService(taskRepo, liveMaterialRepo, videoProjectRepo, llmSystemPromptRepo, aiSliceWorker, draftWorker, aiSliceDraftWorker)
 

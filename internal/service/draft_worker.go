@@ -22,6 +22,8 @@ const (
 	draftDefaultConcurrency = 3
 	// draftPollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
 	draftPollInterval = 3 * time.Second
+	// draftStaleTimeout processing 超时未更新进度则自动改回 pending。
+	draftStaleTimeout = 60 * time.Minute
 	// draftDefaultCanvasWidth / draftDefaultCanvasHeight 剪映草稿默认画布尺寸。
 	draftDefaultCanvasWidth  = 1080
 	draftDefaultCanvasHeight = 1920
@@ -61,6 +63,7 @@ type draftWorker struct {
 	logger           *zap.Logger
 	concurrency      int
 	pollInterval     time.Duration
+	staleTimeout     time.Duration
 
 	wake      chan struct{}
 	startOnce sync.Once
@@ -78,6 +81,8 @@ type DraftWorkerDeps struct {
 	Logger           *zap.Logger
 	// Concurrency 单实例并行 Worker 数；<=0 时使用内置默认值（3）。
 	Concurrency int
+	// StaleTimeout processing 孤儿回收阈值；<=0 时使用内置默认值（60 分钟）。
+	StaleTimeout time.Duration
 }
 
 // NewDraftWorker 创建剪映草稿后台 Worker。
@@ -98,6 +103,10 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 	if concurrency <= 0 {
 		concurrency = draftDefaultConcurrency
 	}
+	staleTimeout := deps.StaleTimeout
+	if staleTimeout <= 0 {
+		staleTimeout = draftStaleTimeout
+	}
 	return &draftWorker{
 		taskRepo:         deps.TaskRepo,
 		liveMaterialRepo: deps.LiveMaterialRepo,
@@ -109,6 +118,7 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 		logger:           logger,
 		concurrency:      concurrency,
 		pollInterval:     draftPollInterval,
+		staleTimeout:     staleTimeout,
 		wake:             make(chan struct{}, 1),
 	}
 }
@@ -122,7 +132,7 @@ func (w *draftWorker) Enqueue() {
 	}
 }
 
-// Start 启动若干并发领取循环 + 定时 poll，保证重启后 pending 任务仍会被处理。
+// Start 启动若干并发领取循环 + 定时 poll，并在启动时立即回收孤儿 processing 任务。
 func (w *draftWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		n := w.concurrency
@@ -133,10 +143,17 @@ func (w *draftWorker) Start(ctx context.Context) {
 			go w.loop(ctx, i)
 		}
 		go w.pollLoop(ctx)
-		w.logger.Info("剪映草稿 Worker 已启动", zap.Int("concurrency", n))
+		// 启动即回收：服务重启后 processing 孤儿无需等待第一个 poll 周期。
+		w.requeueStale(ctx)
+		w.Enqueue()
+		w.logger.Info("剪映草稿 Worker 已启动",
+			zap.Int("concurrency", n),
+			zap.Duration("stale_timeout", w.staleTimeout),
+		)
 	})
 }
 
+// pollLoop 定时回收超时 processing，并唤醒领取 pending。
 func (w *draftWorker) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
@@ -145,8 +162,21 @@ func (w *draftWorker) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			w.requeueStale(ctx)
 			w.Enqueue()
 		}
+	}
+}
+
+// requeueStale 将 updated_at 超时未刷新的草稿 processing 任务改回 pending。
+func (w *draftWorker) requeueStale(ctx context.Context) {
+	n, err := w.taskRepo.RequeueStaleProcessingByType(ctx, model.TaskTypeDraft, w.staleTimeout)
+	if err != nil {
+		w.logger.Warn("回收超时草稿任务失败", zap.Error(err))
+		return
+	}
+	if n > 0 {
+		w.logger.Warn("已将超时草稿任务重新排队", zap.Int64("count", n))
 	}
 }
 

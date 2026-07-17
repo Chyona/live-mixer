@@ -72,12 +72,17 @@ web:
   root_dir: "docker/html"
   root_url: "http://192.168.3.219:81"
 
-# 后台 Worker 调度；可用 APP_WORKER_*_CONCURRENCY 覆盖
+# 后台 Worker 调度；可用 APP_WORKER_*_CONCURRENCY / APP_WORKER_*_STALE_TIMEOUT_MIN 覆盖
 worker:
   ai_slice_concurrency: 6      # 单实例同时执行的 AI 切片任务数
   asr_concurrency: 6           # 单实例同时执行的直播素材 ASR 任务数
   draft_concurrency: 3         # 单实例同时执行的剪映草稿任务数
   ai_slice_draft_concurrency: 3 # 单实例同时执行的一键成片任务数
+  # processing 孤儿回收阈值（分钟）：心跳字段超时未更新则改回 pending
+  asr_stale_timeout_min: 60           # ASR：asr_updated_at
+  ai_slice_stale_timeout_min: 20      # AI 切片：updated_at
+  draft_stale_timeout_min: 60         # 草稿生成：updated_at
+  ai_slice_draft_stale_timeout_min: 90 # 一键成片：updated_at
 
 # 远程文件下载；仅影响服务端下载请求，不改数据库/API 中的原始 URL
 # 环境变量（覆盖 yaml 中同名字段）：

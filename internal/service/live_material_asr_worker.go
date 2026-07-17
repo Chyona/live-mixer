@@ -49,18 +49,23 @@ type liveMaterialASRWorker struct {
 
 // NewLiveMaterialASRWorker 创建直播素材 ASR 后台 worker。
 // concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
+// staleTimeout 为 processing 孤儿回收阈值；<=0 时使用内置默认值（60 分钟）。
 func NewLiveMaterialASRWorker(
 	repo repository.LiveMaterialRepository,
 	asrService ASRService,
 	audioPreparer LiveMaterialASRAudioPreparer,
 	logger *zap.Logger,
 	concurrency int,
+	staleTimeout time.Duration,
 ) LiveMaterialASRWorker {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if concurrency <= 0 {
 		concurrency = liveMaterialASRDefaultConcurrency
+	}
+	if staleTimeout <= 0 {
+		staleTimeout = liveMaterialASRStaleTimeout
 	}
 	return &liveMaterialASRWorker{
 		repo:          repo,
@@ -69,7 +74,7 @@ func NewLiveMaterialASRWorker(
 		logger:        logger,
 		concurrency:   concurrency,
 		pollInterval:  liveMaterialASRPollInterval,
-		staleTimeout:  liveMaterialASRStaleTimeout,
+		staleTimeout:  staleTimeout,
 		wake:          make(chan struct{}, 1),
 	}
 }
@@ -83,7 +88,7 @@ func (w *liveMaterialASRWorker) Enqueue() {
 	}
 }
 
-// Start 启动若干并发领取循环 + 定时 poll，保证重启后 pending 任务仍会被处理。
+// Start 启动若干并发领取循环 + 定时 poll，并在启动时立即回收孤儿 processing 任务。
 func (w *liveMaterialASRWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		n := w.concurrency
@@ -94,7 +99,13 @@ func (w *liveMaterialASRWorker) Start(ctx context.Context) {
 			go w.loop(ctx, i)
 		}
 		go w.pollLoop(ctx)
-		w.logger.Info("直播素材 ASR Worker 已启动", zap.Int("concurrency", n))
+		// 启动即回收：服务重启后 processing 孤儿无需等待第一个 poll 周期。
+		w.requeueStale(ctx)
+		w.Enqueue()
+		w.logger.Info("直播素材 ASR Worker 已启动",
+			zap.Int("concurrency", n),
+			zap.Duration("stale_timeout", w.staleTimeout),
+		)
 	})
 }
 
@@ -112,6 +123,7 @@ func (w *liveMaterialASRWorker) pollLoop(ctx context.Context) {
 	}
 }
 
+// requeueStale 将 asr_updated_at 超时未刷新的 processing 任务改回 pending。
 func (w *liveMaterialASRWorker) requeueStale(ctx context.Context) {
 	n, err := w.repo.RequeueStaleProcessingASR(ctx, w.staleTimeout)
 	if err != nil {

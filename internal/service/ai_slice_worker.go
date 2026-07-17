@@ -21,6 +21,8 @@ const (
 	aiSliceDefaultConcurrency = 6
 	// aiSlicePollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
 	aiSlicePollInterval = 3 * time.Second
+	// aiSliceStaleTimeout processing 超时未更新进度则自动改回 pending。
+	aiSliceStaleTimeout = 20 * time.Minute
 )
 
 // aiSliceUserPromptOutputFormat 内置用户提示词中的「输出格式」固定段落。
@@ -54,6 +56,7 @@ type aiSliceWorker struct {
 	logger           *zap.Logger
 	concurrency      int
 	pollInterval     time.Duration
+	staleTimeout     time.Duration
 
 	wake      chan struct{}
 	startOnce sync.Once
@@ -61,6 +64,7 @@ type aiSliceWorker struct {
 
 // NewAISliceWorker 创建 AI 切片后台 Worker。
 // concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
+// staleTimeout 为 processing 孤儿回收阈值；<=0 时使用内置默认值（20 分钟）。
 func NewAISliceWorker(
 	taskRepo repository.TaskRepository,
 	liveMaterialRepo repository.LiveMaterialRepository,
@@ -68,12 +72,16 @@ func NewAISliceWorker(
 	llmClient LLMChatClient,
 	logger *zap.Logger,
 	concurrency int,
+	staleTimeout time.Duration,
 ) AISliceWorker {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if concurrency <= 0 {
 		concurrency = aiSliceDefaultConcurrency
+	}
+	if staleTimeout <= 0 {
+		staleTimeout = aiSliceStaleTimeout
 	}
 	return &aiSliceWorker{
 		taskRepo:         taskRepo,
@@ -83,6 +91,7 @@ func NewAISliceWorker(
 		logger:           logger,
 		concurrency:      concurrency,
 		pollInterval:     aiSlicePollInterval,
+		staleTimeout:     staleTimeout,
 		wake:             make(chan struct{}, 1),
 	}
 }
@@ -96,7 +105,7 @@ func (w *aiSliceWorker) Enqueue() {
 	}
 }
 
-// Start 启动若干并发领取循环 + 定时 poll，保证重启后 pending 任务仍会被处理。
+// Start 启动若干并发领取循环 + 定时 poll，并在启动时立即回收孤儿 processing 任务。
 func (w *aiSliceWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		n := w.concurrency
@@ -107,11 +116,17 @@ func (w *aiSliceWorker) Start(ctx context.Context) {
 			go w.loop(ctx, i)
 		}
 		go w.pollLoop(ctx)
-		w.logger.Info("AI 切片 Worker 已启动", zap.Int("concurrency", n))
+		// 启动即回收：服务重启后 processing 孤儿无需等待第一个 poll 周期。
+		w.requeueStale(ctx)
+		w.Enqueue()
+		w.logger.Info("AI 切片 Worker 已启动",
+			zap.Int("concurrency", n),
+			zap.Duration("stale_timeout", w.staleTimeout),
+		)
 	})
 }
 
-// pollLoop 定时唤醒，避免仅依赖内存通道导致任务滞留。
+// pollLoop 定时回收超时 processing，并唤醒领取 pending。
 func (w *aiSliceWorker) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
@@ -120,8 +135,21 @@ func (w *aiSliceWorker) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			w.requeueStale(ctx)
 			w.Enqueue()
 		}
+	}
+}
+
+// requeueStale 将 updated_at 超时未刷新的 AI 切片 processing 任务改回 pending。
+func (w *aiSliceWorker) requeueStale(ctx context.Context) {
+	n, err := w.taskRepo.RequeueStaleProcessingByType(ctx, model.TaskTypeAISlice, w.staleTimeout)
+	if err != nil {
+		w.logger.Warn("回收超时 AI 切片任务失败", zap.Error(err))
+		return
+	}
+	if n > 0 {
+		w.logger.Warn("已将超时 AI 切片任务重新排队", zap.Int64("count", n))
 	}
 }
 
