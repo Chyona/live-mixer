@@ -17,7 +17,7 @@ const (
 	// DefaultModel AI 切片默认模型。
 	DefaultModel = "qwen3.7-plus"
 	// DefaultTimeout 单次 Chat Completions 超时。
-	DefaultTimeout = 120 * time.Second
+	DefaultTimeout = 600 * time.Second
 )
 
 // Config OpenAI 兼容协议 LLM 客户端配置。
