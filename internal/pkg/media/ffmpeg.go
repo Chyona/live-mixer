@@ -18,6 +18,8 @@ const (
 	DefaultASRMP3Bitrate = "64k"
 	// DefaultFFmpegBinary 默认 ffmpeg 可执行文件名。
 	DefaultFFmpegBinary = "ffmpeg"
+	// DefaultFFmpegThreads 单次 ffmpeg 进程线程上限，避免多任务并发打满 CPU。
+	DefaultFFmpegThreads = 4
 )
 
 // FFmpegConverter 基于 ffmpeg 的音频转码器。
@@ -58,6 +60,7 @@ func (c *FFmpegConverter) ConvertToASRMP3(ctx context.Context, inputPath, output
 func buildASRMP3Args(sampleRate, channels int, bitrate, inputPath, outputPath string) []string {
 	return []string{
 		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
 		"-i", inputPath,
 		"-vn",
 		"-ac", strconv.Itoa(channels),
@@ -92,7 +95,7 @@ func (c *FFmpegConverter) resolvedMP3Bitrate() string {
 // CutVideoSegment 按起止秒精确裁剪视频片段（重编码，保证切点准确）。
 // 参考命令：
 //
-//	ffmpeg -y -i input.mp4 -ss 10 -to 30 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
+//	ffmpeg -y -threads 4 -i input.mp4 -ss 10 -to 30 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
 //
 // startSec / endSec 单位为秒；endSec 须大于 startSec。
 func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
@@ -118,6 +121,7 @@ func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, output
 func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
 	return []string{
 		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
 		"-i", inputPath,
 		"-ss", formatFFmpegSeconds(startSec),
 		"-to", formatFFmpegSeconds(endSec),
