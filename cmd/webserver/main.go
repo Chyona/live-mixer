@@ -1,4 +1,14 @@
 // webserver 是 HTTP API 服务入口。
+//
+//	@title						Base API
+//	@version					1.0
+//	@description				基于 Gin + PostgreSQL 的基础 API 服务
+//	@host						localhost:30000
+//	@BasePath					/openapi/live-mixer
+//
+//	@securityDefinitions.apikey	BearerAuth
+//	@in							header
+//	@name						Authorization
 package main
 
 import (

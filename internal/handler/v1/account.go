@@ -47,6 +47,7 @@ type UpdateAccountRequest struct {
 // @Param        body  body      CreateAccountRequest  true  "账号信息"
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/accounts [post]
 func (h *AccountHandler) CreateAccount(c *gin.Context) {
 	var req CreateAccountRequest
@@ -71,6 +72,7 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 // @Param        id   path      int  true  "账号 ID"
 // @Success      200  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/accounts/{id} [get]
 func (h *AccountHandler) GetAccount(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -95,6 +97,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 // @Param        page       query     int  false  "页码"
 // @Param        page_size  query     int  false  "每页数量"
 // @Success      200        {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/accounts [get]
 func (h *AccountHandler) ListAccounts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -123,6 +126,7 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 // @Param        id    path      int                   true  "账号 ID"
 // @Param        body  body      UpdateAccountRequest  true  "更新内容"
 // @Success      200   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/accounts/{id} [put]
 func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -152,6 +156,7 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 // @Produce      json
 // @Param        id   path      int  true  "账号 ID"
 // @Success      200  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/accounts/{id} [delete]
 func (h *AccountHandler) DeleteAccount(c *gin.Context) {
 	id, err := parseUintParam(c, "id")

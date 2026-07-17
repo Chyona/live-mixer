@@ -119,6 +119,7 @@ func (h *LLMSystemPromptHandler) toLLMSystemPromptListResponse(ctx context.Conte
 // @Success      200          {object}  response.Body
 // @Failure      400          {object}  response.Body
 // @Failure      401          {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/llm-system-prompts [get]
 func (h *LLMSystemPromptHandler) ListLLMSystemPrompts(c *gin.Context) {
 	var req ListLLMSystemPromptsRequest
@@ -155,6 +156,7 @@ func (h *LLMSystemPromptHandler) ListLLMSystemPrompts(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      401   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/llm-system-prompts [post]
 func (h *LLMSystemPromptHandler) CreateLLMSystemPrompt(c *gin.Context) {
 	var req CreateLLMSystemPromptRequest
@@ -188,6 +190,7 @@ func (h *LLMSystemPromptHandler) CreateLLMSystemPrompt(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/llm-system-prompts/{id} [get]
 func (h *LLMSystemPromptHandler) GetLLMSystemPrompt(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -220,6 +223,7 @@ func (h *LLMSystemPromptHandler) GetLLMSystemPrompt(c *gin.Context) {
 // @Failure      400   {object}  response.Body
 // @Failure      403   {object}  response.Body
 // @Failure      404   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/llm-system-prompts/{id} [put]
 func (h *LLMSystemPromptHandler) UpdateLLMSystemPrompt(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -262,6 +266,7 @@ func (h *LLMSystemPromptHandler) UpdateLLMSystemPrompt(c *gin.Context) {
 // @Failure      400  {object}  response.Body
 // @Failure      403  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/llm-system-prompts/{id} [delete]
 func (h *LLMSystemPromptHandler) DeleteLLMSystemPrompt(c *gin.Context) {
 	id, err := parseUintParam(c, "id")

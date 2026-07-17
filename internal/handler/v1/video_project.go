@@ -173,6 +173,7 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 // @Success      200          {object}  response.Body
 // @Failure      400          {object}  response.Body
 // @Failure      401          {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/video-projects [get]
 func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 	var req ListVideoProjectsRequest
@@ -209,6 +210,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      401   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/video-projects [post]
 func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 	var req CreateVideoProjectRequest
@@ -248,6 +250,7 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/video-projects/{id} [get]
 func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -279,6 +282,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      404   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/video-projects/{id} [put]
 func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -321,6 +325,7 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/video-projects/{id} [delete]
 func (h *VideoProjectHandler) DeleteVideoProject(c *gin.Context) {
 	id, err := parseUintParam(c, "id")

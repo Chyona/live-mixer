@@ -165,6 +165,7 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, tasks []model.Task
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      401   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/tasks/ai-slice [post]
 func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 	var req CreateAISliceTaskRequest
@@ -198,6 +199,7 @@ func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      401   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/tasks/draft [post]
 func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 	var req CreateDraftTaskRequest
@@ -233,6 +235,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      401   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/tasks/ai-slice-draft [post]
 func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 	var req CreateAISliceDraftTaskRequest
@@ -273,6 +276,7 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 // @Success      200         {object}  response.Body
 // @Failure      400         {object}  response.Body
 // @Failure      401         {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/tasks [get]
 func (h *TaskHandler) ListTasks(c *gin.Context) {
 	var req ListTasksRequest
@@ -310,6 +314,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/tasks/{id} [get]
 func (h *TaskHandler) GetTask(c *gin.Context) {
 	id, err := parseUintParam(c, "id")

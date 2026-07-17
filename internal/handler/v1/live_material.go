@@ -159,6 +159,7 @@ type ListLiveMaterialsRequest struct {
 // @Success      200             {object}  response.Body
 // @Failure      400             {object}  response.Body
 // @Failure      401             {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials [get]
 func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 	var req ListLiveMaterialsRequest
@@ -196,6 +197,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      401   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials [post]
 func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 	var req CreateLiveMaterialRequest
@@ -230,6 +232,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials/{id} [get]
 func (h *LiveMaterialHandler) GetLiveMaterial(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -261,6 +264,7 @@ func (h *LiveMaterialHandler) GetLiveMaterial(c *gin.Context) {
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
 // @Failure      404   {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials/{id} [put]
 func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -296,6 +300,7 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials/{id} [delete]
 func (h *LiveMaterialHandler) DeleteLiveMaterial(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -324,6 +329,7 @@ func (h *LiveMaterialHandler) DeleteLiveMaterial(c *gin.Context) {
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials/{id}/asr/retry [post]
 func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
@@ -358,6 +364,7 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 // @Success      200  {file}    file  "ASR 字幕 JSON 文件"
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
+// @Security     BearerAuth
 // @Router       /v1/live-materials/{id}/asr/subtitle [get]
 func (h *LiveMaterialHandler) DownloadASRSubtitle(c *gin.Context) {
 	id, err := parseUintParam(c, "id")

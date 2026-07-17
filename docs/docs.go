@@ -17,6 +17,11 @@ const docTemplate = `{
     "paths": {
         "/v1/accounts": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "分页查询账号",
                 "produces": [
                     "application/json"
@@ -43,12 +48,17 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "注册新账号",
                 "consumes": [
                     "application/json"
@@ -67,7 +77,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateAccountRequest"
+                            "$ref": "#/definitions/v1.CreateAccountRequest"
                         }
                     }
                 ],
@@ -75,13 +85,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -89,6 +99,11 @@ const docTemplate = `{
         },
         "/v1/accounts/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "根据 ID 查询账号",
                 "produces": [
                     "application/json"
@@ -110,18 +125,23 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "更新账号昵称、头像、角色或状态",
                 "consumes": [
                     "application/json"
@@ -147,7 +167,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.UpdateAccountRequest"
+                            "$ref": "#/definitions/v1.UpdateAccountRequest"
                         }
                     }
                 ],
@@ -155,12 +175,17 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "软删除账号",
                 "produces": [
                     "application/json"
@@ -182,7 +207,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -208,7 +233,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.ASRRequest"
+                            "$ref": "#/definitions/v1.ASRRequest"
                         }
                     }
                 ],
@@ -216,19 +241,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -254,7 +279,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.LoginRequest"
+                            "$ref": "#/definitions/v1.LoginRequest"
                         }
                     }
                 ],
@@ -264,13 +289,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                                    "$ref": "#/definitions/response.Body"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/internal_handler_v1.LoginResponse"
+                                            "$ref": "#/definitions/v1.LoginResponse"
                                         }
                                     }
                                 }
@@ -280,13 +305,59 @@ const docTemplate = `{
                     "400": {
                         "description": "请求参数错误（如缺少 username 或 password）",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "用户名或密码错误，或账号已被禁用",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/chat": {
+            "post": {
+                "description": "提交系统/用户提示词，同步返回上游 LLM 的完整 Chat Completions 结果",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "大模型对话"
+                ],
+                "summary": "同步大模型对话",
+                "parameters": [
+                    {
+                        "description": "对话请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.ChatRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -294,6 +365,11 @@ const docTemplate = `{
         },
         "/v1/live-materials": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "分页查询直播素材，支持日期与关键词筛选，不含 live_asr 字段，默认每页 10 条",
                 "produces": [
                     "application/json"
@@ -344,24 +420,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "添加一条直播素材，name、live_url 为必填",
                 "consumes": [
                     "application/json"
@@ -380,7 +461,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateLiveMaterialRequest"
+                            "$ref": "#/definitions/v1.CreateLiveMaterialRequest"
                         }
                     }
                 ],
@@ -388,19 +469,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -408,7 +489,12 @@ const docTemplate = `{
         },
         "/v1/live-materials/{id}": {
             "get": {
-                "description": "根据 ID 查询直播素材完整信息（含 live_asr）",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据 ID 查询直播素材完整信息；live_asr 为分句数组，含 speaker、时间戳与字级 words",
                 "produces": [
                     "application/json"
                 ],
@@ -429,24 +515,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "仅可编辑 name、remark，其它字段不可修改",
                 "consumes": [
                     "application/json"
@@ -472,7 +563,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.UpdateLiveMaterialRequest"
+                            "$ref": "#/definitions/v1.UpdateLiveMaterialRequest"
                         }
                     }
                 ],
@@ -480,24 +571,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "物理删除直播素材，并级联删除 video_project 中关联的剪辑项目",
                 "produces": [
                     "application/json"
@@ -519,19 +615,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -539,6 +635,11 @@ const docTemplate = `{
         },
         "/v1/live-materials/{id}/asr/retry": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "仅 asr_status=failed 时可重试：重置为 pending，由后台 Worker 扫库自动执行",
                 "produces": [
                     "application/json"
@@ -560,19 +661,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -580,6 +681,11 @@ const docTemplate = `{
         },
         "/v1/live-materials/{id}/asr/subtitle": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "同步返回 live_asr 原始 JSON 文件；仅 asr_status=completed 且内容非空时可下载",
                 "produces": [
                     "application/json"
@@ -607,13 +713,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -621,7 +727,12 @@ const docTemplate = `{
         },
         "/v1/llm-system-prompts": {
             "get": {
-                "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content；created_by 为创建人展示名",
                 "produces": [
                     "application/json"
                 ],
@@ -665,24 +776,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "添加一条系统提示词，创建人取自 JWT 当前用户",
                 "consumes": [
                     "application/json"
@@ -701,7 +817,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateLLMSystemPromptRequest"
+                            "$ref": "#/definitions/v1.CreateLLMSystemPromptRequest"
                         }
                     }
                 ],
@@ -709,19 +825,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -729,6 +845,11 @@ const docTemplate = `{
         },
         "/v1/llm-system-prompts/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "根据 ID 查询系统提示词完整信息（含 content）",
                 "produces": [
                     "application/json"
@@ -750,24 +871,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "更新 name、content、remark、ext；is_editable=0 的预置提示词不可修改",
                 "consumes": [
                     "application/json"
@@ -793,7 +919,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.UpdateLLMSystemPromptRequest"
+                            "$ref": "#/definitions/v1.UpdateLLMSystemPromptRequest"
                         }
                     }
                 ],
@@ -801,30 +927,35 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "物理删除系统提示词；is_editable=0 的预置提示词不可删除",
                 "produces": [
                     "application/json"
@@ -846,25 +977,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -872,6 +1003,11 @@ const docTemplate = `{
         },
         "/v1/tasks": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name",
                 "produces": [
                     "application/json"
@@ -910,8 +1046,8 @@ const docTemplate = `{
                         "items": {
                             "type": "string"
                         },
-                        "collectionFormat": "multi",
-                        "description": "关键词数组，模糊匹配 task.video_project_name，多词 AND；如 keywords=发布会&keywords=精剪",
+                        "collectionFormat": "csv",
+                        "description": "关键词数组，模糊匹配 task.video_project_name，多词 AND；如 keywords=发布会\u0026keywords=精剪",
                         "name": "keywords",
                         "in": "query"
                     },
@@ -930,21 +1066,21 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK；data.list 为 Task 数组（含 video_project_name）",
+                        "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -952,7 +1088,12 @@ const docTemplate = `{
         },
         "/v1/tasks/ai-slice": {
             "post": {
-                "description": "异步：根据 video_project.id 读取关联直播 ASR，由 LLM 选取高光片段并回写 video_project.clips0/clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "异步：按 video_project.prompt_id 加载系统提示词，用 clips0 时间段从 live_asr 筛选句段组装用户提示词，LLM 返回句段索引后回写 video_project.clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
                 "consumes": [
                     "application/json"
                 ],
@@ -970,7 +1111,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateAISliceTaskRequest"
+                            "$ref": "#/definitions/v1.CreateAISliceTaskRequest"
                         }
                     }
                 ],
@@ -978,19 +1119,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -998,6 +1139,11 @@ const docTemplate = `{
         },
         "/v1/tasks/ai-slice-draft": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿生成并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
@@ -1016,7 +1162,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateAISliceDraftTaskRequest"
+                            "$ref": "#/definitions/v1.CreateAISliceDraftTaskRequest"
                         }
                     }
                 ],
@@ -1024,19 +1170,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -1044,6 +1190,11 @@ const docTemplate = `{
         },
         "/v1/tasks/draft": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate 生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
@@ -1062,7 +1213,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateDraftTaskRequest"
+                            "$ref": "#/definitions/v1.CreateDraftTaskRequest"
                         }
                     }
                 ],
@@ -1070,19 +1221,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -1090,7 +1241,12 @@ const docTemplate = `{
         },
         "/v1/tasks/{id}": {
             "get": {
-                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名",
                 "produces": [
                     "application/json"
                 ],
@@ -1109,21 +1265,21 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK；data 为 live-mixer_internal_model.Task（含 draft_url/video_url）",
+                        "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -1131,6 +1287,11 @@ const docTemplate = `{
         },
         "/v1/video-projects": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id 与 live_name（关联 live_material.name）",
                 "produces": [
                     "application/json"
@@ -1175,24 +1336,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；成功后返回完整项目（含 id/默认 prompt_id/结构化 clips0/clips1 等）",
                 "consumes": [
                     "application/json"
@@ -1211,7 +1377,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.CreateVideoProjectRequest"
+                            "$ref": "#/definitions/v1.CreateVideoProjectRequest"
                         }
                     }
                 ],
@@ -1219,19 +1385,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -1239,6 +1405,11 @@ const docTemplate = `{
         },
         "/v1/video-projects/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "根据 ID 查询剪辑项目",
                 "produces": [
                     "application/json"
@@ -1260,24 +1431,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/project_source）；未传字段保持不变",
                 "consumes": [
                     "application/json"
@@ -1303,7 +1479,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_handler_v1.UpdateVideoProjectRequest"
+                            "$ref": "#/definitions/v1.UpdateVideoProjectRequest"
                         }
                     }
                 ],
@@ -1311,24 +1487,29 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "物理删除剪辑项目",
                 "produces": [
                     "application/json"
@@ -1350,19 +1531,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -1391,7 +1572,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/live-mixer_pkg_response.Body"
+                            "$ref": "#/definitions/response.Body"
                         }
                     }
                 }
@@ -1399,7 +1580,64 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "internal_handler_v1.ASRRequest": {
+        "model.ClipRange": {
+            "type": "object",
+            "properties": {
+                "end_time": {
+                    "type": "integer"
+                },
+                "start_time": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.ClipWithText": {
+            "type": "object",
+            "properties": {
+                "end_time": {
+                    "type": "integer"
+                },
+                "start_time": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "words": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ClipWord"
+                    }
+                }
+            }
+        },
+        "model.ClipWord": {
+            "type": "object",
+            "properties": {
+                "end_time": {
+                    "type": "integer"
+                },
+                "start_time": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "response.Body": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {},
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "v1.ASRRequest": {
             "type": "object",
             "required": [
                 "audio_url"
@@ -1410,7 +1648,51 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.CreateAccountRequest": {
+        "v1.ChatRequest": {
+            "type": "object",
+            "required": [
+                "usr_prompt"
+            ],
+            "properties": {
+                "sys_prompt": {
+                    "description": "SysPrompt 系统提示词，可选，默认为空。",
+                    "type": "string"
+                },
+                "usr_prompt": {
+                    "description": "UsrPrompt 用户提示词，必选。",
+                    "type": "string"
+                }
+            }
+        },
+        "v1.CreateAISliceDraftTaskRequest": {
+            "type": "object",
+            "required": [
+                "video_project_id"
+            ],
+            "properties": {
+                "canvas_height": {
+                    "type": "integer"
+                },
+                "canvas_width": {
+                    "type": "integer"
+                },
+                "video_project_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "v1.CreateAISliceTaskRequest": {
+            "type": "object",
+            "required": [
+                "video_project_id"
+            ],
+            "properties": {
+                "video_project_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "v1.CreateAccountRequest": {
             "type": "object",
             "required": [
                 "email",
@@ -1441,10 +1723,10 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.CreateAISliceDraftTaskRequest": {
+        "v1.CreateDraftTaskRequest": {
             "type": "object",
             "required": [
-                "live_id"
+                "video_project_id"
             ],
             "properties": {
                 "canvas_height": {
@@ -1453,84 +1735,12 @@ const docTemplate = `{
                 "canvas_width": {
                     "type": "integer"
                 },
-                "live_id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string",
-                    "maxLength": 64
-                },
-                "remark": {
-                    "type": "string",
-                    "maxLength": 256
-                },
-                "sys_prompt_id": {
-                    "type": "integer"
-                },
-                "target_duration_ms": {
-                    "type": "integer"
-                },
-                "usr_prompt": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_handler_v1.CreateAISliceTaskRequest": {
-            "type": "object",
-            "required": [
-                "video_project_id"
-            ],
-            "properties": {
                 "video_project_id": {
-                    "description": "剪辑项目 ID；Worker 从关联 live_material 读取 ASR 并回写 clips0/clips1",
                     "type": "integer"
                 }
             }
         },
-        "internal_handler_v1.CreateDraftTaskRequest": {
-            "type": "object",
-            "required": [
-                "video_project_id"
-            ],
-            "properties": {
-                "canvas_height": {
-                    "description": "剪映草稿画布高度，默认 1920",
-                    "type": "integer"
-                },
-                "canvas_width": {
-                    "description": "剪映草稿画布宽度，默认 1080",
-                    "type": "integer"
-                },
-                "video_project_id": {
-                    "description": "剪辑项目 ID；Worker 读取 live_url 与 clips1 后生成剪映草稿",
-                    "type": "integer"
-                }
-            }
-        },
-        "internal_handler_v1.TaskCreateResponse": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer"
-                },
-                "type": {
-                    "description": "任务类型：ai_slice / draft / ai_slice_draft",
-                    "type": "string"
-                },
-                "status": {
-                    "description": "任务状态：pending / processing / completed / failed",
-                    "type": "string"
-                },
-                "progress": {
-                    "description": "任务进度 0-100",
-                    "type": "integer"
-                },
-                "created_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_handler_v1.CreateLLMSystemPromptRequest": {
+        "v1.CreateLLMSystemPromptRequest": {
             "type": "object",
             "required": [
                 "content",
@@ -1554,7 +1764,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.CreateLiveMaterialRequest": {
+        "v1.CreateLiveMaterialRequest": {
             "type": "object",
             "required": [
                 "live_url",
@@ -1579,7 +1789,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.CreateVideoProjectRequest": {
+        "v1.CreateVideoProjectRequest": {
             "type": "object",
             "required": [
                 "live_id",
@@ -1587,17 +1797,15 @@ const docTemplate = `{
             ],
             "properties": {
                 "clips0": {
-                    "description": "可选时间片段数组，未传时存为空数组",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
+                        "$ref": "#/definitions/model.ClipRange"
                     }
                 },
                 "clips1": {
-                    "description": "可选带文本切片数组，未传时存为空数组",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
+                        "$ref": "#/definitions/model.ClipWithText"
                     }
                 },
                 "live_id": {
@@ -1607,6 +1815,11 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 64
                 },
+                "project_source": {
+                    "description": "项目来源，未传默认为空",
+                    "type": "string",
+                    "maxLength": 32
+                },
                 "prompt_id": {
                     "description": "提示词 ID，未传或为 0 时默认 1",
                     "type": "integer"
@@ -1614,65 +1827,10 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
-                },
-                "project_source": {
-                    "description": "项目来源，未传默认为空",
-                    "type": "string",
-                    "maxLength": 32
                 }
             }
         },
-        "internal_handler_v1.VideoProjectResponse": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "remark": {
-                    "type": "string"
-                },
-                "live_id": {
-                    "type": "integer"
-                },
-                "prompt_id": {
-                    "type": "integer"
-                },
-                "clips0": {
-                    "description": "视频切片列表（毫秒时间段数组）",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
-                    }
-                },
-                "clips1": {
-                    "description": "带文本与词级时间戳的切片列表",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
-                    }
-                },
-                "project_source": {
-                    "description": "项目来源",
-                    "type": "string"
-                },
-                "created_by": {
-                    "type": "integer"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "ext": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_handler_v1.LoginRequest": {
+        "v1.LoginRequest": {
             "type": "object",
             "required": [
                 "password",
@@ -1689,7 +1847,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.LoginResponse": {
+        "v1.LoginResponse": {
             "type": "object",
             "properties": {
                 "avatar": {
@@ -1727,7 +1885,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.UpdateAccountRequest": {
+        "v1.UpdateAccountRequest": {
             "type": "object",
             "properties": {
                 "avatar": {
@@ -1746,7 +1904,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.UpdateLLMSystemPromptRequest": {
+        "v1.UpdateLLMSystemPromptRequest": {
             "type": "object",
             "required": [
                 "content",
@@ -1770,7 +1928,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.UpdateLiveMaterialRequest": {
+        "v1.UpdateLiveMaterialRequest": {
             "type": "object",
             "required": [
                 "name"
@@ -1786,169 +1944,44 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_handler_v1.UpdateVideoProjectRequest": {
+        "v1.UpdateVideoProjectRequest": {
             "type": "object",
             "properties": {
                 "clips0": {
-                    "description": "可选；传入且合法时更新（含空数组表示清空），未传则不更新",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipRange"
+                        "$ref": "#/definitions/model.ClipRange"
                     }
                 },
                 "clips1": {
-                    "description": "可选；传入且合法时更新（含空数组表示清空），未传则不更新",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipWithText"
+                        "$ref": "#/definitions/model.ClipWithText"
                     }
                 },
                 "name": {
                     "type": "string",
                     "maxLength": 64
                 },
+                "project_source": {
+                    "type": "string",
+                    "maxLength": 32
+                },
                 "prompt_id": {
-                    "description": "可选；传入时更新提示词 ID，为 0 时按默认值 1 处理",
                     "type": "integer"
                 },
                 "remark": {
                     "type": "string",
                     "maxLength": 256
-                },
-                "project_source": {
-                    "description": "可选；传入时更新项目来源（空字符串表示清空），未传则不更新",
-                    "type": "string",
-                    "maxLength": 32
                 }
             }
-        },
-        "live-mixer_internal_model.ClipRange": {
-            "type": "object",
-            "properties": {
-                "end_time": {
-                    "description": "结束时间（毫秒）",
-                    "type": "integer"
-                },
-                "start_time": {
-                    "description": "开始时间（毫秒）",
-                    "type": "integer"
-                }
-            }
-        },
-        "live-mixer_internal_model.ClipWithText": {
-            "type": "object",
-            "properties": {
-                "end_time": {
-                    "description": "结束时间（毫秒）",
-                    "type": "integer"
-                },
-                "start_time": {
-                    "description": "开始时间（毫秒）",
-                    "type": "integer"
-                },
-                "text": {
-                    "description": "切片对应文本",
-                    "type": "string"
-                },
-                "words": {
-                    "description": "词级时间戳列表（可选）",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/live-mixer_internal_model.ClipWord"
-                    }
-                }
-            }
-        },
-        "live-mixer_internal_model.ClipWord": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string"
-                },
-                "start_time": {
-                    "description": "开始时间（毫秒）",
-                    "type": "integer"
-                },
-                "end_time": {
-                    "description": "结束时间（毫秒）",
-                    "type": "integer"
-                }
-            }
-        },
-        "live-mixer_internal_model.Task": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer"
-                },
-                "type": {
-                    "description": "任务类型：ai_slice / draft / ai_slice_draft",
-                    "type": "string"
-                },
-                "status": {
-                    "description": "任务状态：pending / processing / completed / failed",
-                    "type": "string"
-                },
-                "progress": {
-                    "description": "任务进度 0-100",
-                    "type": "integer"
-                },
-                "sys_prompt": {
-                    "type": "string"
-                },
-                "usr_prompt": {
-                    "type": "string"
-                },
-                "error_message": {
-                    "type": "string"
-                },
-                "video_project_id": {
-                    "description": "关联剪辑项目 ID（可空）",
-                    "type": "integer"
-                },
-                "video_project_name": {
-                    "description": "关联剪辑项目名称（冗余字段，列表筛选与展示用）",
-                    "type": "string"
-                },
-                "draft_url": {
-                    "description": "剪映草稿 URL（草稿生成/一键成片完成后写入）",
-                    "type": "string"
-                },
-                "video_url": {
-                    "description": "视频地址 URL",
-                    "type": "string"
-                },
-                "created_by": {
-                    "type": "integer"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "started_at": {
-                    "type": "string"
-                },
-                "completed_at": {
-                    "type": "string"
-                },
-                "ext": {
-                    "type": "string"
-                }
-            }
-        },
-        "live-mixer_pkg_response.Body": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "integer"
-                },
-                "data": {},
-                "message": {
-                    "type": "string"
-                }
-            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     }
 }`
