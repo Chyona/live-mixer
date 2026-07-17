@@ -27,6 +27,8 @@ const (
 	// draftDefaultCanvasWidth / draftDefaultCanvasHeight 剪映草稿默认画布尺寸。
 	draftDefaultCanvasWidth  = 1080
 	draftDefaultCanvasHeight = 1920
+	// draftClipMergeGapMS 相邻片段间隔 ≤ 该值（毫秒）时合并后再 ffmpeg 裁剪。
+	draftClipMergeGapMS = 500
 )
 
 // DraftWorker 剪映草稿任务后台调度器：DB 原子抢占 + ffmpeg 切片 + capcut-mate 组装草稿。
@@ -265,6 +267,14 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, err)
 	}
+	beforeMerge := len(clips)
+	clips = mergeAdjacentClipRanges(clips, draftClipMergeGapMS)
+	w.logger.Info("草稿裁剪前合并相邻片段",
+		zap.Uint("task_id", task.ID),
+		zap.Int("clips_before", beforeMerge),
+		zap.Int("clips_after", len(clips)),
+		zap.Int64("merge_gap_ms", draftClipMergeGapMS),
+	)
 	if err := validateClipRanges(clips); err != nil {
 		return w.fail(ctx, task.ID, progress, err)
 	}
@@ -488,5 +498,35 @@ func clips1ToRanges(clips []model.ClipWithText) []model.ClipRange {
 	for _, c := range clips {
 		out = append(out, model.ClipRange{StartTime: c.StartTime, EndTime: c.EndTime})
 	}
+	return out
+}
+
+// mergeAdjacentClipRanges 按列表顺序合并相邻片段：严格保留入参顺序，不排序。
+// 仅当列表中相邻两项满足 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS
+//（含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。
+func mergeAdjacentClipRanges(clips []model.ClipRange, maxGapMS int64) []model.ClipRange {
+	if len(clips) == 0 {
+		return nil
+	}
+	if len(clips) == 1 {
+		return []model.ClipRange{{StartTime: clips[0].StartTime, EndTime: clips[0].EndTime}}
+	}
+
+	out := make([]model.ClipRange, 0, len(clips))
+	cur := clips[0]
+	for i := 1; i < len(clips); i++ {
+		next := clips[i]
+		gap := next.StartTime - cur.EndTime
+		// 列表顺序优先：时间上回跳的相邻项不合，避免负 gap 误吞片段。
+		if next.StartTime >= cur.StartTime && gap <= maxGapMS {
+			if next.EndTime > cur.EndTime {
+				cur.EndTime = next.EndTime
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = next
+	}
+	out = append(out, cur)
 	return out
 }

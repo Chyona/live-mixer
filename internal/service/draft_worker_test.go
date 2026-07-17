@@ -106,6 +106,179 @@ func TestResolveDraftClipRanges_PreferClips1(t *testing.T) {
 	}
 }
 
+func TestMergeAdjacentClipRanges(t *testing.T) {
+	const gap = draftClipMergeGapMS
+
+	tests := []struct {
+		name string
+		in   []model.ClipRange
+		want []model.ClipRange
+	}{
+		{name: "empty", in: nil, want: nil},
+		{
+			name: "single",
+			in:   []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+			want: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+		},
+		{
+			name: "gap_exactly_500_merges",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 1500, EndTime: 2000},
+			},
+			want: []model.ClipRange{{StartTime: 0, EndTime: 2000}},
+		},
+		{
+			name: "gap_501_keeps_two",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 1501, EndTime: 2000},
+			},
+			want: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 1501, EndTime: 2000},
+			},
+		},
+		{
+			name: "overlap_merges",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 900, EndTime: 1500},
+			},
+			want: []model.ClipRange{{StartTime: 0, EndTime: 1500}},
+		},
+		{
+			name: "list_order_preserved_no_sort",
+			// 列表中不相邻：即使时间上可合并也不合；顺序保持 [晚, 早]。
+			in: []model.ClipRange{
+				{StartTime: 1200, EndTime: 2000},
+				{StartTime: 0, EndTime: 1000},
+			},
+			want: []model.ClipRange{
+				{StartTime: 1200, EndTime: 2000},
+				{StartTime: 0, EndTime: 1000},
+			},
+		},
+		{
+			name: "chain_three_into_one",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 1200, EndTime: 2000},
+				{StartTime: 2300, EndTime: 3000},
+			},
+			want: []model.ClipRange{{StartTime: 0, EndTime: 3000}},
+		},
+		{
+			name: "partial_chain",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 1200, EndTime: 2000},
+				{StartTime: 3000, EndTime: 4000},
+			},
+			want: []model.ClipRange{
+				{StartTime: 0, EndTime: 2000},
+				{StartTime: 3000, EndTime: 4000},
+			},
+		},
+		{
+			name: "list_adjacent_merges_even_if_time_jumps_back",
+			// 列表相邻且 gap≤500：按列表合，不按时间轴重排。
+			in: []model.ClipRange{
+				{StartTime: 2000, EndTime: 3000},
+				{StartTime: 3200, EndTime: 4000},
+				{StartTime: 0, EndTime: 500},
+			},
+			want: []model.ClipRange{
+				{StartTime: 2000, EndTime: 4000},
+				{StartTime: 0, EndTime: 500},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeAdjacentClipRanges(tt.in, gap)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d; got=%#v", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] = %#v, want %#v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestDraftWorker_Process_MergesAdjacentClips 验证间隔 ≤500ms 的 clips1 合并后只裁剪一次。
+func TestDraftWorker_Process_MergesAdjacentClips(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	webRoot := t.TempDir()
+
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/live.mp4", CreatedBy: 1,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100,
+	}
+	if err := liveRepo.Create(ctx, material); err != nil {
+		t.Fatalf("create material: %v", err)
+	}
+	project := &model.VideoProject{
+		Name: "项目", LiveID: material.ID, CreatedBy: 1,
+		Clips0: []model.ClipRange{},
+		Clips1: []model.ClipWithText{
+			{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
+			{Text: "b", StartTime: 1300, EndTime: 2000, Words: []model.ClipWord{}},
+		},
+	}
+	if err := projectRepo.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	ext, _ := marshalTaskExt(TaskExt{
+		LiveID: material.ID, VideoProjectID: project.ID,
+		CanvasWidth: 1080, CanvasHeight: 1920,
+	})
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	if err := taskRepo.Create(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %#v", err, claimed)
+	}
+
+	cutter := &mockVideoCutter{}
+	worker := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		CapCut: &mockCapCutAPI{}, Cutter: cutter, Downloader: &mockDraftDownloader{},
+		Web: webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		Logger: zap.NewNop(),
+	})
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if len(cutter.calls) != 1 {
+		t.Fatalf("cut calls = %d, want 1 after merge", len(cutter.calls))
+	}
+
+	// 库中 clips1 仍为细粒度两段，未写回合并结果。
+	updated, err := projectRepo.GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(updated.Clips1) != 2 {
+		t.Errorf("clips1 len = %d, want 2 (unchanged)", len(updated.Clips1))
+	}
+}
+
+
 func TestDraftWorker_Process_Success(t *testing.T) {
 	db := setupDraftWorkerTestDB(t)
 	taskRepo := repository.NewTaskRepository(db)
