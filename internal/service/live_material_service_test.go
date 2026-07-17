@@ -334,8 +334,9 @@ func TestLiveMaterialService_RetryASR_OnlyFailed(t *testing.T) {
 			1: {ID: 1, ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "boom"},
 			2: {ID: 2, ASRStatus: model.ASRStatusCompleted},
 			3: {ID: 3, ASRStatus: model.ASRStatusProcessing},
+			4: {ID: 4, ASRStatus: model.ASRStatusPending},
 		},
-		nextID: 3,
+		nextID: 4,
 	}
 	enqueued := 0
 	svc := NewLiveMaterialService(repo, &mockASRWorker{enqueueFn: func() { enqueued++ }})
@@ -356,6 +357,12 @@ func TestLiveMaterialService_RetryASR_OnlyFailed(t *testing.T) {
 	}
 	if _, err := svc.RetryASR(context.Background(), 3); !errors.Is(err, ErrASRAlreadyProcessing) {
 		t.Errorf("RetryASR(processing) error = %v, want ErrASRAlreadyProcessing", err)
+	}
+	if _, err := svc.RetryASR(context.Background(), 4); !errors.Is(err, ErrASRRetryOnlyFailed) {
+		t.Errorf("RetryASR(pending) error = %v, want ErrASRRetryOnlyFailed", err)
+	}
+	if enqueued != 1 {
+		t.Errorf("enqueued after rejects = %d, want 1", enqueued)
 	}
 }
 

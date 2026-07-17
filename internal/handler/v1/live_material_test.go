@@ -25,6 +25,7 @@ type mockLiveMaterialService struct {
 	listFn                 func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
 	getFn                  func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	downloadASRSubtitleFn  func(ctx context.Context, id uint) ([]byte, string, error)
+	retryASRFn             func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 }
 
 func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
@@ -63,6 +64,9 @@ func (m *mockLiveMaterialService) Delete(ctx context.Context, id uint) error {
 }
 
 func (m *mockLiveMaterialService) RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+	if m.retryASRFn != nil {
+		return m.retryASRFn(ctx, id)
+	}
 	return nil, nil
 }
 
@@ -607,6 +611,93 @@ func TestLiveMaterialHandler_DownloadASRSubtitle_NotFound(t *testing.T) {
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
 	req := httptest.NewRequest(http.MethodGet, "/live-materials/999/asr/subtitle", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// TestLiveMaterialHandler_RetryASR_Success 验证仅 failed 可重试，且无需请求体。
+func TestLiveMaterialHandler_RetryASR_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	var gotID uint
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		retryASRFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+			gotID = id
+			return &model.LiveMaterial{ID: id, ASRStatus: model.ASRStatusPending, ASRProgress: 0}, nil
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.RetryASR, http.MethodPost, "/live-materials/:id/asr/retry")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/live-materials/7/asr/retry", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if gotID != 7 {
+		t.Errorf("id = %d, want 7", gotID)
+	}
+}
+
+func TestLiveMaterialHandler_RetryASR_OnlyFailed(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		retryASRFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+			return nil, service.ErrASRRetryOnlyFailed
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.RetryASR, http.MethodPost, "/live-materials/:id/asr/retry")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/live-materials/1/asr/retry", bytes.NewBufferString(`{"force":true}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestLiveMaterialHandler_RetryASR_Processing(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		retryASRFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+			return nil, service.ErrASRAlreadyProcessing
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.RetryASR, http.MethodPost, "/live-materials/:id/asr/retry")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/live-materials/1/asr/retry", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestLiveMaterialHandler_RetryASR_NotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		retryASRFn: func(ctx context.Context, id uint) (*model.LiveMaterial, error) {
+			return nil, service.ErrLiveMaterialNotFound
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.RetryASR, http.MethodPost, "/live-materials/:id/asr/retry")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodPost, "/live-materials/999/asr/retry", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

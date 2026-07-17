@@ -16,7 +16,8 @@ import (
 
 const (
 	// liveMaterialASRDefaultConcurrency 单实例内并行抢占/执行 ASR 的 Worker 数。
-	liveMaterialASRDefaultConcurrency = 1
+	// 即同一进程最多可同时处理的视频 ASR 数量。
+	liveMaterialASRDefaultConcurrency = 6
 	// liveMaterialASRPollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
 	liveMaterialASRPollInterval = 3 * time.Second
 	// liveMaterialASRStaleTimeout processing 超时未更新进度则自动改回 pending。
