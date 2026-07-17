@@ -21,7 +21,7 @@ func SeedAccounts(db *gorm.DB, logger *zap.Logger) error {
 		return nil
 	}
 
-	hashed, err := utils.HashPassword("admin")
+	hashed, err := utils.HashPassword("Aa123456")
 	if err != nil {
 		return err
 	}
