@@ -19,7 +19,7 @@ const (
 	// DefaultFFmpegBinary 默认 ffmpeg 可执行文件名。
 	DefaultFFmpegBinary = "ffmpeg"
 	// DefaultFFmpegThreads 单次 ffmpeg 进程线程上限，避免多任务并发打满 CPU。
-	DefaultFFmpegThreads = 4
+	DefaultFFmpegThreads = 6
 )
 
 // FFmpegConverter 基于 ffmpeg 的音频转码器。
@@ -92,10 +92,10 @@ func (c *FFmpegConverter) resolvedMP3Bitrate() string {
 	return DefaultASRMP3Bitrate
 }
 
-// CutVideoSegment 按起止秒精确裁剪视频片段（重编码，保证切点准确）。
+// CutVideoSegment 按起止秒裁剪视频片段（重编码）。
 // 参考命令：
 //
-//	ffmpeg -y -threads 4 -i input.mp4 -ss 10 -to 30 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
+//	ffmpeg -y -threads 6 -ss 10 -i input.mp4 -t 20 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
 //
 // startSec / endSec 单位为秒；endSec 须大于 startSec。
 func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
@@ -116,15 +116,16 @@ func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, output
 	return nil
 }
 
-// buildCutVideoArgs 构建精确裁剪参数列表，便于单元测试校验。
-// -ss/-to 放在 -i 之后做输出侧精确裁剪；-map 0:a:0? 表示音频轨可选。
+// buildCutVideoArgs 构建裁剪参数列表，便于单元测试校验。
+// -ss 放在 -i 之前做输入侧快速定位；-t 使用时长（end-start），避免输入 seek 后时间戳归零导致 -to 语义偏移；
+// -map 0:a:0? 表示音频轨可选。
 func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
 	return []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
-		"-i", inputPath,
 		"-ss", formatFFmpegSeconds(startSec),
-		"-to", formatFFmpegSeconds(endSec),
+		"-i", inputPath,
+		"-t", formatFFmpegSeconds(endSec - startSec),
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
 		"-c:v", "libx264",
