@@ -374,6 +374,33 @@ func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	}
 }
 
+// TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize 验证未传画布时写入项目宽高。
+func TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID: 1, ASRStatus: model.ASRStatusCompleted,
+	}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
+		Width: 1920, Height: 1080,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 2000}},
+		Clips1: []model.ClipWithText{},
+	}}
+	tasks := &mockTaskRepo{}
+	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}}
+	svc := NewTaskService(tasks, live, projects, prompts, nil, nil, &mockAISliceDraftWorkerEnqueue{})
+
+	_, err := svc.CreateAISliceDraft(context.Background(), 3, CreateAISliceDraftInput{VideoProjectID: 8})
+	if err != nil {
+		t.Fatalf("CreateAISliceDraft() error = %v", err)
+	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_width":1920`) {
+		t.Errorf("ext = %v, want canvas_width from project", tasks.created.Ext)
+	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_height":1080`) {
+		t.Errorf("ext = %v, want canvas_height from project", tasks.created.Ext)
+	}
+}
+
 func TestTaskService_CreateAISliceDraft_PromptNotFound(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 1, ASRStatus: model.ASRStatusCompleted}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{

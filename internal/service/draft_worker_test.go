@@ -20,17 +20,21 @@ import (
 )
 
 type mockCapCutAPI struct {
-	createResp *capcutmate.CreateDraftResponse
-	createErr  error
-	addResp    *capcutmate.AddVideosResponse
-	addErr     error
+	createResp  *capcutmate.CreateDraftResponse
+	createErr   error
+	addResp     *capcutmate.AddVideosResponse
+	addErr      error
 	createCalls int
 	addCalls    int
+	lastWidth   int
+	lastHeight  int
 	lastAdd     capcutmate.AddVideosRequest
 }
 
 func (m *mockCapCutAPI) CreateDraft(ctx context.Context, width, height int, recordDir string) (*capcutmate.CreateDraftResponse, error) {
 	m.createCalls++
+	m.lastWidth = width
+	m.lastHeight = height
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -351,11 +355,71 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	if got.DraftURL != "http://example.com/draft" {
 		t.Errorf("task.draft_url = %s", got.DraftURL)
 	}
+	if capcut.lastWidth != 1080 || capcut.lastHeight != 1920 {
+		t.Errorf("CreateDraft size = %dx%d, want 1080x1920", capcut.lastWidth, capcut.lastHeight)
+	}
 
 	// 切片应落在 staging/{task_id}
 	staging := filepath.Join(webRoot, "staging", claimed.ID)
 	if _, err := os.Stat(filepath.Join(staging, "source.mp4")); err != nil {
 		t.Errorf("source.mp4 missing: %v", err)
+	}
+}
+
+// TestDraftWorker_Process_UsesProjectCanvasSize 验证 ext 未带画布时，create_draft 使用 video_project.width/height。
+func TestDraftWorker_Process_UsesProjectCanvasSize(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	webRoot := t.TempDir()
+
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/live.mp4", CreatedBy: 1,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100,
+	}
+	if err := liveRepo.Create(ctx, material); err != nil {
+		t.Fatalf("create material: %v", err)
+	}
+	project := &model.VideoProject{
+		Name: "横屏项目", LiveID: material.ID, CreatedBy: 1,
+		Width: 1920, Height: 1080,
+		Clips0: []model.ClipRange{},
+		Clips1: []model.ClipWithText{
+			{Text: "横", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
+		},
+	}
+	if err := projectRepo.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	// ext 故意不写 canvas_*，模拟旧任务或仅带项目引用的场景。
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	}
+	if err := taskRepo.Create(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %#v", err, claimed)
+	}
+
+	capcut := &mockCapCutAPI{}
+	worker := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
+		Web: webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		Logger: zap.NewNop(),
+	})
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if capcut.lastWidth != 1920 || capcut.lastHeight != 1080 {
+		t.Fatalf("CreateDraft size = %dx%d, want project 1920x1080", capcut.lastWidth, capcut.lastHeight)
 	}
 }
 

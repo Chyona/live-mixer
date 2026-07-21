@@ -1144,7 +1144,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿生成并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
+                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1195,7 +1195,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate 生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
+                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
                 ],

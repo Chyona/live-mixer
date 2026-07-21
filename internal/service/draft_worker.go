@@ -322,14 +322,8 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 
 	progress = setProgress(50)
 
-	width := ext.CanvasWidth
-	height := ext.CanvasHeight
-	if width <= 0 {
-		width = draftDefaultCanvasWidth
-	}
-	if height <= 0 {
-		height = draftDefaultCanvasHeight
-	}
+	// 画布：任务 ext（创建时已解析）→ video_project.width/height → 默认竖屏。
+	width, height := resolveDraftCanvasSize(ext.CanvasWidth, ext.CanvasHeight, project)
 
 	if w.capcut == nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("capcut-mate 客户端未配置"))
@@ -337,6 +331,9 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 
 	w.logger.Info("调用 capcut-mate 创建草稿",
 		zap.String("task_id", task.ID),
+		zap.Uint("video_project_id", project.ID),
+		zap.Int("project_width", project.Width),
+		zap.Int("project_height", project.Height),
 		zap.Int("width", width),
 		zap.Int("height", height),
 	)
