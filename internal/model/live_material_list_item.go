@@ -16,9 +16,10 @@ type LiveMaterialListItem struct {
 	ASRStatus    string     `gorm:"column:asr_status;size:20;not null;default:pending" json:"asr_status"`
 	ASRProgress  int16      `gorm:"column:asr_progress;not null;default:0" json:"asr_progress"`
 	ASRErrorMsg  string     `gorm:"column:asr_error_msg;type:text" json:"asr_error_msg,omitempty"`
-	ASRStartedAt *time.Time `gorm:"column:asr_started_at" json:"asr_started_at,omitempty"`
-	ASRUpdatedAt *time.Time `gorm:"column:asr_updated_at" json:"asr_updated_at,omitempty"`
-	ASRVersion   int64      `gorm:"column:asr_version;not null;default:0" json:"asr_version"`
+	ASRStartedAt   *time.Time `gorm:"column:asr_started_at" json:"asr_started_at,omitempty"`
+	ASRUpdatedAt   *time.Time `gorm:"column:asr_updated_at" json:"asr_updated_at,omitempty"`
+	ASRCompletedAt *time.Time `gorm:"column:asr_completed_at" json:"asr_completed_at,omitempty"`
+	ASRVersion     int64      `gorm:"column:asr_version;not null;default:0" json:"asr_version"`
 	CreatedBy    uint       `gorm:"not null" json:"created_by"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`

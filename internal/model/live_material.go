@@ -26,10 +26,11 @@ type LiveMaterial struct {
 	ASRStatus    string     `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
 	ASRProgress  int16      `gorm:"column:asr_progress;not null;default:0;comment:ASR识别进度0到100" json:"asr_progress"`
 	ASRErrorMsg  string     `gorm:"column:asr_error_msg;type:text;comment:ASR识别失败原因" json:"asr_error_msg,omitempty"`
-	ASRStartedAt *time.Time `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
-	ASRUpdatedAt *time.Time `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
+	ASRStartedAt   *time.Time `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
+	ASRUpdatedAt   *time.Time `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
+	ASRCompletedAt *time.Time `gorm:"column:asr_completed_at;comment:ASR识别完成时间" json:"asr_completed_at,omitempty"`
 	// ASRVersion ASR 乐观锁版本号：抢占 pending→processing 时 CAS 递增。
-	ASRVersion   int64      `gorm:"column:asr_version;not null;default:0;comment:ASR乐观锁版本号" json:"asr_version"`
+	ASRVersion int64 `gorm:"column:asr_version;not null;default:0;comment:ASR乐观锁版本号" json:"asr_version"`
 	CreatedBy    uint       `gorm:"not null;index;comment:添加人账号ID" json:"created_by"`
 	CreatedAt    time.Time  `gorm:"comment:添加时间" json:"created_at"`
 	UpdatedAt    time.Time  `gorm:"comment:最后更新时间" json:"updated_at"`

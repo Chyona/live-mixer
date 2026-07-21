@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS live_material (
     asr_error_msg   TEXT,
     asr_started_at  TIMESTAMPTZ,
     asr_updated_at  TIMESTAMPTZ,
+    asr_completed_at TIMESTAMPTZ,
     -- ASR 任务乐观锁版本号：抢占 pending→processing 时 CAS 递增，冲突则重试下一条
     asr_version     BIGINT        NOT NULL DEFAULT 0,
     created_by      BIGINT        NOT NULL REFERENCES account (id),
@@ -79,6 +80,7 @@ COMMENT ON COLUMN live_material.asr_progress IS 'ASR 识别进度（0-100）';
 COMMENT ON COLUMN live_material.asr_error_msg IS 'ASR 识别失败原因';
 COMMENT ON COLUMN live_material.asr_started_at IS 'ASR 识别开始时间';
 COMMENT ON COLUMN live_material.asr_updated_at IS 'ASR 识别状态最后更新时间（用于检测长时间卡死任务）';
+COMMENT ON COLUMN live_material.asr_completed_at IS 'ASR 识别完成时间';
 COMMENT ON COLUMN live_material.asr_version IS 'ASR 乐观锁版本号，多实例抢占 pending 任务时 CAS 使用';
 COMMENT ON COLUMN live_material.created_by IS '添加人（账号 ID）';
 COMMENT ON COLUMN live_material.created_at IS '添加时间';

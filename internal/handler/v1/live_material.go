@@ -62,33 +62,35 @@ type LiveMaterialDetailResponse struct {
 	ASRStatus    string          `json:"asr_status"`
 	ASRProgress  int16           `json:"asr_progress"`
 	ASRErrorMsg  string          `json:"asr_error_msg,omitempty"`
-	ASRStartedAt *time.Time      `json:"asr_started_at,omitempty"`
-	ASRUpdatedAt *time.Time      `json:"asr_updated_at,omitempty"`
-	CreatedBy    string          `json:"created_by"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
-	Ext          string          `json:"ext"`
+	ASRStartedAt   *time.Time      `json:"asr_started_at,omitempty"`
+	ASRUpdatedAt   *time.Time      `json:"asr_updated_at,omitempty"`
+	ASRCompletedAt *time.Time      `json:"asr_completed_at,omitempty"`
+	CreatedBy      string          `json:"created_by"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	Ext            string          `json:"ext"`
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, material *model.LiveMaterial) LiveMaterialDetailResponse {
 	return LiveMaterialDetailResponse{
-		ID:           material.ID,
-		Name:         material.Name,
-		Remark:       material.Remark,
-		LiveURL:      material.LiveURL,
-		LiveASR:      asr.FormatUtterancesForAPI(material.LiveASR),
-		Duration:     material.Duration,
-		Width:        material.Width,
-		Height:       material.Height,
-		ASRStatus:    material.ASRStatus,
-		ASRProgress:  material.ASRProgress,
-		ASRErrorMsg:  material.ASRErrorMsg,
-		ASRStartedAt: material.ASRStartedAt,
-		ASRUpdatedAt: material.ASRUpdatedAt,
-		CreatedBy:    h.createdBy.nameOf(ctx, material.CreatedBy),
-		CreatedAt:    material.CreatedAt,
-		UpdatedAt:    material.UpdatedAt,
-		Ext:          material.Ext,
+		ID:             material.ID,
+		Name:           material.Name,
+		Remark:         material.Remark,
+		LiveURL:        material.LiveURL,
+		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
+		Duration:       material.Duration,
+		Width:          material.Width,
+		Height:         material.Height,
+		ASRStatus:      material.ASRStatus,
+		ASRProgress:    material.ASRProgress,
+		ASRErrorMsg:    material.ASRErrorMsg,
+		ASRStartedAt:   material.ASRStartedAt,
+		ASRUpdatedAt:   material.ASRUpdatedAt,
+		ASRCompletedAt: material.ASRCompletedAt,
+		CreatedBy:      h.createdBy.nameOf(ctx, material.CreatedBy),
+		CreatedAt:      material.CreatedAt,
+		UpdatedAt:      material.UpdatedAt,
+		Ext:            material.Ext,
 	}
 }
 
@@ -104,12 +106,13 @@ type LiveMaterialListResponse struct {
 	ASRStatus    string     `json:"asr_status"`
 	ASRProgress  int16      `json:"asr_progress"`
 	ASRErrorMsg  string     `json:"asr_error_msg,omitempty"`
-	ASRStartedAt *time.Time `json:"asr_started_at,omitempty"`
-	ASRUpdatedAt *time.Time `json:"asr_updated_at,omitempty"`
-	CreatedBy    string     `json:"created_by"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	Ext          string     `json:"ext"`
+	ASRStartedAt   *time.Time `json:"asr_started_at,omitempty"`
+	ASRUpdatedAt   *time.Time `json:"asr_updated_at,omitempty"`
+	ASRCompletedAt *time.Time `json:"asr_completed_at,omitempty"`
+	CreatedBy      string     `json:"created_by"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	Ext            string     `json:"ext"`
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, items []model.LiveMaterialListItem) []LiveMaterialListResponse {
@@ -122,22 +125,23 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 	for i := range items {
 		item := items[i]
 		out = append(out, LiveMaterialListResponse{
-			ID:           item.ID,
-			Name:         item.Name,
-			Remark:       item.Remark,
-			LiveURL:      item.LiveURL,
-			Duration:     item.Duration,
-			Width:        item.Width,
-			Height:       item.Height,
-			ASRStatus:    item.ASRStatus,
-			ASRProgress:  item.ASRProgress,
-			ASRErrorMsg:  item.ASRErrorMsg,
-			ASRStartedAt: item.ASRStartedAt,
-			ASRUpdatedAt: item.ASRUpdatedAt,
-			CreatedBy:    names[item.CreatedBy],
-			CreatedAt:    item.CreatedAt,
-			UpdatedAt:    item.UpdatedAt,
-			Ext:          item.Ext,
+			ID:             item.ID,
+			Name:           item.Name,
+			Remark:         item.Remark,
+			LiveURL:        item.LiveURL,
+			Duration:       item.Duration,
+			Width:          item.Width,
+			Height:         item.Height,
+			ASRStatus:      item.ASRStatus,
+			ASRProgress:    item.ASRProgress,
+			ASRErrorMsg:    item.ASRErrorMsg,
+			ASRStartedAt:   item.ASRStartedAt,
+			ASRUpdatedAt:   item.ASRUpdatedAt,
+			ASRCompletedAt: item.ASRCompletedAt,
+			CreatedBy:      names[item.CreatedBy],
+			CreatedAt:      item.CreatedAt,
+			UpdatedAt:      item.UpdatedAt,
+			Ext:            item.Ext,
 		})
 	}
 	return out

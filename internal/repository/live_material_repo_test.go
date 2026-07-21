@@ -398,6 +398,9 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 	if got.LiveASR != asrJSON {
 		t.Errorf("LiveASR = %q", got.LiveASR)
 	}
+	if got.ASRCompletedAt == nil {
+		t.Error("asr_completed_at should be set on completed")
+	}
 
 	material2 := &model.LiveMaterial{
 		Name: "失败素材", LiveURL: "https://example.com/a.mp3",

@@ -104,12 +104,13 @@ func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.Li
 		result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 			Where("id = ? AND asr_status = ? AND asr_version = ?", material.ID, model.ASRStatusPending, material.ASRVersion).
 			Updates(map[string]interface{}{
-				"asr_status":     model.ASRStatusProcessing,
-				"asr_progress":   int16(5),
-				"asr_error_msg":  "",
-				"asr_started_at": now,
-				"asr_updated_at": now,
-				"asr_version":    newVersion,
+				"asr_status":       model.ASRStatusProcessing,
+				"asr_progress":     int16(5),
+				"asr_error_msg":    "",
+				"asr_started_at":   now,
+				"asr_updated_at":   now,
+				"asr_completed_at": nil,
+				"asr_version":      newVersion,
 			})
 		if result.Error != nil {
 			return nil, result.Error
@@ -124,6 +125,7 @@ func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.Li
 		material.ASRErrorMsg = ""
 		material.ASRStartedAt = &now
 		material.ASRUpdatedAt = &now
+		material.ASRCompletedAt = nil
 		material.ASRVersion = newVersion
 		return &material, nil
 	}
@@ -142,12 +144,13 @@ func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, 
 		Model(&model.LiveMaterial{}).
 		Where("asr_status = ? AND asr_updated_at IS NOT NULL AND asr_updated_at < ?", model.ASRStatusProcessing, cutoff).
 		Updates(map[string]interface{}{
-			"asr_status":     model.ASRStatusPending,
-			"asr_progress":   int16(0),
-			"asr_error_msg":  "ASR 处理超时，已自动重新排队",
-			"asr_started_at": nil,
-			"asr_updated_at": now,
-			"asr_version":    gorm.Expr("asr_version + 1"),
+			"asr_status":       model.ASRStatusPending,
+			"asr_progress":     int16(0),
+			"asr_error_msg":    "ASR 处理超时，已自动重新排队",
+			"asr_started_at":   nil,
+			"asr_updated_at":   now,
+			"asr_completed_at": nil,
+			"asr_version":      gorm.Expr("asr_version + 1"),
 		})
 	return result.RowsAffected, result.Error
 }
@@ -158,11 +161,12 @@ func (r *liveMaterialRepository) UpdateASRProcessing(ctx context.Context, id uin
 		Model(&model.LiveMaterial{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
-			"asr_status":     model.ASRStatusProcessing,
-			"asr_progress":   int16(5),
-			"asr_error_msg":  "",
-			"asr_started_at": now,
-			"asr_updated_at": now,
+			"asr_status":       model.ASRStatusProcessing,
+			"asr_progress":     int16(5),
+			"asr_error_msg":    "",
+			"asr_started_at":   now,
+			"asr_updated_at":   now,
+			"asr_completed_at": nil,
 		}).Error
 }
 
@@ -188,14 +192,15 @@ func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint
 		Model(&model.LiveMaterial{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
-			"asr_status":     model.ASRStatusCompleted,
-			"asr_progress":   int16(100),
-			"live_asr":       liveASR,
-			"duration":       duration,
-			"width":          width,
-			"height":         height,
-			"asr_error_msg":  "",
-			"asr_updated_at": now,
+			"asr_status":       model.ASRStatusCompleted,
+			"asr_progress":     int16(100),
+			"live_asr":         liveASR,
+			"duration":         duration,
+			"width":            width,
+			"height":           height,
+			"asr_error_msg":    "",
+			"asr_updated_at":   now,
+			"asr_completed_at": now,
 		}).Error
 }
 
@@ -217,12 +222,13 @@ func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint)
 		Model(&model.LiveMaterial{}).
 		Where("id = ? AND asr_status = ?", id, model.ASRStatusFailed).
 		Updates(map[string]interface{}{
-			"asr_status":     model.ASRStatusPending,
-			"asr_progress":   int16(0),
-			"live_asr":       "{}",
-			"asr_error_msg":  "",
-			"asr_started_at": nil,
-			"asr_updated_at": now,
+			"asr_status":       model.ASRStatusPending,
+			"asr_progress":     int16(0),
+			"live_asr":         "{}",
+			"asr_error_msg":    "",
+			"asr_started_at":   nil,
+			"asr_updated_at":   now,
+			"asr_completed_at": nil,
 			// 重试入队同样递增版本，保证后续抢占 CAS 基于最新版本。
 			"asr_version": gorm.Expr("asr_version + 1"),
 		})
