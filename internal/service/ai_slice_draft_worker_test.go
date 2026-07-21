@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"live-mixer/internal/model"
-	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
 	"go.uber.org/zap"
@@ -72,13 +71,8 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 
 	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop(), 0, 0)
 	capcut := &mockCapCutAPI{}
-	draft := NewDraftWorker(DraftWorkerDeps{
-		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: webRoot, RootURL: "http://localhost/static"},
-		Logger: zap.NewNop(),
-	})
-	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop(), 0, 0)
+	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, capcut, webRoot)
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
 
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -94,7 +88,6 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 	if got.UsrPrompt == "" {
 		t.Error("usr_prompt should be persisted by AI slice phase")
 	}
-	// 一键成片完成后同样回写 task.draft_url。
 	if got.DraftURL == "" {
 		t.Error("task.draft_url should be written")
 	}
@@ -120,7 +113,7 @@ func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
 
 	material := &model.LiveMaterial{
 		Name: "直播", LiveURL: "https://example.com/a.mp4",
-		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		LiveASR:   `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
@@ -139,13 +132,8 @@ func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
 
 	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{err: errors.New("llm down")}, zap.NewNop(), 0, 0)
-	draft := NewDraftWorker(DraftWorkerDeps{
-		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: &mockCapCutAPI{}, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: t.TempDir(), RootURL: "http://localhost/static"},
-		Logger: zap.NewNop(),
-	})
-	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop(), 0, 0)
+	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, &mockCapCutAPI{}, t.TempDir())
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected error")
 	}
@@ -167,7 +155,7 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 
 	material := &model.LiveMaterial{
 		Name: "直播", LiveURL: "https://example.com/a.mp4",
-		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		LiveASR:   `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
@@ -185,16 +173,10 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
 
-	// LLM 返回空数组 → clips1 为空 → 编排器应失败且不调用草稿。
 	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0, 0)
 	capcut := &mockCapCutAPI{}
-	draft := NewDraftWorker(DraftWorkerDeps{
-		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: t.TempDir(), RootURL: "http://localhost/static"},
-		Logger: zap.NewNop(),
-	})
-	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draft, zap.NewNop(), 0, 0)
+	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, capcut, t.TempDir())
+	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected empty clips1 error")
 	}
@@ -224,7 +206,6 @@ func TestAISliceDraftWorker_UsesConfiguredConcurrency(t *testing.T) {
 	}
 }
 
-// TestAISliceDraftWorker_DefaultAndConfiguredStaleTimeout 验证一键成片孤儿回收超时默认值与配置覆盖。
 func TestAISliceDraftWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
 	defaultW := NewAISliceDraftWorker(nil, nil, nil, nil, zap.NewNop(), 0, 0).(*aiSliceDraftWorker)
 	if defaultW.staleTimeout != aiSliceDraftStaleTimeout {
@@ -236,7 +217,6 @@ func TestAISliceDraftWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
 	}
 }
 
-// TestAISliceDraftWorker_RequeueStaleProcessing 验证将超时 processing 改回 pending。
 func TestAISliceDraftWorker_RequeueStaleProcessing(t *testing.T) {
 	db := setupAISliceWorkerTestDB(t)
 	taskRepo := repository.NewTaskRepository(db)

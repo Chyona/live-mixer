@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"live-mixer/internal/draft"
+	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
 
@@ -125,7 +127,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	if len(project.Clips0) == 0 {
 		return nil, errors.New("video_project.clips0 不能为空，请先设置待分析时间段")
 	}
-	if err := validateClipRanges(project.Clips0); err != nil {
+	if err := prepare.ValidateClipRanges(project.Clips0); err != nil {
 		return nil, err
 	}
 	if err := s.requireASRCompleted(ctx, project.LiveID); err != nil {
@@ -191,11 +193,11 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	}
 
 	// 创建前校验切片可用，避免无效任务进入队列。
-	clips, err := resolveDraftClipRanges(project)
+	clips, err := prepare.ResolveClipRanges(project)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateClipRanges(clips); err != nil {
+	if err := prepare.ValidateClipRanges(clips); err != nil {
 		return nil, err
 	}
 
@@ -206,7 +208,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 		return nil, err
 	}
 
-	width, height := resolveDraftCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
+	width, height := draft.ResolveCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
 
 	// clips 不写入 ext，由 Worker 从 video_project 读取，避免超出 1024 字节限制。
 	ext, err := marshalTaskExt(TaskExt{
@@ -258,7 +260,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 	if len(project.Clips0) == 0 {
 		return nil, errors.New("video_project.clips0 不能为空，请先设置待分析时间段")
 	}
-	if err := validateClipRanges(project.Clips0); err != nil {
+	if err := prepare.ValidateClipRanges(project.Clips0); err != nil {
 		return nil, err
 	}
 	if err := s.requireASRCompleted(ctx, project.LiveID); err != nil {
@@ -277,7 +279,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		return nil, errors.New("系统提示词内容为空")
 	}
 
-	width, height := resolveDraftCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
+	width, height := draft.ResolveCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
 
 	ext, err := marshalTaskExt(TaskExt{
 		LiveID:         project.LiveID,
@@ -420,35 +422,6 @@ func marshalTaskExt(ext TaskExt) (string, error) {
 		return "", errors.New("任务扩展参数过长")
 	}
 	return string(raw), nil
-}
-
-func validateClipRanges(clips []model.ClipRange) error {
-	for i, clip := range clips {
-		if clip.StartTime < 0 || clip.EndTime <= clip.StartTime {
-			return errors.New("clips0 时间段无效：start_time 须小于 end_time 且均非负")
-		}
-		_ = i
-	}
-	return nil
-}
-
-// resolveDraftCanvasSize 解析草稿画布尺寸：
-// 请求参数优先 → video_project.width/height → 内置默认值。
-func resolveDraftCanvasSize(reqWidth, reqHeight int, project *model.VideoProject) (int, int) {
-	width, height := reqWidth, reqHeight
-	if width <= 0 && project != nil {
-		width = project.Width
-	}
-	if height <= 0 && project != nil {
-		height = project.Height
-	}
-	if width <= 0 {
-		width = draftDefaultCanvasWidth
-	}
-	if height <= 0 {
-		height = draftDefaultCanvasHeight
-	}
-	return width, height
 }
 
 func isValidTaskType(t string) bool {

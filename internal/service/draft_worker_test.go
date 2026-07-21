@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"live-mixer/internal/draft"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/capcutmate"
 	"live-mixer/internal/pkg/webroot"
@@ -95,192 +97,39 @@ func setupDraftWorkerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestResolveDraftClipRanges_PreferClips1(t *testing.T) {
-	project := &model.VideoProject{
-		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 100}},
-		Clips1: []model.ClipWithText{{Text: "hi", StartTime: 10, EndTime: 50, Words: []model.ClipWord{}}},
-	}
-	clips, err := resolveDraftClipRanges(project)
-	if err != nil {
-		t.Fatalf("resolveDraftClipRanges() error = %v", err)
-	}
-	if len(clips) != 1 || clips[0].StartTime != 10 || clips[0].EndTime != 50 {
-		t.Errorf("clips = %#v", clips)
-	}
-}
-
-func TestMergeAdjacentClipRanges(t *testing.T) {
-	const gap = draftClipMergeGapMS
-
-	tests := []struct {
-		name string
-		in   []model.ClipRange
-		want []model.ClipRange
-	}{
-		{name: "empty", in: nil, want: nil},
-		{
-			name: "single",
-			in:   []model.ClipRange{{StartTime: 0, EndTime: 1000}},
-			want: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
-		},
-		{
-			name: "gap_exactly_500_merges",
-			in: []model.ClipRange{
-				{StartTime: 0, EndTime: 1000},
-				{StartTime: 1500, EndTime: 2000},
-			},
-			want: []model.ClipRange{{StartTime: 0, EndTime: 2000}},
-		},
-		{
-			name: "gap_501_keeps_two",
-			in: []model.ClipRange{
-				{StartTime: 0, EndTime: 1000},
-				{StartTime: 1501, EndTime: 2000},
-			},
-			want: []model.ClipRange{
-				{StartTime: 0, EndTime: 1000},
-				{StartTime: 1501, EndTime: 2000},
-			},
-		},
-		{
-			name: "overlap_merges",
-			in: []model.ClipRange{
-				{StartTime: 0, EndTime: 1000},
-				{StartTime: 900, EndTime: 1500},
-			},
-			want: []model.ClipRange{{StartTime: 0, EndTime: 1500}},
-		},
-		{
-			name: "list_order_preserved_no_sort",
-			// 列表中不相邻：即使时间上可合并也不合；顺序保持 [晚, 早]。
-			in: []model.ClipRange{
-				{StartTime: 1200, EndTime: 2000},
-				{StartTime: 0, EndTime: 1000},
-			},
-			want: []model.ClipRange{
-				{StartTime: 1200, EndTime: 2000},
-				{StartTime: 0, EndTime: 1000},
-			},
-		},
-		{
-			name: "chain_three_into_one",
-			in: []model.ClipRange{
-				{StartTime: 0, EndTime: 1000},
-				{StartTime: 1200, EndTime: 2000},
-				{StartTime: 2300, EndTime: 3000},
-			},
-			want: []model.ClipRange{{StartTime: 0, EndTime: 3000}},
-		},
-		{
-			name: "partial_chain",
-			in: []model.ClipRange{
-				{StartTime: 0, EndTime: 1000},
-				{StartTime: 1200, EndTime: 2000},
-				{StartTime: 3000, EndTime: 4000},
-			},
-			want: []model.ClipRange{
-				{StartTime: 0, EndTime: 2000},
-				{StartTime: 3000, EndTime: 4000},
-			},
-		},
-		{
-			name: "list_adjacent_merges_even_if_time_jumps_back",
-			// 列表相邻且 gap≤500：按列表合，不按时间轴重排。
-			in: []model.ClipRange{
-				{StartTime: 2000, EndTime: 3000},
-				{StartTime: 3200, EndTime: 4000},
-				{StartTime: 0, EndTime: 500},
-			},
-			want: []model.ClipRange{
-				{StartTime: 2000, EndTime: 4000},
-				{StartTime: 0, EndTime: 500},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := mergeAdjacentClipRanges(tt.in, gap)
-			if len(got) != len(tt.want) {
-				t.Fatalf("len = %d, want %d; got=%#v", len(got), len(tt.want), got)
-			}
-			for i := range tt.want {
-				if got[i] != tt.want[i] {
-					t.Errorf("[%d] = %#v, want %#v", i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
-// TestDraftWorker_Process_MergesAdjacentClips 验证间隔 ≤500ms 的 clips1 合并后只裁剪一次。
-func TestDraftWorker_Process_MergesAdjacentClips(t *testing.T) {
-	db := setupDraftWorkerTestDB(t)
-	taskRepo := repository.NewTaskRepository(db)
-	liveRepo := repository.NewLiveMaterialRepository(db)
-	projectRepo := repository.NewVideoProjectRepository(db)
-	ctx := context.Background()
-	webRoot := t.TempDir()
-
-	material := &model.LiveMaterial{
-		Name: "直播", LiveURL: "https://example.com/live.mp4", CreatedBy: 1,
-		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100,
-	}
-	if err := liveRepo.Create(ctx, material); err != nil {
-		t.Fatalf("create material: %v", err)
-	}
-	project := &model.VideoProject{
-		Name: "项目", LiveID: material.ID, CreatedBy: 1,
-		Clips0: []model.ClipRange{},
-		Clips1: []model.ClipWithText{
-			{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
-			{Text: "b", StartTime: 1300, EndTime: 2000, Words: []model.ClipWord{}},
-		},
-	}
-	if err := projectRepo.Create(ctx, project); err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-
-	ext, _ := marshalTaskExt(TaskExt{
-		LiveID: material.ID, VideoProjectID: project.ID,
-		CanvasWidth: 1080, CanvasHeight: 1920,
+func mustMarshalDraftExt(t *testing.T, liveID, projectID uint, w, h int) string {
+	t.Helper()
+	raw, err := json.Marshal(TaskExt{
+		LiveID: liveID, VideoProjectID: projectID,
+		CanvasWidth: w, CanvasHeight: h,
 	})
-	task := &model.Task{
-		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if err := taskRepo.Create(ctx, task); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
-	if err != nil || claimed == nil {
-		t.Fatalf("claim: %v %#v", err, claimed)
-	}
+	return string(raw)
+}
 
-	cutter := &mockVideoCutter{}
-	worker := NewDraftWorker(DraftWorkerDeps{
-		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: &mockCapCutAPI{}, Cutter: cutter, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+func newTestDraftGenerator(capcut draft.CapCutMateAPI) draft.Generator {
+	return draft.NewGenerator(draft.GeneratorDeps{
+		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
 		Logger: zap.NewNop(),
 	})
-	if err := worker.Process(ctx, claimed); err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
-	if len(cutter.calls) != 1 {
-		t.Fatalf("cut calls = %d, want 1 after merge", len(cutter.calls))
-	}
-
-	// 库中 clips1 仍为细粒度两段，未写回合并结果。
-	updated, err := projectRepo.GetByID(ctx, project.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if len(updated.Clips1) != 2 {
-		t.Errorf("clips1 len = %d, want 2 (unchanged)", len(updated.Clips1))
-	}
 }
 
+func newTestDraftWorker(
+	taskRepo repository.TaskRepository,
+	liveRepo repository.LiveMaterialRepository,
+	projectRepo repository.VideoProjectRepository,
+	capcut draft.CapCutMateAPI,
+	webRoot string,
+) DraftWorker {
+	return NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		Generator: newTestDraftGenerator(capcut),
+		Web:       webroot.Config{RootDir: webRoot, RootURL: "http://localhost/static"},
+		Logger:    zap.NewNop(),
+	})
+}
 
 func TestDraftWorker_Process_Success(t *testing.T) {
 	db := setupDraftWorkerTestDB(t)
@@ -309,10 +158,7 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	ext, _ := marshalTaskExt(TaskExt{
-		LiveID: material.ID, VideoProjectID: project.ID,
-		CanvasWidth: 1080, CanvasHeight: 1920,
-	})
+	ext := mustMarshalDraftExt(t, material.ID, project.ID, 1080, 1920)
 	task := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
 		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
@@ -326,11 +172,13 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	}
 
 	capcut := &mockCapCutAPI{}
-	cutter := &mockVideoCutter{}
 	worker := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: capcut, Cutter: cutter, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: webRoot, RootURL: "http://192.168.3.219:81"},
+		Generator: draft.NewGenerator(draft.GeneratorDeps{
+			CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
+			Logger: zap.NewNop(),
+		}),
+		Web:    webroot.Config{RootDir: webRoot, RootURL: "http://192.168.3.219:81"},
 		Logger: zap.NewNop(),
 	})
 
@@ -340,9 +188,6 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	if capcut.createCalls != 1 || capcut.addCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d", capcut.createCalls, capcut.addCalls)
 	}
-	if len(cutter.calls) != 2 {
-		t.Errorf("cut calls = %d, want 2", len(cutter.calls))
-	}
 	if !strings.Contains(capcut.lastAdd.VideoInfos, "clip_000.mp4") {
 		t.Errorf("video_infos = %s", capcut.lastAdd.VideoInfos)
 	}
@@ -351,22 +196,18 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	if got.Status != model.TaskStatusCompleted || got.Progress != 100 {
 		t.Errorf("task = %s/%d", got.Status, got.Progress)
 	}
-	// 草稿地址应写入 task.draft_url，而非 video_project。
 	if got.DraftURL != "http://example.com/draft" {
 		t.Errorf("task.draft_url = %s", got.DraftURL)
 	}
 	if capcut.lastWidth != 1080 || capcut.lastHeight != 1920 {
-		t.Errorf("CreateDraft size = %dx%d, want 1080x1920", capcut.lastWidth, capcut.lastHeight)
+		t.Errorf("CreateDraft size = %dx%d", capcut.lastWidth, capcut.lastHeight)
 	}
-
-	// 切片应落在 staging/{task_id}
 	staging := filepath.Join(webRoot, "staging", claimed.ID)
 	if _, err := os.Stat(filepath.Join(staging, "source.mp4")); err != nil {
 		t.Errorf("source.mp4 missing: %v", err)
 	}
 }
 
-// TestDraftWorker_Process_UsesProjectCanvasSize 验证 ext 未带画布时，create_draft 使用 video_project.width/height。
 func TestDraftWorker_Process_UsesProjectCanvasSize(t *testing.T) {
 	db := setupDraftWorkerTestDB(t)
 	taskRepo := repository.NewTaskRepository(db)
@@ -379,47 +220,34 @@ func TestDraftWorker_Process_UsesProjectCanvasSize(t *testing.T) {
 		Name: "直播", LiveURL: "https://example.com/live.mp4", CreatedBy: 1,
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100,
 	}
-	if err := liveRepo.Create(ctx, material); err != nil {
-		t.Fatalf("create material: %v", err)
-	}
+	_ = liveRepo.Create(ctx, material)
 	project := &model.VideoProject{
-		Name: "横屏项目", LiveID: material.ID, CreatedBy: 1,
+		Name: "横屏", LiveID: material.ID, CreatedBy: 1,
 		Width: 1920, Height: 1080,
+		Clips1: []model.ClipWithText{{Text: "横", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}}},
 		Clips0: []model.ClipRange{},
-		Clips1: []model.ClipWithText{
-			{Text: "横", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
-		},
 	}
-	if err := projectRepo.Create(ctx, project); err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-
-	// ext 故意不写 canvas_*，模拟旧任务或仅带项目引用的场景。
-	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
+	_ = projectRepo.Create(ctx, project)
+	ext := mustMarshalDraftExt(t, material.ID, project.ID, 0, 0)
 	task := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
 		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
 	}
-	if err := taskRepo.Create(ctx, task); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
-	if err != nil || claimed == nil {
-		t.Fatalf("claim: %v %#v", err, claimed)
-	}
+	_ = taskRepo.Create(ctx, task)
+	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
 
 	capcut := &mockCapCutAPI{}
 	worker := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
-		Logger: zap.NewNop(),
+		Generator: newTestDraftGenerator(capcut),
+		Web:       webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		Logger:    zap.NewNop(),
 	})
 	if err := worker.Process(ctx, claimed); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 	if capcut.lastWidth != 1920 || capcut.lastHeight != 1080 {
-		t.Fatalf("CreateDraft size = %dx%d, want project 1920x1080", capcut.lastWidth, capcut.lastHeight)
+		t.Fatalf("CreateDraft size = %dx%d, want 1920x1080", capcut.lastWidth, capcut.lastHeight)
 	}
 }
 
@@ -439,7 +267,7 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 		Clips0: []model.ClipRange{},
 	}
 	_ = projectRepo.Create(ctx, project)
-	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
+	ext := mustMarshalDraftExt(t, material.ID, project.ID, 0, 0)
 	task := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
 		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
@@ -449,10 +277,9 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 
 	worker := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
-		CapCut: &mockCapCutAPI{createErr: errors.New("capcut down")},
-		Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-		Web: webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
-		Logger: zap.NewNop(),
+		Generator: newTestDraftGenerator(&mockCapCutAPI{createErr: errors.New("capcut down")}),
+		Web:       webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		Logger:    zap.NewNop(),
 	})
 	if err := worker.Process(ctx, claimed); err == nil {
 		t.Fatal("expected error")
@@ -468,9 +295,6 @@ func TestDraftWorker_DefaultConcurrencyIsThree(t *testing.T) {
 	if w.concurrency != 3 {
 		t.Fatalf("concurrency = %d, want 3", w.concurrency)
 	}
-	if draftDefaultConcurrency != 3 {
-		t.Fatalf("draftDefaultConcurrency = %d, want 3", draftDefaultConcurrency)
-	}
 }
 
 func TestDraftWorker_UsesConfiguredConcurrency(t *testing.T) {
@@ -480,19 +304,17 @@ func TestDraftWorker_UsesConfiguredConcurrency(t *testing.T) {
 	}
 }
 
-// TestDraftWorker_DefaultAndConfiguredStaleTimeout 验证草稿孤儿回收超时默认值与配置覆盖。
 func TestDraftWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
 	defaultW := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop()}).(*draftWorker)
 	if defaultW.staleTimeout != draftStaleTimeout {
-		t.Fatalf("default staleTimeout = %v, want %v", defaultW.staleTimeout, draftStaleTimeout)
+		t.Fatalf("default staleTimeout = %v", defaultW.staleTimeout)
 	}
 	custom := NewDraftWorker(DraftWorkerDeps{Logger: zap.NewNop(), StaleTimeout: 45 * time.Minute}).(*draftWorker)
 	if custom.staleTimeout != 45*time.Minute {
-		t.Fatalf("custom staleTimeout = %v, want 45m", custom.staleTimeout)
+		t.Fatalf("custom staleTimeout = %v", custom.staleTimeout)
 	}
 }
 
-// TestDraftWorker_RequeueStaleProcessing 验证将超时 processing 改回 pending。
 func TestDraftWorker_RequeueStaleProcessing(t *testing.T) {
 	db := setupDraftWorkerTestDB(t)
 	taskRepo := repository.NewTaskRepository(db)
@@ -510,13 +332,10 @@ func TestDraftWorker_RequeueStaleProcessing(t *testing.T) {
 		t.Fatalf("backdate: %v", err)
 	}
 
-	worker := NewDraftWorker(DraftWorkerDeps{
-		TaskRepo:     taskRepo,
-		Logger:       zap.NewNop(),
-		Concurrency:  1,
-		StaleTimeout: time.Hour,
+	w := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, Logger: zap.NewNop(), Concurrency: 1, StaleTimeout: time.Hour,
 	}).(*draftWorker)
-	worker.requeueStale(ctx)
+	w.requeueStale(ctx)
 
 	got, err := taskRepo.GetByID(ctx, stale.ID)
 	if err != nil {

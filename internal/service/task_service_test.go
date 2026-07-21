@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"live-mixer/internal/draft"
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
 
@@ -474,18 +475,18 @@ func TestTaskService_List_InvalidDate(t *testing.T) {
 func TestResolveDraftCanvasSize(t *testing.T) {
 	project := &model.VideoProject{Width: 720, Height: 1280}
 
-	w, h := resolveDraftCanvasSize(1080, 1920, project)
+	w, h := draft.ResolveCanvasSize(1080, 1920, project)
 	if w != 1080 || h != 1920 {
 		t.Fatalf("request override = %dx%d, want 1080x1920", w, h)
 	}
 
-	w, h = resolveDraftCanvasSize(0, 0, project)
+	w, h = draft.ResolveCanvasSize(0, 0, project)
 	if w != 720 || h != 1280 {
 		t.Fatalf("project fallback = %dx%d, want 720x1280", w, h)
 	}
 
-	w, h = resolveDraftCanvasSize(0, 0, &model.VideoProject{})
-	if w != draftDefaultCanvasWidth || h != draftDefaultCanvasHeight {
-		t.Fatalf("default = %dx%d, want %dx%d", w, h, draftDefaultCanvasWidth, draftDefaultCanvasHeight)
+	w, h = draft.ResolveCanvasSize(0, 0, &model.VideoProject{})
+	if w != draft.DefaultCanvasWidth || h != draft.DefaultCanvasHeight {
+		t.Fatalf("default = %dx%d, want %dx%d", w, h, draft.DefaultCanvasWidth, draft.DefaultCanvasHeight)
 	}
 }

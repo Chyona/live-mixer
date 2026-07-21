@@ -3,14 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"live-mixer/internal/draft"
 	"live-mixer/internal/model"
-	"live-mixer/internal/pkg/capcutmate"
-	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
@@ -18,49 +15,24 @@ import (
 )
 
 const (
-	// draftDefaultConcurrency 单实例内并行抢占/执行草稿任务的 Worker 数（配置缺失时回落）。
 	draftDefaultConcurrency = 3
-	// draftPollInterval 无待处理任务时的 DB 轮询间隔（多实例兜底唤醒）。
-	draftPollInterval = 3 * time.Second
-	// draftStaleTimeout processing 超时未更新进度则自动改回 pending。
-	draftStaleTimeout = 60 * time.Minute
-	// draftDefaultCanvasWidth / draftDefaultCanvasHeight 剪映草稿默认画布尺寸。
-	draftDefaultCanvasWidth  = 1080
-	draftDefaultCanvasHeight = 1920
-	// draftClipMergeGapMS 相邻片段间隔 ≤ 该值（毫秒）时合并后再 ffmpeg 裁剪。
-	draftClipMergeGapMS = 500
+	draftPollInterval       = 3 * time.Second
+	draftStaleTimeout       = 60 * time.Minute
 )
 
-// DraftWorker 剪映草稿任务后台调度器：DB 乐观锁抢占 + ffmpeg 切片 + capcut-mate 组装草稿。
+// DraftWorker 剪映草稿任务适配器：DB 抢占/进度/完成，组装委托给 draft.Generator。
 type DraftWorker interface {
-	// Enqueue 唤醒调度循环尝试领取任务（非阻塞）。
 	Enqueue()
-	// Process 执行已抢占（processing）的草稿任务完整流程。
 	Process(ctx context.Context, task *model.Task) error
-	// ProcessWithOptions 执行草稿阶段；可由一键成片编排复用。
 	ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error
-	// Start 启动后台 Worker 循环。
 	Start(ctx context.Context)
-}
-
-// CapCutMateAPI 草稿生成所需的 capcut-mate 接口，便于单测替换。
-type CapCutMateAPI interface {
-	CreateDraft(ctx context.Context, width, height int, recordDir string) (*capcutmate.CreateDraftResponse, error)
-	AddVideos(ctx context.Context, req capcutmate.AddVideosRequest, recordDir string) (*capcutmate.AddVideosResponse, error)
-}
-
-// VideoSegmentCutter 视频精确裁剪抽象，便于单测替换。
-type VideoSegmentCutter interface {
-	CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error
 }
 
 type draftWorker struct {
 	taskRepo         repository.TaskRepository
 	liveMaterialRepo repository.LiveMaterialRepository
 	videoProjectRepo repository.VideoProjectRepository
-	capcut           CapCutMateAPI
-	cutter           VideoSegmentCutter
-	downloader       FileDownloader
+	generator        draft.Generator
 	web              webroot.Config
 	logger           *zap.Logger
 	concurrency      int
@@ -71,14 +43,12 @@ type draftWorker struct {
 	startOnce sync.Once
 }
 
-// DraftWorkerDeps 构造草稿 Worker 所需依赖，避免过长参数列表。
+// DraftWorkerDeps 构造草稿任务 Worker 所需依赖。
 type DraftWorkerDeps struct {
 	TaskRepo         repository.TaskRepository
 	LiveMaterialRepo repository.LiveMaterialRepository
 	VideoProjectRepo repository.VideoProjectRepository
-	CapCut           CapCutMateAPI
-	Cutter           VideoSegmentCutter
-	Downloader       FileDownloader
+	Generator        draft.Generator
 	Web              webroot.Config
 	Logger           *zap.Logger
 	// Concurrency 单实例并行 Worker 数；<=0 时使用内置默认值（3）。
@@ -87,19 +57,11 @@ type DraftWorkerDeps struct {
 	StaleTimeout time.Duration
 }
 
-// NewDraftWorker 创建剪映草稿后台 Worker。
+// NewDraftWorker 创建剪映草稿任务后台 Worker（任务生命周期 + 调用 draft.Generator）。
 func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 	logger := deps.Logger
 	if logger == nil {
 		logger = zap.NewNop()
-	}
-	cutter := deps.Cutter
-	if cutter == nil {
-		cutter = media.NewFFmpegConverter("")
-	}
-	downloader := deps.Downloader
-	if downloader == nil {
-		downloader = NewFileDownloader(logger, nil)
 	}
 	concurrency := deps.Concurrency
 	if concurrency <= 0 {
@@ -113,9 +75,7 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 		taskRepo:         deps.TaskRepo,
 		liveMaterialRepo: deps.LiveMaterialRepo,
 		videoProjectRepo: deps.VideoProjectRepo,
-		capcut:           deps.CapCut,
-		cutter:           cutter,
-		downloader:       downloader,
+		generator:        deps.Generator,
 		web:              deps.Web,
 		logger:           logger,
 		concurrency:      concurrency,
@@ -125,16 +85,15 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 	}
 }
 
-// Enqueue 非阻塞唤醒调度器，Create 任务后调用以尽快领取。
+// Enqueue 非阻塞唤醒调度器。
 func (w *draftWorker) Enqueue() {
 	select {
 	case w.wake <- struct{}{}:
 	default:
-		// 已有唤醒信号在队列中，无需重复投递。
 	}
 }
 
-// Start 启动若干并发领取循环 + 定时 poll，并在启动时立即回收孤儿 processing 任务。
+// Start 启动并发领取循环与定时 poll。
 func (w *draftWorker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		n := w.concurrency
@@ -145,7 +104,6 @@ func (w *draftWorker) Start(ctx context.Context) {
 			go w.loop(ctx, i)
 		}
 		go w.pollLoop(ctx)
-		// 启动即回收：服务重启后 processing 孤儿无需等待第一个 poll 周期。
 		w.requeueStale(ctx)
 		w.Enqueue()
 		w.logger.Info("剪映草稿 Worker 已启动",
@@ -155,7 +113,6 @@ func (w *draftWorker) Start(ctx context.Context) {
 	})
 }
 
-// pollLoop 定时回收超时 processing，并唤醒领取 pending。
 func (w *draftWorker) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
@@ -170,7 +127,6 @@ func (w *draftWorker) pollLoop(ctx context.Context) {
 	}
 }
 
-// requeueStale 将 updated_at 超时未刷新的草稿 processing 任务改回 pending。
 func (w *draftWorker) requeueStale(ctx context.Context) {
 	n, err := w.taskRepo.RequeueStaleProcessingByType(ctx, model.TaskTypeDraft, w.staleTimeout)
 	if err != nil {
@@ -193,7 +149,6 @@ func (w *draftWorker) loop(ctx context.Context, workerID int) {
 	}
 }
 
-// drain 循环抢占并处理，直到当前没有更多 pending draft 任务。
 func (w *draftWorker) drain(ctx context.Context, workerID int) {
 	for {
 		if ctx.Err() != nil {
@@ -224,23 +179,24 @@ func (w *draftWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 执行单条草稿任务完整流程（成功后 MarkCompleted）。
+// Process 执行单条草稿任务完整流程。
 func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 	return w.ProcessWithOptions(ctx, task, standalonePhaseOptions())
 }
 
-// ProcessWithOptions 执行草稿阶段：
-// 1) 读 video_project.clips1 与 live_material.live_url；
-// 2) 下载直播视频到 staging/{task_id}；
-// 3) ffmpeg 精确裁剪各片段；
-// 4) 调用 capcut-mate create_draft + add_videos；
-// 5) 回写 task.draft_url；按 opts 决定是否 MarkCompleted。
+// ProcessWithOptions 从任务加载上下文，调用 draft.Generator，并回写任务状态。
 func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
 	}
+	if w.generator == nil {
+		return w.fail(ctx, task.ID, 0, fmt.Errorf("草稿 Generator 未配置"))
+	}
+
+	var lastProgress int16
 	setProgress := func(local int16) int16 {
 		p := mapPhaseProgress(opts, local)
+		lastProgress = p
 		_ = w.taskRepo.UpdateProgress(ctx, task.ID, p)
 		return p
 	}
@@ -264,22 +220,6 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询剪辑项目失败: %w", err))
 	}
 
-	clips, err := resolveDraftClipRanges(project)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, err)
-	}
-	beforeMerge := len(clips)
-	clips = mergeAdjacentClipRanges(clips, draftClipMergeGapMS)
-	w.logger.Info("草稿裁剪前合并相邻片段",
-		zap.String("task_id", task.ID),
-		zap.Int("clips_before", beforeMerge),
-		zap.Int("clips_after", len(clips)),
-		zap.Int64("merge_gap_ms", draftClipMergeGapMS),
-	)
-	if err := validateClipRanges(clips); err != nil {
-		return w.fail(ctx, task.ID, progress, err)
-	}
-
 	liveID := ext.LiveID
 	if liveID == 0 {
 		liveID = project.LiveID
@@ -292,93 +232,25 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材 live_url 为空"))
 	}
 
-	stagingDir := w.web.StagingDir(task.ID)
-	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("创建任务暂存目录失败: %w", err))
-	}
-	recordDir := w.web.CapCutMateRecordDir(task.ID)
-	if err := os.MkdirAll(recordDir, 0o755); err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("创建 capcut-mate 录制目录失败: %w", err))
-	}
+	width, height := draft.ResolveCanvasSize(ext.CanvasWidth, ext.CanvasHeight, project)
 
-	w.logger.Info("开始下载直播视频",
-		zap.String("task_id", task.ID),
-		zap.String("live_url", material.LiveURL),
-		zap.String("staging_dir", stagingDir),
-	)
-	progress = setProgress(15)
-
-	sourcePath := filepath.Join(stagingDir, "source.mp4")
-	if _, err := w.downloader.Download(material.LiveURL, sourcePath); err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("下载直播视频失败: %w", err))
-	}
-
-	progress = setProgress(25)
-
-	clipPaths, err := w.cutClips(ctx, task.ID, sourcePath, stagingDir, clips, opts)
+	result, err := w.generator.Build(ctx, draft.Request{
+		JobID:      task.ID,
+		Material:   material,
+		Project:    project,
+		CanvasW:    width,
+		CanvasH:    height,
+		StagingDir: w.web.StagingDir(task.ID),
+		RecordDir:  w.web.CapCutMateRecordDir(task.ID),
+		Web:        w.web,
+		Progress:   func(local int16) { setProgress(local) },
+	})
 	if err != nil {
-		return w.fail(ctx, task.ID, progress, err)
-	}
-
-	progress = setProgress(50)
-
-	// 画布：任务 ext（创建时已解析）→ video_project.width/height → 默认竖屏。
-	width, height := resolveDraftCanvasSize(ext.CanvasWidth, ext.CanvasHeight, project)
-
-	if w.capcut == nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("capcut-mate 客户端未配置"))
-	}
-
-	w.logger.Info("调用 capcut-mate 创建草稿",
-		zap.String("task_id", task.ID),
-		zap.Uint("video_project_id", project.ID),
-		zap.Int("project_width", project.Width),
-		zap.Int("project_height", project.Height),
-		zap.Int("width", width),
-		zap.Int("height", height),
-	)
-	createResp, err := w.capcut.CreateDraft(ctx, width, height, recordDir)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("创建剪映草稿失败: %w", err))
-	}
-
-	progress = setProgress(70)
-
-	videoInfos, err := w.buildVideoInfos(clipPaths, clips)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, err)
-	}
-	videoInfosJSON, err := capcutmate.BuildVideoInfosJSON(videoInfos)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, err)
-	}
-
-	w.logger.Info("调用 capcut-mate 批量添加视频",
-		zap.String("task_id", task.ID),
-		zap.Int("clips", len(videoInfos)),
-		zap.String("draft_url", createResp.DraftURL),
-	)
-	addResp, err := w.capcut.AddVideos(ctx, capcutmate.AddVideosRequest{
-		Alpha:          1,
-		DraftURL:       createResp.DraftURL,
-		ScaleX:         1,
-		ScaleY:         1,
-		SceneTimelines: []any{},
-		VideoInfos:     videoInfosJSON,
-	}, recordDir)
-	if err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("向草稿添加视频失败: %w", err))
-	}
-
-	draftURL := addResp.DraftURL
-	if draftURL == "" {
-		draftURL = createResp.DraftURL
+		return w.fail(ctx, task.ID, lastProgress, err)
 	}
 
 	progress = setProgress(90)
-
-	// 草稿地址挂在任务上：独立草稿任务与一键成片共用同一回写路径。
-	if err := w.taskRepo.UpdateDraftURL(ctx, task.ID, draftURL); err != nil {
+	if err := w.taskRepo.UpdateDraftURL(ctx, task.ID, result.DraftURL); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写 task.draft_url 失败: %w", err))
 	}
 
@@ -388,7 +260,6 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	ext.CanvasHeight = height
 	extRaw, err := marshalTaskExt(ext)
 	if err != nil {
-		// 草稿已生成，仍尽量标记完成并回写精简 ext。
 		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d,"canvas_width":%d,"canvas_height":%d}`,
 			liveID, project.ID, width, height)
 	}
@@ -404,64 +275,10 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	w.logger.Info("剪映草稿阶段完成",
 		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
-		zap.String("draft_url", draftURL),
-		zap.Int("clips", len(clips)),
+		zap.String("draft_url", result.DraftURL),
 		zap.Bool("mark_complete", opts.MarkComplete),
 	)
 	return nil
-}
-
-// cutClips 按 clips 时间段（毫秒）裁剪出本地切片文件。
-func (w *draftWorker) cutClips(ctx context.Context, taskID string, sourcePath, stagingDir string, clips []model.ClipRange, opts PhaseOptions) ([]string, error) {
-	paths := make([]string, 0, len(clips))
-	for i, clip := range clips {
-		outPath := filepath.Join(stagingDir, fmt.Sprintf("clip_%03d.mp4", i))
-		startSec := float64(clip.StartTime) / 1000.0
-		endSec := float64(clip.EndTime) / 1000.0
-		w.logger.Info("开始 ffmpeg 裁剪切片",
-			zap.String("task_id", taskID),
-			zap.Int("index", i),
-			zap.Int64("start_ms", clip.StartTime),
-			zap.Int64("end_ms", clip.EndTime),
-			zap.String("output", outPath),
-		)
-		if err := w.cutter.CutVideoSegment(ctx, sourcePath, outPath, startSec, endSec); err != nil {
-			return nil, fmt.Errorf("裁剪第 %d 段失败: %w", i, err)
-		}
-		paths = append(paths, outPath)
-
-		// 裁剪阶段本地进度：25 → 50，按片段数线性推进后再映射到父任务。
-		if len(clips) > 0 {
-			local := int16(25 + int(25*float64(i+1)/float64(len(clips))))
-			_ = w.taskRepo.UpdateProgress(ctx, taskID, mapPhaseProgress(opts, local))
-		}
-	}
-	return paths, nil
-}
-
-// buildVideoInfos 将本地切片转为时间轴 video_info（URL + 微秒起止）。
-func (w *draftWorker) buildVideoInfos(clipPaths []string, clips []model.ClipRange) ([]capcutmate.VideoInfo, error) {
-	infos := make([]capcutmate.VideoInfo, 0, len(clipPaths))
-	var cursorUS int64
-	for i, localPath := range clipPaths {
-		videoURL, err := w.web.LocalPathToURL(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("切片路径转 URL 失败: %w", err)
-		}
-		durMS := clips[i].EndTime - clips[i].StartTime
-		if durMS <= 0 {
-			return nil, fmt.Errorf("第 %d 段时长无效", i)
-		}
-		durUS := durMS * 1000 // 毫秒 → 微秒
-		infos = append(infos, capcutmate.VideoInfo{
-			VideoURL: videoURL,
-			Start:    cursorUS,
-			End:      cursorUS + durUS,
-			Volume:   1,
-		})
-		cursorUS += durUS
-	}
-	return infos, nil
 }
 
 func (w *draftWorker) fail(ctx context.Context, taskID string, progress int16, err error) error {
@@ -474,57 +291,4 @@ func (w *draftWorker) fail(ctx context.Context, taskID string, progress int16, e
 		return fmt.Errorf("剪映草稿失败且写入失败状态异常: task=%w, db=%v", err, failErr)
 	}
 	return err
-}
-
-// resolveDraftClipRanges 优先从 video_project.clips1 提取时间段；为空则回退 clips0。
-func resolveDraftClipRanges(project *model.VideoProject) ([]model.ClipRange, error) {
-	if project == nil {
-		return nil, fmt.Errorf("video_project 不能为空")
-	}
-	if clips := clips1ToRanges(project.Clips1); len(clips) > 0 {
-		return clips, nil
-	}
-	if len(project.Clips0) == 0 {
-		return nil, fmt.Errorf("video_project.clips1/clips0 均为空，无法生成草稿")
-	}
-	return project.Clips0, nil
-}
-
-// clips1ToRanges 从 clips1 提取各片段的 start_time/end_time（毫秒）。
-func clips1ToRanges(clips []model.ClipWithText) []model.ClipRange {
-	out := make([]model.ClipRange, 0, len(clips))
-	for _, c := range clips {
-		out = append(out, model.ClipRange{StartTime: c.StartTime, EndTime: c.EndTime})
-	}
-	return out
-}
-
-// mergeAdjacentClipRanges 按列表顺序合并相邻片段：严格保留入参顺序，不排序。
-// 仅当列表中相邻两项满足 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS
-//（含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。
-func mergeAdjacentClipRanges(clips []model.ClipRange, maxGapMS int64) []model.ClipRange {
-	if len(clips) == 0 {
-		return nil
-	}
-	if len(clips) == 1 {
-		return []model.ClipRange{{StartTime: clips[0].StartTime, EndTime: clips[0].EndTime}}
-	}
-
-	out := make([]model.ClipRange, 0, len(clips))
-	cur := clips[0]
-	for i := 1; i < len(clips); i++ {
-		next := clips[i]
-		gap := next.StartTime - cur.EndTime
-		// 列表顺序优先：时间上回跳的相邻项不合，避免负 gap 误吞片段。
-		if next.StartTime >= cur.StartTime && gap <= maxGapMS {
-			if next.EndTime > cur.EndTime {
-				cur.EndTime = next.EndTime
-			}
-			continue
-		}
-		out = append(out, cur)
-		cur = next
-	}
-	out = append(out, cur)
-	return out
 }

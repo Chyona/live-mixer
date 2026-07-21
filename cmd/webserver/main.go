@@ -21,6 +21,7 @@ import (
 	"live-mixer/docs"
 	"live-mixer/internal/bootstrap"
 	"live-mixer/internal/config"
+	"live-mixer/internal/draft"
 	v1handler "live-mixer/internal/handler/v1"
 	v2handler "live-mixer/internal/handler/v2"
 	"live-mixer/internal/middleware"
@@ -101,14 +102,18 @@ func main() {
 		cfg.Worker.AISliceStaleTimeout(),
 	)
 
-	// 剪映草稿 Worker：ffmpeg 切片 + capcut-mate 组装草稿，进度写入 task 表。
+	// 剪映草稿：纯组装 Generator + 任务适配 Worker。
 	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())
+	draftGenerator := draft.NewGenerator(draft.GeneratorDeps{
+		CapCut:     capcutClient,
+		Downloader: fileDownloader,
+		Logger:     logger,
+	})
 	draftWorker := service.NewDraftWorker(service.DraftWorkerDeps{
 		TaskRepo:         taskRepo,
 		LiveMaterialRepo: liveMaterialRepo,
 		VideoProjectRepo: videoProjectRepo,
-		CapCut:           capcutClient,
-		Downloader:       fileDownloader,
+		Generator:        draftGenerator,
 		Web: webroot.Config{
 			RootDir: cfg.Web.RootDir,
 			RootURL: cfg.Web.RootURL,
