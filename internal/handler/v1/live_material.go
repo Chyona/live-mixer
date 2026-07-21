@@ -39,9 +39,6 @@ type CreateLiveMaterialRequest struct {
 	Name    string `json:"name" binding:"required,max=64"`
 	LiveURL string `json:"live_url" binding:"required,url,max=1024"`
 	Remark  string `json:"remark" binding:"max=256"`
-	// Width / Height 可选：直播画面分辨率（像素）；未传时为 0。
-	Width   int    `json:"width" binding:"omitempty,min=0"`
-	Height  int    `json:"height" binding:"omitempty,min=0"`
 	Ext     string `json:"ext" binding:"max=1024"`
 }
 
@@ -225,7 +222,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 	}
 
 	material, err := h.liveMaterialService.Create(
-		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext, req.Width, req.Height,
+		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext,
 	)
 	if err != nil {
 		response.BadRequest(c, err.Error())

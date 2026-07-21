@@ -382,7 +382,7 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 	}
 
 	asrJSON := `{"audio_info":{"duration":3000},"result":{"text":"ok"}}`
-	if err := repo.UpdateASRCompleted(ctx, material.ID, asrJSON, 3000); err != nil {
+	if err := repo.UpdateASRCompleted(ctx, material.ID, asrJSON, 3000, 1920, 1080); err != nil {
 		t.Fatalf("UpdateASRCompleted() error = %v", err)
 	}
 	got, _ = repo.GetByID(ctx, material.ID)
@@ -391,6 +391,9 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 	}
 	if got.Duration != 3000 {
 		t.Errorf("Duration = %d, want 3000", got.Duration)
+	}
+	if got.Width != 1920 || got.Height != 1080 {
+		t.Errorf("Width/Height = %d/%d, want 1920x1080", got.Width, got.Height)
 	}
 	if got.LiveASR != asrJSON {
 		t.Errorf("LiveASR = %q", got.LiveASR)

@@ -211,28 +211,30 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		}
 	}
 
-	// 下载源媒体 → 转标准 MP3 → 上传对象存储，得到 ASR 可用的公网音频 URL。
+	// 下载源媒体 → 探测分辨率 → 转标准 MP3 → 上传对象存储，得到 ASR 可用的公网音频 URL。
 	w.logger.Info("开始音频预处理",
 		zap.Uint("material_id", materialID),
 		zap.String("source_url", material.LiveURL),
 	)
-	audioURL, cleanup, err := w.prepareAudioURL(ctx, materialID, material.LiveURL, updateProgress)
-	if cleanup != nil {
-		defer cleanup()
+	prep, err := w.prepareAudio(ctx, materialID, material.LiveURL, updateProgress)
+	if prep.Cleanup != nil {
+		defer prep.Cleanup()
 	}
 	if err != nil {
 		return w.failASR(ctx, materialID, lastProgress, err)
 	}
 	w.logger.Info("音频预处理完成",
 		zap.Uint("material_id", materialID),
-		zap.String("audio_url", audioURL),
+		zap.String("audio_url", prep.AudioURL),
+		zap.Int("width", prep.Width),
+		zap.Int("height", prep.Height),
 	)
 
 	w.logger.Info("开始 ASR 语音识别",
 		zap.Uint("material_id", materialID),
-		zap.String("audio_url", audioURL),
+		zap.String("audio_url", prep.AudioURL),
 	)
-	raw, err := w.asrService.TranscribeWithProgress(ctx, audioURL, func(progress int) {
+	raw, err := w.asrService.TranscribeWithProgress(ctx, prep.AudioURL, func(progress int) {
 		// ASR 轮询阶段映射到 50~95，与预处理阶段 5~45 衔接。
 		mapped := int16(50 + progress*45/100)
 		if mapped > 95 {
@@ -250,25 +252,27 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		liveASR = "{}"
 	}
 
-	if err := w.repo.UpdateASRCompleted(ctx, materialID, liveASR, duration); err != nil {
+	if err := w.repo.UpdateASRCompleted(ctx, materialID, liveASR, duration, prep.Width, prep.Height); err != nil {
 		return fmt.Errorf("写入 ASR 成功结果失败: %w", err)
 	}
 	w.logger.Info("直播素材 ASR 处理完成",
 		zap.Uint("material_id", materialID),
 		zap.Int64("duration_ms", duration),
+		zap.Int("width", prep.Width),
+		zap.Int("height", prep.Height),
 	)
 	return nil
 }
 
-// prepareAudioURL 调用音频预处理服务；未配置时回退为直接使用素材原始 URL。
-func (w *liveMaterialASRWorker) prepareAudioURL(
+// prepareAudio 调用音频预处理服务；未配置时回退为直接使用素材原始 URL（无法探测分辨率）。
+func (w *liveMaterialASRWorker) prepareAudio(
 	ctx context.Context,
 	materialID uint,
 	sourceURL string,
 	updateProgress func(progress int16),
-) (string, func(), error) {
+) (ASRAudioPrepareResult, error) {
 	if w.audioPreparer == nil {
-		return sourceURL, nil, nil
+		return ASRAudioPrepareResult{AudioURL: sourceURL}, nil
 	}
 	return w.audioPreparer.Prepare(ctx, materialID, sourceURL, updateProgress)
 }

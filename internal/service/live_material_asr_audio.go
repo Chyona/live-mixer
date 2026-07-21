@@ -43,29 +43,40 @@ func (utilsFileDownloader) Download(url, dest string) (string, error) {
 	return utils.DownloadFile(url, dest)
 }
 
+// ASRAudioPrepareResult ASR 音频预处理结果（含可选分辨率探测）。
+type ASRAudioPrepareResult struct {
+	AudioURL string
+	Width    int
+	Height   int
+	Cleanup  func()
+}
+
 // LiveMaterialASRAudioPreparer 为直播素材 ASR 准备公网可访问的媒体 URL。
 type LiveMaterialASRAudioPreparer interface {
-	// Prepare 下载源媒体、转标准 MP3、上传对象存储，返回可供 ASR 调用的媒体 URL。
-	// cleanup 用于删除本地临时文件，调用方应在完成后执行 defer cleanup()。
-	Prepare(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (string, func(), error)
+	// Prepare 下载源媒体、探测分辨率、转标准 MP3、上传对象存储。
+	// Cleanup 用于删除本地临时文件，调用方应在完成后执行 defer Cleanup()。
+	Prepare(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error)
 }
 
 type liveMaterialASRAudioPreparer struct {
-	downloader        FileDownloader
-	converter         AudioConverter
-	uploader          ObjectUploader
-	objectKeyPrefix   string
-	workDir           string
-	logger            *zap.Logger
+	downloader      FileDownloader
+	converter       AudioConverter
+	uploader        ObjectUploader
+	prober          media.VideoProber
+	objectKeyPrefix string
+	workDir         string
+	logger          *zap.Logger
 }
 
 // NewLiveMaterialASRAudioPreparer 创建 ASR 音频预处理服务。
+// prober 为 nil 时使用默认 ffprobe 探测器。
 func NewLiveMaterialASRAudioPreparer(
 	downloader FileDownloader,
 	converter AudioConverter,
 	uploader ObjectUploader,
 	workDir string,
 	logger *zap.Logger,
+	prober media.VideoProber,
 ) LiveMaterialASRAudioPreparer {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -76,10 +87,14 @@ func NewLiveMaterialASRAudioPreparer(
 	if converter == nil {
 		converter = media.NewFFmpegConverter("")
 	}
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
 	return &liveMaterialASRAudioPreparer{
 		downloader:      downloader,
 		converter:       converter,
 		uploader:        uploader,
+		prober:          prober,
 		objectKeyPrefix: defaultASRAudioObjectPrefix,
 		workDir:         workDir,
 		logger:          logger,
@@ -91,14 +106,15 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	materialID uint,
 	sourceURL string,
 	onProgress func(progress int16),
-) (string, func(), error) {
+) (ASRAudioPrepareResult, error) {
+	empty := ASRAudioPrepareResult{}
 	if p.uploader == nil {
-		return "", nil, fmt.Errorf("对象存储未配置，无法上传 ASR 音频")
+		return empty, fmt.Errorf("对象存储未配置，无法上传 ASR 音频")
 	}
 
 	tempDir, err := p.ensureTempDir()
 	if err != nil {
-		return "", nil, err
+		return empty, err
 	}
 
 	sessionID := newASRSessionID()
@@ -131,9 +147,29 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	)
 	if _, err := p.downloader.Download(sourceURL, sourcePath); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("下载直播素材失败: %w", err)
+		return empty, fmt.Errorf("下载直播素材失败: %w", err)
 	}
 	report(20)
+
+	// 下载完成后立刻探测分辨率；失败不阻断后续 ASR（纯音频无视频轨属正常）。
+	width, height := 0, 0
+	if p.prober != nil {
+		w, h, probeErr := p.prober.ProbeVideoSize(ctx, sourcePath)
+		if probeErr != nil {
+			p.logger.Warn("ffprobe 探测直播素材分辨率失败，将保持 width/height=0",
+				zap.Uint("material_id", materialID),
+				zap.String("source_path", sourcePath),
+				zap.Error(probeErr),
+			)
+		} else {
+			width, height = w, h
+			p.logger.Info("已探测直播素材分辨率",
+				zap.Uint("material_id", materialID),
+				zap.Int("width", width),
+				zap.Int("height", height),
+			)
+		}
+	}
 
 	p.logger.Info("开始转码为标准 MP3",
 		zap.Uint("material_id", materialID),
@@ -143,7 +179,7 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	report(25)
 	if err := p.converter.ConvertToASRMP3(ctx, sourcePath, mp3Path); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("转码 ASR MP3 失败: %w", err)
+		return empty, fmt.Errorf("转码 ASR MP3 失败: %w", err)
 	}
 	report(35)
 
@@ -157,16 +193,23 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	audioURL, err := p.uploader.UploadFile(ctx, mp3Path, objectKey)
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("上传 ASR 音频失败: %w", err)
+		return empty, fmt.Errorf("上传 ASR 音频失败: %w", err)
 	}
 	report(45)
 
 	p.logger.Info("ASR 音频预处理完成",
 		zap.Uint("material_id", materialID),
 		zap.String("audio_url", audioURL),
+		zap.Int("width", width),
+		zap.Int("height", height),
 	)
 
-	return audioURL, cleanup, nil
+	return ASRAudioPrepareResult{
+		AudioURL: audioURL,
+		Width:    width,
+		Height:   height,
+		Cleanup:  cleanup,
+	}, nil
 }
 
 func (p *liveMaterialASRAudioPreparer) resolveTempDir() (string, error) {

@@ -28,8 +28,8 @@ type LiveMaterialRepository interface {
 	UpdateASRProcessing(ctx context.Context, id uint) error
 	// UpdateASRProgress 更新 ASR 识别进度。
 	UpdateASRProgress(ctx context.Context, id uint, progress int16) error
-	// UpdateASRCompleted 写入 ASR 成功结果。
-	UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error
+	// UpdateASRCompleted 写入 ASR 成功结果，并回写探测到的分辨率（0 表示未知/无视频轨）。
+	UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error
 	// UpdateASRFailed 标记 ASR 识别失败。
 	UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
 	// ResetASRToPending 将失败的 ASR 重置为待处理（仅 failed 生效）。
@@ -176,7 +176,13 @@ func (r *liveMaterialRepository) UpdateASRProgress(ctx context.Context, id uint,
 		}).Error
 }
 
-func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64) error {
+func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error {
+	if width < 0 {
+		width = 0
+	}
+	if height < 0 {
+		height = 0
+	}
 	now := time.Now()
 	return r.db.WithContext(ctx).
 		Model(&model.LiveMaterial{}).
@@ -186,6 +192,8 @@ func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint
 			"asr_progress":   int16(100),
 			"live_asr":       liveASR,
 			"duration":       duration,
+			"width":          width,
+			"height":         height,
 			"asr_error_msg":  "",
 			"asr_updated_at": now,
 		}).Error

@@ -75,7 +75,7 @@ func main() {
 		logger.Fatal("初始化对象存储失败", zap.Error(err))
 	}
 	fileDownloader := service.NewFileDownloader(logger, cfg.Download.URLRewriter())
-	audioPreparer := service.NewLiveMaterialASRAudioPreparer(fileDownloader, nil, storageClient, "", logger)
+	audioPreparer := service.NewLiveMaterialASRAudioPreparer(fileDownloader, nil, storageClient, "", logger, nil)
 	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(
 		liveMaterialRepo,
 		asrService,

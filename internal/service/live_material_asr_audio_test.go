@@ -32,6 +32,18 @@ func (m *mockObjectUploader) UploadFile(ctx context.Context, localPath, objectKe
 	return m.uploadFn(ctx, localPath, objectKey)
 }
 
+
+type mockVideoProber struct {
+	probeFn func(ctx context.Context, inputPath string) (width, height int, err error)
+}
+
+func (m *mockVideoProber) ProbeVideoSize(ctx context.Context, inputPath string) (width, height int, err error) {
+	if m.probeFn != nil {
+		return m.probeFn(ctx, inputPath)
+	}
+	return 0, 0, nil
+}
+
 func defaultMockConverter() *mockAudioConverter {
 	return &mockAudioConverter{
 		convertFn: func(ctx context.Context, inputPath, outputPath string) error {
@@ -55,6 +67,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 		uploadedPath string
 	)
 
+	var probedPath string
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{
 			downloadFn: func(url, dest string) (string, error) {
@@ -81,17 +94,30 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 		},
 		tempDir,
 		nil,
+		&mockVideoProber{
+			probeFn: func(ctx context.Context, inputPath string) (int, int, error) {
+				probedPath = inputPath
+				return 1920, 1080, nil
+			},
+		},
 	)
 
 	var progresses []int16
-	audioURL, cleanup, err := preparer.Prepare(context.Background(), 12, "https://example.com/live.mp4", func(p int16) {
+	result, err := preparer.Prepare(context.Background(), 12, "https://example.com/live.mp4", func(p int16) {
 		progresses = append(progresses, p)
 	})
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
-	defer cleanup()
+	defer result.Cleanup()
+	audioURL := result.AudioURL
 
+	if probedPath == "" {
+		t.Fatal("expected ProbeVideoSize to be called")
+	}
+	if result.Width != 1920 || result.Height != 1080 {
+		t.Errorf("Width/Height = %d/%d, want 1920x1080", result.Width, result.Height)
+	}
 	wantSource := buildASRSourceLocalPath(tempDir, sessionID)
 	if downloadDest != wantSource {
 		t.Errorf("download dest = %q, want %q", downloadDest, wantSource)
@@ -125,8 +151,9 @@ func TestLiveMaterialASRAudioPreparer_Prepare_UploaderMissing(t *testing.T) {
 		nil,
 		t.TempDir(),
 		nil,
+		nil,
 	)
-	_, _, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
+	_, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
 	if err == nil || !strings.Contains(err.Error(), "对象存储未配置") {
 		t.Fatalf("Prepare() error = %v, want storage not configured", err)
 	}
@@ -143,10 +170,11 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DownloadFailed(t *testing.T) {
 		&mockObjectUploader{},
 		t.TempDir(),
 		nil,
+		nil,
 	)
-	_, cleanup, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
-	if cleanup != nil {
-		defer cleanup()
+	result, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
+	if result.Cleanup != nil {
+		defer result.Cleanup()
 	}
 	if err == nil || !strings.Contains(err.Error(), "下载直播素材失败") {
 		t.Fatalf("Prepare() error = %v, want download failure", err)
@@ -168,10 +196,11 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 		&mockObjectUploader{},
 		t.TempDir(),
 		nil,
+		nil,
 	)
-	_, cleanup, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
-	if cleanup != nil {
-		defer cleanup()
+	result, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
+	if result.Cleanup != nil {
+		defer result.Cleanup()
 	}
 	if err == nil || !strings.Contains(err.Error(), "转码 ASR MP3 失败") {
 		t.Fatalf("Prepare() error = %v, want convert failure", err)
@@ -193,10 +222,11 @@ func TestLiveMaterialASRAudioPreparer_Prepare_UploadFailed(t *testing.T) {
 		},
 		t.TempDir(),
 		nil,
+		nil,
 	)
-	_, cleanup, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
-	if cleanup != nil {
-		defer cleanup()
+	result, err := preparer.Prepare(context.Background(), 1, "https://example.com/a.mp4", nil)
+	if result.Cleanup != nil {
+		defer result.Cleanup()
 	}
 	if err == nil || !strings.Contains(err.Error(), "上传 ASR 音频失败") {
 		t.Fatalf("Prepare() error = %v, want upload failure", err)
@@ -204,7 +234,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_UploadFailed(t *testing.T) {
 }
 
 func TestLiveMaterialASRAudioPreparer_TempDirFallback(t *testing.T) {
-	p := NewLiveMaterialASRAudioPreparer(nil, nil, &mockObjectUploader{}, "", nil).(*liveMaterialASRAudioPreparer)
+	p := NewLiveMaterialASRAudioPreparer(nil, nil, &mockObjectUploader{}, "", nil, nil).(*liveMaterialASRAudioPreparer)
 	got, err := p.resolveTempDir()
 	if err != nil {
 		t.Fatalf("resolveTempDir() error = %v", err)
@@ -249,11 +279,12 @@ func TestLiveMaterialASRAudioPreparer_Prepare_DefaultTempDir(t *testing.T) {
 		},
 		"",
 		nil,
+		nil,
 	)
 
-	_, cleanup, err := preparer.Prepare(context.Background(), 99, "https://example.com/live.mp4", nil)
+	result, err := preparer.Prepare(context.Background(), 99, "https://example.com/live.mp4", nil)
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
-	defer cleanup()
+	defer result.Cleanup()
 }

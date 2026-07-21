@@ -19,7 +19,7 @@ import (
 
 // mockLiveMaterialService 用于 handler 单元测试。
 type mockLiveMaterialService struct {
-	createFn               func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string, width, height int) (*model.LiveMaterial, error)
+	createFn               func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
 	updateFn               func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
 	deleteFn               func(ctx context.Context, id uint) error
 	listFn                 func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
@@ -28,9 +28,9 @@ type mockLiveMaterialService struct {
 	retryASRFn             func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 }
 
-func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string, width, height int) (*model.LiveMaterial, error) {
+func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
 	if m.createFn != nil {
-		return m.createFn(ctx, createdBy, name, liveURL, remark, ext, width, height)
+		return m.createFn(ctx, createdBy, name, liveURL, remark, ext)
 	}
 	return nil, nil
 }
@@ -260,7 +260,7 @@ func TestLiveMaterialHandler_List_CustomPageSize(t *testing.T) {
 func TestLiveMaterialHandler_Create_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		createFn: func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string, width, height int) (*model.LiveMaterial, error) {
+		createFn: func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
 			if createdBy != 5 {
 				t.Errorf("createdBy = %d, want 5", createdBy)
 			}
@@ -269,8 +269,6 @@ func TestLiveMaterialHandler_Create_Success(t *testing.T) {
 				Name:      name,
 				LiveURL:   liveURL,
 				Remark:    remark,
-				Width:     width,
-				Height:    height,
 				CreatedBy: createdBy,
 				ASRStatus: model.ASRStatusPending,
 			}, nil
