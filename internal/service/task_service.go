@@ -69,7 +69,7 @@ type TaskService interface {
 	CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) (*model.Task, error)
 	CreateDraft(ctx context.Context, createdBy uint, input CreateDraftInput) (*model.Task, error)
 	CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error)
-	Get(ctx context.Context, id uint) (*model.Task, error)
+	Get(ctx context.Context, id string) (*model.Task, error)
 	List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.Task, int64, error)
 }
 
@@ -158,6 +158,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 		Type:             model.TaskTypeAISlice,
 		Status:           model.TaskStatusPending,
 		Progress:         0,
+		Version:          0,
 		SysPrompt:        sysPrompt,
 		// usr_prompt 由 Worker 根据 clips0 + live_asr 组装内置模板后回写。
 		VideoProjectID:   model.NewUintPtr(project.ID),
@@ -168,7 +169,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
 	}
-	// 唤醒 AI 切片 Worker；多实例下由 DB 原子抢占领取，进度/状态写入数据库供轮询。
+	// 唤醒 AI 切片 Worker；多实例下由 DB 乐观锁抢占领取，进度/状态写入数据库供轮询。
 	if s.aiSliceWorker != nil {
 		s.aiSliceWorker.Enqueue()
 	}
@@ -205,13 +206,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 		return nil, err
 	}
 
-	width, height := input.CanvasWidth, input.CanvasHeight
-	if width <= 0 {
-		width = draftDefaultCanvasWidth
-	}
-	if height <= 0 {
-		height = draftDefaultCanvasHeight
-	}
+	width, height := resolveDraftCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
 
 	// clips 不写入 ext，由 Worker 从 video_project 读取，避免超出 1024 字节限制。
 	ext, err := marshalTaskExt(TaskExt{
@@ -228,6 +223,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 		Type:             model.TaskTypeDraft,
 		Status:           model.TaskStatusPending,
 		Progress:         0,
+		Version:          0,
 		VideoProjectID:   model.NewUintPtr(project.ID),
 		VideoProjectName: project.Name,
 		CreatedBy:        createdBy,
@@ -236,7 +232,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
 	}
-	// 唤醒草稿 Worker；多实例下由 DB 原子抢占领取，进度/状态写入数据库供轮询。
+	// 唤醒草稿 Worker；多实例下由 DB 乐观锁抢占领取，进度/状态写入数据库供轮询。
 	if s.draftWorker != nil {
 		s.draftWorker.Enqueue()
 	}
@@ -281,13 +277,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		return nil, errors.New("系统提示词内容为空")
 	}
 
-	width, height := input.CanvasWidth, input.CanvasHeight
-	if width <= 0 {
-		width = draftDefaultCanvasWidth
-	}
-	if height <= 0 {
-		height = draftDefaultCanvasHeight
-	}
+	width, height := resolveDraftCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
 
 	ext, err := marshalTaskExt(TaskExt{
 		LiveID:         project.LiveID,
@@ -304,6 +294,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		Type:             model.TaskTypeAISliceDraft,
 		Status:           model.TaskStatusPending,
 		Progress:         0,
+		Version:          0,
 		SysPrompt:        sysPrompt,
 		VideoProjectID:   model.NewUintPtr(project.ID),
 		VideoProjectName: project.Name,
@@ -319,7 +310,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 	return task, nil
 }
 
-func (s *taskService) Get(ctx context.Context, id uint) (*model.Task, error) {
+func (s *taskService) Get(ctx context.Context, id string) (*model.Task, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -439,6 +430,25 @@ func validateClipRanges(clips []model.ClipRange) error {
 		_ = i
 	}
 	return nil
+}
+
+// resolveDraftCanvasSize 解析草稿画布尺寸：
+// 请求参数优先 → video_project.width/height → 内置默认值。
+func resolveDraftCanvasSize(reqWidth, reqHeight int, project *model.VideoProject) (int, int) {
+	width, height := reqWidth, reqHeight
+	if width <= 0 && project != nil {
+		width = project.Width
+	}
+	if height <= 0 && project != nil {
+		height = project.Height
+	}
+	if width <= 0 {
+		width = draftDefaultCanvasWidth
+	}
+	if height <= 0 {
+		height = draftDefaultCanvasHeight
+	}
+	return width, height
 }
 
 func isValidTaskType(t string) bool {

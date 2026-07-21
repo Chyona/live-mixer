@@ -48,6 +48,9 @@ type CreateVideoProjectRequest struct {
 	PromptID      uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
+	// Width / Height 可选：剪映草稿工程画布分辨率（像素）。
+	Width         int                  `json:"width" binding:"omitempty,min=0"`
+	Height        int                  `json:"height" binding:"omitempty,min=0"`
 	ProjectSource string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
 }
 
@@ -59,6 +62,8 @@ type UpdateVideoProjectRequest struct {
 	PromptID      *uint                 `json:"prompt_id"`
 	Clips0        *[]model.ClipRange    `json:"clips0"`
 	Clips1        *[]model.ClipWithText `json:"clips1"`
+	Width         *int                  `json:"width" binding:"omitempty,min=0"`
+	Height        *int                  `json:"height" binding:"omitempty,min=0"`
 	ProjectSource *string               `json:"project_source" binding:"omitempty,max=32"`
 }
 
@@ -72,6 +77,8 @@ type VideoProjectResponse struct {
 	PromptID      uint                 `json:"prompt_id"`
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
+	Width         int                  `json:"width"`
+	Height        int                  `json:"height"`
 	ProjectSource string               `json:"project_source"`
 	CreatedBy     string               `json:"created_by"`
 	CreatedAt     time.Time            `json:"created_at"`
@@ -96,6 +103,8 @@ func (h *VideoProjectHandler) toVideoProjectResponse(ctx context.Context, projec
 		PromptID:      project.PromptID,
 		Clips0:        clips0,
 		Clips1:        clips1,
+		Width:         project.Width,
+		Height:        project.Height,
 		ProjectSource: project.ProjectSource,
 		CreatedBy:     h.createdBy.nameOf(ctx, project.CreatedBy),
 		CreatedAt:     project.CreatedAt,
@@ -127,6 +136,8 @@ type VideoProjectListResponse struct {
 	PromptID      uint                 `json:"prompt_id"`
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
+	Width         int                  `json:"width"`
+	Height        int                  `json:"height"`
 	ProjectSource string               `json:"project_source"`
 	CreatedBy     string               `json:"created_by"`
 	CreatedAt     time.Time            `json:"created_at"`
@@ -152,6 +163,8 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 		PromptID:      item.PromptID,
 		Clips0:        clips0,
 		Clips1:        clips1,
+		Width:         item.Width,
+		Height:        item.Height,
 		ProjectSource: item.ProjectSource,
 		CreatedBy:     createdByName,
 		CreatedAt:     item.CreatedAt,
@@ -232,6 +245,8 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 		PromptID:      req.PromptID,
 		Clips0:        req.Clips0,
 		Clips1:        req.Clips1,
+		Width:         req.Width,
+		Height:        req.Height,
 		ProjectSource: req.ProjectSource,
 	})
 	if err != nil {
@@ -273,7 +288,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/project_source）；未传字段保持不变
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -303,6 +318,8 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 		PromptID:      req.PromptID,
 		Clips0:        req.Clips0,
 		Clips1:        req.Clips1,
+		Width:         req.Width,
+		Height:        req.Height,
 		ProjectSource: req.ProjectSource,
 	})
 	if err != nil {

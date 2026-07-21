@@ -25,7 +25,7 @@ func (m *mockTaskRepo) Create(ctx context.Context, task *model.Task) error {
 		return m.createFn(ctx, task)
 	}
 	m.created = task
-	task.ID = 42
+	task.ID = "00000000-0000-0000-0000-000000000042"
 	return nil
 }
 
@@ -189,7 +189,7 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAISlice() error = %v", err)
 	}
-	if got.ID != 42 || got.Status != model.TaskStatusPending || got.Progress != 0 {
+	if got.ID != "00000000-0000-0000-0000-000000000042" || got.Status != model.TaskStatusPending || got.Progress != 0 {
 		t.Errorf("task = %#v", got)
 	}
 	if worker.enqueued != 1 {
@@ -290,6 +290,28 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":3`) {
 		t.Errorf("ext = %v", tasks.created)
+	}
+}
+
+// TestTaskService_CreateDraft_UsesProjectCanvasSize 验证未传画布尺寸时回退到 video_project.width/height。
+func TestTaskService_CreateDraft_UsesProjectCanvasSize(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 3, Name: "draft-project-B", LiveID: 9, Width: 720, Height: 1280,
+		Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 1000}},
+	}}
+	tasks := &mockTaskRepo{}
+	svc := NewTaskService(tasks, live, projects, &mockPromptRepo{}, nil, nil, nil)
+
+	_, err := svc.CreateDraft(context.Background(), 7, CreateDraftInput{VideoProjectID: 3})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_width":720`) {
+		t.Errorf("ext = %v, want canvas_width from project", tasks.created.Ext)
+	}
+	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_height":1280`) {
+		t.Errorf("ext = %v, want canvas_height from project", tasks.created.Ext)
 	}
 }
 
@@ -418,5 +440,25 @@ func TestTaskService_List_InvalidDate(t *testing.T) {
 	_, _, err := svc.List(context.Background(), 1, 10, TaskListOptions{StartDate: "2026/01/01"})
 	if err == nil || !strings.Contains(err.Error(), "start_date") {
 		t.Fatalf("error = %v, want start_date format error", err)
+	}
+}
+
+// TestResolveDraftCanvasSize 验证画布尺寸优先级：请求 > 项目 > 默认值。
+func TestResolveDraftCanvasSize(t *testing.T) {
+	project := &model.VideoProject{Width: 720, Height: 1280}
+
+	w, h := resolveDraftCanvasSize(1080, 1920, project)
+	if w != 1080 || h != 1920 {
+		t.Fatalf("request override = %dx%d, want 1080x1920", w, h)
+	}
+
+	w, h = resolveDraftCanvasSize(0, 0, project)
+	if w != 720 || h != 1280 {
+		t.Fatalf("project fallback = %dx%d, want 720x1280", w, h)
+	}
+
+	w, h = resolveDraftCanvasSize(0, 0, &model.VideoProject{})
+	if w != draftDefaultCanvasWidth || h != draftDefaultCanvasHeight {
+		t.Fatalf("default = %dx%d, want %dx%d", w, h, draftDefaultCanvasWidth, draftDefaultCanvasHeight)
 	}
 }

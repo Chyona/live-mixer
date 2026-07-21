@@ -114,7 +114,7 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, nil)
 
-	material, err := svc.Create(context.Background(), 2, "  测试素材  ", " https://example.com/live.mp4 ", "备注", "")
+	material, err := svc.Create(context.Background(), 2, "  测试素材  ", " https://example.com/live.mp4 ", "备注", "", 1920, 1080)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -137,6 +137,12 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	if material.ASRStatus != model.ASRStatusPending {
 		t.Errorf("ASRStatus = %q, want %q", material.ASRStatus, model.ASRStatusPending)
 	}
+	if material.Width != 1920 || material.Height != 1080 {
+		t.Errorf("Width/Height = %d/%d, want 1920/1080", material.Width, material.Height)
+	}
+	if material.ASRVersion != 0 {
+		t.Errorf("ASRVersion = %d, want 0", material.ASRVersion)
+	}
 	if material.ASRProgress != 0 {
 		t.Errorf("ASRProgress = %d, want 0", material.ASRProgress)
 	}
@@ -145,7 +151,7 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 // TestLiveMaterialService_Create_EmptyName 验证名称为纯空格时拒绝创建。
 func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "   ", "https://example.com/live.mp4", "", "")
+	_, err := svc.Create(context.Background(), 1, "   ", "https://example.com/live.mp4", "", "", 0, 0)
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -157,7 +163,7 @@ func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 // TestLiveMaterialService_Create_EmptyLiveURL 验证直播链接为空时拒绝创建。
 func TestLiveMaterialService_Create_EmptyLiveURL(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "  ", "", "")
+	_, err := svc.Create(context.Background(), 1, "素材", "  ", "", "", 0, 0)
 	if err == nil {
 		t.Fatal("expected error for empty live_url")
 	}
@@ -235,7 +241,7 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "")
+	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "", 0, 0)
 	if err == nil || err.Error() != "db down" {
 		t.Errorf("error = %v, want db down", err)
 	}
@@ -298,7 +304,7 @@ func TestLiveMaterialService_Get_Success(t *testing.T) {
 // TestLiveMaterialService_Create_UnsupportedFormat 验证不支持的媒体格式拒绝创建。
 func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/audio.flac", "", "")
+	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/audio.flac", "", "", 0, 0)
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -316,7 +322,7 @@ func TestLiveMaterialService_Create_WakesASRWorker(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, worker)
 
-	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mp4", "", "")
+	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mp4", "", "", 0, 0)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

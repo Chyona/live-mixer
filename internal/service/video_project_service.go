@@ -30,6 +30,7 @@ type VideoProjectListOptions struct {
 // CreateVideoProjectInput 创建剪辑项目入参。
 // Clips0 / Clips1 为可选：nil 或空切片均写入 JSON 空数组 []。
 // ProjectSource 可选，未传时为空字符串。
+// Width / Height 可选：剪映草稿工程画布分辨率，0 表示未设置。
 type CreateVideoProjectInput struct {
 	Name          string
 	Remark        string
@@ -37,6 +38,8 @@ type CreateVideoProjectInput struct {
 	PromptID      uint
 	Clips0        []model.ClipRange
 	Clips1        []model.ClipWithText
+	Width         int
+	Height        int
 	ProjectSource string
 }
 
@@ -48,6 +51,8 @@ type VideoProjectUpdateInput struct {
 	PromptID      *uint
 	Clips0        *[]model.ClipRange
 	Clips1        *[]model.ClipWithText
+	Width         *int
+	Height        *int
 	ProjectSource *string
 }
 
@@ -86,6 +91,9 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 	if input.LiveID == 0 {
 		return nil, errors.New("直播素材 ID 不能为空")
 	}
+	if input.Width < 0 || input.Height < 0 {
+		return nil, errors.New("width/height 不能为负数")
+	}
 	if _, err := s.liveMaterialRepo.GetByID(ctx, input.LiveID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLiveMaterialNotFoundForProject
@@ -114,6 +122,8 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		PromptID:      promptID,
 		Clips0:        clips0,
 		Clips1:        clips1,
+		Width:         input.Width,
+		Height:        input.Height,
 		ProjectSource: strings.TrimSpace(input.ProjectSource),
 		CreatedBy:     createdBy,
 	}
@@ -163,6 +173,18 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 			return nil, err
 		}
 		project.Clips1 = clips1
+	}
+	if input.Width != nil {
+		if *input.Width < 0 {
+			return nil, errors.New("width 不能为负数")
+		}
+		project.Width = *input.Width
+	}
+	if input.Height != nil {
+		if *input.Height < 0 {
+			return nil, errors.New("height 不能为负数")
+		}
+		project.Height = *input.Height
 	}
 	if input.ProjectSource != nil {
 		project.ProjectSource = strings.TrimSpace(*input.ProjectSource)

@@ -31,7 +31,7 @@ const (
 	draftClipMergeGapMS = 500
 )
 
-// DraftWorker 剪映草稿任务后台调度器：DB 原子抢占 + ffmpeg 切片 + capcut-mate 组装草稿。
+// DraftWorker 剪映草稿任务后台调度器：DB 乐观锁抢占 + ffmpeg 切片 + capcut-mate 组装草稿。
 type DraftWorker interface {
 	// Enqueue 唤醒调度循环尝试领取任务（非阻塞）。
 	Enqueue()
@@ -212,11 +212,12 @@ func (w *draftWorker) drain(ctx context.Context, workerID int) {
 		}
 		w.logger.Info("已抢占剪映草稿任务",
 			zap.Int("worker_id", workerID),
-			zap.Uint("task_id", task.ID),
+			zap.String("task_id", task.ID),
+			zap.Int64("version", task.Version),
 		)
 		if err := w.Process(ctx, task); err != nil {
 			w.logger.Error("剪映草稿任务执行失败",
-				zap.Uint("task_id", task.ID),
+				zap.String("task_id", task.ID),
 				zap.Error(err),
 			)
 		}
@@ -270,7 +271,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	beforeMerge := len(clips)
 	clips = mergeAdjacentClipRanges(clips, draftClipMergeGapMS)
 	w.logger.Info("草稿裁剪前合并相邻片段",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.Int("clips_before", beforeMerge),
 		zap.Int("clips_after", len(clips)),
 		zap.Int64("merge_gap_ms", draftClipMergeGapMS),
@@ -301,7 +302,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	}
 
 	w.logger.Info("开始下载直播视频",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.String("live_url", material.LiveURL),
 		zap.String("staging_dir", stagingDir),
 	)
@@ -335,7 +336,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	}
 
 	w.logger.Info("调用 capcut-mate 创建草稿",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.Int("width", width),
 		zap.Int("height", height),
 	)
@@ -356,7 +357,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	}
 
 	w.logger.Info("调用 capcut-mate 批量添加视频",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.Int("clips", len(videoInfos)),
 		zap.String("draft_url", createResp.DraftURL),
 	)
@@ -404,7 +405,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		_ = setProgress(100)
 	}
 	w.logger.Info("剪映草稿阶段完成",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.String("draft_url", draftURL),
 		zap.Int("clips", len(clips)),
@@ -414,14 +415,14 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 }
 
 // cutClips 按 clips 时间段（毫秒）裁剪出本地切片文件。
-func (w *draftWorker) cutClips(ctx context.Context, taskID uint, sourcePath, stagingDir string, clips []model.ClipRange, opts PhaseOptions) ([]string, error) {
+func (w *draftWorker) cutClips(ctx context.Context, taskID string, sourcePath, stagingDir string, clips []model.ClipRange, opts PhaseOptions) ([]string, error) {
 	paths := make([]string, 0, len(clips))
 	for i, clip := range clips {
 		outPath := filepath.Join(stagingDir, fmt.Sprintf("clip_%03d.mp4", i))
 		startSec := float64(clip.StartTime) / 1000.0
 		endSec := float64(clip.EndTime) / 1000.0
 		w.logger.Info("开始 ffmpeg 裁剪切片",
-			zap.Uint("task_id", taskID),
+			zap.String("task_id", taskID),
 			zap.Int("index", i),
 			zap.Int64("start_ms", clip.StartTime),
 			zap.Int64("end_ms", clip.EndTime),
@@ -466,9 +467,9 @@ func (w *draftWorker) buildVideoInfos(clipPaths []string, clips []model.ClipRang
 	return infos, nil
 }
 
-func (w *draftWorker) fail(ctx context.Context, taskID uint, progress int16, err error) error {
+func (w *draftWorker) fail(ctx context.Context, taskID string, progress int16, err error) error {
 	w.logger.Error("剪映草稿任务失败",
-		zap.Uint("task_id", taskID),
+		zap.String("task_id", taskID),
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)

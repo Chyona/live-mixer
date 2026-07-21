@@ -8,9 +8,14 @@ import (
 
 	"live-mixer/internal/model"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
+
+// claimOptimisticMaxAttempts 乐观锁抢占最大重试次数。
+// 多 Worker 同时选中同一 pending 行时，仅一个 CAS 成功，其余需改抢下一条；
+// 上限用于避免极端竞争下空转，正常场景远低于该值。
+const claimOptimisticMaxAttempts = 64
 
 // TaskListFilter 任务列表查询筛选条件。
 type TaskListFilter struct {
@@ -23,29 +28,29 @@ type TaskListFilter struct {
 
 // TaskRepository 异步任务数据访问接口。
 type TaskRepository interface {
-	// Create 插入一条任务记录。
+	// Create 插入一条任务记录；若 ID 为空则自动生成 UUID。
 	Create(ctx context.Context, task *model.Task) error
 	// GetByID 根据主键查询任务。
-	GetByID(ctx context.Context, id uint) (*model.Task, error)
-	// List 分页查询任务列表，按 id 倒序。
+	GetByID(ctx context.Context, id string) (*model.Task, error)
+	// List 分页查询任务列表，按创建时间倒序。
 	List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.Task, int64, error)
 	// ClaimPendingByType 多实例安全地抢占一条指定类型的 pending 任务。
-	// 使用事务 + FOR UPDATE SKIP LOCKED（Postgres），将状态改为 processing 并返回；无待处理任务时返回 nil。
+	// 使用乐观锁（version CAS）：将状态改为 processing 并返回；无待处理任务时返回 nil。
 	ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error)
 	// UpdateProgress 更新任务进度（0-100），仅 processing 状态时生效。
-	UpdateProgress(ctx context.Context, id uint, progress int16) error
+	UpdateProgress(ctx context.Context, id string, progress int16) error
 	// MarkCompleted 标记任务成功完成，并写入最终进度与扩展字段。
-	MarkCompleted(ctx context.Context, id uint, progress int16, ext string) error
+	MarkCompleted(ctx context.Context, id string, progress int16, ext string) error
 	// MarkFailed 标记任务失败，写入错误信息与当前进度。
-	MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
+	MarkFailed(ctx context.Context, id string, progress int16, errorMsg string) error
 	// UpdateExt 仅更新 ext 字段。
-	UpdateExt(ctx context.Context, id uint, ext string) error
+	UpdateExt(ctx context.Context, id string, ext string) error
 	// UpdateDraftURL 回写剪映草稿 URL（草稿生成/一键成片成功后调用）。
-	UpdateDraftURL(ctx context.Context, id uint, draftURL string) error
+	UpdateDraftURL(ctx context.Context, id string, draftURL string) error
 	// UpdatePrompts 回写本次任务实际使用的系统/用户提示词。
-	UpdatePrompts(ctx context.Context, id uint, sysPrompt, usrPrompt string) error
+	UpdatePrompts(ctx context.Context, id string, sysPrompt, usrPrompt string) error
 	// UpdateVideoProjectID 更新关联的剪辑项目 ID。
-	UpdateVideoProjectID(ctx context.Context, id uint, videoProjectID uint) error
+	UpdateVideoProjectID(ctx context.Context, id string, videoProjectID uint) error
 	// CountProcessingByTypes 统计指定类型中处于 processing 的任务数（供 draft 槽位限流复用）。
 	CountProcessingByTypes(ctx context.Context, types []string) (int64, error)
 	// RequeueStaleProcessingByType 将指定类型下超时未更新的 processing 任务重置为 pending，供崩溃/重启恢复。
@@ -63,12 +68,16 @@ func NewTaskRepository(db *gorm.DB) TaskRepository {
 }
 
 func (r *taskRepository) Create(ctx context.Context, task *model.Task) error {
+	// 全新部署使用 UUID 主键；调用方未填时由仓储统一生成，避免业务层遗漏。
+	if task.ID == "" {
+		task.ID = uuid.NewString()
+	}
 	return r.db.WithContext(ctx).Create(task).Error
 }
 
-func (r *taskRepository) GetByID(ctx context.Context, id uint) (*model.Task, error) {
+func (r *taskRepository) GetByID(ctx context.Context, id string) (*model.Task, error) {
 	var task model.Task
-	err := r.db.WithContext(ctx).First(&task, id).Error
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&task).Error
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +94,8 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Offset(offset).Limit(limit).Order("id DESC").Find(&tasks).Error; err != nil {
+	// UUID 主键无序，列表按创建时间倒序保证「新任务在前」。
+	if err := query.Offset(offset).Limit(limit).Order("created_at DESC, id DESC").Find(&tasks).Error; err != nil {
 		return nil, 0, err
 	}
 	return tasks, total, nil
@@ -112,57 +122,58 @@ func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
 	return query
 }
 
-// ClaimPendingByType 原子抢占：选最早一条 pending 任务并改为 processing。
-// 多实例下依赖 SKIP LOCKED 避免重复领取；SQLite 单测无 SKIP LOCKED 时退化为行锁。
+// ClaimPendingByType 乐观锁抢占：选最早一条 pending 任务，用 version CAS 改为 processing。
+//
+// 关键流程：
+//  1. 按 created_at ASC 取出一条 pending（不持有行锁，多实例可并发读到同一行）；
+//  2. UPDATE ... WHERE id=? AND status=pending AND version=?，成功则 version+1；
+//  3. RowsAffected=0 表示被其它 Worker 抢先，继续尝试下一条，避免误判队列为空。
 func (r *taskRepository) ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error) {
-	var claimed *model.Task
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	for attempt := 0; attempt < claimOptimisticMaxAttempts; attempt++ {
 		var task model.Task
-		q := tx.Where("status = ? AND type = ?", model.TaskStatusPending, taskType).
-			Order("id ASC").
-			Limit(1)
-		// Postgres 使用 SKIP LOCKED，保证多 Worker 互不阻塞、不重复抢占。
-		if tx.Dialector.Name() == "postgres" {
-			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		err := r.db.WithContext(ctx).
+			Where("status = ? AND type = ?", model.TaskStatusPending, taskType).
+			Order("created_at ASC, id ASC").
+			First(&task).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
 		}
-		if err := q.First(&task).Error; err != nil {
-			return err
+		if err != nil {
+			return nil, err
 		}
 
 		now := time.Now()
-		result := tx.Model(&model.Task{}).
-			Where("id = ? AND status = ?", task.ID, model.TaskStatusPending).
+		newVersion := task.Version + 1
+		// CAS：仅当 status 仍为 pending 且 version 未被他人改写时抢占成功。
+		result := r.db.WithContext(ctx).Model(&model.Task{}).
+			Where("id = ? AND status = ? AND version = ?", task.ID, model.TaskStatusPending, task.Version).
 			Updates(map[string]interface{}{
 				"status":     model.TaskStatusProcessing,
 				"progress":   int16(0),
 				"started_at": now,
 				"updated_at": now,
+				"version":    newVersion,
 			})
 		if result.Error != nil {
-			return result.Error
+			return nil, result.Error
 		}
-		// 并发下若已被其它实例抢走则视为本次未抢到。
 		if result.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
+			// 乐观锁冲突：该任务已被其它实例抢走，继续抢下一条。
+			continue
 		}
 
 		task.Status = model.TaskStatusProcessing
 		task.Progress = 0
 		task.StartedAt = &now
 		task.UpdatedAt = now
-		claimed = &task
-		return nil
-	})
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+		task.Version = newVersion
+		return &task, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return claimed, nil
+	// 短时间内大量冲突仍未抢到：返回空，由 Worker 下一轮 poll/唤醒再试。
+	return nil, nil
 }
 
-func (r *taskRepository) UpdateProgress(ctx context.Context, id uint, progress int16) error {
+func (r *taskRepository) UpdateProgress(ctx context.Context, id string, progress int16) error {
 	if progress < 0 {
 		progress = 0
 	}
@@ -178,7 +189,7 @@ func (r *taskRepository) UpdateProgress(ctx context.Context, id uint, progress i
 		}).Error
 }
 
-func (r *taskRepository) MarkCompleted(ctx context.Context, id uint, progress int16, ext string) error {
+func (r *taskRepository) MarkCompleted(ctx context.Context, id string, progress int16, ext string) error {
 	if progress < 0 {
 		progress = 0
 	}
@@ -187,10 +198,10 @@ func (r *taskRepository) MarkCompleted(ctx context.Context, id uint, progress in
 	}
 	now := time.Now()
 	updates := map[string]interface{}{
-		"status":       model.TaskStatusCompleted,
-		"progress":     progress,
-		"completed_at": now,
-		"updated_at":   now,
+		"status":        model.TaskStatusCompleted,
+		"progress":      progress,
+		"completed_at":  now,
+		"updated_at":    now,
 		"error_message": "",
 	}
 	if ext != "" {
@@ -202,7 +213,7 @@ func (r *taskRepository) MarkCompleted(ctx context.Context, id uint, progress in
 		Updates(updates).Error
 }
 
-func (r *taskRepository) MarkFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+func (r *taskRepository) MarkFailed(ctx context.Context, id string, progress int16, errorMsg string) error {
 	if progress < 0 {
 		progress = 0
 	}
@@ -222,7 +233,7 @@ func (r *taskRepository) MarkFailed(ctx context.Context, id uint, progress int16
 		}).Error
 }
 
-func (r *taskRepository) UpdateExt(ctx context.Context, id uint, ext string) error {
+func (r *taskRepository) UpdateExt(ctx context.Context, id string, ext string) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Task{}).
 		Where("id = ?", id).
@@ -233,7 +244,7 @@ func (r *taskRepository) UpdateExt(ctx context.Context, id uint, ext string) err
 }
 
 // UpdateDraftURL 将草稿生成结果写入 task.draft_url。
-func (r *taskRepository) UpdateDraftURL(ctx context.Context, id uint, draftURL string) error {
+func (r *taskRepository) UpdateDraftURL(ctx context.Context, id string, draftURL string) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Task{}).
 		Where("id = ?", id).
@@ -244,7 +255,7 @@ func (r *taskRepository) UpdateDraftURL(ctx context.Context, id uint, draftURL s
 }
 
 // UpdatePrompts 将本次任务使用的系统提示词与用户提示词写入 task 表。
-func (r *taskRepository) UpdatePrompts(ctx context.Context, id uint, sysPrompt, usrPrompt string) error {
+func (r *taskRepository) UpdatePrompts(ctx context.Context, id string, sysPrompt, usrPrompt string) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Task{}).
 		Where("id = ?", id).
@@ -255,7 +266,7 @@ func (r *taskRepository) UpdatePrompts(ctx context.Context, id uint, sysPrompt, 
 		}).Error
 }
 
-func (r *taskRepository) UpdateVideoProjectID(ctx context.Context, id uint, videoProjectID uint) error {
+func (r *taskRepository) UpdateVideoProjectID(ctx context.Context, id string, videoProjectID uint) error {
 	if videoProjectID == 0 {
 		return r.db.WithContext(ctx).
 			Model(&model.Task{}).
@@ -287,6 +298,7 @@ func (r *taskRepository) CountProcessingByTypes(ctx context.Context, types []str
 }
 
 // RequeueStaleProcessingByType 将 type 匹配且 updated_at 早于阈值的 processing 任务改回 pending。
+// 同时递增 version，避免与仍在执行的旧 Worker 进度回写产生语义混淆。
 // olderThan <= 0 或 taskType 为空时不执行任何更新，直接返回 0。
 func (r *taskRepository) RequeueStaleProcessingByType(ctx context.Context, taskType string, olderThan time.Duration) (int64, error) {
 	if olderThan <= 0 || taskType == "" {
@@ -303,6 +315,7 @@ func (r *taskRepository) RequeueStaleProcessingByType(ctx context.Context, taskT
 			"error_message": "任务处理超时，已自动重新排队",
 			"started_at":    nil,
 			"updated_at":    now,
+			"version":       gorm.Expr("version + 1"),
 		})
 	return result.RowsAffected, result.Error
 }

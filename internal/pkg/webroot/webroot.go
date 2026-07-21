@@ -19,12 +19,12 @@ type Config struct {
 }
 
 // StagingDir 返回某任务的暂存目录：{RootDir}/staging/{taskID}。
-func (c Config) StagingDir(taskID uint) string {
-	return filepath.Join(c.RootDir, "staging", fmt.Sprintf("%d", taskID))
+func (c Config) StagingDir(taskID string) string {
+	return filepath.Join(c.RootDir, "staging", taskID)
 }
 
 // CapCutMateRecordDir 返回 capcut-mate 请求/响应落盘目录。
-func (c Config) CapCutMateRecordDir(taskID uint) string {
+func (c Config) CapCutMateRecordDir(taskID string) string {
 	return filepath.Join(c.StagingDir(taskID), "capcut_mate")
 }
 

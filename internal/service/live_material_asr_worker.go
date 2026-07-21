@@ -24,7 +24,7 @@ const (
 	liveMaterialASRStaleTimeout = 60 * time.Minute
 )
 
-// LiveMaterialASRWorker 直播素材 ASR 后台识别调度器：DB 原子抢占 + 定时 poll。
+// LiveMaterialASRWorker 直播素材 ASR 后台识别调度器：DB 乐观锁抢占 + 定时 poll。
 type LiveMaterialASRWorker interface {
 	// Enqueue 非阻塞唤醒调度循环尝试领取任务。
 	Enqueue()
@@ -166,6 +166,7 @@ func (w *liveMaterialASRWorker) drain(ctx context.Context, workerID int) {
 		w.logger.Info("已抢占直播素材 ASR 任务",
 			zap.Int("worker_id", workerID),
 			zap.Uint("material_id", material.ID),
+			zap.Int64("asr_version", material.ASRVersion),
 		)
 		if err := w.Process(ctx, material); err != nil {
 			w.logger.Error("直播素材 ASR 任务执行失败",

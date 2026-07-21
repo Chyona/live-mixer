@@ -39,8 +39,8 @@ func TestTaskRepository_CreateGetList(t *testing.T) {
 	if err := repo.Create(ctx, task); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if task.ID == 0 {
-		t.Fatal("Create() should set ID")
+	if task.ID == "" {
+		t.Fatal("Create() should set UUID ID")
 	}
 
 	got, err := repo.GetByID(ctx, task.ID)
@@ -74,7 +74,7 @@ func TestTaskRepository_List_DateFilter(t *testing.T) {
 		CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
 	}
 	for _, task := range []*model.Task{inRange, outRange} {
-		if err := db.Create(task).Error; err != nil {
+		if err := repo.Create(ctx, task); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
 	}
@@ -115,7 +115,7 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 		t.Fatalf("List() error = %v", err)
 	}
 	if total != 1 || len(list) != 1 || list[0].ID != hit.ID {
-		t.Fatalf("unexpected keywords result: total=%d list=%+v want id=%d", total, list, hit.ID)
+		t.Fatalf("unexpected keywords result: total=%d list=%+v want id=%s", total, list, hit.ID)
 	}
 	if list[0].VideoProjectName != "发布会精剪" {
 		t.Errorf("VideoProjectName = %q, want 发布会精剪", list[0].VideoProjectName)
@@ -127,8 +127,14 @@ func TestTaskRepository_ClaimPendingByType(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Create(ctx, &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1})
-	first := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: `{"live_id":1}`}
-	second := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: `{"live_id":2}`}
+	first := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: `{"live_id":1}`,
+		CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+	}
+	second := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, Ext: `{"live_id":2}`,
+		CreatedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
+	}
 	_ = repo.Create(ctx, first)
 	_ = repo.Create(ctx, second)
 
@@ -137,10 +143,14 @@ func TestTaskRepository_ClaimPendingByType(t *testing.T) {
 		t.Fatalf("ClaimPendingByType() error = %v", err)
 	}
 	if claimed == nil || claimed.ID != first.ID {
-		t.Fatalf("claimed = %#v, want id=%d", claimed, first.ID)
+		t.Fatalf("claimed = %#v, want id=%s", claimed, first.ID)
 	}
 	if claimed.Status != model.TaskStatusProcessing || claimed.StartedAt == nil {
 		t.Errorf("claimed status/started = %s/%v", claimed.Status, claimed.StartedAt)
+	}
+	// 乐观锁：抢占成功后 version 应从 0 增至 1。
+	if claimed.Version != 1 {
+		t.Errorf("claimed.Version = %d, want 1", claimed.Version)
 	}
 
 	// draft 类型不应被 ai_slice 抢占。
@@ -149,7 +159,7 @@ func TestTaskRepository_ClaimPendingByType(t *testing.T) {
 		t.Fatalf("second claim error = %v", err)
 	}
 	if draftClaim == nil || draftClaim.ID != second.ID {
-		t.Fatalf("second claimed = %#v, want id=%d", draftClaim, second.ID)
+		t.Fatalf("second claimed = %#v, want id=%s", draftClaim, second.ID)
 	}
 
 	none, err := repo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
@@ -158,6 +168,71 @@ func TestTaskRepository_ClaimPendingByType(t *testing.T) {
 	}
 	if none != nil {
 		t.Errorf("empty claim = %#v, want nil", none)
+	}
+}
+
+// TestTaskRepository_ClaimPendingByType_OptimisticLockConcurrent 验证多 goroutine 乐观锁互斥抢占。
+func TestTaskRepository_ClaimPendingByType_OptimisticLockConcurrent(t *testing.T) {
+	// SQLite :memory: 每连接独立库；共享 cache 才能在并发下看到同一张表。
+	db, err := gorm.Open(sqlite.Open("file:task_claim_concurrent?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.Task{}); err != nil {
+		t.Fatalf("AutoMigrate: %v", err)
+	}
+	repo := NewTaskRepository(db)
+	ctx := context.Background()
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		task := &model.Task{
+			Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+			CreatedAt: time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC),
+		}
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("Create[%d]: %v", i, err)
+		}
+	}
+
+	type result struct {
+		id  string
+		err error
+	}
+	ch := make(chan result, n*2)
+	for i := 0; i < n*2; i++ {
+		go func() {
+			claimed, err := repo.ClaimPendingByType(ctx, model.TaskTypeAISlice)
+			if err != nil {
+				ch <- result{err: err}
+				return
+			}
+			if claimed == nil {
+				ch <- result{}
+				return
+			}
+			ch <- result{id: claimed.ID}
+		}()
+	}
+
+	seen := make(map[string]struct{})
+	var claimedCount int
+	for i := 0; i < n*2; i++ {
+		r := <-ch
+		if r.err != nil {
+			t.Fatalf("claim error: %v", r.err)
+		}
+		if r.id == "" {
+			continue
+		}
+		if _, ok := seen[r.id]; ok {
+			t.Fatalf("duplicate claim for task id=%s", r.id)
+		}
+		seen[r.id] = struct{}{}
+		claimedCount++
+	}
+	if claimedCount != n {
+		t.Fatalf("claimedCount = %d, want %d", claimedCount, n)
 	}
 }
 
@@ -297,6 +372,9 @@ func TestTaskRepository_RequeueStaleProcessingByType(t *testing.T) {
 	}
 	if got.ErrorMessage != "任务处理超时，已自动重新排队" {
 		t.Errorf("staleAI ErrorMessage = %q", got.ErrorMessage)
+	}
+	if got.Version != 1 {
+		t.Errorf("staleAI Version = %d, want 1 (requeue increments version)", got.Version)
 	}
 
 	// 未超时的同类型 processing 不应被回收。

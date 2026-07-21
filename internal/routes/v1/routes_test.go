@@ -289,7 +289,7 @@ func TestRegisterRoutes_TasksProtected(t *testing.T) {
 		{http.MethodPost, "/v1/tasks/ai-slice"},
 		{http.MethodPost, "/v1/tasks/draft"},
 		{http.MethodPost, "/v1/tasks/ai-slice-draft"},
-		{http.MethodGet, "/v1/tasks/1"},
+		{http.MethodGet, "/v1/tasks/11111111-1111-1111-1111-111111111111"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)

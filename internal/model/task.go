@@ -21,10 +21,13 @@ const (
 
 // Task 异步任务实体。
 type Task struct {
-	ID             uint       `gorm:"primaryKey;comment:主键" json:"id"`
+	// ID 使用 UUID 字符串主键（创建时由仓储层生成）。
+	ID             string     `gorm:"primaryKey;size:36;comment:主键UUID" json:"id"`
 	Type           string     `gorm:"size:32;not null;index;comment:任务类型" json:"type"`
 	Status         string     `gorm:"size:32;not null;default:pending;index;comment:任务状态" json:"status"`
 	Progress       int16      `gorm:"not null;default:0;comment:任务进度0-100" json:"progress"`
+	// Version 乐观锁版本号：抢占 pending→processing 时 CAS 递增。
+	Version        int64      `gorm:"not null;default:0;comment:乐观锁版本号" json:"version"`
 	SysPrompt      string     `gorm:"column:sys_prompt;type:text;comment:系统提示词" json:"sys_prompt,omitempty"`
 	UsrPrompt      string     `gorm:"column:usr_prompt;type:text;comment:用户提示词" json:"usr_prompt,omitempty"`
 	ErrorMessage     string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`

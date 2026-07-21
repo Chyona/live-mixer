@@ -39,6 +39,9 @@ type CreateLiveMaterialRequest struct {
 	Name    string `json:"name" binding:"required,max=64"`
 	LiveURL string `json:"live_url" binding:"required,url,max=1024"`
 	Remark  string `json:"remark" binding:"max=256"`
+	// Width / Height 可选：直播画面分辨率（像素）；未传时为 0。
+	Width   int    `json:"width" binding:"omitempty,min=0"`
+	Height  int    `json:"height" binding:"omitempty,min=0"`
 	Ext     string `json:"ext" binding:"max=1024"`
 }
 
@@ -57,6 +60,8 @@ type LiveMaterialDetailResponse struct {
 	LiveURL      string          `json:"live_url"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
 	Duration     int64           `json:"duration"`
+	Width        int             `json:"width"`
+	Height       int             `json:"height"`
 	ASRStatus    string          `json:"asr_status"`
 	ASRProgress  int16           `json:"asr_progress"`
 	ASRErrorMsg  string          `json:"asr_error_msg,omitempty"`
@@ -76,6 +81,8 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		LiveURL:      material.LiveURL,
 		LiveASR:      asr.FormatUtterancesForAPI(material.LiveASR),
 		Duration:     material.Duration,
+		Width:        material.Width,
+		Height:       material.Height,
 		ASRStatus:    material.ASRStatus,
 		ASRProgress:  material.ASRProgress,
 		ASRErrorMsg:  material.ASRErrorMsg,
@@ -95,6 +102,8 @@ type LiveMaterialListResponse struct {
 	Remark       string     `json:"remark"`
 	LiveURL      string     `json:"live_url"`
 	Duration     int64      `json:"duration"`
+	Width        int        `json:"width"`
+	Height       int        `json:"height"`
 	ASRStatus    string     `json:"asr_status"`
 	ASRProgress  int16      `json:"asr_progress"`
 	ASRErrorMsg  string     `json:"asr_error_msg,omitempty"`
@@ -121,6 +130,8 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 			Remark:       item.Remark,
 			LiveURL:      item.LiveURL,
 			Duration:     item.Duration,
+			Width:        item.Width,
+			Height:       item.Height,
 			ASRStatus:    item.ASRStatus,
 			ASRProgress:  item.ASRProgress,
 			ASRErrorMsg:  item.ASRErrorMsg,
@@ -214,7 +225,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 	}
 
 	material, err := h.liveMaterialService.Create(
-		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext,
+		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext, req.Width, req.Height,
 	)
 	if err != nil {
 		response.BadRequest(c, err.Error())

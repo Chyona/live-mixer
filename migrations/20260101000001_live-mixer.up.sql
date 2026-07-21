@@ -45,17 +45,24 @@ CREATE TABLE IF NOT EXISTS live_material (
     live_url     VARCHAR(1024) NOT NULL,
     live_asr        JSONB         NOT NULL DEFAULT '{}',
     duration        BIGINT        NOT NULL DEFAULT 0,
+    -- 直播画面分辨率（像素）；0 表示未知/未探测
+    width           INTEGER       NOT NULL DEFAULT 0,
+    height          INTEGER       NOT NULL DEFAULT 0,
     asr_status      VARCHAR(20)   NOT NULL DEFAULT 'pending',
     asr_progress    SMALLINT      NOT NULL DEFAULT 0,
     asr_error_msg   TEXT,
     asr_started_at  TIMESTAMPTZ,
     asr_updated_at  TIMESTAMPTZ,
+    -- ASR 任务乐观锁版本号：抢占 pending→processing 时 CAS 递增，冲突则重试下一条
+    asr_version     BIGINT        NOT NULL DEFAULT 0,
     created_by      BIGINT        NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     ext             VARCHAR(1024),
     CONSTRAINT chk_live_material_asr_progress CHECK (asr_progress BETWEEN 0 AND 100),
-    CONSTRAINT chk_live_material_asr_status CHECK (asr_status IN ('pending', 'processing', 'completed', 'failed'))
+    CONSTRAINT chk_live_material_asr_status CHECK (asr_status IN ('pending', 'processing', 'completed', 'failed')),
+    CONSTRAINT chk_live_material_width CHECK (width >= 0),
+    CONSTRAINT chk_live_material_height CHECK (height >= 0)
 );
 
 COMMENT ON TABLE live_material IS '直播素材表';
@@ -65,11 +72,14 @@ COMMENT ON COLUMN live_material.remark IS '备注';
 COMMENT ON COLUMN live_material.live_url IS '直播链接';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.duration IS '直播时长（毫秒）';
+COMMENT ON COLUMN live_material.width IS '直播画面宽度（像素），0 表示未知';
+COMMENT ON COLUMN live_material.height IS '直播画面高度（像素），0 表示未知';
 COMMENT ON COLUMN live_material.asr_status IS 'ASR 识别状态：pending待处理 processing识别中 completed已完成 failed失败';
 COMMENT ON COLUMN live_material.asr_progress IS 'ASR 识别进度（0-100）';
 COMMENT ON COLUMN live_material.asr_error_msg IS 'ASR 识别失败原因';
 COMMENT ON COLUMN live_material.asr_started_at IS 'ASR 识别开始时间';
 COMMENT ON COLUMN live_material.asr_updated_at IS 'ASR 识别状态最后更新时间（用于检测长时间卡死任务）';
+COMMENT ON COLUMN live_material.asr_version IS 'ASR 乐观锁版本号，多实例抢占 pending 任务时 CAS 使用';
 COMMENT ON COLUMN live_material.created_by IS '添加人（账号 ID）';
 COMMENT ON COLUMN live_material.created_at IS '添加时间';
 COMMENT ON COLUMN live_material.updated_at IS '最后更新时间';
@@ -77,6 +87,8 @@ COMMENT ON COLUMN live_material.ext IS '扩展字段';
 
 CREATE INDEX IF NOT EXISTS idx_live_material_created_by ON live_material (created_by);
 CREATE INDEX IF NOT EXISTS idx_live_material_asr_status ON live_material (asr_status);
+-- 多实例 Worker 按创建时间 FIFO 抢占 pending ASR 时使用
+CREATE INDEX IF NOT EXISTS idx_live_material_asr_status_created_at ON live_material (asr_status, created_at, id);
 
 -- 剪辑项目表
 CREATE TABLE IF NOT EXISTS video_project (
@@ -88,12 +100,17 @@ CREATE TABLE IF NOT EXISTS video_project (
     prompt_id       BIGINT      NOT NULL DEFAULT 1,
     clips0          JSONB       NOT NULL DEFAULT '[]',
     clips1          JSONB       NOT NULL DEFAULT '[]',
+    -- 剪映草稿工程画布分辨率（像素）；0 表示未设置，草稿任务将回退默认值
+    width           INTEGER     NOT NULL DEFAULT 0,
+    height          INTEGER     NOT NULL DEFAULT 0,
     -- 项目来源标识，默认为空
     project_source  VARCHAR(32) NOT NULL DEFAULT '',
     created_by      BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    ext             VARCHAR(1024)
+    ext             VARCHAR(1024),
+    CONSTRAINT chk_video_project_width CHECK (width >= 0),
+    CONSTRAINT chk_video_project_height CHECK (height >= 0)
 );
 
 COMMENT ON TABLE video_project IS '剪辑项目表';
@@ -104,6 +121,8 @@ COMMENT ON COLUMN video_project.live_id IS '关联直播素材 ID（live_materia
 COMMENT ON COLUMN video_project.prompt_id IS '提示词 ID（llm_system_prompt.id），无外键约束，默认 1';
 COMMENT ON COLUMN video_project.clips0 IS '视频切片列表（毫秒），格式：[{"start_time":0,"end_time":10}]';
 COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片列表（毫秒），格式：[{"text":"...","start_time":0,"end_time":10,"words":[{"text":"...","start_time":0,"end_time":160}]}]';
+COMMENT ON COLUMN video_project.width IS '剪映草稿工程宽度（像素），0 表示未设置';
+COMMENT ON COLUMN video_project.height IS '剪映草稿工程高度（像素），0 表示未设置';
 COMMENT ON COLUMN video_project.project_source IS '项目来源，默认为空';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
@@ -143,10 +162,13 @@ CREATE INDEX IF NOT EXISTS idx_llm_system_prompt_created_by ON llm_system_prompt
 
 -- 任务表：异步任务统一入口，通过 type 区分三类业务
 CREATE TABLE IF NOT EXISTS task (
-    id                     BIGSERIAL PRIMARY KEY,
+    -- 主键使用 UUID 字符串，便于分布式生成且避免自增 ID 暴露业务量
+    id                     VARCHAR(36) PRIMARY KEY,
     type                   VARCHAR(32) NOT NULL,
     status                 VARCHAR(32) NOT NULL DEFAULT 'pending',
     progress               SMALLINT    NOT NULL DEFAULT 0,
+    -- 乐观锁版本号：抢占 pending→processing 时 CAS 递增，冲突则重试下一条
+    version                BIGINT      NOT NULL DEFAULT 0,
     sys_prompt             TEXT,
     usr_prompt             TEXT,
     error_message          TEXT,
@@ -169,10 +191,11 @@ CREATE TABLE IF NOT EXISTS task (
 );
 
 COMMENT ON TABLE task IS '任务表';
-COMMENT ON COLUMN task.id IS '主键';
+COMMENT ON COLUMN task.id IS '主键（UUID）';
 COMMENT ON COLUMN task.type IS '任务类型：ai_slice AI切片 draft 剪映草稿 ai_slice_draft AI切片+剪映草稿';
 COMMENT ON COLUMN task.status IS '任务状态：pending待处理 processing执行中 completed已完成 failed失败';
 COMMENT ON COLUMN task.progress IS '任务进度（0-100），供客户端轮询展示';
+COMMENT ON COLUMN task.version IS '乐观锁版本号，多实例抢占 pending 任务时 CAS 使用';
 COMMENT ON COLUMN task.sys_prompt IS '系统提示词';
 COMMENT ON COLUMN task.usr_prompt IS '用户提示词';
 COMMENT ON COLUMN task.error_message IS '失败原因';
@@ -191,5 +214,5 @@ CREATE INDEX IF NOT EXISTS idx_task_type ON task (type);
 CREATE INDEX IF NOT EXISTS idx_task_status ON task (status);
 CREATE INDEX IF NOT EXISTS idx_task_created_by ON task (created_by);
 CREATE INDEX IF NOT EXISTS idx_task_video_project_id ON task (video_project_id);
--- 多实例 Worker 按类型抢占 pending 任务时使用
-CREATE INDEX IF NOT EXISTS idx_task_type_status_id ON task (type, status, id);
+-- 多实例 Worker 按类型 + 创建时间 FIFO 抢占 pending 任务时使用
+CREATE INDEX IF NOT EXISTS idx_task_type_status_created_at ON task (type, status, created_at, id);

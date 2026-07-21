@@ -14,7 +14,7 @@ import (
 
 // mockTaskService 用于任务 handler 单元测试。
 type mockTaskService struct {
-	getFn  func(ctx context.Context, id uint) (*model.Task, error)
+	getFn  func(ctx context.Context, id string) (*model.Task, error)
 	listFn func(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.Task, int64, error)
 }
 
@@ -27,7 +27,7 @@ func (m *mockTaskService) CreateDraft(ctx context.Context, createdBy uint, input
 func (m *mockTaskService) CreateAISliceDraft(ctx context.Context, createdBy uint, input service.CreateAISliceDraftInput) (*model.Task, error) {
 	return nil, nil
 }
-func (m *mockTaskService) Get(ctx context.Context, id uint) (*model.Task, error) {
+func (m *mockTaskService) Get(ctx context.Context, id string) (*model.Task, error) {
 	if m.getFn != nil {
 		return m.getFn(ctx, id)
 	}
@@ -44,12 +44,13 @@ func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts ser
 func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewTaskHandler(&mockTaskService{
-		getFn: func(ctx context.Context, id uint) (*model.Task, error) {
-			if id != 7 {
-				t.Errorf("id = %d, want 7", id)
+		getFn: func(ctx context.Context, id string) (*model.Task, error) {
+			wantID := "11111111-1111-1111-1111-111111111111"
+			if id != wantID {
+				t.Errorf("id = %q, want %q", id, wantID)
 			}
 			return &model.Task{
-				ID: 7, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
+				ID: wantID, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
 				DraftURL: "http://example.com/draft", VideoURL: "https://video.example.com/a.mp4",
 			}, nil
 		},
@@ -57,7 +58,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	r := newAuthedRouter(secret, handler.GetTask, http.MethodGet, "/tasks/:id")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
-	req := httptest.NewRequest(http.MethodGet, "/tasks/7", nil)
+	req := httptest.NewRequest(http.MethodGet, "/tasks/11111111-1111-1111-1111-111111111111", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

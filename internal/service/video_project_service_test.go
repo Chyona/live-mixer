@@ -125,7 +125,7 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	svc := NewVideoProjectService(projectRepo, liveRepo)
 
 	project, err := svc.Create(context.Background(), 2, CreateVideoProjectInput{
-		Name: "  项目  ", Remark: "备注", LiveID: 1,
+		Name: "  项目  ", Remark: "备注", LiveID: 1, Width: 1080, Height: 1920,
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -141,6 +141,9 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	}
 	if project.CreatedBy != 2 || project.LiveID != 1 {
 		t.Errorf("unexpected project: %+v", project)
+	}
+	if project.Width != 1080 || project.Height != 1920 {
+		t.Errorf("Width/Height = %d/%d, want 1080/1920", project.Width, project.Height)
 	}
 	if project.ProjectSource != "" {
 		t.Errorf("ProjectSource = %q, want empty", project.ProjectSource)

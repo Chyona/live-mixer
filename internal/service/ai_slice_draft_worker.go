@@ -164,11 +164,12 @@ func (w *aiSliceDraftWorker) drain(ctx context.Context, workerID int) {
 		}
 		w.logger.Info("已抢占一键成片任务",
 			zap.Int("worker_id", workerID),
-			zap.Uint("task_id", task.ID),
+			zap.String("task_id", task.ID),
+			zap.Int64("version", task.Version),
 		)
 		if err := w.Process(ctx, task); err != nil {
 			w.logger.Error("一键成片任务执行失败",
-				zap.Uint("task_id", task.ID),
+				zap.String("task_id", task.ID),
 				zap.Error(err),
 			)
 		}
@@ -226,16 +227,16 @@ func (w *aiSliceDraftWorker) Process(ctx context.Context, task *model.Task) erro
 	}
 
 	w.logger.Info("一键成片任务完成",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", projectID),
 		zap.Int("clips1", len(project.Clips1)),
 	)
 	return nil
 }
 
-func (w *aiSliceDraftWorker) fail(ctx context.Context, taskID uint, progress int16, err error) error {
+func (w *aiSliceDraftWorker) fail(ctx context.Context, taskID string, progress int16, err error) error {
 	w.logger.Error("一键成片任务失败",
-		zap.Uint("task_id", taskID),
+		zap.String("task_id", taskID),
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)

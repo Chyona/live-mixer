@@ -9,7 +9,6 @@ import (
 	"live-mixer/internal/model"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // LiveMaterialRepository 直播素材数据访问接口。
@@ -21,7 +20,7 @@ type LiveMaterialRepository interface {
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
 	// ClaimPendingASR 多实例安全地抢占一条 pending ASR 任务。
-	// 使用事务 + FOR UPDATE SKIP LOCKED（PostgreSQL 15+），将状态改为 processing 并返回；无待处理时返回 nil。
+	// 使用乐观锁（asr_version CAS）：将状态改为 processing 并返回；无待处理时返回 nil。
 	ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error)
 	// RequeueStaleProcessingASR 将超时未更新的 processing 任务重置为 pending，供崩溃恢复。
 	RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error)
@@ -79,37 +78,45 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 		Updates(material).Error
 }
 
-// ClaimPendingASR 原子抢占：选最早一条 pending 素材并改为 processing。
-// 多实例下依赖 PostgreSQL FOR UPDATE SKIP LOCKED 避免重复领取。
+// ClaimPendingASR 乐观锁抢占：选最早一条 pending 素材，用 asr_version CAS 改为 processing。
+//
+// 关键流程与任务表 ClaimPendingByType 一致：
+//  1. 按 created_at ASC 取出一条 asr_status=pending（不持行锁）；
+//  2. UPDATE ... WHERE id=? AND asr_status=pending AND asr_version=?；
+//  3. 冲突则继续尝试下一条，避免误判队列为空。
 func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
-	var claimed *model.LiveMaterial
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	for attempt := 0; attempt < claimOptimisticMaxAttempts; attempt++ {
 		var material model.LiveMaterial
-		err := tx.Where("asr_status = ?", model.ASRStatusPending).
-			Order("id ASC").
-			Limit(1).
-			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+		err := r.db.WithContext(ctx).
+			Where("asr_status = ?", model.ASRStatusPending).
+			Order("created_at ASC, id ASC").
 			First(&material).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		now := time.Now()
-		result := tx.Model(&model.LiveMaterial{}).
-			Where("id = ? AND asr_status = ?", material.ID, model.ASRStatusPending).
+		newVersion := material.ASRVersion + 1
+		// CAS：仅当仍为 pending 且 asr_version 未被改写时抢占成功。
+		result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+			Where("id = ? AND asr_status = ? AND asr_version = ?", material.ID, model.ASRStatusPending, material.ASRVersion).
 			Updates(map[string]interface{}{
 				"asr_status":     model.ASRStatusProcessing,
 				"asr_progress":   int16(5),
 				"asr_error_msg":  "",
 				"asr_started_at": now,
 				"asr_updated_at": now,
+				"asr_version":    newVersion,
 			})
 		if result.Error != nil {
-			return result.Error
+			return nil, result.Error
 		}
-		// 并发下若已被其它实例抢走则视为本次未抢到。
 		if result.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
+			// 乐观锁冲突：已被其它实例抢走，继续抢下一条。
+			continue
 		}
 
 		material.ASRStatus = model.ASRStatusProcessing
@@ -117,19 +124,14 @@ func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.Li
 		material.ASRErrorMsg = ""
 		material.ASRStartedAt = &now
 		material.ASRUpdatedAt = &now
-		claimed = &material
-		return nil
-	})
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+		material.ASRVersion = newVersion
+		return &material, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return claimed, nil
+	return nil, nil
 }
 
 // RequeueStaleProcessingASR 将 asr_updated_at 早于阈值的 processing 任务改回 pending。
+// 同时递增 asr_version，便于新一轮抢占与旧 Worker 写回区分。
 func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
 	if olderThan <= 0 {
 		return 0, nil
@@ -145,6 +147,7 @@ func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, 
 			"asr_error_msg":  "ASR 处理超时，已自动重新排队",
 			"asr_started_at": nil,
 			"asr_updated_at": now,
+			"asr_version":    gorm.Expr("asr_version + 1"),
 		})
 	return result.RowsAffected, result.Error
 }
@@ -212,6 +215,8 @@ func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint)
 			"asr_error_msg":  "",
 			"asr_started_at": nil,
 			"asr_updated_at": now,
+			// 重试入队同样递增版本，保证后续抢占 CAS 基于最新版本。
+			"asr_version": gorm.Expr("asr_version + 1"),
 		})
 	if result.Error != nil {
 		return result.Error

@@ -152,23 +152,21 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 	}
 }
 
-// TestLiveMaterialRepository_ClaimPendingASR 验证悲观锁抢占 pending → processing。
-// 依赖 PostgreSQL FOR UPDATE SKIP LOCKED，内存 SQLite 单测环境跳过。
+// TestLiveMaterialRepository_ClaimPendingASR 验证乐观锁抢占 pending → processing。
 func TestLiveMaterialRepository_ClaimPendingASR(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
-	if db.Dialector.Name() != "postgres" {
-		t.Skip("ClaimPendingASR 需要 PostgreSQL 15+（FOR UPDATE SKIP LOCKED）")
-	}
 	repo := NewLiveMaterialRepository(db)
 	ctx := context.Background()
 
 	first := &model.LiveMaterial{
 		Name: "先创建", LiveURL: "https://example.com/a.mp4",
 		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
 	}
 	second := &model.LiveMaterial{
 		Name: "后创建", LiveURL: "https://example.com/b.mp4",
 		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+		CreatedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
 	}
 	if err := repo.Create(ctx, first); err != nil {
 		t.Fatalf("Create first error = %v", err)
@@ -187,6 +185,9 @@ func TestLiveMaterialRepository_ClaimPendingASR(t *testing.T) {
 	if claimed.ASRStatus != model.ASRStatusProcessing || claimed.ASRProgress != 5 {
 		t.Errorf("claimed state = %s/%d, want processing/5", claimed.ASRStatus, claimed.ASRProgress)
 	}
+	if claimed.ASRVersion != 1 {
+		t.Errorf("claimed.ASRVersion = %d, want 1", claimed.ASRVersion)
+	}
 
 	claimed2, err := repo.ClaimPendingASR(ctx)
 	if err != nil {
@@ -202,6 +203,72 @@ func TestLiveMaterialRepository_ClaimPendingASR(t *testing.T) {
 	}
 	if none != nil {
 		t.Fatalf("empty claim = %#v, want nil", none)
+	}
+}
+
+// TestLiveMaterialRepository_ClaimPendingASR_OptimisticLockConcurrent 验证多 goroutine 乐观锁互斥抢占 ASR。
+func TestLiveMaterialRepository_ClaimPendingASR_OptimisticLockConcurrent(t *testing.T) {
+	// SQLite :memory: 每连接独立库；共享 cache 才能在并发下看到同一张表。
+	db, err := gorm.Open(sqlite.Open("file:asr_claim_concurrent?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}); err != nil {
+		t.Fatalf("AutoMigrate: %v", err)
+	}
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		m := &model.LiveMaterial{
+			Name: "m", LiveURL: "https://example.com/a.mp4",
+			LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+			CreatedAt: time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC),
+		}
+		if err := repo.Create(ctx, m); err != nil {
+			t.Fatalf("Create[%d]: %v", i, err)
+		}
+	}
+
+	type result struct {
+		id  uint
+		err error
+	}
+	ch := make(chan result, n*2)
+	for i := 0; i < n*2; i++ {
+		go func() {
+			claimed, err := repo.ClaimPendingASR(ctx)
+			if err != nil {
+				ch <- result{err: err}
+				return
+			}
+			if claimed == nil {
+				ch <- result{}
+				return
+			}
+			ch <- result{id: claimed.ID}
+		}()
+	}
+
+	seen := make(map[uint]struct{})
+	var claimedCount int
+	for i := 0; i < n*2; i++ {
+		r := <-ch
+		if r.err != nil {
+			t.Fatalf("claim error: %v", r.err)
+		}
+		if r.id == 0 {
+			continue
+		}
+		if _, ok := seen[r.id]; ok {
+			t.Fatalf("duplicate claim for material id=%d", r.id)
+		}
+		seen[r.id] = struct{}{}
+		claimedCount++
+	}
+	if claimedCount != n {
+		t.Fatalf("claimedCount = %d, want %d", claimedCount, n)
 	}
 }
 
@@ -239,6 +306,9 @@ func TestLiveMaterialRepository_RequeueStaleProcessingASR(t *testing.T) {
 	if got.ASRStatus != model.ASRStatusPending {
 		t.Errorf("ASRStatus = %q, want pending", got.ASRStatus)
 	}
+	if got.ASRVersion != 1 {
+		t.Errorf("ASRVersion = %d, want 1 after requeue", got.ASRVersion)
+	}
 }
 
 // TestLiveMaterialRepository_ResetASRToPending_OnlyFailed 验证仅 failed 可重置。
@@ -264,6 +334,9 @@ func TestLiveMaterialRepository_ResetASRToPending_OnlyFailed(t *testing.T) {
 	got, _ := repo.GetByID(ctx, failed.ID)
 	if got.ASRStatus != model.ASRStatusPending {
 		t.Errorf("failed reset status = %q, want pending", got.ASRStatus)
+	}
+	if got.ASRVersion != 1 {
+		t.Errorf("ASRVersion = %d, want 1 after reset", got.ASRVersion)
 	}
 
 	if err := repo.ResetASRToPending(ctx, completed.ID); err == nil {

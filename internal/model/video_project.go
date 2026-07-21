@@ -17,6 +17,9 @@ type VideoProject struct {
 	PromptID      uint           `gorm:"column:prompt_id;not null;default:1;index;comment:提示词ID" json:"prompt_id"`
 	Clips0        []ClipRange    `gorm:"column:clips0;serializer:json;type:jsonb;not null;default:'[]';comment:视频切片列表毫秒" json:"clips0"`
 	Clips1        []ClipWithText `gorm:"column:clips1;serializer:json;type:jsonb;not null;default:'[]';comment:带文本与词级时间戳的切片列表毫秒" json:"clips1"`
+	// Width / Height 剪映草稿工程画布分辨率（像素）；0 表示未设置。
+	Width         int            `gorm:"not null;default:0;comment:剪映草稿工程宽度像素" json:"width"`
+	Height        int            `gorm:"not null;default:0;comment:剪映草稿工程高度像素" json:"height"`
 	ProjectSource string         `gorm:"column:project_source;size:32;not null;default:'';comment:项目来源" json:"project_source"`
 	CreatedBy     uint           `gorm:"not null;index;comment:创建人账号ID" json:"created_by"`
 	CreatedAt     time.Time      `gorm:"comment:创建时间" json:"created_at"`

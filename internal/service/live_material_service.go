@@ -45,8 +45,8 @@ var ErrASRSubtitleEmpty = errors.New("ASR 字幕为空，无法导出")
 
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
-	// Create 创建直播素材，createdBy 来自 JWT 当前用户。
-	Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
+	// Create 创建直播素材，createdBy 来自 JWT 当前用户；width/height 为可选分辨率。
+	Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string, width, height int) (*model.LiveMaterial, error)
 	// Update 更新直播素材，仅允许修改 name、remark。
 	Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
 	// List 分页查询直播素材列表，不含 live_asr 字段。
@@ -71,7 +71,7 @@ func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository, 
 	return &liveMaterialService{liveMaterialRepo: liveMaterialRepo, asrWorker: asrWorker}
 }
 
-func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
+func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string, width, height int) (*model.LiveMaterial, error) {
 	// 去除首尾空格，避免仅空白字符通过校验。
 	name = strings.TrimSpace(name)
 	liveURL = strings.TrimSpace(liveURL)
@@ -80,6 +80,9 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 	}
 	if liveURL == "" {
 		return nil, errors.New("直播链接不能为空")
+	}
+	if width < 0 || height < 0 {
+		return nil, errors.New("width/height 不能为负数")
 	}
 	if _, err := asr.DetectFormat(liveURL); err != nil {
 		if strings.Contains(err.Error(), "不支持的") {
@@ -95,8 +98,11 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 		Ext:         ext,
 		LiveASR:     "{}",
 		Duration:    0,
+		Width:       width,
+		Height:      height,
 		ASRStatus:   model.ASRStatusPending,
 		ASRProgress: 0,
+		ASRVersion:  0,
 		CreatedBy:   createdBy,
 	}
 	if err := s.liveMaterialRepo.Create(ctx, material); err != nil {

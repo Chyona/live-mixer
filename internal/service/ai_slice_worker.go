@@ -31,7 +31,7 @@ const aiSliceUserPromptOutputFormat = `## 输出格式
 - 索引必须来自 视频ASR 列表的行号（从 0 开始）。
 - 不要输出任何额外文字、注释或角色标记。`
 
-// AISliceWorker AI 切片任务后台调度器：通过 DB 原子抢占实现多实例安全调度。
+// AISliceWorker AI 切片任务后台调度器：通过 DB 乐观锁抢占实现多实例安全调度。
 type AISliceWorker interface {
 	// Enqueue 唤醒调度循环尝试领取任务（非阻塞）。
 	Enqueue()
@@ -183,11 +183,12 @@ func (w *aiSliceWorker) drain(ctx context.Context, workerID int) {
 		}
 		w.logger.Info("已抢占 AI 切片任务",
 			zap.Int("worker_id", workerID),
-			zap.Uint("task_id", task.ID),
+			zap.String("task_id", task.ID),
+			zap.Int64("version", task.Version),
 		)
 		if err := w.Process(ctx, task); err != nil {
 			w.logger.Error("AI 切片任务执行失败",
-				zap.Uint("task_id", task.ID),
+				zap.String("task_id", task.ID),
 				zap.Error(err),
 			)
 		}
@@ -324,7 +325,7 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 		_ = setProgress(100)
 	}
 	w.logger.Info("AI 切片阶段完成",
-		zap.Uint("task_id", task.ID),
+		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.Int("segments", len(segments)),
 		zap.Int("indices", len(indices)),
@@ -334,9 +335,9 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 	return nil
 }
 
-func (w *aiSliceWorker) fail(ctx context.Context, taskID uint, progress int16, err error) error {
+func (w *aiSliceWorker) fail(ctx context.Context, taskID string, progress int16, err error) error {
 	w.logger.Error("AI 切片任务失败",
-		zap.Uint("task_id", taskID),
+		zap.String("task_id", taskID),
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)

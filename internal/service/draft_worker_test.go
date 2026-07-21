@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -354,7 +353,7 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	}
 
 	// 切片应落在 staging/{task_id}
-	staging := filepath.Join(webRoot, "staging", strconv.FormatUint(uint64(claimed.ID), 10))
+	staging := filepath.Join(webRoot, "staging", claimed.ID)
 	if _, err := os.Stat(filepath.Join(staging, "source.mp4")); err != nil {
 		t.Errorf("source.mp4 missing: %v", err)
 	}

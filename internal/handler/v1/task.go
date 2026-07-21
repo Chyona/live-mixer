@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"live-mixer/internal/middleware"
@@ -13,6 +14,7 @@ import (
 	"live-mixer/pkg/utils"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // TaskHandler 异步任务 HTTP 处理器。
@@ -62,7 +64,7 @@ type ListTasksRequest struct {
 
 // TaskCreateResponse 创建任务立即返回的摘要。
 type TaskCreateResponse struct {
-	ID        uint      `json:"id"`
+	ID        string    `json:"id"`
 	Type      string    `json:"type"`
 	Status    string    `json:"status"`
 	Progress  int16     `json:"progress"`
@@ -82,10 +84,11 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 // TaskResponse 任务详情/列表 API 响应。
 // created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
 type TaskResponse struct {
-	ID               uint       `json:"id"`
+	ID               string     `json:"id"`
 	Type             string     `json:"type"`
 	Status           string     `json:"status"`
 	Progress         int16      `json:"progress"`
+	Version          int64      `json:"version"`
 	SysPrompt        string     `json:"sys_prompt,omitempty"`
 	UsrPrompt        string     `json:"usr_prompt,omitempty"`
 	ErrorMessage     string     `json:"error_message,omitempty"`
@@ -107,6 +110,7 @@ func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) Task
 		Type:             task.Type,
 		Status:           task.Status,
 		Progress:         task.Progress,
+		Version:          task.Version,
 		SysPrompt:        task.SysPrompt,
 		UsrPrompt:        task.UsrPrompt,
 		ErrorMessage:     task.ErrorMessage,
@@ -137,6 +141,7 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, tasks []model.Task
 			Type:             task.Type,
 			Status:           task.Status,
 			Progress:         task.Progress,
+			Version:          task.Version,
 			SysPrompt:        task.SysPrompt,
 			UsrPrompt:        task.UsrPrompt,
 			ErrorMessage:     task.ErrorMessage,
@@ -310,14 +315,14 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 // @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名
 // @Tags         异步任务
 // @Produce      json
-// @Param        id   path  int  true  "任务 ID"
+// @Param        id   path  string  true  "任务 ID（UUID）"
 // @Success      200  {object}  response.Body
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
 // @Security     BearerAuth
 // @Router       /v1/tasks/{id} [get]
 func (h *TaskHandler) GetTask(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
+	id, err := parseTaskIDParam(c)
 	if err != nil {
 		response.BadRequest(c, "无效的任务 ID")
 		return
@@ -333,6 +338,18 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 		return
 	}
 	response.Success(c, h.toTaskResponse(c.Request.Context(), task))
+}
+
+// parseTaskIDParam 解析路径中的任务 UUID。
+func parseTaskIDParam(c *gin.Context) (string, error) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		return "", errors.New("empty task id")
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 func writeTaskCreateError(c *gin.Context, err error) {
