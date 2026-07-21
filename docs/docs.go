@@ -1256,8 +1256,8 @@ const docTemplate = `{
                 "summary": "获取任务详情",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "任务 ID",
+                        "type": "string",
+                        "description": "任务 ID（UUID）",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -1454,7 +1454,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/project_source）；未传字段保持不变",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变",
                 "consumes": [
                     "application/json"
                 ],
@@ -1808,6 +1808,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.ClipWithText"
                     }
                 },
+                "height": {
+                    "type": "integer",
+                    "minimum": 0
+                },
                 "live_id": {
                     "type": "integer"
                 },
@@ -1827,6 +1831,11 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
+                },
+                "width": {
+                    "description": "Width / Height 可选：剪映草稿工程画布分辨率（像素）。",
+                    "type": "integer",
+                    "minimum": 0
                 }
             }
         },
@@ -1959,6 +1968,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.ClipWithText"
                     }
                 },
+                "height": {
+                    "type": "integer",
+                    "minimum": 0
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 64
@@ -1973,6 +1986,10 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
+                },
+                "width": {
+                    "type": "integer",
+                    "minimum": 0
                 }
             }
         }
