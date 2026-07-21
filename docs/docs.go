@@ -1359,7 +1359,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；成功后返回完整项目（含 id/默认 prompt_id/结构化 clips0/clips1 等）",
+                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目",
                 "consumes": [
                     "application/json"
                 ],
@@ -1454,7 +1454,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920",
                 "consumes": [
                     "application/json"
                 ],
@@ -1833,7 +1833,7 @@ const docTemplate = `{
                     "maxLength": 256
                 },
                 "width": {
-                    "description": "Width / Height 可选：剪映草稿工程画布分辨率（像素）。",
+                    "description": "Width / Height 可选：仅支持 1920×1080 或 1080×1920；都不传时按素材分辨率自动选档。",
                     "type": "integer",
                     "minimum": 0
                 }

@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -19,6 +21,14 @@ var ErrVideoProjectNotFound = errors.New("剪辑项目不存在")
 
 // ErrLiveMaterialNotFoundForProject 创建剪辑项目时关联的直播素材不存在。
 var ErrLiveMaterialNotFoundForProject = errors.New("关联的直播素材不存在")
+
+// 剪辑项目画布仅支持两档分辨率。
+const (
+	projectCanvasLandscapeW = 1920
+	projectCanvasLandscapeH = 1080
+	projectCanvasPortraitW  = 1080
+	projectCanvasPortraitH  = 1920
+)
 
 // VideoProjectListOptions 剪辑项目列表查询选项（来自 HTTP 查询参数）。
 type VideoProjectListOptions struct {
@@ -30,7 +40,7 @@ type VideoProjectListOptions struct {
 // CreateVideoProjectInput 创建剪辑项目入参。
 // Clips0 / Clips1 为可选：nil 或空切片均写入 JSON 空数组 []。
 // ProjectSource 可选，未传时为空字符串。
-// Width / Height 可选：剪映草稿工程画布分辨率，0 表示未设置。
+// Width / Height 可选：未传（均为 0）时按关联素材分辨率在 1920×1080 / 1080×1920 中自动选档。
 type CreateVideoProjectInput struct {
 	Name          string
 	Remark        string
@@ -73,13 +83,27 @@ type VideoProjectService interface {
 type videoProjectService struct {
 	videoProjectRepo repository.VideoProjectRepository
 	liveMaterialRepo repository.LiveMaterialRepository
+	logger           *zap.Logger
 }
 
 // NewVideoProjectService 创建剪辑项目业务服务实例。
 func NewVideoProjectService(videoProjectRepo repository.VideoProjectRepository, liveMaterialRepo repository.LiveMaterialRepository) VideoProjectService {
+	return NewVideoProjectServiceWithLogger(videoProjectRepo, liveMaterialRepo, nil)
+}
+
+// NewVideoProjectServiceWithLogger 创建带日志的剪辑项目业务服务；logger 为 nil 时使用 Nop。
+func NewVideoProjectServiceWithLogger(
+	videoProjectRepo repository.VideoProjectRepository,
+	liveMaterialRepo repository.LiveMaterialRepository,
+	logger *zap.Logger,
+) VideoProjectService {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &videoProjectService{
 		videoProjectRepo: videoProjectRepo,
 		liveMaterialRepo: liveMaterialRepo,
+		logger:           logger,
 	}
 }
 
@@ -91,14 +115,36 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 	if input.LiveID == 0 {
 		return nil, errors.New("直播素材 ID 不能为空")
 	}
-	if input.Width < 0 || input.Height < 0 {
-		return nil, errors.New("width/height 不能为负数")
-	}
-	if _, err := s.liveMaterialRepo.GetByID(ctx, input.LiveID); err != nil {
+	material, err := s.liveMaterialRepo.GetByID(ctx, input.LiveID)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrLiveMaterialNotFoundForProject
 		}
 		return nil, err
+	}
+
+	width, height, err := resolveProjectCanvasSize(input.Width, input.Height, material.Width, material.Height)
+	if err != nil {
+		return nil, err
+	}
+	if input.Width == 0 && input.Height == 0 && (material.Width <= 0 || material.Height <= 0) {
+		s.logger.Info("剪辑项目画布回退为默认竖屏：素材分辨率未知",
+			zap.Uint("live_id", material.ID),
+			zap.Int("material_width", material.Width),
+			zap.Int("material_height", material.Height),
+			zap.Int("project_width", width),
+			zap.Int("project_height", height),
+		)
+	} else {
+		s.logger.Info("剪辑项目画布尺寸已确定",
+			zap.Uint("live_id", material.ID),
+			zap.Int("material_width", material.Width),
+			zap.Int("material_height", material.Height),
+			zap.Int("req_width", input.Width),
+			zap.Int("req_height", input.Height),
+			zap.Int("project_width", width),
+			zap.Int("project_height", height),
+		)
 	}
 
 	promptID := input.PromptID
@@ -122,8 +168,8 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		PromptID:      promptID,
 		Clips0:        clips0,
 		Clips1:        clips1,
-		Width:         input.Width,
-		Height:        input.Height,
+		Width:         width,
+		Height:        height,
 		ProjectSource: strings.TrimSpace(input.ProjectSource),
 		CreatedBy:     createdBy,
 	}
@@ -174,16 +220,15 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 		}
 		project.Clips1 = clips1
 	}
-	if input.Width != nil {
-		if *input.Width < 0 {
-			return nil, errors.New("width 不能为负数")
+	// 宽高须成对更新，且只能是支持的两档画布之一。
+	if input.Width != nil || input.Height != nil {
+		if input.Width == nil || input.Height == nil {
+			return nil, errors.New("width/height 须成对传入")
+		}
+		if err := validateProjectCanvasPair(*input.Width, *input.Height); err != nil {
+			return nil, err
 		}
 		project.Width = *input.Width
-	}
-	if input.Height != nil {
-		if *input.Height < 0 {
-			return nil, errors.New("height 不能为负数")
-		}
 		project.Height = *input.Height
 	}
 	if input.ProjectSource != nil {
@@ -224,6 +269,56 @@ func (s *videoProjectService) Get(ctx context.Context, id uint) (*model.VideoPro
 		return nil, err
 	}
 	return project, nil
+}
+
+// resolveProjectCanvasSize 解析创建项目时的画布尺寸：
+// - 均为 0：按素材宽高比在 1920×1080 / 1080×1920 中选更接近的一档；素材未知时默认竖屏；
+// - 仅一侧非 0：报错；
+// - 均大于 0：必须恰好为支持的两档之一。
+func resolveProjectCanvasSize(reqW, reqH, materialW, materialH int) (int, int, error) {
+	if reqW < 0 || reqH < 0 {
+		return 0, 0, errors.New("width/height 不能为负数")
+	}
+	if (reqW == 0) != (reqH == 0) {
+		return 0, 0, errors.New("width/height 须成对传入，或不传以按素材自动推断")
+	}
+	if reqW > 0 && reqH > 0 {
+		if err := validateProjectCanvasPair(reqW, reqH); err != nil {
+			return 0, 0, err
+		}
+		return reqW, reqH, nil
+	}
+	w, h := pickProjectCanvasByMaterial(materialW, materialH)
+	return w, h, nil
+}
+
+// validateProjectCanvasPair 校验宽高是否为支持的两档之一。
+func validateProjectCanvasPair(width, height int) error {
+	if (width == projectCanvasLandscapeW && height == projectCanvasLandscapeH) ||
+		(width == projectCanvasPortraitW && height == projectCanvasPortraitH) {
+		return nil
+	}
+	return fmt.Errorf("width/height 仅支持 %dx%d 或 %dx%d",
+		projectCanvasLandscapeW, projectCanvasLandscapeH,
+		projectCanvasPortraitW, projectCanvasPortraitH,
+	)
+}
+
+// pickProjectCanvasByMaterial 按素材宽高比选择更接近的画布档；素材无效时默认竖屏。
+func pickProjectCanvasByMaterial(materialW, materialH int) (int, int) {
+	if materialW <= 0 || materialH <= 0 {
+		return projectCanvasPortraitW, projectCanvasPortraitH
+	}
+	r := float64(materialW) / float64(materialH)
+	landscapeRatio := float64(projectCanvasLandscapeW) / float64(projectCanvasLandscapeH) // 16/9
+	portraitRatio := float64(projectCanvasPortraitW) / float64(projectCanvasPortraitH)   // 9/16
+	dLandscape := math.Abs(r - landscapeRatio)
+	dPortrait := math.Abs(r - portraitRatio)
+	// 并列时选用竖屏（与草稿默认画布一致）。
+	if dPortrait <= dLandscape {
+		return projectCanvasPortraitW, projectCanvasPortraitH
+	}
+	return projectCanvasLandscapeW, projectCanvasLandscapeH
 }
 
 // buildVideoProjectListFilter 解析列表筛选参数并转换为仓储层筛选条件。

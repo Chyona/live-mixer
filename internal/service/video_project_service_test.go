@@ -173,6 +173,128 @@ func TestVideoProjectService_Create_WithTypedClips(t *testing.T) {
 	if len(project.Clips1) != 1 || project.Clips1[0].Text != "我是中国人" {
 		t.Errorf("Clips1 = %#v", project.Clips1)
 	}
+	// 素材分辨率未知时默认竖屏档。
+	if project.Width != 1080 || project.Height != 1920 {
+		t.Errorf("Width/Height = %d/%d, want 1080/1920 default", project.Width, project.Height)
+	}
+}
+
+func TestResolveProjectCanvasSize(t *testing.T) {
+	t.Run("explicit landscape", func(t *testing.T) {
+		w, h, err := resolveProjectCanvasSize(1920, 1080, 0, 0)
+		if err != nil || w != 1920 || h != 1080 {
+			t.Fatalf("got %dx%d err=%v", w, h, err)
+		}
+	})
+	t.Run("explicit portrait", func(t *testing.T) {
+		w, h, err := resolveProjectCanvasSize(1080, 1920, 0, 0)
+		if err != nil || w != 1080 || h != 1920 {
+			t.Fatalf("got %dx%d err=%v", w, h, err)
+		}
+	})
+	t.Run("explicit invalid", func(t *testing.T) {
+		_, _, err := resolveProjectCanvasSize(1280, 720, 0, 0)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+	t.Run("only one side", func(t *testing.T) {
+		_, _, err := resolveProjectCanvasSize(1920, 0, 1280, 720)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+	t.Run("infer landscape from material", func(t *testing.T) {
+		w, h, err := resolveProjectCanvasSize(0, 0, 1280, 720)
+		if err != nil || w != 1920 || h != 1080 {
+			t.Fatalf("got %dx%d err=%v, want 1920x1080", w, h, err)
+		}
+	})
+	t.Run("infer portrait from material", func(t *testing.T) {
+		w, h, err := resolveProjectCanvasSize(0, 0, 720, 1280)
+		if err != nil || w != 1080 || h != 1920 {
+			t.Fatalf("got %dx%d err=%v, want 1080x1920", w, h, err)
+		}
+	})
+	t.Run("material unknown defaults portrait", func(t *testing.T) {
+		w, h, err := resolveProjectCanvasSize(0, 0, 0, 0)
+		if err != nil || w != 1080 || h != 1920 {
+			t.Fatalf("got %dx%d err=%v, want 1080x1920", w, h, err)
+		}
+	})
+	t.Run("near square prefers portrait", func(t *testing.T) {
+		// r=1：距 9/16 更近，应选竖屏。
+		w, h, err := resolveProjectCanvasSize(0, 0, 1000, 1000)
+		if err != nil || w != 1080 || h != 1920 {
+			t.Fatalf("got %dx%d err=%v, want 1080x1920", w, h, err)
+		}
+	})
+}
+
+func TestVideoProjectService_Create_InferCanvasFromMaterial(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{
+			1: {ID: 1, Name: "横屏", Width: 1280, Height: 720},
+			2: {ID: 2, Name: "竖屏", Width: 720, Height: 1280},
+		},
+	}
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, liveRepo)
+
+	landscape, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{Name: "横", LiveID: 1})
+	if err != nil {
+		t.Fatalf("landscape Create: %v", err)
+	}
+	if landscape.Width != 1920 || landscape.Height != 1080 {
+		t.Errorf("landscape = %dx%d, want 1920x1080", landscape.Width, landscape.Height)
+	}
+
+	portrait, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{Name: "竖", LiveID: 2})
+	if err != nil {
+		t.Fatalf("portrait Create: %v", err)
+	}
+	if portrait.Width != 1080 || portrait.Height != 1920 {
+		t.Errorf("portrait = %dx%d, want 1080x1920", portrait.Width, portrait.Height)
+	}
+}
+
+func TestVideoProjectService_Create_InvalidCanvasPair(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{1: {ID: 1}},
+	}
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, liveRepo)
+	_, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "项目", LiveID: 1, Width: 1280, Height: 720,
+	})
+	if err == nil {
+		t.Fatal("expected invalid canvas error")
+	}
+}
+
+func TestVideoProjectService_Update_CanvasPairValidation(t *testing.T) {
+	projectRepo := &mockVideoProjectRepo{
+		projects: map[uint]*model.VideoProject{
+			1: {ID: 1, Name: "项目", LiveID: 1, Width: 1080, Height: 1920, CreatedBy: 1},
+		},
+	}
+	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
+
+	w, h := 1920, 1080
+	updated, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{Width: &w, Height: &h})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.Width != 1920 || updated.Height != 1080 {
+		t.Errorf("got %dx%d", updated.Width, updated.Height)
+	}
+
+	onlyW := 1920
+	if _, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{Width: &onlyW}); err == nil {
+		t.Fatal("expected pair required error")
+	}
+	badW, badH := 800, 600
+	if _, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{Width: &badW, Height: &badH}); err == nil {
+		t.Fatal("expected invalid pair error")
+	}
 }
 
 // TestVideoProjectService_Create_InvalidClips 验证非法时间段被拒绝。

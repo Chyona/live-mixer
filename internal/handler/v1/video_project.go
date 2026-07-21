@@ -48,7 +48,7 @@ type CreateVideoProjectRequest struct {
 	PromptID      uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
 	Clips0        []model.ClipRange    `json:"clips0"`
 	Clips1        []model.ClipWithText `json:"clips1"`
-	// Width / Height 可选：剪映草稿工程画布分辨率（像素）。
+	// Width / Height 可选：仅支持 1920×1080 或 1080×1920；都不传时按素材分辨率自动选档。
 	Width         int                  `json:"width" binding:"omitempty,min=0"`
 	Height        int                  `json:"height" binding:"omitempty,min=0"`
 	ProjectSource string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
@@ -215,7 +215,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
-// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；成功后返回完整项目（含 id/默认 prompt_id/结构化 clips0/clips1 等）
+// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -288,7 +288,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json

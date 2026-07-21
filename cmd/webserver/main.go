@@ -86,7 +86,7 @@ func main() {
 	)
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 	llmSystemPromptService := service.NewLLMSystemPromptService(llmSystemPromptRepo)
-	videoProjectService := service.NewVideoProjectService(videoProjectRepo, liveMaterialRepo)
+	videoProjectService := service.NewVideoProjectServiceWithLogger(videoProjectRepo, liveMaterialRepo, logger)
 
 	// OpenAI 兼容协议 LLM 客户端，供 AI 切片 Worker 与同步对话接口共用。
 	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
