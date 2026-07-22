@@ -86,6 +86,31 @@ func TestBuildCaptionsFromASR_ClampsPartialOverlap(t *testing.T) {
 	}
 }
 
+func TestBuildCaptionsFromASR_SplitsLongCaption(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 20000, DraftStartUS: 0, DraftEndUS: 20_000_000},
+	}
+	// 好， + 超长后半句 → 多条字幕，每条 ≤15 字
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":0,"end_time":10000,"text":"好，我里面给你们去搭个这个嗯蕾丝美学的米色","words":[]}
+	]}}`
+	got := BuildCaptionsFromASR(liveASR, placements)
+	if len(got) < 2 {
+		t.Fatalf("len=%d want >=2: %#v", len(got), got)
+	}
+	if got[0].Text != "好，" {
+		t.Errorf("first=%q", got[0].Text)
+	}
+	for i, c := range got {
+		if n := len([]rune(c.Text)); n > 15 {
+			t.Errorf("caption[%d] len=%d text=%q", i, n, c.Text)
+		}
+		if c.End <= c.Start {
+			t.Errorf("caption[%d] bad time %#v", i, c)
+		}
+	}
+}
+
 func TestBuildCaptionsFromASR_Empty(t *testing.T) {
 	if got := BuildCaptionsFromASR("", nil); got != nil {
 		t.Errorf("empty = %#v", got)
