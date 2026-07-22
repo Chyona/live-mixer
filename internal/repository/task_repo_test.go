@@ -12,14 +12,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// setupTaskTestDB 创建内存 SQLite 并迁移任务相关表（含 JOIN 所需的 video_project / live_material）。
+// setupTaskTestDB 创建内存 SQLite 并迁移任务表。
 func setupTaskTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.Task{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
 	return db
@@ -122,37 +122,25 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 	}
 }
 
-// TestTaskRepository_List_JoinsLiveURLAndCanvasSize 验证列表 JOIN 返回 live_url 与项目画布尺寸。
-func TestTaskRepository_List_JoinsLiveURLAndCanvasSize(t *testing.T) {
+// TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize 验证列表直接返回 task 上冗余的 live_url / width / height。
+func TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize(t *testing.T) {
 	db := setupTaskTestDB(t)
 	repo := NewTaskRepository(db)
 	ctx := context.Background()
 
-	material := &model.LiveMaterial{
-		Name: "素材", LiveURL: "https://example.com/live.mp4", LiveASR: "{}",
-		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
-	}
-	if err := db.Create(material).Error; err != nil {
-		t.Fatalf("create live_material: %v", err)
-	}
-	project := &model.VideoProject{
-		Name: "项目", LiveID: material.ID, Width: 1920, Height: 1080,
-		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
-	}
-	if err := db.Create(project).Error; err != nil {
-		t.Fatalf("create video_project: %v", err)
-	}
-
-	withProject := &model.Task{
+	withSnapshot := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID: model.NewUintPtr(project.ID), VideoProjectName: project.Name,
+		VideoProjectName: "项目",
+		LiveURL:          "https://example.com/live.mp4",
+		Width:            1920,
+		Height:           1080,
 	}
 	orphan := &model.Task{
 		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectName: "已删项目",
+		VideoProjectName: "无快照任务",
 	}
-	if err := repo.Create(ctx, withProject); err != nil {
-		t.Fatalf("create withProject: %v", err)
+	if err := repo.Create(ctx, withSnapshot); err != nil {
+		t.Fatalf("create withSnapshot: %v", err)
 	}
 	if err := repo.Create(ctx, orphan); err != nil {
 		t.Fatalf("create orphan: %v", err)
@@ -170,7 +158,7 @@ func TestTaskRepository_List_JoinsLiveURLAndCanvasSize(t *testing.T) {
 	for _, item := range list {
 		byID[item.ID] = item
 	}
-	got := byID[withProject.ID]
+	got := byID[withSnapshot.ID]
 	if got.LiveURL != "https://example.com/live.mp4" {
 		t.Errorf("LiveURL = %q, want https://example.com/live.mp4", got.LiveURL)
 	}

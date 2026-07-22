@@ -172,10 +172,11 @@ func (m *mockAISliceDraftWorkerEnqueue) Start(ctx context.Context) {}
 
 func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
-		ID: 1, ASRStatus: model.ASRStatusCompleted,
+		ID: 1, LiveURL: "https://live.example/a.mp4", ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 5, Name: "slice-project-A", LiveID: 1, PromptID: 1,
+		Width: 1080, Height: 1920,
 		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
 		Clips1: []model.ClipWithText{},
 	}}
@@ -204,6 +205,13 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	}
 	if tasks.created == nil || tasks.created.SysPrompt != "sys-prompt" {
 		t.Errorf("SysPrompt = %q", tasks.created.SysPrompt)
+	}
+	// 创建时应按 video_project / live_material 自动写入冗余快照字段。
+	if tasks.created == nil || tasks.created.LiveURL != "https://live.example/a.mp4" {
+		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
+	}
+	if tasks.created == nil || tasks.created.Width != 1080 || tasks.created.Height != 1920 {
+		t.Errorf("Width/Height = %d/%d, want 1080/1920", tasks.created.Width, tasks.created.Height)
 	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":5`) {
 		t.Errorf("ext = %v", tasks.created)
@@ -289,12 +297,19 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	if tasks.created == nil || tasks.created.VideoProjectName != "draft-project-B" {
 		t.Errorf("VideoProjectName = %q, want draft-project-B", tasks.created.VideoProjectName)
 	}
+	if tasks.created == nil || tasks.created.LiveURL != "https://x/a.mp4" {
+		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
+	}
+	// 未传画布且项目未设置时，写入默认竖屏尺寸。
+	if tasks.created == nil || tasks.created.Width != draft.DefaultCanvasWidth || tasks.created.Height != draft.DefaultCanvasHeight {
+		t.Errorf("Width/Height = %d/%d", tasks.created.Width, tasks.created.Height)
+	}
 	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"video_project_id":3`) {
 		t.Errorf("ext = %v", tasks.created)
 	}
 }
 
-// TestTaskService_CreateDraft_UsesProjectCanvasSize 验证未传画布尺寸时回退到 video_project.width/height。
+// TestTaskService_CreateDraft_UsesProjectCanvasSize 验证未传画布尺寸时回退到 video_project.width/height 并写入 task。
 func TestTaskService_CreateDraft_UsesProjectCanvasSize(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
@@ -308,11 +323,11 @@ func TestTaskService_CreateDraft_UsesProjectCanvasSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDraft() error = %v", err)
 	}
-	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_width":720`) {
-		t.Errorf("ext = %v, want canvas_width from project", tasks.created.Ext)
+	if tasks.created == nil || tasks.created.Width != 720 || tasks.created.Height != 1280 {
+		t.Errorf("Width/Height = %d/%d, want 720/1280 from project", tasks.created.Width, tasks.created.Height)
 	}
-	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_height":1280`) {
-		t.Errorf("ext = %v, want canvas_height from project", tasks.created.Ext)
+	if tasks.created == nil || tasks.created.LiveURL != "https://x/a.mp4" {
+		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
 	}
 }
 
@@ -338,7 +353,7 @@ func TestTaskService_CreateDraft_EmptyClips(t *testing.T) {
 
 func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
-		ID: 1, ASRStatus: model.ASRStatusCompleted,
+		ID: 1, LiveURL: "https://live.example/one.mp4", ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
@@ -370,15 +385,19 @@ func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	if tasks.created == nil || tasks.created.SysPrompt != "sys-prompt" {
 		t.Errorf("SysPrompt = %q", tasks.created.SysPrompt)
 	}
-	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_width":720`) {
-		t.Errorf("ext = %v", tasks.created.Ext)
+	// 请求画布覆盖应写入 task.width/height；live_url 来自素材快照。
+	if tasks.created == nil || tasks.created.Width != 720 || tasks.created.Height != 1280 {
+		t.Errorf("Width/Height = %d/%d, want 720/1280", tasks.created.Width, tasks.created.Height)
+	}
+	if tasks.created == nil || tasks.created.LiveURL != "https://live.example/one.mp4" {
+		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
 	}
 }
 
-// TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize 验证未传画布时写入项目宽高。
+// TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize 验证未传画布时写入项目宽高到 task。
 func TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
-		ID: 1, ASRStatus: model.ASRStatusCompleted,
+		ID: 1, LiveURL: "https://live.example/one.mp4", ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
@@ -394,11 +413,8 @@ func TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAISliceDraft() error = %v", err)
 	}
-	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_width":1920`) {
-		t.Errorf("ext = %v, want canvas_width from project", tasks.created.Ext)
-	}
-	if tasks.created == nil || !strings.Contains(tasks.created.Ext, `"canvas_height":1080`) {
-		t.Errorf("ext = %v, want canvas_height from project", tasks.created.Ext)
+	if tasks.created == nil || tasks.created.Width != 1920 || tasks.created.Height != 1080 {
+		t.Errorf("Width/Height = %d/%d, want 1920/1080 from project", tasks.created.Width, tasks.created.Height)
 	}
 }
 

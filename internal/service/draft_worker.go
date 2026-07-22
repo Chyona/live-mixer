@@ -228,11 +228,16 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询直播素材失败: %w", err))
 	}
+	// 优先使用创建任务时快照的 live_url，素材侧为空时仍可继续生成草稿。
+	if material.LiveURL == "" {
+		material.LiveURL = task.LiveURL
+	}
 	if material.LiveURL == "" {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材 live_url 为空"))
 	}
 
-	width, height := draft.ResolveCanvasSize(ext.CanvasWidth, ext.CanvasHeight, project)
+	// 画布尺寸优先使用创建时写入 task 的快照；缺失时再按项目/默认值解析。
+	width, height := draft.ResolveCanvasSize(task.Width, task.Height, project)
 
 	result, err := w.generator.Build(ctx, draft.Request{
 		JobID:      task.ID,
@@ -256,12 +261,9 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 
 	ext.LiveID = liveID
 	ext.VideoProjectID = project.ID
-	ext.CanvasWidth = width
-	ext.CanvasHeight = height
 	extRaw, err := marshalTaskExt(ext)
 	if err != nil {
-		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d,"canvas_width":%d,"canvas_height":%d}`,
-			liveID, project.ID, width, height)
+		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, liveID, project.ID)
 	}
 
 	if opts.MarkComplete {

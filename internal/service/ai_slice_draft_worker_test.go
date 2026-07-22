@@ -55,11 +55,11 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 
 	ext, _ := marshalTaskExt(TaskExt{
 		LiveID: material.ID, VideoProjectID: project.ID,
-		CanvasWidth: 1080, CanvasHeight: 1920,
 	})
 	task := &model.Task{
 		Type: model.TaskTypeAISliceDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		SysPrompt: "系统提示", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+		SysPrompt: "系统提示", VideoProjectID: model.NewUintPtr(project.ID),
+		Width: 1080, Height: 1920, LiveURL: material.LiveURL, Ext: ext,
 	}
 	if err := taskRepo.Create(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -165,10 +165,11 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 		Clips1: []model.ClipWithText{},
 	}
 	_ = projectRepo.Create(ctx, project)
-	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID, CanvasWidth: 1080, CanvasHeight: 1920})
+	ext, _ := marshalTaskExt(TaskExt{LiveID: material.ID, VideoProjectID: project.ID})
 	task := &model.Task{
 		Type: model.TaskTypeAISliceDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+		SysPrompt: "sys", VideoProjectID: model.NewUintPtr(project.ID),
+		Width: 1080, Height: 1920, LiveURL: material.LiveURL, Ext: ext,
 	}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)

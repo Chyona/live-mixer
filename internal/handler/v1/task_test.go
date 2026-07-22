@@ -40,7 +40,7 @@ func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts ser
 	return nil, 0, nil
 }
 
-// TestTaskHandler_Get_ReturnsDraftURL 验证详情接口返回 draft_url / video_url。
+// TestTaskHandler_Get_ReturnsDraftURL 验证详情接口返回 draft_url / video_url / live_url / width / height。
 func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewTaskHandler(&mockTaskService{
@@ -52,6 +52,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 			return &model.Task{
 				ID: wantID, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
 				DraftURL: "http://example.com/draft", VideoURL: "https://video.example.com/a.mp4",
+				LiveURL: "https://example.com/live.mp4", Width: 1080, Height: 1920,
 			}, nil
 		},
 	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
@@ -70,6 +71,9 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 		Data struct {
 			DraftURL  string `json:"draft_url"`
 			VideoURL  string `json:"video_url"`
+			LiveURL   string `json:"live_url"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
 			CreatedBy string `json:"created_by"`
 		} `json:"data"`
 	}
@@ -81,6 +85,12 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 	if resp.Data.VideoURL != "https://video.example.com/a.mp4" {
 		t.Errorf("video_url = %q", resp.Data.VideoURL)
+	}
+	if resp.Data.LiveURL != "https://example.com/live.mp4" {
+		t.Errorf("live_url = %q", resp.Data.LiveURL)
+	}
+	if resp.Data.Width != 1080 || resp.Data.Height != 1920 {
+		t.Errorf("width/height = %d/%d", resp.Data.Width, resp.Data.Height)
 	}
 	if resp.Data.CreatedBy != "AdminNick" {
 		t.Errorf("created_by = %q, want AdminNick", resp.Data.CreatedBy)

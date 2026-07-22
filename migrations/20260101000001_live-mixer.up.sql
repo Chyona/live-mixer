@@ -178,6 +178,10 @@ CREATE TABLE IF NOT EXISTS task (
     video_project_id       BIGINT REFERENCES video_project (id) ON DELETE SET NULL,
     -- 冗余存项目名称，便于列表展示与删除项目后仍可检索（与 video_project.name 同长）
     video_project_name     VARCHAR(64) NOT NULL DEFAULT '',
+    -- 创建任务时按 video_project.id 自动快照：画布尺寸取自项目（草稿类可被请求覆盖后落库），直播链接取自关联 live_material；不设外键
+    width                  INTEGER     NOT NULL DEFAULT 0,
+    height                 INTEGER     NOT NULL DEFAULT 0,
+    live_url               VARCHAR(1024) NOT NULL DEFAULT '',
     -- 草稿/成片结果 URL：草稿生成与一键成片完成后写入 draft_url；video_url 可由客户端回写
     draft_url              VARCHAR(1024),
     video_url              VARCHAR(1024),
@@ -189,7 +193,9 @@ CREATE TABLE IF NOT EXISTS task (
     ext                    VARCHAR(1024),
     CONSTRAINT chk_task_type CHECK (type IN ('ai_slice', 'draft', 'ai_slice_draft')),
     CONSTRAINT chk_task_status CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-    CONSTRAINT chk_task_progress CHECK (progress BETWEEN 0 AND 100)
+    CONSTRAINT chk_task_progress CHECK (progress BETWEEN 0 AND 100),
+    CONSTRAINT chk_task_width CHECK (width >= 0),
+    CONSTRAINT chk_task_height CHECK (height >= 0)
 );
 
 COMMENT ON TABLE task IS '任务表';
@@ -203,6 +209,9 @@ COMMENT ON COLUMN task.usr_prompt IS '用户提示词';
 COMMENT ON COLUMN task.error_message IS '失败原因';
 COMMENT ON COLUMN task.video_project_id IS '关联剪辑项目 ID（video_project.id），可为空';
 COMMENT ON COLUMN task.video_project_name IS '关联剪辑项目名称（冗余自 video_project.name），默认为空';
+COMMENT ON COLUMN task.width IS '画布宽度（像素），创建时按 video_project 自动快照；草稿类可为请求覆盖后的解析结果；0 表示未设置';
+COMMENT ON COLUMN task.height IS '画布高度（像素），创建时按 video_project 自动快照；草稿类可为请求覆盖后的解析结果；0 表示未设置';
+COMMENT ON COLUMN task.live_url IS '直播链接，创建时按 video_project.live_id 从 live_material 自动快照；无外键';
 COMMENT ON COLUMN task.draft_url IS '剪映草稿 URL（草稿生成/一键成片完成后写入）';
 COMMENT ON COLUMN task.video_url IS '视频地址 URL';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';

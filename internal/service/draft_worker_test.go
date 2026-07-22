@@ -97,11 +97,10 @@ func setupDraftWorkerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func mustMarshalDraftExt(t *testing.T, liveID, projectID uint, w, h int) string {
+func mustMarshalDraftExt(t *testing.T, liveID, projectID uint) string {
 	t.Helper()
 	raw, err := json.Marshal(TaskExt{
 		LiveID: liveID, VideoProjectID: projectID,
-		CanvasWidth: w, CanvasHeight: h,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -158,10 +157,13 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	ext := mustMarshalDraftExt(t, material.ID, project.ID, 1080, 1920)
+	ext := mustMarshalDraftExt(t, material.ID, project.ID)
 	task := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+		VideoProjectID: model.NewUintPtr(project.ID),
+		// 创建时快照的画布尺寸与直播链接，Worker 直接读取。
+		Width: 1080, Height: 1920, LiveURL: material.LiveURL,
+		Ext: ext,
 	}
 	if err := taskRepo.Create(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -228,10 +230,11 @@ func TestDraftWorker_Process_UsesProjectCanvasSize(t *testing.T) {
 		Clips0: []model.ClipRange{},
 	}
 	_ = projectRepo.Create(ctx, project)
-	ext := mustMarshalDraftExt(t, material.ID, project.ID, 0, 0)
+	ext := mustMarshalDraftExt(t, material.ID, project.ID)
 	task := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+		// Width/Height 为 0 时 Worker 回退到 video_project 画布尺寸。
+		VideoProjectID: model.NewUintPtr(project.ID), LiveURL: material.LiveURL, Ext: ext,
 	}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
@@ -251,6 +254,56 @@ func TestDraftWorker_Process_UsesProjectCanvasSize(t *testing.T) {
 	}
 }
 
+func TestDraftWorker_Process_UsesTaskLiveURLFallback(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	webRoot := t.TempDir()
+
+	// 素材 live_url 为空时，应回退使用创建任务时写入的 task.live_url。
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "", CreatedBy: 1,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100,
+	}
+	if err := liveRepo.Create(ctx, material); err != nil {
+		t.Fatalf("create material: %v", err)
+	}
+	project := &model.VideoProject{
+		Name: "项目", LiveID: material.ID, CreatedBy: 1,
+		Clips1: []model.ClipWithText{{Text: "hi", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}}},
+		Clips0: []model.ClipRange{},
+	}
+	if err := projectRepo.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	ext := mustMarshalDraftExt(t, material.ID, project.ID)
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID),
+		Width: 1080, Height: 1920, LiveURL: "https://snapshot.example/live.mp4", Ext: ext,
+	}
+	if err := taskRepo.Create(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %#v", err, claimed)
+	}
+
+	capcut := &mockCapCutAPI{}
+	worker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, capcut, webRoot)
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	got, _ := taskRepo.GetByID(ctx, claimed.ID)
+	if got.Status != model.TaskStatusCompleted {
+		t.Errorf("status = %s, want completed", got.Status)
+	}
+}
+
 func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 	db := setupDraftWorkerTestDB(t)
 	taskRepo := repository.NewTaskRepository(db)
@@ -267,10 +320,10 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 		Clips0: []model.ClipRange{},
 	}
 	_ = projectRepo.Create(ctx, project)
-	ext := mustMarshalDraftExt(t, material.ID, project.ID, 0, 0)
+	ext := mustMarshalDraftExt(t, material.ID, project.ID)
 	task := &model.Task{
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
-		VideoProjectID: model.NewUintPtr(project.ID), Ext: ext,
+		VideoProjectID: model.NewUintPtr(project.ID), LiveURL: material.LiveURL, Ext: ext,
 	}
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)

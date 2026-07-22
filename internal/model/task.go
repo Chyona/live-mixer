@@ -33,6 +33,11 @@ type Task struct {
 	ErrorMessage     string     `gorm:"type:text;comment:失败原因" json:"error_message,omitempty"`
 	VideoProjectID   *uint      `gorm:"column:video_project_id;index;comment:关联剪辑项目ID" json:"video_project_id,omitempty"`
 	VideoProjectName string     `gorm:"column:video_project_name;size:64;not null;default:'';comment:关联剪辑项目名称" json:"video_project_name"`
+	// Width / Height 创建时按 video_project 自动快照的画布尺寸（像素）；草稿类可为请求覆盖后的解析结果。
+	Width  int `gorm:"not null;default:0;comment:画布宽度像素" json:"width"`
+	Height int `gorm:"not null;default:0;comment:画布高度像素" json:"height"`
+	// LiveURL 创建时按 video_project.live_id 从 live_material 自动快照的直播链接；无外键。
+	LiveURL string `gorm:"column:live_url;size:1024;not null;default:'';comment:直播链接快照" json:"live_url"`
 	// DraftURL 剪映草稿地址：草稿生成与一键成片 Worker 成功后回写。
 	DraftURL string `gorm:"column:draft_url;size:1024;comment:剪映草稿URL" json:"draft_url"`
 	// VideoURL 成片/导出视频地址，可由客户端通过更新接口写入。

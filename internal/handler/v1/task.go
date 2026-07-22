@@ -83,6 +83,7 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 
 // TaskResponse 任务详情/列表 API 响应。
 // created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
+// width/height/live_url 为创建任务时按 video_project 自动快照的冗余字段。
 type TaskResponse struct {
 	ID               string     `json:"id"`
 	Type             string     `json:"type"`
@@ -94,6 +95,9 @@ type TaskResponse struct {
 	ErrorMessage     string     `json:"error_message,omitempty"`
 	VideoProjectID   *uint      `json:"video_project_id,omitempty"`
 	VideoProjectName string     `json:"video_project_name"`
+	LiveURL          string     `json:"live_url"`
+	Width            int        `json:"width"`
+	Height           int        `json:"height"`
 	DraftURL         string     `json:"draft_url"`
 	VideoURL         string     `json:"video_url"`
 	CreatedBy        string     `json:"created_by"`
@@ -116,6 +120,9 @@ func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) Task
 		ErrorMessage:     task.ErrorMessage,
 		VideoProjectID:   task.VideoProjectID,
 		VideoProjectName: task.VideoProjectName,
+		LiveURL:          task.LiveURL,
+		Width:            task.Width,
+		Height:           task.Height,
 		DraftURL:         task.DraftURL,
 		VideoURL:         task.VideoURL,
 		CreatedBy:        h.createdBy.nameOf(ctx, task.CreatedBy),
@@ -127,16 +134,16 @@ func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) Task
 	}
 }
 
-func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.TaskListItem) []TaskListResponse {
+func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.TaskListItem) []TaskResponse {
 	ids := make([]uint, 0, len(items))
 	for i := range items {
 		ids = append(ids, items[i].CreatedBy)
 	}
 	names := h.createdBy.namesOf(ctx, uniqueAccountIDs(ids))
-	out := make([]TaskListResponse, 0, len(items))
+	out := make([]TaskResponse, 0, len(items))
 	for i := range items {
 		item := items[i]
-		out = append(out, TaskListResponse{
+		out = append(out, TaskResponse{
 			ID:               item.ID,
 			Type:             item.Type,
 			Status:           item.Status,
@@ -161,32 +168,6 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.Task
 		})
 	}
 	return out
-}
-
-// TaskListResponse 任务列表项响应。
-// 在 TaskResponse 基础上额外返回 live_url（live_material）与 width/height（video_project）。
-type TaskListResponse struct {
-	ID               string     `json:"id"`
-	Type             string     `json:"type"`
-	Status           string     `json:"status"`
-	Progress         int16      `json:"progress"`
-	Version          int64      `json:"version"`
-	SysPrompt        string     `json:"sys_prompt,omitempty"`
-	UsrPrompt        string     `json:"usr_prompt,omitempty"`
-	ErrorMessage     string     `json:"error_message,omitempty"`
-	VideoProjectID   *uint      `json:"video_project_id,omitempty"`
-	VideoProjectName string     `json:"video_project_name"`
-	LiveURL          string     `json:"live_url"`
-	Width            int        `json:"width"`
-	Height           int        `json:"height"`
-	DraftURL         string     `json:"draft_url"`
-	VideoURL         string     `json:"video_url"`
-	CreatedBy        string     `json:"created_by"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	StartedAt        *time.Time `json:"started_at,omitempty"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
-	Ext              string     `json:"ext"`
 }
 
 // CreateAISliceTask 创建 AI 切片任务
@@ -225,7 +206,7 @@ func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 
 // CreateDraftTask 创建剪映草稿任务
 // @Summary      创建剪映草稿任务
-// @Description  异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url
+// @Description  异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -261,7 +242,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 
 // CreateAISliceDraftTask 创建一键成片任务
 // @Summary      创建一键成片任务
-// @Description  异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url
+// @Description  异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -297,7 +278,7 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url（live_material）、width/height（video_project）
+// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url、width/height（创建时按 video_project 自动快照）
 // @Tags         异步任务
 // @Produce      json
 // @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
@@ -341,7 +322,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 
 // GetTask 获取任务详情
 // @Summary      获取任务详情
-// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名
+// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、width/height/live_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名
 // @Tags         异步任务
 // @Produce      json
 // @Param        id   path  string  true  "任务 ID（UUID）"
