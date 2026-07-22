@@ -247,7 +247,6 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		CanvasH:    height,
 		StagingDir: w.web.StagingDir(task.ID),
 		RecordDir:  w.web.CapCutMateRecordDir(task.ID),
-		Web:        w.web,
 		Progress:   func(local int16) { setProgress(local) },
 	})
 	if err != nil {

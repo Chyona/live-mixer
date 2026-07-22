@@ -108,10 +108,17 @@ func mustMarshalDraftExt(t *testing.T, liveID, projectID uint) string {
 	return string(raw)
 }
 
+// mockDraftObjectUploader 草稿 Worker 测试用对象存储上传 mock。
+type mockDraftObjectUploader struct{}
+
+func (mockDraftObjectUploader) UploadFile(ctx context.Context, localPath, objectKey string) (string, error) {
+	return "https://oss.example/" + objectKey, nil
+}
+
 func newTestDraftGenerator(capcut draft.CapCutMateAPI) draft.Generator {
 	return draft.NewGenerator(draft.GeneratorDeps{
 		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-		Logger: zap.NewNop(),
+		Uploader: mockDraftObjectUploader{}, Logger: zap.NewNop(),
 	})
 }
 
@@ -125,7 +132,7 @@ func newTestDraftWorker(
 	return NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
 		Generator: newTestDraftGenerator(capcut),
-		Web:       webroot.Config{RootDir: webRoot, RootURL: "http://localhost/static"},
+		Web:       webroot.Config{RootDir: webRoot},
 		Logger:    zap.NewNop(),
 	})
 }
@@ -178,9 +185,9 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
 		Generator: draft.NewGenerator(draft.GeneratorDeps{
 			CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDraftDownloader{},
-			Logger: zap.NewNop(),
+			Uploader: mockDraftObjectUploader{}, Logger: zap.NewNop(),
 		}),
-		Web:    webroot.Config{RootDir: webRoot, RootURL: "http://192.168.3.219:81"},
+		Web:    webroot.Config{RootDir: webRoot},
 		Logger: zap.NewNop(),
 	})
 
@@ -189,6 +196,9 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	}
 	if capcut.createCalls != 1 || capcut.addCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d", capcut.createCalls, capcut.addCalls)
+	}
+	if !strings.Contains(capcut.lastAdd.VideoInfos, "https://oss.example/temp/draft/") {
+		t.Errorf("video_infos = %s, want object storage URL", capcut.lastAdd.VideoInfos)
 	}
 	if !strings.Contains(capcut.lastAdd.VideoInfos, "clip_000.mp4") {
 		t.Errorf("video_infos = %s", capcut.lastAdd.VideoInfos)
@@ -243,7 +253,7 @@ func TestDraftWorker_Process_UsesProjectCanvasSize(t *testing.T) {
 	worker := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
 		Generator: newTestDraftGenerator(capcut),
-		Web:       webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		Web:       webroot.Config{RootDir: webRoot},
 		Logger:    zap.NewNop(),
 	})
 	if err := worker.Process(ctx, claimed); err != nil {
@@ -331,7 +341,7 @@ func TestDraftWorker_Process_CapCutFail(t *testing.T) {
 	worker := NewDraftWorker(DraftWorkerDeps{
 		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
 		Generator: newTestDraftGenerator(&mockCapCutAPI{createErr: errors.New("capcut down")}),
-		Web:       webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		Web:       webroot.Config{RootDir: webRoot},
 		Logger:    zap.NewNop(),
 	})
 	if err := worker.Process(ctx, claimed); err == nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"live-mixer/internal/model"
-	"live-mixer/internal/pkg/webroot"
 )
 
 // Request 剪映草稿组装入参（与任务模型无关）。
@@ -18,7 +17,6 @@ type Request struct {
 	CanvasW, CanvasH int
 	StagingDir       string
 	RecordDir        string
-	Web              webroot.Config
 	// Progress 可选：本地进度 0–100；由任务层映射到 task.progress。
 	Progress func(local int16)
 	// Recipe 为空时使用 DefaultRecipe。

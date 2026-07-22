@@ -13,17 +13,19 @@ import (
 
 // Builder 执行素材准备 + Recipe 步骤，实现 Generator。
 type Builder struct {
-	Prepare *prepare.Pipeline
-	API     CapCutMateAPI
-	Logger  *zap.Logger
+	Prepare  *prepare.Pipeline
+	API      CapCutMateAPI
+	Uploader steps.ObjectUploader
+	Logger   *zap.Logger
 }
 
 // NewBuilder 创建草稿组装器。
-func NewBuilder(prep *prepare.Pipeline, api CapCutMateAPI, logger *zap.Logger) *Builder {
+// uploader 用于将本地切片上传到对象存储，供 add_videos 使用公网 URL。
+func NewBuilder(prep *prepare.Pipeline, api CapCutMateAPI, uploader steps.ObjectUploader, logger *zap.Logger) *Builder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Builder{Prepare: prep, API: api, Logger: logger}
+	return &Builder{Prepare: prep, API: api, Uploader: uploader, Logger: logger}
 }
 
 // Build 解析 clips → Prepare → 按 Recipe 执行 Steps，返回 draft_url。
@@ -66,7 +68,7 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 
 	recipe := req.Recipe
 	if len(recipe.Steps) == 0 {
-		recipe = DefaultRecipe(b.API, b.Logger)
+		recipe = DefaultRecipe(b.API, b.Uploader, b.Logger)
 	}
 
 	s := &session.Session{
@@ -78,7 +80,6 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 		Clips:      clips,
 		CanvasW:    req.CanvasW,
 		CanvasH:    req.CanvasH,
-		Web:        req.Web,
 		Timeline:   session.NewTimeline(),
 		Progress:   req.Progress,
 	}

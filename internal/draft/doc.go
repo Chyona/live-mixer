@@ -5,6 +5,8 @@
 //  1. 在 internal/pkg/capcutmate 增加对应 API 客户端方法；
 //  2. 在 internal/draft/steps 实现 Step；
 //  3. 将步骤加入 Recipe（默认 DefaultRecipe = create + videos）。
+//
+// add_videos 的视频 URL：本地切片经 ObjectUploader 上传对象存储后使用返回的公网地址。
 package draft
 
 import (
@@ -15,6 +17,8 @@ import (
 type (
 	// CapCutMateAPI 草稿生成所需的 capcut-mate 接口。
 	CapCutMateAPI = steps.CapCutMateAPI
+	// ObjectUploader 将本地切片上传到对象存储。
+	ObjectUploader = steps.ObjectUploader
 	// Step 草稿组装步骤。
 	Step = steps.Step
 )

@@ -103,10 +103,12 @@ func main() {
 	)
 
 	// 剪映草稿：纯组装 Generator + 任务适配 Worker。
+	// 切片经对象存储上传后，用返回的公网 URL 调用 capcut-mate add_videos。
 	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())
 	draftGenerator := draft.NewGenerator(draft.GeneratorDeps{
 		CapCut:     capcutClient,
 		Downloader: fileDownloader,
+		Uploader:   storageClient,
 		Logger:     logger,
 	})
 	draftWorker := service.NewDraftWorker(service.DraftWorkerDeps{
@@ -116,7 +118,6 @@ func main() {
 		Generator:        draftGenerator,
 		Web: webroot.Config{
 			RootDir: cfg.Web.RootDir,
-			RootURL: cfg.Web.RootURL,
 		},
 		Logger:       logger,
 		Concurrency:  cfg.Worker.DraftConcurrencyOrDefault(),

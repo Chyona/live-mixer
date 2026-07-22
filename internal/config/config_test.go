@@ -148,15 +148,11 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 	if cfg.Web.RootDir != "docker/html" {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
 	}
-	if cfg.Web.RootURL != "http://192.168.3.219:81" {
-		t.Errorf("Web.RootURL = %q", cfg.Web.RootURL)
-	}
 }
 
 func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	t.Setenv("CAPCUT_MATE_URL", "http://10.0.0.1:81")
 	t.Setenv("WEB_ROOT_DIR", `D:\html`)
-	t.Setenv("WEB_ROOT_URL", "http://10.0.0.1:81")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -167,9 +163,6 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	}
 	if cfg.Web.RootDir != `D:\html` {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
-	}
-	if cfg.Web.RootURL != "http://10.0.0.1:81" {
-		t.Errorf("Web.RootURL = %q", cfg.Web.RootURL)
 	}
 }
 

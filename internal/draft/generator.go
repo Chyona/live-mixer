@@ -2,6 +2,7 @@ package draft
 
 import (
 	"live-mixer/internal/draft/prepare"
+	"live-mixer/internal/draft/steps"
 	"live-mixer/internal/pkg/media"
 
 	"go.uber.org/zap"
@@ -12,7 +13,9 @@ type GeneratorDeps struct {
 	CapCut     CapCutMateAPI
 	Cutter     prepare.VideoSegmentCutter
 	Downloader prepare.FileDownloader
-	Logger     *zap.Logger
+	// Uploader 将本地切片上传到对象存储；add_videos 使用其返回的公网 URL。
+	Uploader steps.ObjectUploader
+	Logger   *zap.Logger
 	// NewDownloader 当 Downloader 为 nil 时的工厂。
 	NewDownloader func(logger *zap.Logger) prepare.FileDownloader
 }
@@ -32,5 +35,5 @@ func NewGenerator(deps GeneratorDeps) Generator {
 		downloader = deps.NewDownloader(logger)
 	}
 	prep := prepare.NewPipeline(downloader, cutter, logger)
-	return NewBuilder(prep, deps.CapCut, logger)
+	return NewBuilder(prep, deps.CapCut, deps.Uploader, logger)
 }

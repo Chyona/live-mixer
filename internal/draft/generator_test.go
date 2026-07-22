@@ -11,7 +11,6 @@ import (
 	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/capcutmate"
-	"live-mixer/internal/pkg/webroot"
 
 	"go.uber.org/zap"
 )
@@ -80,6 +79,20 @@ func (m *mockDownloader) Download(url, dest string) (string, error) {
 	return dest, os.WriteFile(dest, []byte("source"), 0o644)
 }
 
+// mockObjectUploader 模拟对象存储上传，返回可识别的公网 URL。
+type mockObjectUploader struct {
+	err   error
+	calls []string
+}
+
+func (m *mockObjectUploader) UploadFile(ctx context.Context, localPath, objectKey string) (string, error) {
+	m.calls = append(m.calls, objectKey)
+	if m.err != nil {
+		return "", m.err
+	}
+	return "https://oss.example/" + objectKey, nil
+}
+
 func TestResolveClipRanges_PreferClips1(t *testing.T) {
 	project := &model.VideoProject{
 		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 100}},
@@ -138,13 +151,14 @@ func TestMergeAdjacentClipRanges(t *testing.T) {
 }
 
 func TestGenerator_Build_Success(t *testing.T) {
-	webRoot := t.TempDir()
+	stagingRoot := t.TempDir()
 	jobID := "job-1"
 	capcut := &mockCapCutAPI{}
 	cutter := &mockVideoCutter{}
+	uploader := &mockObjectUploader{}
 	gen := NewGenerator(GeneratorDeps{
 		CapCut: capcut, Cutter: cutter, Downloader: &mockDownloader{},
-		Logger: zap.NewNop(),
+		Uploader: uploader, Logger: zap.NewNop(),
 	})
 
 	material := &model.LiveMaterial{LiveURL: "https://example.com/live.mp4"}
@@ -162,9 +176,8 @@ func TestGenerator_Build_Success(t *testing.T) {
 		Project:    project,
 		CanvasW:    1080,
 		CanvasH:    1920,
-		StagingDir: filepath.Join(webRoot, "staging", jobID),
-		RecordDir:  filepath.Join(webRoot, "staging", jobID, "capcut_mate"),
-		Web:        webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		StagingDir: filepath.Join(stagingRoot, "staging", jobID),
+		RecordDir:  filepath.Join(stagingRoot, "staging", jobID, "capcut_mate"),
 		Progress:   func(local int16) { progressLog = append(progressLog, local) },
 	})
 	if err != nil {
@@ -179,8 +192,12 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if len(cutter.calls) != 2 {
 		t.Errorf("cut calls = %d, want 2", len(cutter.calls))
 	}
-	if !strings.Contains(capcut.lastAdd.VideoInfos, "clip_000.mp4") {
-		t.Errorf("video_infos = %s", capcut.lastAdd.VideoInfos)
+	// add_videos 应使用对象存储 URL，而非 WEB_ROOT_URL 映射。
+	if !strings.Contains(capcut.lastAdd.VideoInfos, "https://oss.example/temp/draft/job-1/clip_000.mp4") {
+		t.Errorf("video_infos = %s, want object storage URL", capcut.lastAdd.VideoInfos)
+	}
+	if len(uploader.calls) != 2 {
+		t.Errorf("upload calls = %d, want 2", len(uploader.calls))
 	}
 	if len(progressLog) == 0 {
 		t.Error("expected progress callbacks")
@@ -188,11 +205,11 @@ func TestGenerator_Build_Success(t *testing.T) {
 }
 
 func TestGenerator_Build_MergesAdjacentClips(t *testing.T) {
-	webRoot := t.TempDir()
+	stagingRoot := t.TempDir()
 	cutter := &mockVideoCutter{}
 	gen := NewGenerator(GeneratorDeps{
 		CapCut: &mockCapCutAPI{}, Cutter: cutter, Downloader: &mockDownloader{},
-		Logger: zap.NewNop(),
+		Uploader: &mockObjectUploader{}, Logger: zap.NewNop(),
 	})
 	_, err := gen.Build(context.Background(), Request{
 		JobID:    "j",
@@ -204,9 +221,8 @@ func TestGenerator_Build_MergesAdjacentClips(t *testing.T) {
 			},
 		},
 		CanvasW: 1080, CanvasH: 1920,
-		StagingDir: filepath.Join(webRoot, "s"),
-		RecordDir:  filepath.Join(webRoot, "r"),
-		Web:        webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		StagingDir: filepath.Join(stagingRoot, "s"),
+		RecordDir:  filepath.Join(stagingRoot, "r"),
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -217,11 +233,11 @@ func TestGenerator_Build_MergesAdjacentClips(t *testing.T) {
 }
 
 func TestGenerator_Build_UsesExplicitClips(t *testing.T) {
-	webRoot := t.TempDir()
+	stagingRoot := t.TempDir()
 	cutter := &mockVideoCutter{}
 	gen := NewGenerator(GeneratorDeps{
 		CapCut: &mockCapCutAPI{}, Cutter: cutter, Downloader: &mockDownloader{},
-		Logger: zap.NewNop(),
+		Uploader: &mockObjectUploader{}, Logger: zap.NewNop(),
 	})
 	_, err := gen.Build(context.Background(), Request{
 		JobID:    "j",
@@ -229,9 +245,8 @@ func TestGenerator_Build_UsesExplicitClips(t *testing.T) {
 		Project:  &model.VideoProject{Clips1: []model.ClipWithText{{StartTime: 0, EndTime: 9999}}},
 		Clips:    []model.ClipRange{{StartTime: 0, EndTime: 500}},
 		CanvasW:  720, CanvasH: 1280,
-		StagingDir: filepath.Join(webRoot, "s"),
-		RecordDir:  filepath.Join(webRoot, "r"),
-		Web:        webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		StagingDir: filepath.Join(stagingRoot, "s"),
+		RecordDir:  filepath.Join(stagingRoot, "r"),
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -242,10 +257,31 @@ func TestGenerator_Build_UsesExplicitClips(t *testing.T) {
 }
 
 func TestGenerator_Build_CapCutFail(t *testing.T) {
-	webRoot := t.TempDir()
+	stagingRoot := t.TempDir()
 	gen := NewGenerator(GeneratorDeps{
 		CapCut: &mockCapCutAPI{createErr: errors.New("capcut down")},
 		Cutter: &mockVideoCutter{}, Downloader: &mockDownloader{},
+		Uploader: &mockObjectUploader{}, Logger: zap.NewNop(),
+	})
+	_, err := gen.Build(context.Background(), Request{
+		JobID:    "j",
+		Material: &model.LiveMaterial{LiveURL: "https://example.com/a.mp4"},
+		Project: &model.VideoProject{
+			Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 500, Words: []model.ClipWord{}}},
+		},
+		CanvasW: 1080, CanvasH: 1920,
+		StagingDir: filepath.Join(stagingRoot, "s"),
+		RecordDir:  filepath.Join(stagingRoot, "r"),
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestGenerator_Build_UploaderMissing(t *testing.T) {
+	stagingRoot := t.TempDir()
+	gen := NewGenerator(GeneratorDeps{
+		CapCut: &mockCapCutAPI{}, Cutter: &mockVideoCutter{}, Downloader: &mockDownloader{},
 		Logger: zap.NewNop(),
 	})
 	_, err := gen.Build(context.Background(), Request{
@@ -255,12 +291,11 @@ func TestGenerator_Build_CapCutFail(t *testing.T) {
 			Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 500, Words: []model.ClipWord{}}},
 		},
 		CanvasW: 1080, CanvasH: 1920,
-		StagingDir: filepath.Join(webRoot, "s"),
-		RecordDir:  filepath.Join(webRoot, "r"),
-		Web:        webroot.Config{RootDir: webRoot, RootURL: "http://example.com"},
+		StagingDir: filepath.Join(stagingRoot, "s"),
+		RecordDir:  filepath.Join(stagingRoot, "r"),
 	})
-	if err == nil {
-		t.Fatal("expected error")
+	if err == nil || !strings.Contains(err.Error(), "对象存储未配置") {
+		t.Fatalf("error = %v, want 对象存储未配置", err)
 	}
 }
 

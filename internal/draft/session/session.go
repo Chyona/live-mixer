@@ -4,7 +4,6 @@ package session
 
 import (
 	"live-mixer/internal/model"
-	"live-mixer/internal/pkg/webroot"
 )
 
 // Session 贯穿 Prepare 与各 Step 的可变上下文。
@@ -21,7 +20,6 @@ type Session struct {
 	DraftURL   string
 	CanvasW    int
 	CanvasH    int
-	Web        webroot.Config
 	Timeline   *Timeline
 	// Progress 可选：报告本地进度（0-100），由调用方映射。
 	Progress func(local int16)
