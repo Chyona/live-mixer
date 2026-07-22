@@ -106,6 +106,71 @@ func TestClient_AddVideos_Success(t *testing.T) {
 	}
 }
 
+func TestBuildCaptionsJSON(t *testing.T) {
+	got, err := BuildCaptionsJSON([]CaptionItem{
+		{Start: 0, End: 5000000, Text: "床前明月光", Keyword: "明月", FontSize: 15},
+	})
+	if err != nil {
+		t.Fatalf("BuildCaptionsJSON() error = %v", err)
+	}
+	if !strings.Contains(got, `"text":"床前明月光"`) {
+		t.Errorf("json = %s", got)
+	}
+	if !strings.Contains(got, `"keyword":"明月"`) {
+		t.Errorf("json missing keyword: %s", got)
+	}
+}
+
+func TestClient_AddCaptions_Success(t *testing.T) {
+	var got AddCaptionsRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathAddCaptions {
+			t.Errorf("path = %s, want %s", r.URL.Path, pathAddCaptions)
+		}
+		defer r.Body.Close()
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(AddCaptionsResponse{
+			Code: 0, Message: "成功", DraftURL: got.DraftURL, TrackID: "cap-1",
+			TextIDs: []string{"t1"}, SegmentIDs: []string{"s1"},
+		})
+	}))
+	defer srv.Close()
+
+	captions, _ := BuildCaptionsJSON([]CaptionItem{{Start: 0, End: 1000, Text: "你好"}})
+	client := NewClient(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	resp, err := client.AddCaptions(context.Background(), AddCaptionsRequest{
+		DraftURL: "http://example.com/draft",
+		Captions: captions,
+	}, "")
+	if err != nil {
+		t.Fatalf("AddCaptions() error = %v", err)
+	}
+	if got.Alpha != 1 || got.ScaleX != 1 || got.ScaleY != 1 {
+		t.Errorf("defaults not applied: %#v", got)
+	}
+	if got.Font != "得意黑" || got.FontSize != 13 || got.BorderColor != "#ffea00" {
+		t.Errorf("style defaults = font=%q size=%d border=%q", got.Font, got.FontSize, got.BorderColor)
+	}
+	if resp.TrackID != "cap-1" || len(resp.TextIDs) != 1 {
+		t.Errorf("resp = %#v", resp)
+	}
+}
+
+func TestClient_AddCaptions_BusinessError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(AddCaptionsResponse{Code: 1, Message: "失败"})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	_, err := client.AddCaptions(context.Background(), AddCaptionsRequest{
+		DraftURL: "http://d", Captions: "[]",
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "业务失败") {
+		t.Fatalf("error = %v, want 业务失败", err)
+	}
+}
+
 func TestClient_CreateDraft_HTTPErrorRecorded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

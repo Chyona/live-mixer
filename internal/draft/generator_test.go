@@ -16,15 +16,19 @@ import (
 )
 
 type mockCapCutAPI struct {
-	createResp  *capcutmate.CreateDraftResponse
-	createErr   error
-	addResp     *capcutmate.AddVideosResponse
-	addErr      error
-	createCalls int
-	addCalls    int
-	lastWidth   int
-	lastHeight  int
-	lastAdd     capcutmate.AddVideosRequest
+	createResp    *capcutmate.CreateDraftResponse
+	createErr     error
+	addResp       *capcutmate.AddVideosResponse
+	addErr        error
+	captionsResp  *capcutmate.AddCaptionsResponse
+	captionsErr   error
+	createCalls   int
+	addCalls      int
+	captionsCalls int
+	lastWidth     int
+	lastHeight    int
+	lastAdd       capcutmate.AddVideosRequest
+	lastCaptions  capcutmate.AddCaptionsRequest
 }
 
 func (m *mockCapCutAPI) CreateDraft(ctx context.Context, width, height int, recordDir string) (*capcutmate.CreateDraftResponse, error) {
@@ -50,6 +54,18 @@ func (m *mockCapCutAPI) AddVideos(ctx context.Context, req capcutmate.AddVideosR
 		return m.addResp, nil
 	}
 	return &capcutmate.AddVideosResponse{Code: 0, DraftURL: req.DraftURL}, nil
+}
+
+func (m *mockCapCutAPI) AddCaptions(ctx context.Context, req capcutmate.AddCaptionsRequest, recordDir string) (*capcutmate.AddCaptionsResponse, error) {
+	m.captionsCalls++
+	m.lastCaptions = req
+	if m.captionsErr != nil {
+		return nil, m.captionsErr
+	}
+	if m.captionsResp != nil {
+		return m.captionsResp, nil
+	}
+	return &capcutmate.AddCaptionsResponse{Code: 0, DraftURL: req.DraftURL}, nil
 }
 
 type mockVideoCutter struct {
@@ -161,7 +177,13 @@ func TestGenerator_Build_Success(t *testing.T) {
 		Uploader: uploader, Logger: zap.NewNop(),
 	})
 
-	material := &model.LiveMaterial{LiveURL: "https://example.com/live.mp4"}
+	material := &model.LiveMaterial{
+		LiveURL: "https://example.com/live.mp4",
+		LiveASR: `{"result":{"utterances":[
+			{"additions":{},"start_time":100,"end_time":800,"text":"第一段","words":[]},
+			{"additions":{},"start_time":2100,"end_time":3000,"text":"第二段","words":[]}
+		]}}`,
+	}
 	project := &model.VideoProject{
 		ID: 9, Width: 1080, Height: 1920,
 		Clips1: []model.ClipWithText{
@@ -186,8 +208,15 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if result.DraftURL != "http://example.com/draft" {
 		t.Errorf("DraftURL = %s", result.DraftURL)
 	}
-	if capcut.createCalls != 1 || capcut.addCalls != 1 {
-		t.Errorf("capcut calls create=%d add=%d", capcut.createCalls, capcut.addCalls)
+	if capcut.createCalls != 1 || capcut.addCalls != 1 || capcut.captionsCalls != 1 {
+		t.Errorf("capcut calls create=%d add=%d captions=%d", capcut.createCalls, capcut.addCalls, capcut.captionsCalls)
+	}
+	if !strings.Contains(capcut.lastCaptions.Captions, "第一段") || !strings.Contains(capcut.lastCaptions.Captions, "第二段") {
+		t.Errorf("captions = %s", capcut.lastCaptions.Captions)
+	}
+	// 第二段字幕应映射到草稿时间轴第二段起点之后（第一段时长 1000ms = 1e6 us）。
+	if !strings.Contains(capcut.lastCaptions.Captions, `"start":1100000`) {
+		t.Errorf("expected second caption start 1100000 in %s", capcut.lastCaptions.Captions)
 	}
 	if len(cutter.calls) != 2 {
 		t.Errorf("cut calls = %d, want 2", len(cutter.calls))

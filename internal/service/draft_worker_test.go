@@ -22,15 +22,19 @@ import (
 )
 
 type mockCapCutAPI struct {
-	createResp  *capcutmate.CreateDraftResponse
-	createErr   error
-	addResp     *capcutmate.AddVideosResponse
-	addErr      error
-	createCalls int
-	addCalls    int
-	lastWidth   int
-	lastHeight  int
-	lastAdd     capcutmate.AddVideosRequest
+	createResp    *capcutmate.CreateDraftResponse
+	createErr     error
+	addResp       *capcutmate.AddVideosResponse
+	addErr        error
+	captionsResp  *capcutmate.AddCaptionsResponse
+	captionsErr   error
+	createCalls   int
+	addCalls      int
+	captionsCalls int
+	lastWidth     int
+	lastHeight    int
+	lastAdd       capcutmate.AddVideosRequest
+	lastCaptions  capcutmate.AddCaptionsRequest
 }
 
 func (m *mockCapCutAPI) CreateDraft(ctx context.Context, width, height int, recordDir string) (*capcutmate.CreateDraftResponse, error) {
@@ -56,6 +60,18 @@ func (m *mockCapCutAPI) AddVideos(ctx context.Context, req capcutmate.AddVideosR
 		return m.addResp, nil
 	}
 	return &capcutmate.AddVideosResponse{Code: 0, DraftURL: req.DraftURL}, nil
+}
+
+func (m *mockCapCutAPI) AddCaptions(ctx context.Context, req capcutmate.AddCaptionsRequest, recordDir string) (*capcutmate.AddCaptionsResponse, error) {
+	m.captionsCalls++
+	m.lastCaptions = req
+	if m.captionsErr != nil {
+		return nil, m.captionsErr
+	}
+	if m.captionsResp != nil {
+		return m.captionsResp, nil
+	}
+	return &capcutmate.AddCaptionsResponse{Code: 0, DraftURL: req.DraftURL}, nil
 }
 
 type mockVideoCutter struct {

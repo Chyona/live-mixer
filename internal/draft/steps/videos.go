@@ -52,7 +52,7 @@ func (st VideosStep) Run(ctx context.Context, s *session.Session) error {
 		s.Timeline = session.NewTimeline()
 	}
 
-	videoInfos, err := buildVideoInfos(ctx, s, st.Uploader, logger)
+	videoInfos, placements, err := buildVideoInfos(ctx, s, st.Uploader, logger)
 	if err != nil {
 		return err
 	}
@@ -81,16 +81,20 @@ func (st VideosStep) Run(ctx context.Context, s *session.Session) error {
 	if addResp.DraftURL != "" {
 		s.DraftURL = addResp.DraftURL
 	}
+	// 写入切片映射，供后续字幕步骤按同一时间轴对齐 ASR。
+	s.ClipPlacements = placements
 	tr := s.Timeline.EnsureTrack(session.TrackMainVideo)
 	tr.TrackID = addResp.TrackID
 	tr.SegmentIDs = append([]string(nil), addResp.SegmentIDs...)
-	s.ReportProgress(90)
+	s.ReportProgress(85)
 	return nil
 }
 
-// buildVideoInfos 将本地切片上传到对象存储，组装 add_videos 所需的 VideoInfo 列表。
-func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUploader, logger *zap.Logger) ([]capcutmate.VideoInfo, error) {
+// buildVideoInfos 将本地切片上传到对象存储，组装 add_videos 所需的 VideoInfo 列表，
+// 同时生成源时间轴 ↔ 草稿时间轴的 ClipPlacement，供字幕同步使用。
+func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUploader, logger *zap.Logger) ([]capcutmate.VideoInfo, []session.ClipPlacement, error) {
 	infos := make([]capcutmate.VideoInfo, 0, len(s.ClipPaths))
+	placements := make([]session.ClipPlacement, 0, len(s.ClipPaths))
 	for i, localPath := range s.ClipPaths {
 		objectKey := BuildDraftClipObjectKey(s.JobID, localPath)
 		logger.Info("上传草稿切片到对象存储",
@@ -101,25 +105,32 @@ func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUpl
 		)
 		videoURL, err := uploader.UploadFile(ctx, localPath, objectKey)
 		if err != nil {
-			return nil, fmt.Errorf("上传第 %d 段切片失败: %w", i, err)
+			return nil, nil, fmt.Errorf("上传第 %d 段切片失败: %w", i, err)
 		}
 		if strings.TrimSpace(videoURL) == "" {
-			return nil, fmt.Errorf("第 %d 段切片上传后 URL 为空", i)
+			return nil, nil, fmt.Errorf("第 %d 段切片上传后 URL 为空", i)
 		}
 		durMS := s.Clips[i].EndTime - s.Clips[i].StartTime
 		if durMS <= 0 {
-			return nil, fmt.Errorf("第 %d 段时长无效", i)
+			return nil, nil, fmt.Errorf("第 %d 段时长无效", i)
 		}
 		durUS := durMS * 1000 // 毫秒 → 微秒
 		startUS := s.Timeline.Advance(durUS)
+		endUS := startUS + durUS
 		infos = append(infos, capcutmate.VideoInfo{
 			VideoURL: videoURL,
 			Start:    startUS,
-			End:      startUS + durUS,
+			End:      endUS,
 			Volume:   1,
 		})
+		placements = append(placements, session.ClipPlacement{
+			SourceStartMS: s.Clips[i].StartTime,
+			SourceEndMS:   s.Clips[i].EndTime,
+			DraftStartUS:  startUS,
+			DraftEndUS:    endUS,
+		})
 	}
-	return infos, nil
+	return infos, placements, nil
 }
 
 // BuildDraftClipObjectKey 生成草稿切片对象键：temp/draft/{jobID}/{文件名}。

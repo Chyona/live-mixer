@@ -53,6 +53,10 @@ func (m *mockVideosAPI) AddVideos(ctx context.Context, req capcutmate.AddVideosR
 	return &capcutmate.AddVideosResponse{Code: 0, DraftURL: req.DraftURL, TrackID: "track-1"}, nil
 }
 
+func (m *mockVideosAPI) AddCaptions(ctx context.Context, req capcutmate.AddCaptionsRequest, recordDir string) (*capcutmate.AddCaptionsResponse, error) {
+	return &capcutmate.AddCaptionsResponse{Code: 0, DraftURL: req.DraftURL}, nil
+}
+
 func TestBuildDraftClipObjectKey(t *testing.T) {
 	got := BuildDraftClipObjectKey("job-1", `D:\tmp\clip_000.mp4`)
 	want := "temp/draft/job-1/clip_000.mp4"
@@ -96,6 +100,19 @@ func TestVideosStep_Run_UploadsAndUsesObjectURL(t *testing.T) {
 	}
 	if !strings.Contains(api.lastReq.VideoInfos, "clip_001.mp4") {
 		t.Errorf("VideoInfos missing clip_001: %s", api.lastReq.VideoInfos)
+	}
+	// VideosStep 应写入 ClipPlacements，供字幕步骤与 add_videos 时间轴对齐。
+	if len(s.ClipPlacements) != 2 {
+		t.Fatalf("ClipPlacements = %d, want 2", len(s.ClipPlacements))
+	}
+	if s.ClipPlacements[0].SourceStartMS != 0 || s.ClipPlacements[0].SourceEndMS != 1000 {
+		t.Errorf("placement[0] source = %#v", s.ClipPlacements[0])
+	}
+	if s.ClipPlacements[0].DraftStartUS != 0 || s.ClipPlacements[0].DraftEndUS != 1_000_000 {
+		t.Errorf("placement[0] draft = %#v", s.ClipPlacements[0])
+	}
+	if s.ClipPlacements[1].DraftStartUS != 1_000_000 || s.ClipPlacements[1].DraftEndUS != 2_500_000 {
+		t.Errorf("placement[1] draft = %#v", s.ClipPlacements[1])
 	}
 }
 
