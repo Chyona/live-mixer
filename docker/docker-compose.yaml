@@ -60,7 +60,7 @@ services:
       - live-mixer-network
 
   capcut-mate:
-    image: gogoshine/capcut-mate:latest
+    image: gogoshine/capcut-mate-pro:latest
     container_name: live-capcut-mate
     platform: linux/amd64
     restart: unless-stopped  # 除非手动停止，否则总是重启容器
