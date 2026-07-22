@@ -15,7 +15,7 @@ import (
 // mockTaskService 用于任务 handler 单元测试。
 type mockTaskService struct {
 	getFn  func(ctx context.Context, id string) (*model.Task, error)
-	listFn func(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.Task, int64, error)
+	listFn func(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.TaskListItem, int64, error)
 }
 
 func (m *mockTaskService) CreateAISlice(ctx context.Context, createdBy uint, input service.CreateAISliceInput) (*model.Task, error) {
@@ -33,7 +33,7 @@ func (m *mockTaskService) Get(ctx context.Context, id string) (*model.Task, erro
 	}
 	return nil, nil
 }
-func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.Task, int64, error) {
+func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.TaskListItem, int64, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, page, pageSize, opts)
 	}
@@ -84,5 +84,54 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 	if resp.Data.CreatedBy != "AdminNick" {
 		t.Errorf("created_by = %q, want AdminNick", resp.Data.CreatedBy)
+	}
+}
+
+// TestTaskHandler_List_ReturnsLiveURLAndCanvasSize 验证列表接口返回 live_url / width / height。
+func TestTaskHandler_List_ReturnsLiveURLAndCanvasSize(t *testing.T) {
+	secret := "handler-test-secret"
+	projectID := uint(9)
+	handler := NewTaskHandler(&mockTaskService{
+		listFn: func(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.TaskListItem, int64, error) {
+			return []model.TaskListItem{{
+				ID: "22222222-2222-2222-2222-222222222222", Type: model.TaskTypeDraft,
+				Status: model.TaskStatusCompleted, CreatedBy: 1,
+				VideoProjectID: &projectID, VideoProjectName: "精剪",
+				LiveURL: "https://example.com/live.mp4", Width: 1080, Height: 1920,
+			}}, 1, nil
+		},
+	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
+	r := newAuthedRouter(secret, handler.ListTasks, http.MethodGet, "/tasks")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks?page=1&page_size=10", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			List []struct {
+				LiveURL string `json:"live_url"`
+				Width   int    `json:"width"`
+				Height  int    `json:"height"`
+			} `json:"list"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Data.List) != 1 {
+		t.Fatalf("list len = %d, want 1", len(resp.Data.List))
+	}
+	item := resp.Data.List[0]
+	if item.LiveURL != "https://example.com/live.mp4" {
+		t.Errorf("live_url = %q", item.LiveURL)
+	}
+	if item.Width != 1080 || item.Height != 1920 {
+		t.Errorf("width/height = %d/%d, want 1080/1920", item.Width, item.Height)
 	}
 }

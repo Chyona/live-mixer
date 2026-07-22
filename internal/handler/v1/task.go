@@ -127,37 +127,66 @@ func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) Task
 	}
 }
 
-func (h *TaskHandler) toTaskResponseList(ctx context.Context, tasks []model.Task) []TaskResponse {
-	ids := make([]uint, 0, len(tasks))
-	for i := range tasks {
-		ids = append(ids, tasks[i].CreatedBy)
+func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.TaskListItem) []TaskListResponse {
+	ids := make([]uint, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].CreatedBy)
 	}
 	names := h.createdBy.namesOf(ctx, uniqueAccountIDs(ids))
-	out := make([]TaskResponse, 0, len(tasks))
-	for i := range tasks {
-		task := tasks[i]
-		out = append(out, TaskResponse{
-			ID:               task.ID,
-			Type:             task.Type,
-			Status:           task.Status,
-			Progress:         task.Progress,
-			Version:          task.Version,
-			SysPrompt:        task.SysPrompt,
-			UsrPrompt:        task.UsrPrompt,
-			ErrorMessage:     task.ErrorMessage,
-			VideoProjectID:   task.VideoProjectID,
-			VideoProjectName: task.VideoProjectName,
-			DraftURL:         task.DraftURL,
-			VideoURL:         task.VideoURL,
-			CreatedBy:        names[task.CreatedBy],
-			CreatedAt:        task.CreatedAt,
-			UpdatedAt:        task.UpdatedAt,
-			StartedAt:        task.StartedAt,
-			CompletedAt:      task.CompletedAt,
-			Ext:              task.Ext,
+	out := make([]TaskListResponse, 0, len(items))
+	for i := range items {
+		item := items[i]
+		out = append(out, TaskListResponse{
+			ID:               item.ID,
+			Type:             item.Type,
+			Status:           item.Status,
+			Progress:         item.Progress,
+			Version:          item.Version,
+			SysPrompt:        item.SysPrompt,
+			UsrPrompt:        item.UsrPrompt,
+			ErrorMessage:     item.ErrorMessage,
+			VideoProjectID:   item.VideoProjectID,
+			VideoProjectName: item.VideoProjectName,
+			LiveURL:          item.LiveURL,
+			Width:            item.Width,
+			Height:           item.Height,
+			DraftURL:         item.DraftURL,
+			VideoURL:         item.VideoURL,
+			CreatedBy:        names[item.CreatedBy],
+			CreatedAt:        item.CreatedAt,
+			UpdatedAt:        item.UpdatedAt,
+			StartedAt:        item.StartedAt,
+			CompletedAt:      item.CompletedAt,
+			Ext:              item.Ext,
 		})
 	}
 	return out
+}
+
+// TaskListResponse 任务列表项响应。
+// 在 TaskResponse 基础上额外返回 live_url（live_material）与 width/height（video_project）。
+type TaskListResponse struct {
+	ID               string     `json:"id"`
+	Type             string     `json:"type"`
+	Status           string     `json:"status"`
+	Progress         int16      `json:"progress"`
+	Version          int64      `json:"version"`
+	SysPrompt        string     `json:"sys_prompt,omitempty"`
+	UsrPrompt        string     `json:"usr_prompt,omitempty"`
+	ErrorMessage     string     `json:"error_message,omitempty"`
+	VideoProjectID   *uint      `json:"video_project_id,omitempty"`
+	VideoProjectName string     `json:"video_project_name"`
+	LiveURL          string     `json:"live_url"`
+	Width            int        `json:"width"`
+	Height           int        `json:"height"`
+	DraftURL         string     `json:"draft_url"`
+	VideoURL         string     `json:"video_url"`
+	CreatedBy        string     `json:"created_by"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	Ext              string     `json:"ext"`
 }
 
 // CreateAISliceTask 创建 AI 切片任务
@@ -268,7 +297,7 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name
+// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url（live_material）、width/height（video_project）
 // @Tags         异步任务
 // @Produce      json
 // @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"

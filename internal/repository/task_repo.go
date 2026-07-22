@@ -32,8 +32,8 @@ type TaskRepository interface {
 	Create(ctx context.Context, task *model.Task) error
 	// GetByID 根据主键查询任务。
 	GetByID(ctx context.Context, id string) (*model.Task, error)
-	// List 分页查询任务列表，按创建时间倒序。
-	List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.Task, int64, error)
+	// List 分页查询任务列表，LEFT JOIN video_project / live_material 取画布尺寸与直播链接，按创建时间倒序。
+	List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.TaskListItem, int64, error)
 	// ClaimPendingByType 多实例安全地抢占一条指定类型的 pending 任务。
 	// 使用乐观锁（version CAS）：将状态改为 processing 并返回；无待处理任务时返回 nil。
 	ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error)
@@ -84,40 +84,48 @@ func (r *taskRepository) GetByID(ctx context.Context, id string) (*model.Task, e
 	return &task, nil
 }
 
-func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.Task, int64, error) {
-	var tasks []model.Task
+func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.TaskListItem, int64, error) {
+	var items []model.TaskListItem
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&model.Task{})
-	query = applyTaskListFilter(query, filter)
+	countQuery := r.db.WithContext(ctx).Model(&model.Task{})
+	countQuery = applyTaskListFilter(countQuery, filter)
+	if err := countQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
+	// JOIN 取 live_url 与项目画布尺寸；项目删除后 video_project_id 可能为空，故用 LEFT JOIN。
+	query := r.db.WithContext(ctx).
+		Table("task").
+		Select("task.*, live_material.live_url AS live_url, video_project.width AS width, video_project.height AS height").
+		Joins("LEFT JOIN video_project ON video_project.id = task.video_project_id").
+		Joins("LEFT JOIN live_material ON live_material.id = video_project.live_id")
+	query = applyTaskListFilter(query, filter)
 	// UUID 主键无序，列表按创建时间倒序保证「新任务在前」。
-	if err := query.Offset(offset).Limit(limit).Order("created_at DESC, id DESC").Find(&tasks).Error; err != nil {
+	if err := query.Offset(offset).Limit(limit).Order("task.created_at DESC, task.id DESC").Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
-	return tasks, total, nil
+	return items, total, nil
 }
 
-// applyTaskListFilter 将列表筛选条件应用到 GORM 查询。
+// applyTaskListFilter 将列表筛选条件应用到 GORM 查询（列名带表前缀，避免 JOIN 歧义）。
 func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
+	const table = "task"
 	if filter.Type != "" {
-		query = query.Where("type = ?", filter.Type)
+		query = query.Where(table+".type = ?", filter.Type)
 	}
 	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
+		query = query.Where(table+".status = ?", filter.Status)
 	}
 	if filter.StartAt != nil {
-		query = query.Where("created_at >= ?", *filter.StartAt)
+		query = query.Where(table+".created_at >= ?", *filter.StartAt)
 	}
 	if filter.EndAt != nil {
-		query = query.Where("created_at < ?", *filter.EndAt)
+		query = query.Where(table+".created_at < ?", *filter.EndAt)
 	}
 	for _, kw := range filter.Keywords {
 		pattern := "%" + kw + "%"
-		query = query.Where("LOWER(video_project_name) LIKE ?", pattern)
+		query = query.Where("LOWER("+table+".video_project_name) LIKE ?", pattern)
 	}
 	return query
 }

@@ -12,14 +12,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// setupTaskTestDB 创建内存 SQLite 并迁移任务相关表。
+// setupTaskTestDB 创建内存 SQLite 并迁移任务相关表（含 JOIN 所需的 video_project / live_material）。
 func setupTaskTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}, &model.Task{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
 	return db
@@ -119,6 +119,67 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 	}
 	if list[0].VideoProjectName != "发布会精剪" {
 		t.Errorf("VideoProjectName = %q, want 发布会精剪", list[0].VideoProjectName)
+	}
+}
+
+// TestTaskRepository_List_JoinsLiveURLAndCanvasSize 验证列表 JOIN 返回 live_url 与项目画布尺寸。
+func TestTaskRepository_List_JoinsLiveURLAndCanvasSize(t *testing.T) {
+	db := setupTaskTestDB(t)
+	repo := NewTaskRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "素材", LiveURL: "https://example.com/live.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	if err := db.Create(material).Error; err != nil {
+		t.Fatalf("create live_material: %v", err)
+	}
+	project := &model.VideoProject{
+		Name: "项目", LiveID: material.ID, Width: 1920, Height: 1080,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
+	}
+	if err := db.Create(project).Error; err != nil {
+		t.Fatalf("create video_project: %v", err)
+	}
+
+	withProject := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID), VideoProjectName: project.Name,
+	}
+	orphan := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectName: "已删项目",
+	}
+	if err := repo.Create(ctx, withProject); err != nil {
+		t.Fatalf("create withProject: %v", err)
+	}
+	if err := repo.Create(ctx, orphan); err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+
+	list, total, err := repo.List(ctx, TaskListFilter{}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 2 || len(list) != 2 {
+		t.Fatalf("List total/len = %d/%d, want 2/2", total, len(list))
+	}
+
+	byID := map[string]model.TaskListItem{}
+	for _, item := range list {
+		byID[item.ID] = item
+	}
+	got := byID[withProject.ID]
+	if got.LiveURL != "https://example.com/live.mp4" {
+		t.Errorf("LiveURL = %q, want https://example.com/live.mp4", got.LiveURL)
+	}
+	if got.Width != 1920 || got.Height != 1080 {
+		t.Errorf("Width/Height = %d/%d, want 1920/1080", got.Width, got.Height)
+	}
+	orphaned := byID[orphan.ID]
+	if orphaned.LiveURL != "" || orphaned.Width != 0 || orphaned.Height != 0 {
+		t.Errorf("orphan should have empty live_url and zero canvas, got %+v", orphaned)
 	}
 }
 

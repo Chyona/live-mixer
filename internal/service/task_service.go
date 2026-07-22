@@ -72,7 +72,7 @@ type TaskService interface {
 	CreateDraft(ctx context.Context, createdBy uint, input CreateDraftInput) (*model.Task, error)
 	CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error)
 	Get(ctx context.Context, id string) (*model.Task, error)
-	List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.Task, int64, error)
+	List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.TaskListItem, int64, error)
 }
 
 type taskService struct {
@@ -323,7 +323,7 @@ func (s *taskService) Get(ctx context.Context, id string) (*model.Task, error) {
 	return task, nil
 }
 
-func (s *taskService) List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.Task, int64, error) {
+func (s *taskService) List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.TaskListItem, int64, error) {
 	if opts.Type != "" && !isValidTaskType(opts.Type) {
 		return nil, 0, ErrTaskInvalidType
 	}

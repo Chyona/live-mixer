@@ -1008,7 +1008,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name",
+                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url（live_material）、width/height（video_project）",
                 "produces": [
                     "application/json"
                 ],
