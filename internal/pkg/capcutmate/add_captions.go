@@ -30,6 +30,7 @@ type AddCaptionsRequest struct {
 	Captions    string  `json:"captions"`
 	Alignment   int     `json:"alignment"`
 	Alpha       float64 `json:"alpha"`
+	TextColor   string  `json:"text_color"`
 	BorderColor string  `json:"border_color"`
 	FontSize    int     `json:"font_size"`
 	ScaleX      float64 `json:"scale_x"`
@@ -88,8 +89,11 @@ func applyAddCaptionsDefaults(req *AddCaptionsRequest) {
 	if req.Font == "" {
 		req.Font = "得意黑"
 	}
+	if req.TextColor == "" {
+		req.TextColor = "#ffde00"
+	}
 	if req.BorderColor == "" {
-		req.BorderColor = "#ffea00"
+		req.BorderColor = "#000000"
 	}
 }
 

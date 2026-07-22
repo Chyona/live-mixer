@@ -148,8 +148,8 @@ func TestClient_AddCaptions_Success(t *testing.T) {
 	if got.Alpha != 1 || got.ScaleX != 1 || got.ScaleY != 1 {
 		t.Errorf("defaults not applied: %#v", got)
 	}
-	if got.Font != "得意黑" || got.FontSize != 13 || got.BorderColor != "#ffea00" {
-		t.Errorf("style defaults = font=%q size=%d border=%q", got.Font, got.FontSize, got.BorderColor)
+	if got.Font != "得意黑" || got.FontSize != 13 || got.TextColor != "#ffde00" || got.BorderColor != "#000000" {
+		t.Errorf("style defaults = font=%q size=%d text=%q border=%q", got.Font, got.FontSize, got.TextColor, got.BorderColor)
 	}
 	if resp.TrackID != "cap-1" || len(resp.TextIDs) != 1 {
 		t.Errorf("resp = %#v", resp)

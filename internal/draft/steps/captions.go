@@ -16,7 +16,8 @@ import (
 const (
 	defaultCaptionAlignment   = 1
 	defaultCaptionAlpha       = 1.0
-	defaultCaptionBorderColor = "#ffea00"
+	defaultCaptionTextColor   = "#ffde00"
+	defaultCaptionBorderColor = "#000000"
 	defaultCaptionFontSize    = 13
 	defaultCaptionScale       = 1.0
 	defaultCaptionTransformY  = -800.0
@@ -78,6 +79,7 @@ func (st CaptionsStep) Run(ctx context.Context, s *session.Session) error {
 		Captions:    captionsJSON,
 		Alignment:   defaultCaptionAlignment,
 		Alpha:       defaultCaptionAlpha,
+		TextColor:   defaultCaptionTextColor,
 		BorderColor: defaultCaptionBorderColor,
 		FontSize:    defaultCaptionFontSize,
 		ScaleX:      defaultCaptionScale,
