@@ -18,12 +18,11 @@ func TestSplitBalancedPreferLatin_Table(t *testing.T) {
 		n    int
 		want []int
 	}{
-		{15, []int{15}},
-		{16, []int{8, 8}},
-		{17, []int{9, 8}},
-		{30, []int{15, 15}},
+		{12, []int{12}},
+		{13, []int{7, 6}},
+		{24, []int{12, 12}},
+		{25, []int{9, 8, 8}},
 		{31, []int{11, 10, 10}},
-		{46, []int{12, 12, 11, 11}},
 	}
 	for _, tt := range tests {
 		got := splitBalancedPreferLatin(mk(tt.n), MaxCaptionRunes)
@@ -71,7 +70,7 @@ func TestSplitBalancedPreferLatin_KeepsEnglishWordIntact(t *testing.T) {
 }
 
 func TestSplitBalancedPreferLatin_LongEnglishWord(t *testing.T) {
-	word := "ABCDEFGHIJKLMNOP" // 16 letters > 15
+	word := "ABCDEFGHIJKLM" // 13 letters > 12
 	got := splitBalancedPreferLatin(word, MaxCaptionRunes)
 	if len(got) != 1 || got[0] != word {
 		t.Fatalf("got %v, want whole word on one line", got)
@@ -88,6 +87,42 @@ func TestSplitByPunctuation(t *testing.T) {
 	}
 }
 
+func TestTrimCaptionEdgePunct(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"好，", "好"},
+		{"，然后", "然后"},
+		{"今天很好，", "今天很好"},
+		{"…开场", "开场"},
+		{"结尾...", "结尾"},
+		{"  ，。  ", ""},
+	}
+	for _, tt := range tests {
+		if got := trimCaptionEdgePunct(tt.in); got != tt.want {
+			t.Errorf("trimCaptionEdgePunct(%q)=%q want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func assertNoEdgePunct(t *testing.T, text string) {
+	t.Helper()
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return
+	}
+	if runes[0] == '…' || isBreakPunctRune(runes[0]) {
+		t.Errorf("leading punct: %q", text)
+	}
+	if len(runes) >= 3 && runes[0] == '.' && runes[1] == '.' && runes[2] == '.' {
+		t.Errorf("leading ellipsis: %q", text)
+	}
+	last := len(runes) - 1
+	if runes[last] == '…' || isBreakPunctRune(runes[last]) {
+		t.Errorf("trailing punct: %q", text)
+	}
+}
+
 func TestSplitUtteranceForCaptions_PunctAndBalance(t *testing.T) {
 	u := Utterance{
 		StartTime: 0,
@@ -98,22 +133,18 @@ func TestSplitUtteranceForCaptions_PunctAndBalance(t *testing.T) {
 	if len(got) < 2 {
 		t.Fatalf("expected multiple segments, got %v", got)
 	}
-	if got[0].Text != "好，" {
+	if got[0].Text != "好" {
 		t.Errorf("first = %q", got[0].Text)
 	}
-	var total int
 	for _, seg := range got {
 		n := utf8.RuneCountInString(seg.Text)
-		total += n
 		if n > MaxCaptionRunes {
-			t.Errorf("seg %q len=%d > 15", seg.Text, n)
+			t.Errorf("seg %q len=%d > %d", seg.Text, n, MaxCaptionRunes)
 		}
+		assertNoEdgePunct(t, seg.Text)
 		if seg.EndTime <= seg.StartTime {
 			t.Errorf("bad time %#v", seg)
 		}
-	}
-	if total != utf8.RuneCountInString(u.Text) {
-		t.Errorf("rune total %d want %d", total, utf8.RuneCountInString(u.Text))
 	}
 	if got[0].StartTime != 0 || got[len(got)-1].EndTime != 10000 {
 		t.Errorf("time span %d-%d", got[0].StartTime, got[len(got)-1].EndTime)
@@ -136,9 +167,11 @@ func TestSplitUtteranceForCaptions_WithWords(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len=%d want 2: %#v", len(got), got)
 	}
-	if got[0].Text != "今天很好，" || got[1].Text != "明天更好" {
+	if got[0].Text != "今天很好" || got[1].Text != "明天更好" {
 		t.Errorf("texts = %q / %q", got[0].Text, got[1].Text)
 	}
+	assertNoEdgePunct(t, got[0].Text)
+	assertNoEdgePunct(t, got[1].Text)
 	if got[0].StartTime != 0 || got[0].EndTime != 1200 {
 		t.Errorf("seg0 time = %d-%d", got[0].StartTime, got[0].EndTime)
 	}

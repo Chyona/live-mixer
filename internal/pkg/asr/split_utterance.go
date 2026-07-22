@@ -7,7 +7,7 @@ import (
 )
 
 // MaxCaptionRunes 单条字幕最大字数（按 Unicode rune 计，含标点与英文字母）。
-const MaxCaptionRunes = 15
+const MaxCaptionRunes = 12
 
 // TimedSegment 断句后的字幕片段（源时间轴，毫秒）。
 type TimedSegment struct {
@@ -23,6 +23,7 @@ type captionAtom struct {
 }
 
 // SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文单词不拆），并切分时间。
+// 成片每行会剥离首尾断句标点，保证行首行尾均非标点。
 func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 	text := strings.TrimSpace(u.Text)
 	if text == "" {
@@ -31,10 +32,17 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 
 	var lines []string
 	for _, clause := range splitByPunctuation(text) {
-		if strings.TrimSpace(clause) == "" {
+		clause = trimCaptionEdgePunct(clause)
+		if clause == "" {
 			continue
 		}
-		lines = append(lines, splitBalancedPreferLatin(clause, MaxCaptionRunes)...)
+		for _, line := range splitBalancedPreferLatin(clause, MaxCaptionRunes) {
+			line = trimCaptionEdgePunct(line)
+			if line == "" {
+				continue
+			}
+			lines = append(lines, line)
+		}
 	}
 	if len(lines) == 0 {
 		return nil
@@ -44,6 +52,43 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 		return segs
 	}
 	return assignTimesProportional(u, lines)
+}
+
+// trimCaptionEdgePunct 去掉首尾空白与断句标点（含 … / ...），使成片行首行尾非标点。
+func trimCaptionEdgePunct(s string) string {
+	runes := []rune(strings.TrimSpace(s))
+	for len(runes) > 0 {
+		if unicode.IsSpace(runes[0]) {
+			runes = runes[1:]
+			continue
+		}
+		if len(runes) >= 3 && runes[0] == '.' && runes[1] == '.' && runes[2] == '.' {
+			runes = runes[3:]
+			continue
+		}
+		if runes[0] == '…' || isBreakPunctRune(runes[0]) {
+			runes = runes[1:]
+			continue
+		}
+		break
+	}
+	for len(runes) > 0 {
+		last := len(runes) - 1
+		if unicode.IsSpace(runes[last]) {
+			runes = runes[:last]
+			continue
+		}
+		if len(runes) >= 3 && runes[last] == '.' && runes[last-1] == '.' && runes[last-2] == '.' {
+			runes = runes[:last-2]
+			continue
+		}
+		if runes[last] == '…' || isBreakPunctRune(runes[last]) {
+			runes = runes[:last]
+			continue
+		}
+		break
+	}
+	return string(runes)
 }
 
 func splitByPunctuation(text string) []string {
