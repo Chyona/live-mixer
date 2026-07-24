@@ -191,8 +191,10 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		return nil
 	}
 
+	asrVersion := material.ASRVersion
 	w.logger.Info("开始处理直播素材 ASR",
 		zap.Uint("material_id", materialID),
+		zap.Int64("asr_version", asrVersion),
 		zap.String("live_url", material.LiveURL),
 	)
 
@@ -202,7 +204,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 			return
 		}
 		lastProgress = progress
-		if updateErr := w.repo.UpdateASRProgress(ctx, materialID, progress); updateErr != nil {
+		if updateErr := w.repo.UpdateASRProgress(ctx, materialID, asrVersion, progress); updateErr != nil {
 			w.logger.Warn("更新 ASR 进度失败",
 				zap.Uint("material_id", materialID),
 				zap.Int16("progress", progress),
@@ -221,7 +223,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		defer prep.Cleanup()
 	}
 	if err != nil {
-		return w.failASR(ctx, materialID, lastProgress, err)
+		return w.failASR(ctx, materialID, asrVersion, lastProgress, err)
 	}
 	w.logger.Info("音频预处理完成",
 		zap.Uint("material_id", materialID),
@@ -243,7 +245,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		updateProgress(mapped)
 	})
 	if err != nil {
-		return w.failASR(ctx, materialID, lastProgress, err)
+		return w.failASR(ctx, materialID, asrVersion, lastProgress, err)
 	}
 
 	duration := asr.ParseDurationMs(raw)
@@ -252,7 +254,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		liveASR = "{}"
 	}
 
-	if err := w.repo.UpdateASRCompleted(ctx, materialID, liveASR, duration, prep.Width, prep.Height); err != nil {
+	if err := w.repo.UpdateASRCompleted(ctx, materialID, asrVersion, liveASR, duration, prep.Width, prep.Height); err != nil {
 		return fmt.Errorf("写入 ASR 成功结果失败: %w", err)
 	}
 	w.logger.Info("直播素材 ASR 处理完成",
@@ -277,13 +279,13 @@ func (w *liveMaterialASRWorker) prepareAudio(
 	return w.audioPreparer.Prepare(ctx, materialID, sourceURL, updateProgress)
 }
 
-func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, progress int16, err error) error {
+func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, asrVersion int64, progress int16, err error) error {
 	w.logger.Error("直播素材 ASR 流程失败",
 		zap.Uint("material_id", materialID),
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)
-	if failErr := w.repo.UpdateASRFailed(ctx, materialID, progress, err.Error()); failErr != nil {
+	if failErr := w.repo.UpdateASRFailed(ctx, materialID, asrVersion, progress, err.Error()); failErr != nil {
 		return fmt.Errorf("ASR 失败且写入失败状态异常: asr=%w, db=%v", err, failErr)
 	}
 	return err

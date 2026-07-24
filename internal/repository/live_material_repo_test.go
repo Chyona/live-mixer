@@ -288,6 +288,11 @@ func TestLiveMaterialRepository_RequeueStaleProcessingASR(t *testing.T) {
 	if err := repo.UpdateASRProcessing(ctx, material.ID); err != nil {
 		t.Fatalf("UpdateASRProcessing() error = %v", err)
 	}
+	before, _ := repo.GetByID(ctx, material.ID)
+	if before.ASRStartedAt == nil {
+		t.Fatal("asr_started_at should be set before requeue")
+	}
+	startedAt := *before.ASRStartedAt
 
 	stale := time.Now().Add(-2 * time.Hour)
 	if err := db.Model(&model.LiveMaterial{}).Where("id = ?", material.ID).
@@ -308,6 +313,103 @@ func TestLiveMaterialRepository_RequeueStaleProcessingASR(t *testing.T) {
 	}
 	if got.ASRVersion != 1 {
 		t.Errorf("ASRVersion = %d, want 1 after requeue", got.ASRVersion)
+	}
+	if got.ASRStartedAt == nil {
+		t.Fatal("asr_started_at should be preserved after stale requeue")
+	}
+	if !got.ASRStartedAt.Equal(startedAt) {
+		t.Errorf("asr_started_at = %v, want preserved %v", got.ASRStartedAt, startedAt)
+	}
+
+	// 再次抢占应刷新 asr_started_at。
+	time.Sleep(time.Millisecond)
+	claimed, err := repo.ClaimPendingASR(ctx)
+	if err != nil {
+		t.Fatalf("ClaimPendingASR() error = %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("ClaimPendingASR() = nil, want claimed material")
+	}
+	if claimed.ASRStartedAt == nil {
+		t.Fatal("claimed asr_started_at should be set")
+	}
+	if claimed.ASRStartedAt.Before(startedAt) {
+		t.Errorf("claimed asr_started_at = %v, want >= previous %v", claimed.ASRStartedAt, startedAt)
+	}
+}
+
+// TestLiveMaterialRepository_ASRWrites_VersionCAS 验证过期 asr_version 的进度/完成/失败写回被忽略。
+func TestLiveMaterialRepository_ASRWrites_VersionCAS(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	material := &model.LiveMaterial{
+		Name: "版本CAS", LiveURL: "https://example.com/cas.mp4",
+		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, material); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	claimed, err := repo.ClaimPendingASR(ctx)
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimPendingASR() = %v, %v", claimed, err)
+	}
+	oldVersion := claimed.ASRVersion
+	startedAt := *claimed.ASRStartedAt
+
+	// 模拟超时回收：status→pending、version+1，保留 started_at。
+	stale := time.Now().Add(-2 * time.Hour)
+	if err := db.Model(&model.LiveMaterial{}).Where("id = ?", material.ID).
+		Update("asr_updated_at", stale).Error; err != nil {
+		t.Fatalf("backdate asr_updated_at error = %v", err)
+	}
+	if _, err := repo.RequeueStaleProcessingASR(ctx, time.Hour); err != nil {
+		t.Fatalf("RequeueStaleProcessingASR() error = %v", err)
+	}
+
+	// 旧 Worker 用过期 version 写回，应全部被忽略。
+	if err := repo.UpdateASRProgress(ctx, material.ID, oldVersion, 80); err != nil {
+		t.Fatalf("UpdateASRProgress(stale) error = %v", err)
+	}
+	if err := repo.UpdateASRCompleted(ctx, material.ID, oldVersion, `{"ok":true}`, 1000, 1280, 720); err != nil {
+		t.Fatalf("UpdateASRCompleted(stale) error = %v", err)
+	}
+	if err := repo.UpdateASRFailed(ctx, material.ID, oldVersion, 40, "旧失败"); err != nil {
+		t.Fatalf("UpdateASRFailed(stale) error = %v", err)
+	}
+
+	got, _ := repo.GetByID(ctx, material.ID)
+	if got.ASRStatus != model.ASRStatusPending {
+		t.Errorf("ASRStatus = %q, want pending (stale writes ignored)", got.ASRStatus)
+	}
+	if got.ASRProgress != 0 {
+		t.Errorf("ASRProgress = %d, want 0", got.ASRProgress)
+	}
+	if got.ASRErrorMsg != "ASR 处理超时，已自动重新排队" {
+		t.Errorf("ASRErrorMsg = %q", got.ASRErrorMsg)
+	}
+	if got.ASRStartedAt == nil || !got.ASRStartedAt.Equal(startedAt) {
+		t.Errorf("asr_started_at should remain %v, got %v", startedAt, got.ASRStartedAt)
+	}
+	if got.LiveASR == `{"ok":true}` {
+		t.Error("stale UpdateASRCompleted should not overwrite live_asr")
+	}
+
+	// 新一轮抢占后，正确 version 可写完成。
+	claimed2, err := repo.ClaimPendingASR(ctx)
+	if err != nil || claimed2 == nil {
+		t.Fatalf("second ClaimPendingASR() = %v, %v", claimed2, err)
+	}
+	if err := repo.UpdateASRCompleted(ctx, material.ID, claimed2.ASRVersion, `{"result":"ok"}`, 2000, 1920, 1080); err != nil {
+		t.Fatalf("UpdateASRCompleted(current) error = %v", err)
+	}
+	final, _ := repo.GetByID(ctx, material.ID)
+	if final.ASRStatus != model.ASRStatusCompleted {
+		t.Errorf("final ASRStatus = %q, want completed", final.ASRStatus)
+	}
+	if final.ASRStartedAt == nil {
+		t.Error("final asr_started_at should not be empty")
 	}
 }
 
@@ -373,7 +475,7 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 		t.Error("asr_started_at should be set")
 	}
 
-	if err := repo.UpdateASRProgress(ctx, material.ID, 50); err != nil {
+	if err := repo.UpdateASRProgress(ctx, material.ID, got.ASRVersion, 50); err != nil {
 		t.Fatalf("UpdateASRProgress() error = %v", err)
 	}
 	got, _ = repo.GetByID(ctx, material.ID)
@@ -382,7 +484,7 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 	}
 
 	asrJSON := `{"audio_info":{"duration":3000},"result":{"text":"ok"}}`
-	if err := repo.UpdateASRCompleted(ctx, material.ID, asrJSON, 3000, 1920, 1080); err != nil {
+	if err := repo.UpdateASRCompleted(ctx, material.ID, got.ASRVersion, asrJSON, 3000, 1920, 1080); err != nil {
 		t.Fatalf("UpdateASRCompleted() error = %v", err)
 	}
 	got, _ = repo.GetByID(ctx, material.ID)
@@ -407,7 +509,11 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 		LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
 	}
 	_ = repo.Create(ctx, material2)
-	if err := repo.UpdateASRFailed(ctx, material2.ID, 20, "网络错误"); err != nil {
+	if err := repo.UpdateASRProcessing(ctx, material2.ID); err != nil {
+		t.Fatalf("UpdateASRProcessing(material2) error = %v", err)
+	}
+	got2prep, _ := repo.GetByID(ctx, material2.ID)
+	if err := repo.UpdateASRFailed(ctx, material2.ID, got2prep.ASRVersion, 20, "网络错误"); err != nil {
 		t.Fatalf("UpdateASRFailed() error = %v", err)
 	}
 	got2, _ := repo.GetByID(ctx, material2.ID)

@@ -57,6 +57,9 @@ func (m *workerMockRepo) ClaimPendingASR(ctx context.Context) (*model.LiveMateri
 		material.ASRStatus = model.ASRStatusProcessing
 		material.ASRProgress = 5
 		material.ASRErrorMsg = ""
+		material.ASRVersion++
+		now := time.Now()
+		material.ASRStartedAt = &now
 		stored := *material
 		return &stored, nil
 	}
@@ -84,23 +87,29 @@ func (m *workerMockRepo) UpdateASRProcessing(ctx context.Context, id uint) error
 	return nil
 }
 
-func (m *workerMockRepo) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
+func (m *workerMockRepo) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	material := m.materials[id]
 	if material == nil {
 		return gorm.ErrRecordNotFound
 	}
+	if material.ASRStatus != model.ASRStatusProcessing || material.ASRVersion != asrVersion {
+		return nil
+	}
 	material.ASRProgress = progress
 	return nil
 }
 
-func (m *workerMockRepo) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error {
+func (m *workerMockRepo) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	material := m.materials[id]
 	if material == nil {
 		return gorm.ErrRecordNotFound
+	}
+	if material.ASRStatus != model.ASRStatusProcessing || material.ASRVersion != asrVersion {
+		return nil
 	}
 	material.ASRStatus = model.ASRStatusCompleted
 	material.ASRProgress = 100
@@ -111,12 +120,15 @@ func (m *workerMockRepo) UpdateASRCompleted(ctx context.Context, id uint, liveAS
 	return nil
 }
 
-func (m *workerMockRepo) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+func (m *workerMockRepo) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	material := m.materials[id]
 	if material == nil {
 		return gorm.ErrRecordNotFound
+	}
+	if material.ASRStatus != model.ASRStatusProcessing || material.ASRVersion != asrVersion {
+		return nil
 	}
 	material.ASRStatus = model.ASRStatusFailed
 	material.ASRProgress = progress
@@ -262,6 +274,65 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 	}
 	if material.Width != 1280 || material.Height != 720 {
 		t.Errorf("Width/Height = %d/%d, want 1280x720", material.Width, material.Height)
+	}
+}
+
+// TestLiveMaterialASRWorker_Process_StaleVersionIgnored 验证超时回收后旧 Worker 写回被忽略，asr_started_at 不被清空。
+func TestLiveMaterialASRWorker_Process_StaleVersionIgnored(t *testing.T) {
+	started := time.Now().Add(-time.Minute)
+	repo := &workerMockRepo{
+		materials: map[uint]*model.LiveMaterial{
+			10: {
+				ID:           10,
+				LiveURL:      "https://example.com/stale.mp4",
+				ASRStatus:    model.ASRStatusProcessing,
+				ASRVersion:   2,
+				ASRStartedAt: &started,
+			},
+		},
+	}
+	asrSvc := &workerMockASR{
+		transcribeFn: func(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
+			return json.RawMessage(`{"audio_info":{"duration":500},"result":{"text":"stale"}}`), nil
+		},
+	}
+	worker := NewLiveMaterialASRWorker(repo, asrSvc, &mockASRAudioPreparer{
+		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
+			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/stale.mp3", Cleanup: func() {}}, nil
+		},
+	}, nil, 0, 0)
+
+	// 模拟 pollLoop 超时回收：version 递增、status 改回 pending，保留 started_at。
+	repo.mu.Lock()
+	repo.materials[10].ASRStatus = model.ASRStatusPending
+	repo.materials[10].ASRProgress = 0
+	repo.materials[10].ASRVersion = 3
+	repo.materials[10].ASRErrorMsg = "ASR 处理超时，已自动重新排队"
+	repo.mu.Unlock()
+
+	// 旧 Worker 仍持有 version=2 继续 Process，写回应被忽略。
+	oldSnapshot := &model.LiveMaterial{
+		ID:         10,
+		LiveURL:    "https://example.com/stale.mp4",
+		ASRStatus:  model.ASRStatusProcessing,
+		ASRVersion: 2,
+	}
+	if err := worker.Process(context.Background(), oldSnapshot); err != nil {
+		t.Fatalf("Process(stale) error = %v", err)
+	}
+
+	got := repo.materials[10]
+	if got.ASRStatus != model.ASRStatusPending {
+		t.Errorf("ASRStatus = %q, want pending", got.ASRStatus)
+	}
+	if got.ASRVersion != 3 {
+		t.Errorf("ASRVersion = %d, want 3", got.ASRVersion)
+	}
+	if got.ASRStartedAt == nil || !got.ASRStartedAt.Equal(started) {
+		t.Errorf("asr_started_at = %v, want preserved %v", got.ASRStartedAt, started)
+	}
+	if got.LiveASR != "" && got.LiveASR != "{}" {
+		t.Errorf("LiveASR = %q, want unchanged by stale complete", got.LiveASR)
 	}
 }
 

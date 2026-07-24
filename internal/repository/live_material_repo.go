@@ -27,11 +27,14 @@ type LiveMaterialRepository interface {
 	// UpdateASRProcessing 标记 ASR 开始识别。
 	UpdateASRProcessing(ctx context.Context, id uint) error
 	// UpdateASRProgress 更新 ASR 识别进度。
-	UpdateASRProgress(ctx context.Context, id uint, progress int16) error
+	// 仅当 asr_status=processing 且 asr_version 匹配时生效，避免超时回收后旧 Worker 继续写回。
+	UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error
 	// UpdateASRCompleted 写入 ASR 成功结果，并回写探测到的分辨率（0 表示未知/无视频轨）。
-	UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error
+	// 仅当 asr_status=processing 且 asr_version 匹配时生效。
+	UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error
 	// UpdateASRFailed 标记 ASR 识别失败。
-	UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error
+	// 仅当 asr_status=processing 且 asr_version 匹配时生效。
+	UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error
 	// ResetASRToPending 将失败的 ASR 重置为待处理（仅 failed 生效）。
 	ResetASRToPending(ctx context.Context, id uint) error
 	// List 分页查询直播素材列表，支持日期与关键词筛选，按 id 倒序，不含 live_asr 字段。
@@ -147,7 +150,7 @@ func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, 
 			"asr_status":       model.ASRStatusPending,
 			"asr_progress":     int16(0),
 			"asr_error_msg":    "ASR 处理超时，已自动重新排队",
-			"asr_started_at":   nil,
+			// 保留 asr_started_at：pending 窗口可继续展示上次开始时间；新一轮由 ClaimPendingASR 覆盖。
 			"asr_updated_at":   now,
 			"asr_completed_at": nil,
 			"asr_version":      gorm.Expr("asr_version + 1"),
@@ -170,17 +173,17 @@ func (r *liveMaterialRepository) UpdateASRProcessing(ctx context.Context, id uin
 		}).Error
 }
 
-func (r *liveMaterialRepository) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
+func (r *liveMaterialRepository) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return r.db.WithContext(ctx).
 		Model(&model.LiveMaterial{}).
-		Where("id = ?", id).
+		Where("id = ? AND asr_status = ? AND asr_version = ?", id, model.ASRStatusProcessing, asrVersion).
 		Updates(map[string]interface{}{
 			"asr_progress":   progress,
 			"asr_updated_at": time.Now(),
 		}).Error
 }
 
-func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error {
+func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
 	if width < 0 {
 		width = 0
 	}
@@ -190,7 +193,7 @@ func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint
 	now := time.Now()
 	return r.db.WithContext(ctx).
 		Model(&model.LiveMaterial{}).
-		Where("id = ?", id).
+		Where("id = ? AND asr_status = ? AND asr_version = ?", id, model.ASRStatusProcessing, asrVersion).
 		Updates(map[string]interface{}{
 			"asr_status":       model.ASRStatusCompleted,
 			"asr_progress":     int16(100),
@@ -204,10 +207,10 @@ func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint
 		}).Error
 }
 
-func (r *liveMaterialRepository) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+func (r *liveMaterialRepository) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {
 	return r.db.WithContext(ctx).
 		Model(&model.LiveMaterial{}).
-		Where("id = ?", id).
+		Where("id = ? AND asr_status = ? AND asr_version = ?", id, model.ASRStatusProcessing, asrVersion).
 		Updates(map[string]interface{}{
 			"asr_status":     model.ASRStatusFailed,
 			"asr_progress":   progress,

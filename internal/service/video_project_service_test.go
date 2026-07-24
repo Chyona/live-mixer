@@ -99,13 +99,13 @@ func (m *mockLiveMaterialRepoForProject) RequeueStaleProcessingASR(ctx context.C
 func (m *mockLiveMaterialRepoForProject) UpdateASRProcessing(ctx context.Context, id uint) error {
 	return nil
 }
-func (m *mockLiveMaterialRepoForProject) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
+func (m *mockLiveMaterialRepoForProject) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return nil
 }
-func (m *mockLiveMaterialRepoForProject) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error {
+func (m *mockLiveMaterialRepoForProject) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
 	return nil
 }
-func (m *mockLiveMaterialRepoForProject) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+func (m *mockLiveMaterialRepoForProject) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {
 	return nil
 }
 func (m *mockLiveMaterialRepoForProject) ResetASRToPending(ctx context.Context, id uint) error {

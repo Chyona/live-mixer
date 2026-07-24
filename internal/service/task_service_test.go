@@ -57,13 +57,13 @@ func (m *mockLiveRepoForTask) RequeueStaleProcessingASR(ctx context.Context, old
 	return 0, nil
 }
 func (m *mockLiveRepoForTask) UpdateASRProcessing(ctx context.Context, id uint) error  { return nil }
-func (m *mockLiveRepoForTask) UpdateASRProgress(ctx context.Context, id uint, progress int16) error {
+func (m *mockLiveRepoForTask) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return nil
 }
-func (m *mockLiveRepoForTask) UpdateASRCompleted(ctx context.Context, id uint, liveASR string, duration int64, width, height int) error {
+func (m *mockLiveRepoForTask) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
 	return nil
 }
-func (m *mockLiveRepoForTask) UpdateASRFailed(ctx context.Context, id uint, progress int16, errorMsg string) error {
+func (m *mockLiveRepoForTask) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {
 	return nil
 }
 func (m *mockLiveRepoForTask) ResetASRToPending(ctx context.Context, id uint) error { return nil }
