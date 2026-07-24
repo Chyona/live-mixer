@@ -347,14 +347,6 @@ func normalizeWebConfig(w *WebConfig) {
 	}
 }
 
-// StagingMaxDirsOrDefault 返回 staging 最多保留目录数；<=0 时回落默认 80。
-func (w WebConfig) StagingMaxDirsOrDefault() int {
-	if w.StagingMaxDirs <= 0 {
-		return DefaultStagingMaxDirs
-	}
-	return w.StagingMaxDirs
-}
-
 // StagingCleanupInterval 返回 staging 清理间隔；<=0 时回落默认 60 分钟。
 func (w WebConfig) StagingCleanupInterval() time.Duration {
 	min := w.StagingCleanupIntervalMin

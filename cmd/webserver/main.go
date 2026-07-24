@@ -144,7 +144,7 @@ func main() {
 
 	sched := scheduler.New(logger)
 	webRoot := cfg.Web.RootDir
-	maxDirs := cfg.Web.StagingMaxDirsOrDefault()
+	maxDirs := cfg.Web.StagingMaxDirs
 	sched.Register(scheduler.Job{
 		Name:     "staging-cleanup",
 		Interval: cfg.Web.StagingCleanupInterval(),

@@ -154,9 +154,6 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
 		t.Errorf("Web.StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)
 	}
-	if got := cfg.Web.StagingMaxDirsOrDefault(); got != DefaultStagingMaxDirs {
-		t.Errorf("StagingMaxDirsOrDefault() = %d, want %d", got, DefaultStagingMaxDirs)
-	}
 	if got := cfg.Web.StagingCleanupInterval(); got != time.Hour {
 		t.Errorf("StagingCleanupInterval() = %v, want 1h", got)
 	}
