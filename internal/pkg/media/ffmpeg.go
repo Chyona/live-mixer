@@ -41,13 +41,20 @@ func NewFFmpegConverter(binaryPath string) *FFmpegConverter {
 
 // ConvertToASRMP3 将输入媒体转为 ASR 适用的标准 MP3（单声道、16kHz、libmp3lame）。
 // 通过去视频轨与降采样减小文件体积，同时保持语音识别所需的基本音质。
+// 无对齐参数时等价于 Align 零值（不裁片头、不补片头、不按目标时长封口）。
 func (c *FFmpegConverter) ConvertToASRMP3(ctx context.Context, inputPath, outputPath string) error {
+	return c.ConvertToASRMP3Aligned(ctx, inputPath, outputPath, ASRAlignOptions{})
+}
+
+// ConvertToASRMP3Aligned 在标准 MP3 转码基础上，将音轨对齐到视频时间轴。
+// LeadPadMs>0 时片头补静音；TrimStartSec>0 时裁掉音轨前缀；TargetDurSec>0 时 apad+-t 封口到目标时长。
+func (c *FFmpegConverter) ConvertToASRMP3Aligned(ctx context.Context, inputPath, outputPath string, align ASRAlignOptions) error {
 	binary := c.BinaryPath
 	if strings.TrimSpace(binary) == "" {
 		binary = DefaultFFmpegBinary
 	}
 
-	args := buildASRMP3Args(c.resolvedSampleRate(), c.resolvedChannels(), c.resolvedMP3Bitrate(), inputPath, outputPath)
+	args := buildASRMP3Args(c.resolvedSampleRate(), c.resolvedChannels(), c.resolvedMP3Bitrate(), inputPath, outputPath, align)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -57,17 +64,50 @@ func (c *FFmpegConverter) ConvertToASRMP3(ctx context.Context, inputPath, output
 }
 
 // buildASRMP3Args 构建 ffmpeg 转 ASR MP3 的参数列表，便于单元测试校验。
-func buildASRMP3Args(sampleRate, channels int, bitrate, inputPath, outputPath string) []string {
-	return []string{
+func buildASRMP3Args(sampleRate, channels int, bitrate, inputPath, outputPath string, align ASRAlignOptions) []string {
+	args := []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
 		"-i", inputPath,
 		"-vn",
-		"-ac", strconv.Itoa(channels),
-		"-ar", strconv.Itoa(sampleRate),
+		"-af", buildASRAlignAudioFilter(sampleRate, channels, align),
 		"-c:a", "libmp3lame",
 		"-b:a", bitrate,
-		outputPath,
+	}
+	if align.TargetDurSec > 0 {
+		args = append(args, "-t", formatFFmpegSeconds(align.TargetDurSec))
+	}
+	args = append(args, outputPath)
+	return args
+}
+
+// buildASRAlignAudioFilter 构建将对齐到视频时间轴的 -af 滤镜链。
+// 始终 asetpts 归零，避免源片 audio.start_time>0 时 apad/whole_dur 按错误时间戳提前结束。
+func buildASRAlignAudioFilter(sampleRate, channels int, align ASRAlignOptions) string {
+	parts := make([]string, 0, 6)
+	if align.TrimStartSec > 0 {
+		parts = append(parts, fmt.Sprintf("atrim=start=%s", formatFFmpegSeconds(align.TrimStartSec)))
+	}
+	parts = append(parts, "asetpts=PTS-STARTPTS")
+	if align.LeadPadMs > 0 {
+		// delays=N:all=1 对任意声道数片头补静音，使内容落在视频时间轴上。
+		parts = append(parts, fmt.Sprintf("adelay=delays=%d:all=1", align.LeadPadMs))
+	}
+	parts = append(parts, fmt.Sprintf("aformat=sample_rates=%d:channel_layouts=%s", sampleRate, channelLayoutName(channels)))
+	if align.TargetDurSec > 0 {
+		parts = append(parts, fmt.Sprintf("apad=whole_dur=%s", formatFFmpegSeconds(align.TargetDurSec)))
+	}
+	return strings.Join(parts, ",")
+}
+
+func channelLayoutName(channels int) string {
+	switch channels {
+	case 1:
+		return "mono"
+	case 2:
+		return "stereo"
+	default:
+		return fmt.Sprintf("%d", channels)
 	}
 }
 

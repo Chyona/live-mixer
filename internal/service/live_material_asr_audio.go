@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,8 @@ const (
 	defaultASRAudioObjectPrefix = storage.SubDirTemp
 	// defaultTempDirName 进程工作目录下的临时文件根目录名。
 	defaultTempDirName = "temp"
+	// asrDurationMismatchWarnSec 对齐后 MP3 与目标时长差超过该阈值（秒）时打 Warn。
+	asrDurationMismatchWarnSec = 0.15
 )
 
 // FileDownloader 下载远程文件到本地的抽象，便于单元测试注入 mock。
@@ -26,9 +29,9 @@ type FileDownloader interface {
 	Download(url, dest string) (string, error)
 }
 
-// AudioConverter 将媒体文件转为 ASR 适用标准 MP3 的抽象。
+// AudioConverter 将媒体文件转为 ASR 适用标准 MP3 的抽象（支持时间轴对齐）。
 type AudioConverter interface {
-	ConvertToASRMP3(ctx context.Context, inputPath, outputPath string) error
+	ConvertToASRMP3Aligned(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error
 }
 
 // ObjectUploader 上传本地文件到对象存储的抽象。
@@ -53,7 +56,7 @@ type ASRAudioPrepareResult struct {
 
 // LiveMaterialASRAudioPreparer 为直播素材 ASR 准备公网可访问的媒体 URL。
 type LiveMaterialASRAudioPreparer interface {
-	// Prepare 下载源媒体、探测分辨率、转标准 MP3、上传对象存储。
+	// Prepare 下载源媒体、探测时间轴与分辨率、对齐转标准 MP3、上传对象存储。
 	// Cleanup 用于删除本地临时文件，调用方应在完成后执行 defer Cleanup()。
 	Prepare(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error)
 }
@@ -62,7 +65,7 @@ type liveMaterialASRAudioPreparer struct {
 	downloader      FileDownloader
 	converter       AudioConverter
 	uploader        ObjectUploader
-	prober          media.VideoProber
+	prober          media.MediaTimelineProber
 	objectKeyPrefix string
 	workDir         string
 	logger          *zap.Logger
@@ -76,7 +79,7 @@ func NewLiveMaterialASRAudioPreparer(
 	uploader ObjectUploader,
 	workDir string,
 	logger *zap.Logger,
-	prober media.VideoProber,
+	prober media.MediaTimelineProber,
 ) LiveMaterialASRAudioPreparer {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -151,37 +154,53 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	}
 	report(20)
 
-	// 下载完成后立刻探测分辨率；失败不阻断后续 ASR（纯音频无视频轨属正常）。
+	// 下载完成后探测时间轴与分辨率；失败不阻断后续 ASR（纯音频无视频轨属正常）。
 	width, height := 0, 0
+	align := media.ASRAlignOptions{}
 	if p.prober != nil {
-		w, h, probeErr := p.prober.ProbeVideoSize(ctx, sourcePath)
+		tl, probeErr := p.prober.ProbeMediaTimeline(ctx, sourcePath)
 		if probeErr != nil {
-			p.logger.Warn("ffprobe 探测直播素材分辨率失败，将保持 width/height=0",
+			p.logger.Warn("ffprobe 探测直播素材时间轴失败，将使用默认对齐参数",
 				zap.Uint("material_id", materialID),
 				zap.String("source_path", sourcePath),
 				zap.Error(probeErr),
 			)
 		} else {
-			width, height = w, h
-			p.logger.Info("已探测直播素材分辨率",
+			width, height = tl.Width, tl.Height
+			align = tl.AlignOptions()
+			p.logger.Info("已探测直播素材时间轴",
 				zap.Uint("material_id", materialID),
 				zap.Int("width", width),
 				zap.Int("height", height),
+				zap.Bool("has_video", tl.HasVideo),
+				zap.Bool("has_audio", tl.HasAudio),
+				zap.Float64("video_start_sec", tl.VideoStartSec),
+				zap.Float64("video_duration_sec", tl.VideoDurationSec),
+				zap.Float64("audio_start_sec", tl.AudioStartSec),
+				zap.Float64("audio_duration_sec", tl.AudioDurationSec),
+				zap.Int64("lead_pad_ms", align.LeadPadMs),
+				zap.Float64("trim_start_sec", align.TrimStartSec),
+				zap.Float64("target_dur_sec", align.TargetDurSec),
 			)
 		}
 	}
 
-	p.logger.Info("开始转码为标准 MP3",
+	p.logger.Info("开始转码为对齐标准 MP3",
 		zap.Uint("material_id", materialID),
 		zap.String("input", sourcePath),
 		zap.String("output", mp3Path),
+		zap.Int64("lead_pad_ms", align.LeadPadMs),
+		zap.Float64("trim_start_sec", align.TrimStartSec),
+		zap.Float64("target_dur_sec", align.TargetDurSec),
 	)
 	report(25)
-	if err := p.converter.ConvertToASRMP3(ctx, sourcePath, mp3Path); err != nil {
+	if err := p.converter.ConvertToASRMP3Aligned(ctx, sourcePath, mp3Path, align); err != nil {
 		cleanup()
 		return empty, fmt.Errorf("转码 ASR MP3 失败: %w", err)
 	}
 	report(35)
+
+	p.warnIfDurationMismatch(ctx, materialID, mp3Path, align.TargetDurSec)
 
 	objectKey := buildASRObjectKey(p.objectKeyPrefix, sessionID)
 	p.logger.Info("开始上传 ASR 临时媒体",
@@ -202,6 +221,9 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		zap.String("audio_url", audioURL),
 		zap.Int("width", width),
 		zap.Int("height", height),
+		zap.Int64("lead_pad_ms", align.LeadPadMs),
+		zap.Float64("trim_start_sec", align.TrimStartSec),
+		zap.Float64("target_dur_sec", align.TargetDurSec),
 	)
 
 	return ASRAudioPrepareResult{
@@ -210,6 +232,42 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		Height:   height,
 		Cleanup:  cleanup,
 	}, nil
+}
+
+func (p *liveMaterialASRAudioPreparer) warnIfDurationMismatch(ctx context.Context, materialID uint, mp3Path string, targetDurSec float64) {
+	if p.prober == nil || targetDurSec <= 0 {
+		return
+	}
+	tl, err := p.prober.ProbeMediaTimeline(ctx, mp3Path)
+	if err != nil {
+		p.logger.Warn("转码后探测 MP3 时长失败",
+			zap.Uint("material_id", materialID),
+			zap.String("mp3_path", mp3Path),
+			zap.Error(err),
+		)
+		return
+	}
+	mp3Dur := tl.FormatDurationSec
+	if mp3Dur <= 0 {
+		mp3Dur = tl.AudioDurationSec
+	}
+	delta := math.Abs(mp3Dur - targetDurSec)
+	if delta <= asrDurationMismatchWarnSec {
+		p.logger.Info("对齐后 MP3 时长校验通过",
+			zap.Uint("material_id", materialID),
+			zap.Float64("target_dur_sec", targetDurSec),
+			zap.Float64("mp3_dur_sec", mp3Dur),
+			zap.Float64("delta_sec", delta),
+		)
+		return
+	}
+	p.logger.Warn("对齐后 MP3 时长与目标视频时长偏差过大",
+		zap.Uint("material_id", materialID),
+		zap.Float64("target_dur_sec", targetDurSec),
+		zap.Float64("mp3_dur_sec", mp3Dur),
+		zap.Float64("delta_sec", delta),
+		zap.Float64("warn_threshold_sec", asrDurationMismatchWarnSec),
+	)
 }
 
 func (p *liveMaterialASRAudioPreparer) resolveTempDir() (string, error) {

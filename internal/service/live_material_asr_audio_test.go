@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"live-mixer/internal/pkg/media"
 )
 
 type mockFileDownloader struct {
@@ -17,11 +19,11 @@ func (m *mockFileDownloader) Download(url, dest string) (string, error) {
 }
 
 type mockAudioConverter struct {
-	convertFn func(ctx context.Context, inputPath, outputPath string) error
+	convertFn func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error
 }
 
-func (m *mockAudioConverter) ConvertToASRMP3(ctx context.Context, inputPath, outputPath string) error {
-	return m.convertFn(ctx, inputPath, outputPath)
+func (m *mockAudioConverter) ConvertToASRMP3Aligned(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error {
+	return m.convertFn(ctx, inputPath, outputPath, align)
 }
 
 type mockObjectUploader struct {
@@ -32,21 +34,29 @@ func (m *mockObjectUploader) UploadFile(ctx context.Context, localPath, objectKe
 	return m.uploadFn(ctx, localPath, objectKey)
 }
 
-
-type mockVideoProber struct {
-	probeFn func(ctx context.Context, inputPath string) (width, height int, err error)
+type mockMediaProber struct {
+	probeTimelineFn func(ctx context.Context, inputPath string) (media.MediaTimeline, error)
+	probeSizeFn     func(ctx context.Context, inputPath string) (width, height int, err error)
 }
 
-func (m *mockVideoProber) ProbeVideoSize(ctx context.Context, inputPath string) (width, height int, err error) {
-	if m.probeFn != nil {
-		return m.probeFn(ctx, inputPath)
+func (m *mockMediaProber) ProbeMediaTimeline(ctx context.Context, inputPath string) (media.MediaTimeline, error) {
+	if m.probeTimelineFn != nil {
+		return m.probeTimelineFn(ctx, inputPath)
 	}
-	return 0, 0, nil
+	return media.MediaTimeline{}, nil
+}
+
+func (m *mockMediaProber) ProbeVideoSize(ctx context.Context, inputPath string) (width, height int, err error) {
+	if m.probeSizeFn != nil {
+		return m.probeSizeFn(ctx, inputPath)
+	}
+	tl, err := m.ProbeMediaTimeline(ctx, inputPath)
+	return tl.Width, tl.Height, err
 }
 
 func defaultMockConverter() *mockAudioConverter {
 	return &mockAudioConverter{
-		convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+		convertFn: func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error {
 			return os.WriteFile(outputPath, []byte("fake-mp3"), 0644)
 		},
 	}
@@ -63,11 +73,12 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 		downloadDest string
 		convertInput string
 		convertOut   string
+		gotAlign     media.ASRAlignOptions
 		uploadedKey  string
 		uploadedPath string
+		probeCalls   int
 	)
 
-	var probedPath string
 	preparer := NewLiveMaterialASRAudioPreparer(
 		&mockFileDownloader{
 			downloadFn: func(url, dest string) (string, error) {
@@ -79,9 +90,10 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 			},
 		},
 		&mockAudioConverter{
-			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+			convertFn: func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error {
 				convertInput = inputPath
 				convertOut = outputPath
+				gotAlign = align
 				return os.WriteFile(outputPath, []byte("fake-mp3"), 0644)
 			},
 		},
@@ -94,10 +106,26 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 		},
 		tempDir,
 		nil,
-		&mockVideoProber{
-			probeFn: func(ctx context.Context, inputPath string) (int, int, error) {
-				probedPath = inputPath
-				return 1920, 1080, nil
+		&mockMediaProber{
+			probeTimelineFn: func(ctx context.Context, inputPath string) (media.MediaTimeline, error) {
+				probeCalls++
+				if strings.HasSuffix(inputPath, ".mp3") {
+					return media.MediaTimeline{
+						HasAudio:          true,
+						AudioDurationSec:  5,
+						FormatDurationSec: 5,
+					}, nil
+				}
+				return media.MediaTimeline{
+					Width:            1920,
+					Height:           1080,
+					HasVideo:         true,
+					HasAudio:         true,
+					VideoStartSec:    0,
+					VideoDurationSec: 5,
+					AudioStartSec:    1,
+					AudioDurationSec: 4,
+				}, nil
 			},
 		},
 	)
@@ -112,11 +140,17 @@ func TestLiveMaterialASRAudioPreparer_Prepare_Success(t *testing.T) {
 	defer result.Cleanup()
 	audioURL := result.AudioURL
 
-	if probedPath == "" {
-		t.Fatal("expected ProbeVideoSize to be called")
+	if probeCalls < 2 {
+		t.Fatalf("expected ProbeMediaTimeline for source and mp3, got %d calls", probeCalls)
 	}
 	if result.Width != 1920 || result.Height != 1080 {
 		t.Errorf("Width/Height = %d/%d, want 1920x1080", result.Width, result.Height)
+	}
+	if gotAlign.LeadPadMs != 1000 {
+		t.Errorf("LeadPadMs = %d, want 1000", gotAlign.LeadPadMs)
+	}
+	if gotAlign.TargetDurSec != 5 {
+		t.Errorf("TargetDurSec = %v, want 5", gotAlign.TargetDurSec)
 	}
 	wantSource := buildASRSourceLocalPath(tempDir, sessionID)
 	if downloadDest != wantSource {
@@ -189,7 +223,7 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 			},
 		},
 		&mockAudioConverter{
-			convertFn: func(ctx context.Context, inputPath, outputPath string) error {
+			convertFn: func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error {
 				return context.Canceled
 			},
 		},
