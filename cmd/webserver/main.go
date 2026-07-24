@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"live-mixer/docs"
 	"live-mixer/internal/bootstrap"
@@ -30,6 +31,7 @@ import (
 	"live-mixer/internal/pkg/storage"
 	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
+	"live-mixer/internal/scheduler"
 	"live-mixer/internal/service"
 	routesv1 "live-mixer/internal/routes/v1"
 	routesv2 "live-mixer/internal/routes/v2"
@@ -140,6 +142,34 @@ func main() {
 	aiSliceWorker.Start(ctx)
 	draftWorker.Start(ctx)
 	aiSliceDraftWorker.Start(ctx)
+
+	sched := scheduler.New(logger)
+	webRoot := cfg.Web.RootDir
+	retention := cfg.Web.StagingRetention()
+	sched.Register(scheduler.Job{
+		Name:     "staging-cleanup",
+		Interval: cfg.Web.StagingCleanupInterval(),
+		Run: func(ctx context.Context) {
+			removed, err := webroot.CleanupStaging(webRoot, retention, time.Now())
+			if err != nil {
+				logger.Warn("staging 清理未完全成功",
+					zap.String("root_dir", webRoot),
+					zap.Int("removed", removed),
+					zap.Error(err),
+				)
+				return
+			}
+			if removed > 0 {
+				logger.Info("staging 清理完成",
+					zap.String("root_dir", webRoot),
+					zap.Int("removed", removed),
+					zap.Duration("retention", retention),
+				)
+			}
+		},
+	})
+	sched.Start(ctx)
+
 	v1AccountHandler := v1handler.NewAccountHandler(accountService)
 	v1AuthHandler := v1handler.NewAuthHandler(authService)
 	v1ASRHandler := v1handler.NewASRHandler(asrService)

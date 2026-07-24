@@ -66,11 +66,13 @@ llm:
 capcut_mate:
   base_url: "http://192.168.3.219:81"
 
-# WEB 静态根目录：切片落盘到 root_dir/staging/{task_id}，对外 URL 为 root_url/...
-# 可用 APP_WEB_ROOT_DIR / APP_WEB_ROOT_URL 或 WEB_ROOT_DIR / WEB_ROOT_URL 覆盖
+# WEB 本地暂存根目录：切片落盘到 root_dir/staging/{task_id}；对外 URL 由对象存储上传提供
+# 可用 APP_WEB_ROOT_DIR 或 WEB_ROOT_DIR 覆盖
+# staging 清理：APP_WEB_STAGING_RETENTION_HOURS / APP_WEB_STAGING_CLEANUP_INTERVAL_MIN
 web:
   root_dir: "docker/html"
-  root_url: "http://192.168.3.219:81"
+  staging_retention_hours: 24       # staging 子目录保留时长（小时），超时直接删除
+  staging_cleanup_interval_min: 60  # 全局定时清理间隔（分钟）
 
 # 后台 Worker 调度；可用 APP_WORKER_*_CONCURRENCY / APP_WORKER_*_STALE_TIMEOUT_MIN 覆盖
 worker:

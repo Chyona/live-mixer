@@ -148,6 +148,18 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 	if cfg.Web.RootDir != "docker/html" {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
 	}
+	if cfg.Web.StagingRetentionHours != DefaultStagingRetentionHours {
+		t.Errorf("Web.StagingRetentionHours = %d, want %d", cfg.Web.StagingRetentionHours, DefaultStagingRetentionHours)
+	}
+	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
+		t.Errorf("Web.StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)
+	}
+	if got := cfg.Web.StagingRetention(); got != 24*time.Hour {
+		t.Errorf("StagingRetention() = %v, want 24h", got)
+	}
+	if got := cfg.Web.StagingCleanupInterval(); got != time.Hour {
+		t.Errorf("StagingCleanupInterval() = %v, want 1h", got)
+	}
 }
 
 func TestLoad_CapCutMateEnvOverride(t *testing.T) {
@@ -163,6 +175,38 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	}
 	if cfg.Web.RootDir != `D:\html` {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
+	}
+}
+
+func TestLoad_WebStagingCleanupEnvOverride(t *testing.T) {
+	t.Setenv("APP_WEB_STAGING_RETENTION_HOURS", "48")
+	t.Setenv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN", "30")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Web.StagingRetentionHours != 48 {
+		t.Errorf("StagingRetentionHours = %d, want 48", cfg.Web.StagingRetentionHours)
+	}
+	if cfg.Web.StagingCleanupIntervalMin != 30 {
+		t.Errorf("StagingCleanupIntervalMin = %d, want 30", cfg.Web.StagingCleanupIntervalMin)
+	}
+}
+
+func TestLoad_WebStagingCleanupInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_WEB_STAGING_RETENTION_HOURS", "0")
+	t.Setenv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN", "-1")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Web.StagingRetentionHours != DefaultStagingRetentionHours {
+		t.Errorf("StagingRetentionHours = %d, want %d", cfg.Web.StagingRetentionHours, DefaultStagingRetentionHours)
+	}
+	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
+		t.Errorf("StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)
 	}
 }
 
