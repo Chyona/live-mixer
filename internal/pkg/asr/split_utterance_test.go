@@ -77,6 +77,93 @@ func TestSplitBalancedPreferLatin_LongEnglishWord(t *testing.T) {
 	}
 }
 
+func assertTokenIntactAcrossLines(t *testing.T, lines []string, token string) {
+	t.Helper()
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, token) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("token %q not kept intact in any line: %v", token, lines)
+	}
+	joined := strings.Join(lines, "")
+	if !strings.Contains(joined, token) {
+		t.Fatalf("joined text missing token %q: %q", token, joined)
+	}
+	tok := []rune(token)
+	for i := 0; i+1 < len(lines); i++ {
+		left, right := lines[i], lines[i+1]
+		for k := 1; k < len(tok); k++ {
+			prefix, suffix := string(tok[:k]), string(tok[k:])
+			if strings.HasSuffix(left, prefix) && strings.HasPrefix(right, suffix) {
+				t.Errorf("token %q split across lines %q | %q: %v", token, left, right, lines)
+			}
+		}
+	}
+}
+
+func TestSplitBalancedPreferIntact_KeepsNumberIntact(t *testing.T) {
+	// 优惠力度达到(6) + 100(3) + 真的很香(4) = 13 → 目标 7+6，切点易落在 100 中
+	text := "优惠力度达到100真的很香"
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes)
+	joined := strings.Join(got, "")
+	if joined != text {
+		t.Fatalf("joined %q != original", joined)
+	}
+	assertTokenIntactAcrossLines(t, got, "100")
+}
+
+func TestSplitBalancedPreferIntact_KeepsPercentIntact(t *testing.T) {
+	text := "优惠力度达到100%真的很香" // 14 runes → 7+7
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes)
+	joined := strings.Join(got, "")
+	if joined != text {
+		t.Fatalf("joined %q != original", joined)
+	}
+	assertTokenIntactAcrossLines(t, got, "100%")
+}
+
+func TestSplitBalancedPreferIntact_LongNumber(t *testing.T) {
+	num := "1234567890123" // 13 digits > 12
+	got := splitBalancedPreferIntact(num, MaxCaptionRunes)
+	if len(got) != 1 || got[0] != num {
+		t.Fatalf("got %v, want whole number on one line", got)
+	}
+}
+
+func TestSplitByPunctuation_KeepsDecimalIntact(t *testing.T) {
+	got := splitByPunctuation("价格是3.14元。真的")
+	joined := strings.Join(got, "")
+	if joined != "价格是3.14元。真的" {
+		t.Fatalf("joined %q", joined)
+	}
+	found := false
+	for _, clause := range got {
+		if strings.Contains(clause, "3.14") {
+			found = true
+		}
+		if strings.Contains(clause, "3.") && !strings.Contains(clause, "3.14") {
+			t.Errorf("decimal split in clause %q: %v", clause, got)
+		}
+	}
+	if !found {
+		t.Fatalf("3.14 not intact: %v", got)
+	}
+}
+
+func TestSplitBalancedPreferIntact_KeepsDecimalIntact(t *testing.T) {
+	text := "今天价格只要3.14元起"
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes)
+	joined := strings.Join(got, "")
+	if joined != text {
+		t.Fatalf("joined %q != original", joined)
+	}
+	assertTokenIntactAcrossLines(t, got, "3.14")
+}
+
 func TestSplitByPunctuation(t *testing.T) {
 	got := splitByPunctuation("好，我里面给你们去搭个这个嗯蕾丝美学的米色")
 	if len(got) != 2 || got[0] != "好，" {

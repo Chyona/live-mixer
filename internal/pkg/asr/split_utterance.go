@@ -17,12 +17,12 @@ type TimedSegment struct {
 }
 
 type captionAtom struct {
-	text  string
-	latin bool
-	runes int
+	text       string
+	keepIntact bool // 英文词 / 数字词整段不拆
+	runes      int
 }
 
-// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文单词不拆），并切分时间。
+// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文词与数字词不拆），并切分时间。
 // 成片每行会剥离首尾断句标点，保证行首行尾均非标点。
 func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 	text := strings.TrimSpace(u.Text)
@@ -36,7 +36,7 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 		if clause == "" {
 			continue
 		}
-		for _, line := range splitBalancedPreferLatin(clause, MaxCaptionRunes) {
+		for _, line := range splitBalancedPreferIntact(clause, MaxCaptionRunes) {
 			line = trimCaptionEdgePunct(line)
 			if line == "" {
 				continue
@@ -111,6 +111,11 @@ func splitByPunctuation(text string) []string {
 		cur = append(cur, r)
 		i++
 		if r == '…' || isBreakPunctRune(r) {
+			// 小数点夹在数字之间不断句（如 3.14）
+			if isDecimalPoint(r) && len(cur) >= 2 && i < len(runes) &&
+				unicode.IsDigit(cur[len(cur)-2]) && unicode.IsDigit(runes[i]) {
+				continue
+			}
 			out = append(out, string(cur))
 			cur = cur[:0]
 		}
@@ -138,28 +143,89 @@ func tokenizeCaptionAtoms(text string) []captionAtom {
 	}
 	out := make([]captionAtom, 0, len(runes))
 	for i := 0; i < len(runes); {
+		if end := matchNumericToken(runes, i); end > i {
+			s := string(runes[i:end])
+			out = append(out, captionAtom{text: s, keepIntact: true, runes: end - i})
+			i = end
+			continue
+		}
 		if isLatinLetter(runes[i]) {
 			j := i + 1
 			for j < len(runes) && isLatinLetter(runes[j]) {
 				j++
 			}
 			s := string(runes[i:j])
-			out = append(out, captionAtom{text: s, latin: true, runes: j - i})
+			out = append(out, captionAtom{text: s, keepIntact: true, runes: j - i})
 			i = j
 			continue
 		}
-		out = append(out, captionAtom{text: string(runes[i]), latin: false, runes: 1})
+		out = append(out, captionAtom{text: string(runes[i]), keepIntact: false, runes: 1})
 		i++
 	}
 	return out
+}
+
+// matchNumericToken 从 i 起匹配数字词：可选货币前缀 + 数字(含小数) + 可选单位后缀。
+// 未匹配时返回 i。
+func matchNumericToken(runes []rune, i int) int {
+	if i >= len(runes) {
+		return i
+	}
+	start := i
+	if isCurrencyPrefix(runes[i]) {
+		if i+1 >= len(runes) || !unicode.IsDigit(runes[i+1]) {
+			return start
+		}
+		i++
+	}
+	if i >= len(runes) || !unicode.IsDigit(runes[i]) {
+		return start
+	}
+	for i < len(runes) {
+		if unicode.IsDigit(runes[i]) {
+			i++
+			continue
+		}
+		if isDecimalPoint(runes[i]) && i+1 < len(runes) && unicode.IsDigit(runes[i+1]) {
+			i++
+			continue
+		}
+		break
+	}
+	if i < len(runes) && isNumericSuffix(runes[i]) {
+		i++
+	}
+	return i
+}
+
+func isCurrencyPrefix(r rune) bool {
+	switch r {
+	case '¥', '$', '€', '£', '￥':
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericSuffix(r rune) bool {
+	switch r {
+	case '%', '％', '‰', '°', '℃':
+		return true
+	default:
+		return false
+	}
+}
+
+func isDecimalPoint(r rune) bool {
+	return r == '.' || r == '．'
 }
 
 func isLatinLetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
-// splitBalancedPreferLatin 超长时按最少行数均分；拉丁字母串整词不拆。
-func splitBalancedPreferLatin(text string, max int) []string {
+// splitBalancedPreferIntact 超长时按最少行数均分；英文词与数字词整段不拆。
+func splitBalancedPreferIntact(text string, max int) []string {
 	if text == "" {
 		return nil
 	}
@@ -216,8 +282,8 @@ func splitBalancedPreferLatin(text string, max int) []string {
 		}
 		// 超过当前行目标。
 		if next <= max {
-			if atom.latin {
-				// 英文整词优先换行，避免为凑目标而跨行切开（此处本就不会拆词，但避免行尾过挤）。
+			if atom.keepIntact {
+				// 英文/数字整词优先换行，避免为凑目标而跨行切开。
 				flush()
 				cur.WriteString(atom.text)
 				curLen = atom.runes
@@ -229,13 +295,18 @@ func splitBalancedPreferLatin(text string, max int) []string {
 			curLen = atom.runes
 			continue
 		}
-		// 超过上限：封口，整原子起新行（超长 Latin 允许该行 > max）。
+		// 超过上限：封口，整原子起新行（超长 keepIntact 允许该行 > max）。
 		flush()
 		cur.WriteString(atom.text)
 		curLen = atom.runes
 	}
 	flush()
 	return lines
+}
+
+// splitBalancedPreferLatin 保留旧名，供既有测试与调用兼容。
+func splitBalancedPreferLatin(text string, max int) []string {
+	return splitBalancedPreferIntact(text, max)
 }
 
 func stripBreakPunct(s string) string {
