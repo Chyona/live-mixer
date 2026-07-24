@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -181,6 +184,10 @@ func (c *Client) poll(ctx context.Context, taskID string, onProgress ProgressCal
 
 		result, done, err := c.queryOnce(ctx, taskID)
 		if err != nil {
+			// 单次查询传输/读超时等瞬时错误：继续轮询，不立刻整单失败。
+			if isTransientQueryError(ctx, err) {
+				continue
+			}
 			return nil, err
 		}
 		if done {
@@ -188,6 +195,33 @@ func (c *Client) poll(ctx context.Context, taskID string, onProgress ProgressCal
 		}
 	}
 	return nil, fmt.Errorf("ASR 任务轮询超时，已尝试 %d 次", c.cfg.MaxPolls)
+}
+
+// isTransientQueryError 判断 ASR 查询错误是否为可软重试的传输层问题。
+// 父 ctx 已取消/超时、业务失败码等返回 false；http.Client 自身 Timeout 导致的
+// DeadlineExceeded（父 ctx 仍有效）、EOF / UnexpectedEOF、net.Error 超时等视为瞬时错误。
+func isTransientQueryError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return isTransientQueryError(ctx, urlErr.Err)
+	}
+	return false
 }
 
 // queryOnce 查询一次 ASR 任务状态；done 为 true 时表示已获得完整结果。

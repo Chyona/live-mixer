@@ -3,6 +3,7 @@ package asr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,6 +116,160 @@ func TestClient_Transcribe_QueryFailed(t *testing.T) {
 	_, err := client.Transcribe(context.Background(), "https://example.com/test.wav")
 	if err == nil || !strings.Contains(err.Error(), "ASR 查询失败") {
 		t.Fatalf("Transcribe() error = %v, want query failure", err)
+	}
+}
+
+// TestClient_Transcribe_QueryTimeoutThenSuccess 单次 query 读超时后应继续轮询并最终成功。
+func TestClient_Transcribe_QueryTimeoutThenSuccess(t *testing.T) {
+	var queryCount atomic.Int32
+	expected := map[string]interface{}{
+		"audio_info": map[string]interface{}{"duration": 2000},
+		"result":     map[string]interface{}{"text": "超时后成功"},
+	}
+	expectedBody, _ := json.Marshal(expected)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/submit") {
+			w.Header().Set(headerStatusCode, statusSuccess)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/query") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		n := queryCount.Add(1)
+		if n == 1 {
+			// 超过 HTTPClient.Timeout，触发 Client.Timeout / deadline exceeded。
+			time.Sleep(80 * time.Millisecond)
+			w.Header().Set(headerStatusCode, statusProcessing1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set(headerStatusCode, statusSuccess)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(expectedBody)
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PollInterval: 5 * time.Millisecond,
+		MaxPolls:     5,
+		HTTPClient:   &http.Client{Timeout: 30 * time.Millisecond},
+	})
+
+	raw, err := client.Transcribe(context.Background(), "https://example.com/test.wav")
+	if err != nil {
+		t.Fatalf("Transcribe() error = %v, want success after transient timeout", err)
+	}
+	if queryCount.Load() < 2 {
+		t.Errorf("queryCount = %d, want >= 2 (at least one timeout + one success)", queryCount.Load())
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if got["result"] == nil {
+		t.Fatalf("result missing in response: %s", string(raw))
+	}
+}
+
+// TestClient_Transcribe_QueryConnectionDropThenSuccess 连接被中断后应软重试并成功。
+func TestClient_Transcribe_QueryConnectionDropThenSuccess(t *testing.T) {
+	var queryCount atomic.Int32
+	expectedBody := []byte(`{"result":{"text":"ok"}}`)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/submit") {
+			w.Header().Set(headerStatusCode, statusSuccess)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		n := queryCount.Add(1)
+		if n == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("server does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("Hijack: %v", err)
+			}
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set(headerStatusCode, statusSuccess)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(expectedBody)
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PollInterval: 5 * time.Millisecond,
+		MaxPolls:     5,
+	})
+
+	raw, err := client.Transcribe(context.Background(), "https://example.com/test.wav")
+	if err != nil {
+		t.Fatalf("Transcribe() error = %v, want success after connection drop", err)
+	}
+	if queryCount.Load() < 2 {
+		t.Errorf("queryCount = %d, want >= 2", queryCount.Load())
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("invalid result JSON: %s", string(raw))
+	}
+}
+
+// TestClient_Transcribe_QueryTimeoutExhaustsMaxPolls 连续瞬时超时耗尽 MaxPolls 仍返回轮询超时。
+func TestClient_Transcribe_QueryTimeoutExhaustsMaxPolls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/submit") {
+			w.Header().Set(headerStatusCode, statusSuccess)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set(headerStatusCode, statusProcessing1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PollInterval: time.Millisecond,
+		MaxPolls:     2,
+		HTTPClient:   &http.Client{Timeout: 20 * time.Millisecond},
+	})
+
+	_, err := client.Transcribe(context.Background(), "https://example.com/test.wav")
+	if err == nil || !strings.Contains(err.Error(), "轮询超时") {
+		t.Fatalf("Transcribe() error = %v, want 轮询超时", err)
+	}
+}
+
+func TestIsTransientQueryError(t *testing.T) {
+	ctx := context.Background()
+	if isTransientQueryError(ctx, nil) {
+		t.Error("nil should not be transient")
+	}
+	if !isTransientQueryError(ctx, context.DeadlineExceeded) {
+		t.Error("DeadlineExceeded with live parent ctx should be transient")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if isTransientQueryError(canceled, context.DeadlineExceeded) {
+		t.Error("any error under canceled parent ctx should not be transient")
+	}
+	if isTransientQueryError(ctx, context.Canceled) {
+		t.Error("Canceled should not be transient")
+	}
+	if isTransientQueryError(ctx, fmt.Errorf("ASR 查询失败: 40000002 task error")) {
+		t.Error("business query failure should not be transient")
 	}
 }
 
