@@ -1,57 +1,84 @@
 package webroot
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestCleanupStaging_RemovesOnlyExpiredDirs(t *testing.T) {
+func TestCleanupStaging_KeepsNewestDirs(t *testing.T) {
 	root := t.TempDir()
 	staging := filepath.Join(root, "staging")
 	if err := os.MkdirAll(staging, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	oldDir := filepath.Join(staging, "old-task")
-	newDir := filepath.Join(staging, "new-task")
 	keepFile := filepath.Join(staging, "not-a-dir.txt")
-	for _, dir := range []string{oldDir, newDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := os.WriteFile(keepFile, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	oldTime := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(oldDir, oldTime, oldTime); err != nil {
-		t.Fatal(err)
+	base := time.Now().Add(-10 * time.Hour)
+	dirs := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("task-%d", i)
+		path := filepath.Join(staging, name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mt := base.Add(time.Duration(i) * time.Hour) // task-4 最新
+		if err := os.Chtimes(path, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		dirs[i] = path
 	}
 
-	now := time.Now()
-	removed, err := CleanupStaging(root, 24*time.Hour, now)
+	removed, err := CleanupStaging(root, 3)
 	if err != nil {
 		t.Fatalf("CleanupStaging error = %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("removed = %d, want 1", removed)
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
 	}
-	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
-		t.Fatalf("old dir still exists: %v", err)
-	}
-	if _, err := os.Stat(newDir); err != nil {
-		t.Fatalf("new dir missing: %v", err)
+	// 保留 task-2/3/4，删除 task-0/1
+	for i, path := range dirs {
+		_, statErr := os.Stat(path)
+		if i < 2 {
+			if !os.IsNotExist(statErr) {
+				t.Fatalf("old dir %s should be removed: %v", path, statErr)
+			}
+			continue
+		}
+		if statErr != nil {
+			t.Fatalf("new dir %s missing: %v", path, statErr)
+		}
 	}
 	if _, err := os.Stat(keepFile); err != nil {
 		t.Fatalf("file under staging should remain: %v", err)
 	}
 }
 
+func TestCleanupStaging_NoOpWhenWithinLimit(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	for _, name := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(staging, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := CleanupStaging(root, 80)
+	if err != nil {
+		t.Fatalf("CleanupStaging error = %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0", removed)
+	}
+}
+
 func TestCleanupStaging_MissingRootIsOK(t *testing.T) {
-	removed, err := CleanupStaging(filepath.Join(t.TempDir(), "missing"), 24*time.Hour, time.Now())
+	removed, err := CleanupStaging(filepath.Join(t.TempDir(), "missing"), 80)
 	if err != nil {
 		t.Fatalf("CleanupStaging error = %v", err)
 	}
@@ -61,10 +88,10 @@ func TestCleanupStaging_MissingRootIsOK(t *testing.T) {
 }
 
 func TestCleanupStaging_RejectsInvalidArgs(t *testing.T) {
-	if _, err := CleanupStaging("", time.Hour, time.Now()); err == nil {
+	if _, err := CleanupStaging("", 80); err == nil {
 		t.Fatal("empty rootDir should error")
 	}
-	if _, err := CleanupStaging(t.TempDir(), 0, time.Now()); err == nil {
-		t.Fatal("non-positive maxAge should error")
+	if _, err := CleanupStaging(t.TempDir(), 0); err == nil {
+		t.Fatal("non-positive keep should error")
 	}
 }

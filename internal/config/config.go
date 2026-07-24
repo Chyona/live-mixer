@@ -62,8 +62,8 @@ type CapCutMateConfig struct {
 type WebConfig struct {
 	// RootDir 本地暂存根目录（切片落盘根路径），例如 D:\code\GitHub\live-mixer\docker\html
 	RootDir string `mapstructure:"root_dir"`
-	// StagingRetentionHours staging 子目录保留时长（小时）；超时由全局定时任务删除；默认 24。
-	StagingRetentionHours int `mapstructure:"staging_retention_hours"`
+	// StagingMaxDirs staging 下最多保留的任务子目录数（按 mtime 保留最新）；超出删除最旧；默认 80。
+	StagingMaxDirs int `mapstructure:"staging_max_dirs"`
 	// StagingCleanupIntervalMin staging 清理任务执行间隔（分钟）；默认 60。
 	StagingCleanupIntervalMin int `mapstructure:"staging_cleanup_interval_min"`
 }
@@ -235,8 +235,8 @@ const DefaultDraftStaleTimeoutMin = 60
 // DefaultAISliceDraftStaleTimeoutMin 一键成片 processing 孤儿回收默认超时（分钟）。
 const DefaultAISliceDraftStaleTimeoutMin = 90
 
-// DefaultStagingRetentionHours staging 子目录默认保留时长（小时）。
-const DefaultStagingRetentionHours = 24
+// DefaultStagingMaxDirs staging 下默认最多保留的任务子目录数。
+const DefaultStagingMaxDirs = 80
 
 // DefaultStagingCleanupIntervalMin staging 清理任务默认执行间隔（分钟）。
 const DefaultStagingCleanupIntervalMin = 60
@@ -339,21 +339,20 @@ func (w WorkerConfig) AISliceDraftStaleTimeout() time.Duration {
 
 // normalizeWebConfig 将未配置或非法的 staging 清理参数回落到内置默认值。
 func normalizeWebConfig(w *WebConfig) {
-	if w.StagingRetentionHours <= 0 {
-		w.StagingRetentionHours = DefaultStagingRetentionHours
+	if w.StagingMaxDirs <= 0 {
+		w.StagingMaxDirs = DefaultStagingMaxDirs
 	}
 	if w.StagingCleanupIntervalMin <= 0 {
 		w.StagingCleanupIntervalMin = DefaultStagingCleanupIntervalMin
 	}
 }
 
-// StagingRetention 返回 staging 子目录保留时长；<=0 时回落默认 24 小时。
-func (w WebConfig) StagingRetention() time.Duration {
-	h := w.StagingRetentionHours
-	if h <= 0 {
-		h = DefaultStagingRetentionHours
+// StagingMaxDirsOrDefault 返回 staging 最多保留目录数；<=0 时回落默认 80。
+func (w WebConfig) StagingMaxDirsOrDefault() int {
+	if w.StagingMaxDirs <= 0 {
+		return DefaultStagingMaxDirs
 	}
-	return time.Duration(h) * time.Hour
+	return w.StagingMaxDirs
 }
 
 // StagingCleanupInterval 返回 staging 清理间隔；<=0 时回落默认 60 分钟。
@@ -568,9 +567,9 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := lookupEnvPrefer("APP_WEB_ROOT_DIR", "WEB_ROOT_DIR"); ok {
 		cfg.Web.RootDir = val
 	}
-	if val, ok := os.LookupEnv("APP_WEB_STAGING_RETENTION_HOURS"); ok {
+	if val, ok := os.LookupEnv("APP_WEB_STAGING_MAX_DIRS"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
-			cfg.Web.StagingRetentionHours = n
+			cfg.Web.StagingMaxDirs = n
 		}
 	}
 	if val, ok := os.LookupEnv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN"); ok {

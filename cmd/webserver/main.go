@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	"live-mixer/docs"
 	"live-mixer/internal/bootstrap"
@@ -145,15 +144,16 @@ func main() {
 
 	sched := scheduler.New(logger)
 	webRoot := cfg.Web.RootDir
-	retention := cfg.Web.StagingRetention()
+	maxDirs := cfg.Web.StagingMaxDirsOrDefault()
 	sched.Register(scheduler.Job{
 		Name:     "staging-cleanup",
 		Interval: cfg.Web.StagingCleanupInterval(),
 		Run: func(ctx context.Context) {
-			removed, err := webroot.CleanupStaging(webRoot, retention, time.Now())
+			removed, err := webroot.CleanupStaging(webRoot, maxDirs)
 			if err != nil {
 				logger.Warn("staging 清理未完全成功",
 					zap.String("root_dir", webRoot),
+					zap.Int("max_dirs", maxDirs),
 					zap.Int("removed", removed),
 					zap.Error(err),
 				)
@@ -162,8 +162,8 @@ func main() {
 			if removed > 0 {
 				logger.Info("staging 清理完成",
 					zap.String("root_dir", webRoot),
+					zap.Int("max_dirs", maxDirs),
 					zap.Int("removed", removed),
-					zap.Duration("retention", retention),
 				)
 			}
 		},
