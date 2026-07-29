@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -222,7 +223,7 @@ func TestLiveMaterialRepository_ClaimPendingASR_OptimisticLockConcurrent(t *test
 	const n = 20
 	for i := 0; i < n; i++ {
 		m := &model.LiveMaterial{
-			Name: "m", LiveURL: "https://example.com/a.mp4",
+			Name: fmt.Sprintf("m-%d", i), LiveURL: fmt.Sprintf("https://example.com/a-%d.mp4", i),
 			LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1,
 			CreatedAt: time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC),
 		}

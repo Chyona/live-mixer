@@ -28,6 +28,12 @@ const liveMaterialListDateLayout = "2006-01-02"
 // ErrUnsupportedMediaFormat 创建素材时不支持的音视频格式。
 var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持: mp3, wav, mp4, ogg, raw")
 
+// ErrLiveMaterialNameExists 素材名称已存在（唯一约束）。
+var ErrLiveMaterialNameExists = errors.New("素材名称已存在")
+
+// ErrLiveMaterialURLExists 直播链接已存在（唯一约束）。
+var ErrLiveMaterialURLExists = errors.New("直播链接已存在")
+
 // ErrLiveMaterialNotFound 直播素材不存在。
 var ErrLiveMaterialNotFound = errors.New("直播素材不存在")
 
@@ -112,7 +118,7 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 		CreatedBy:   createdBy,
 	}
 	if err := s.liveMaterialRepo.Create(ctx, material); err != nil {
-		return nil, err
+		return nil, mapLiveMaterialUniqueError(err)
 	}
 	// 仅写库为 pending；唤醒 Worker 尽快扫库抢占（即使无唤醒，定时 poll 也会兜底）。
 	if s.asrWorker != nil {
@@ -148,9 +154,27 @@ func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark 
 	material.Remark = remark
 
 	if err := s.liveMaterialRepo.UpdateNameRemark(ctx, material); err != nil {
-		return nil, err
+		return nil, mapLiveMaterialUniqueError(err)
 	}
 	return material, nil
+}
+
+// mapLiveMaterialUniqueError 将 name / live_url 唯一约束冲突转为业务错误。
+func mapLiveMaterialUniqueError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "unique") && !strings.Contains(msg, "duplicate") {
+		return err
+	}
+	if strings.Contains(msg, "live_url") {
+		return ErrLiveMaterialURLExists
+	}
+	if strings.Contains(msg, "name") {
+		return ErrLiveMaterialNameExists
+	}
+	return errors.New("素材名称或直播链接已存在")
 }
 
 func (s *liveMaterialService) List(ctx context.Context, page, pageSize int, opts LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {

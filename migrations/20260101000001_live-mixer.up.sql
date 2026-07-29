@@ -75,9 +75,9 @@ CREATE TABLE IF NOT EXISTS live_material (
 
 COMMENT ON TABLE live_material IS '直播素材表';
 COMMENT ON COLUMN live_material.id IS '主键';
-COMMENT ON COLUMN live_material.name IS '素材名称';
+COMMENT ON COLUMN live_material.name IS '素材名称（唯一）';
 COMMENT ON COLUMN live_material.remark IS '备注';
-COMMENT ON COLUMN live_material.live_url IS '直播链接';
+COMMENT ON COLUMN live_material.live_url IS '直播链接（唯一）';
 COMMENT ON COLUMN live_material.url_type IS '直播链接类型：file=音视频文件，m3u8=HLS 流媒体';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.asr_summaries IS 'AI 总结分段（JSON 数组），格式：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟，时间单位毫秒';
@@ -101,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_live_material_created_by ON live_material (create
 CREATE INDEX IF NOT EXISTS idx_live_material_asr_status ON live_material (asr_status);
 -- 多实例 Worker 按创建时间 FIFO 抢占 pending ASR 时使用
 CREATE INDEX IF NOT EXISTS idx_live_material_asr_status_created_at ON live_material (asr_status, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_name ON live_material (name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_live_url ON live_material (live_url);
 
 -- 剪辑项目表
 CREATE TABLE IF NOT EXISTS video_project (

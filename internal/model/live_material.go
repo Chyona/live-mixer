@@ -39,9 +39,9 @@ type ASRParagraph struct {
 // LiveMaterial 直播素材实体。
 type LiveMaterial struct {
 	ID           uint       `gorm:"primaryKey;comment:主键" json:"id"`
-	Name         string     `gorm:"size:64;not null;comment:素材名称" json:"name"`
+	Name         string     `gorm:"size:64;not null;uniqueIndex;comment:素材名称" json:"name"`
 	Remark       string     `gorm:"size:256;comment:备注" json:"remark"`
-	LiveURL      string     `gorm:"size:1024;not null;comment:直播链接" json:"live_url"`
+	LiveURL      string     `gorm:"size:1024;not null;uniqueIndex;comment:直播链接" json:"live_url"`
 	// URLType live_url 类型：file=音视频文件，m3u8=HLS 流。
 	URLType      string     `gorm:"column:url_type;size:16;not null;default:file;comment:直播链接类型file或m3u8" json:"url_type"`
 	LiveASR      string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
