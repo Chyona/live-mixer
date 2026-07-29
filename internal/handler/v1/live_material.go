@@ -38,8 +38,6 @@ func NewLiveMaterialHandler(liveMaterialService service.LiveMaterialService, acc
 type CreateLiveMaterialRequest struct {
 	Name    string `json:"name" binding:"required,max=64"`
 	LiveURL string `json:"live_url" binding:"required,url,max=1024"`
-	// URLType 可选：file 或 m3u8；省略时按 live_url 是否含 .m3u8 推断。
-	URLType string `json:"url_type" binding:"omitempty,oneof=file m3u8"`
 	Remark  string `json:"remark" binding:"max=256"`
 	Ext     string `json:"ext" binding:"max=1024"`
 }
@@ -219,7 +217,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 
 // CreateLiveMaterial 创建直播素材
 // @Summary      创建直播素材
-// @Description  添加一条直播素材，name、live_url 为必填；url_type 可选（file/m3u8，省略则按链接推断）
+// @Description  添加一条直播素材，name、live_url 为必填；url_type 由后台按 live_url 自动识别写入
 // @Tags         直播素材
 // @Accept       json
 // @Produce      json
@@ -244,7 +242,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 	}
 
 	material, err := h.liveMaterialService.Create(
-		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext, req.URLType,
+		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext,
 	)
 	if err != nil {
 		response.BadRequest(c, err.Error())

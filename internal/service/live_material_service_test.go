@@ -114,7 +114,7 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, nil)
 
-	material, err := svc.Create(context.Background(), 2, "  测试素材  ", " https://example.com/live.mp4 ", "备注", "", "")
+	material, err := svc.Create(context.Background(), 2, "  测试素材  ", " https://example.com/live.mp4 ", "备注", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 // TestLiveMaterialService_Create_EmptyName 验证名称为纯空格时拒绝创建。
 func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "   ", "https://example.com/live.mp4", "", "", "")
+	_, err := svc.Create(context.Background(), 1, "   ", "https://example.com/live.mp4", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -166,7 +166,7 @@ func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 // TestLiveMaterialService_Create_EmptyLiveURL 验证直播链接为空时拒绝创建。
 func TestLiveMaterialService_Create_EmptyLiveURL(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "  ", "", "", "")
+	_, err := svc.Create(context.Background(), 1, "素材", "  ", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty live_url")
 	}
@@ -244,7 +244,7 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "", "")
+	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "")
 	if err == nil || err.Error() != "db down" {
 		t.Errorf("error = %v, want db down", err)
 	}
@@ -307,7 +307,7 @@ func TestLiveMaterialService_Get_Success(t *testing.T) {
 // TestLiveMaterialService_Create_UnsupportedFormat 验证不支持的媒体格式拒绝创建。
 func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/audio.flac", "", "", "")
+	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/audio.flac", "", "")
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -316,34 +316,17 @@ func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_Create_M3U8 验证 m3u8 链接可创建且跳过文件格式校验。
+// TestLiveMaterialService_Create_M3U8 验证 m3u8 链接由后台识别为 m3u8 且跳过文件格式校验。
 func TestLiveMaterialService_Create_M3U8(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, nil)
 
-	material, err := svc.Create(context.Background(), 1, "直播流", "https://example.com/live/index.m3u8", "", "", "")
+	material, err := svc.Create(context.Background(), 1, "直播流", "https://example.com/live/index.m3u8", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if material.URLType != model.URLTypeM3U8 {
 		t.Errorf("URLType = %q, want %q", material.URLType, model.URLTypeM3U8)
-	}
-
-	explicit, err := svc.Create(context.Background(), 1, "显式流", "https://cdn.example.com/playlist", "", "", model.URLTypeM3U8)
-	if err != nil {
-		t.Fatalf("Create() explicit m3u8 error = %v", err)
-	}
-	if explicit.URLType != model.URLTypeM3U8 {
-		t.Errorf("explicit URLType = %q, want %q", explicit.URLType, model.URLTypeM3U8)
-	}
-}
-
-// TestLiveMaterialService_Create_InvalidURLType 验证非法 url_type 被拒绝。
-func TestLiveMaterialService_Create_InvalidURLType(t *testing.T) {
-	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "", "rtmp")
-	if !errors.Is(err, ErrInvalidURLType) {
-		t.Fatalf("error = %v, want ErrInvalidURLType", err)
 	}
 }
 
@@ -356,7 +339,7 @@ func TestLiveMaterialService_Create_WakesASRWorker(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, worker)
 
-	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mp4", "", "", "")
+	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mp4", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
