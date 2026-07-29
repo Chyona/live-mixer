@@ -18,6 +18,7 @@ var (
 	ErrLLMSystemPromptNotFound     = errors.New("系统提示词不存在")
 	ErrLLMSystemPromptNotEditable  = errors.New("系统预置提示词不可修改")
 	ErrLLMSystemPromptNotDeletable = errors.New("系统预置提示词不可删除")
+	ErrLLMSystemPromptNameExists   = errors.New("提示词名称已存在")
 )
 
 // LLMSystemPromptListOptions 系统提示词列表查询选项（来自 HTTP 查询参数）。
@@ -69,7 +70,7 @@ func (s *llmSystemPromptService) Create(ctx context.Context, createdBy uint, nam
 		CreatedBy:  createdBy,
 	}
 	if err := s.repo.Create(ctx, prompt); err != nil {
-		return nil, err
+		return nil, mapLLMSystemPromptUniqueError(err)
 	}
 	return prompt, nil
 }
@@ -101,9 +102,22 @@ func (s *llmSystemPromptService) Update(ctx context.Context, id uint, name, cont
 	prompt.Ext = ext
 
 	if err := s.repo.Update(ctx, prompt); err != nil {
-		return nil, err
+		return nil, mapLLMSystemPromptUniqueError(err)
 	}
 	return prompt, nil
+}
+
+// mapLLMSystemPromptUniqueError 将 name 唯一约束冲突转为业务错误。
+func mapLLMSystemPromptUniqueError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if (strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate")) &&
+		strings.Contains(msg, "name") {
+		return ErrLLMSystemPromptNameExists
+	}
+	return err
 }
 
 func (s *llmSystemPromptService) Delete(ctx context.Context, id uint) error {

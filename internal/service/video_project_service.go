@@ -19,6 +19,9 @@ import (
 // ErrVideoProjectNotFound 剪辑项目不存在。
 var ErrVideoProjectNotFound = errors.New("剪辑项目不存在")
 
+// ErrVideoProjectNameExists 项目名称已存在（唯一约束）。
+var ErrVideoProjectNameExists = errors.New("项目名称已存在")
+
 // ErrLiveMaterialNotFoundForProject 创建剪辑项目时关联的直播素材不存在。
 var ErrLiveMaterialNotFoundForProject = errors.New("关联的直播素材不存在")
 
@@ -174,7 +177,7 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		CreatedBy:     createdBy,
 	}
 	if err := s.videoProjectRepo.Create(ctx, project); err != nil {
-		return nil, err
+		return nil, mapVideoProjectUniqueError(err)
 	}
 	return project, nil
 }
@@ -236,9 +239,22 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 	}
 
 	if err := s.videoProjectRepo.Update(ctx, project); err != nil {
-		return nil, err
+		return nil, mapVideoProjectUniqueError(err)
 	}
 	return project, nil
+}
+
+// mapVideoProjectUniqueError 将 name 唯一约束冲突转为业务错误。
+func mapVideoProjectUniqueError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if (strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate")) &&
+		strings.Contains(msg, "name") {
+		return ErrVideoProjectNameExists
+	}
+	return err
 }
 
 func (s *videoProjectService) Delete(ctx context.Context, id uint) error {

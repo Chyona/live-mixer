@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS video_project (
 
 COMMENT ON TABLE video_project IS '剪辑项目表';
 COMMENT ON COLUMN video_project.id IS '主键';
-COMMENT ON COLUMN video_project.name IS '项目名称';
+COMMENT ON COLUMN video_project.name IS '项目名称（唯一）';
 COMMENT ON COLUMN video_project.remark IS '备注';
 COMMENT ON COLUMN video_project.live_id IS '关联直播素材 ID（live_material.id）';
 COMMENT ON COLUMN video_project.prompt_id IS '提示词 ID（llm_system_prompt.id），无外键约束，默认 1';
@@ -146,6 +146,7 @@ COMMENT ON COLUMN video_project.ext IS '扩展字段';
 CREATE INDEX IF NOT EXISTS idx_video_project_created_by ON video_project (created_by);
 CREATE INDEX IF NOT EXISTS idx_video_project_live_id ON video_project (live_id);
 CREATE INDEX IF NOT EXISTS idx_video_project_prompt_id ON video_project (prompt_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_video_project_name ON video_project (name);
 
 -- 大模型系统提示词管理表
 CREATE TABLE IF NOT EXISTS llm_system_prompt (
@@ -163,7 +164,7 @@ CREATE TABLE IF NOT EXISTS llm_system_prompt (
 
 COMMENT ON TABLE llm_system_prompt IS '大模型系统提示词管理表';
 COMMENT ON COLUMN llm_system_prompt.id IS '主键';
-COMMENT ON COLUMN llm_system_prompt.name IS '提示词名称';
+COMMENT ON COLUMN llm_system_prompt.name IS '提示词名称（唯一）';
 COMMENT ON COLUMN llm_system_prompt.content IS '提示词内容';
 COMMENT ON COLUMN llm_system_prompt.remark IS '备注';
 COMMENT ON COLUMN llm_system_prompt.is_editable IS '是否允许修改：0否 1是';
@@ -173,6 +174,7 @@ COMMENT ON COLUMN llm_system_prompt.updated_at IS '更新时间';
 COMMENT ON COLUMN llm_system_prompt.ext IS '扩展字段';
 
 CREATE INDEX IF NOT EXISTS idx_llm_system_prompt_created_by ON llm_system_prompt (created_by);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_system_prompt_name ON llm_system_prompt (name);
 
 -- 任务表：异步任务统一入口，通过 type 区分三类业务
 CREATE TABLE IF NOT EXISTS task (

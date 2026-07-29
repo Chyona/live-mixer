@@ -10,7 +10,7 @@ const DefaultVideoProjectPromptID uint = 1
 // VideoProject 剪辑项目实体。
 type VideoProject struct {
 	ID     uint   `gorm:"primaryKey;comment:主键" json:"id"`
-	Name   string `gorm:"size:64;comment:项目名称" json:"name"`
+	Name   string `gorm:"size:64;uniqueIndex;comment:项目名称" json:"name"`
 	Remark string `gorm:"size:256;comment:备注" json:"remark"`
 	LiveID uint   `gorm:"column:live_id;not null;index;comment:关联直播素材ID" json:"live_id"`
 	// PromptID 提示词 ID（对应 llm_system_prompt.id），无外键约束，默认 1。
