@@ -13,17 +13,21 @@ const (
 )
 
 // ASRSummarySegment AI 对完整 ASR 的总结与分段（毫秒）。
+// Title 长度宜 ≤6 字；单段总结对应时长宜在 5~60 分钟。
 type ASRSummarySegment struct {
+	Title     string `json:"title"`
 	Summary   string `json:"summary"`
 	StartTime int64  `json:"start_time"`
 	EndTime   int64  `json:"end_time"`
 }
 
-// ASRParagraph 全文段落划分（毫秒）；单段字数宜不超过约 300。
+// ASRParagraph 全文段落划分（毫秒）；含说话人与字级时间戳。
 type ASRParagraph struct {
-	Text      string `json:"text"`
-	StartTime int64  `json:"start_time"`
-	EndTime   int64  `json:"end_time"`
+	Speaker   string     `json:"speaker"`
+	Text      string     `json:"text"`
+	StartTime int64      `json:"start_time"`
+	EndTime   int64      `json:"end_time"`
+	Words     []ClipWord `json:"words,omitempty"`
 }
 
 // LiveMaterial 直播素材实体。
