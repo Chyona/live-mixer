@@ -12,6 +12,12 @@ const (
 	ASRStatusFailed     = "failed"     // 失败
 )
 
+// live_url 类型常量。
+const (
+	URLTypeFile = "file" // 音视频文件
+	URLTypeM3U8 = "m3u8" // HLS 流媒体
+)
+
 // ASRSummarySegment AI 对完整 ASR 的总结与分段（毫秒）。
 // Title 长度宜 ≤6 字；单段总结对应时长宜在 5~60 分钟。
 type ASRSummarySegment struct {
@@ -36,6 +42,8 @@ type LiveMaterial struct {
 	Name         string     `gorm:"size:64;not null;comment:素材名称" json:"name"`
 	Remark       string     `gorm:"size:256;comment:备注" json:"remark"`
 	LiveURL      string     `gorm:"size:1024;not null;comment:直播链接" json:"live_url"`
+	// URLType live_url 类型：file=音视频文件，m3u8=HLS 流。
+	URLType      string     `gorm:"column:url_type;size:16;not null;default:file;comment:直播链接类型file或m3u8" json:"url_type"`
 	LiveASR      string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	// ASRSummaries AI 总结分段；ASRParagraphs 全文段落划分。默认空数组。
 	ASRSummaries  []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI总结分段" json:"asr_summaries"`

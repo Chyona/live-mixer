@@ -28,6 +28,9 @@ const liveMaterialListDateLayout = "2006-01-02"
 // ErrUnsupportedMediaFormat 创建素材时不支持的音视频格式。
 var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持: mp3, wav, mp4, ogg, raw")
 
+// ErrInvalidURLType url_type 取值非法。
+var ErrInvalidURLType = errors.New("url_type 仅支持 file 或 m3u8")
+
 // ErrLiveMaterialNotFound 直播素材不存在。
 var ErrLiveMaterialNotFound = errors.New("直播素材不存在")
 
@@ -46,7 +49,8 @@ var ErrASRSubtitleEmpty = errors.New("ASR 字幕为空，无法导出")
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
 	// Create 创建直播素材，createdBy 来自 JWT 当前用户；分辨率由 ASR 预处理 ffprobe 回写。
-	Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
+	// urlType 为空时按 live_url 后缀推断（.m3u8 → m3u8，否则 file）。
+	Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext, urlType string) (*model.LiveMaterial, error)
 	// Update 更新直播素材，仅允许修改 name、remark。
 	Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
 	// List 分页查询直播素材列表，不含 live_asr 字段。
@@ -71,7 +75,7 @@ func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository, 
 	return &liveMaterialService{liveMaterialRepo: liveMaterialRepo, asrWorker: asrWorker}
 }
 
-func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
+func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext, urlType string) (*model.LiveMaterial, error) {
 	// 去除首尾空格，避免仅空白字符通过校验。
 	name = strings.TrimSpace(name)
 	liveURL = strings.TrimSpace(liveURL)
@@ -81,22 +85,30 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 	if liveURL == "" {
 		return nil, errors.New("直播链接不能为空")
 	}
-	if _, err := asr.DetectFormat(liveURL); err != nil {
-		if strings.Contains(err.Error(), "不支持的") {
-			return nil, ErrUnsupportedMediaFormat
-		}
+	resolvedType, err := resolveLiveURLType(liveURL, urlType)
+	if err != nil {
 		return nil, err
+	}
+	// 文件类链接仍校验 ASR 支持的后缀；m3u8 流跳过文件格式检测。
+	if resolvedType == model.URLTypeFile {
+		if _, err := asr.DetectFormat(liveURL); err != nil {
+			if strings.Contains(err.Error(), "不支持的") {
+				return nil, ErrUnsupportedMediaFormat
+			}
+			return nil, err
+		}
 	}
 
 	material := &model.LiveMaterial{
-		Name:        name,
-		Remark:      remark,
-		LiveURL:     liveURL,
-		Ext:         ext,
-		LiveASR:     "{}",
+		Name:          name,
+		Remark:        remark,
+		LiveURL:       liveURL,
+		URLType:       resolvedType,
+		Ext:           ext,
+		LiveASR:       "{}",
 		ASRSummaries:  []model.ASRSummarySegment{},
 		ASRParagraphs: []model.ASRParagraph{},
-		Duration:    0,
+		Duration:      0,
 		// 分辨率由 ASR Worker 下载源媒体后 ffprobe 回写，创建时固定为 0。
 		Width:       0,
 		Height:      0,
@@ -113,6 +125,28 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 		s.asrWorker.Enqueue()
 	}
 	return material, nil
+}
+
+// resolveLiveURLType 规范化 url_type；为空时按 live_url 路径后缀推断。
+func resolveLiveURLType(liveURL, urlType string) (string, error) {
+	urlType = strings.ToLower(strings.TrimSpace(urlType))
+	switch urlType {
+	case "":
+		if inferURLTypeM3U8(liveURL) {
+			return model.URLTypeM3U8, nil
+		}
+		return model.URLTypeFile, nil
+	case model.URLTypeFile, model.URLTypeM3U8:
+		return urlType, nil
+	default:
+		return "", ErrInvalidURLType
+	}
+}
+
+func inferURLTypeM3U8(liveURL string) bool {
+	lower := strings.ToLower(liveURL)
+	// 常见形态：xxx.m3u8 或路径中带 .m3u8?
+	return strings.Contains(lower, ".m3u8")
 }
 
 func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {

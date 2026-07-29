@@ -38,6 +38,8 @@ func NewLiveMaterialHandler(liveMaterialService service.LiveMaterialService, acc
 type CreateLiveMaterialRequest struct {
 	Name    string `json:"name" binding:"required,max=64"`
 	LiveURL string `json:"live_url" binding:"required,url,max=1024"`
+	// URLType 可选：file 或 m3u8；省略时按 live_url 是否含 .m3u8 推断。
+	URLType string `json:"url_type" binding:"omitempty,oneof=file m3u8"`
 	Remark  string `json:"remark" binding:"max=256"`
 	Ext     string `json:"ext" binding:"max=1024"`
 }
@@ -55,6 +57,7 @@ type LiveMaterialDetailResponse struct {
 	Name         string          `json:"name"`
 	Remark       string          `json:"remark"`
 	LiveURL      string          `json:"live_url"`
+	URLType      string          `json:"url_type"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
 	ASRSummaries  []model.ASRSummarySegment `json:"asr_summaries"`
 	ASRParagraphs []model.ASRParagraph      `json:"asr_paragraphs"`
@@ -87,6 +90,7 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		Name:           material.Name,
 		Remark:         material.Remark,
 		LiveURL:        material.LiveURL,
+		URLType:        material.URLType,
 		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
 		ASRSummaries:   summaries,
 		ASRParagraphs:  paragraphs,
@@ -112,6 +116,7 @@ type LiveMaterialListResponse struct {
 	Name         string     `json:"name"`
 	Remark       string     `json:"remark"`
 	LiveURL      string     `json:"live_url"`
+	URLType      string     `json:"url_type"`
 	Duration     int64      `json:"duration"`
 	Width        int        `json:"width"`
 	Height       int        `json:"height"`
@@ -141,6 +146,7 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 			Name:           item.Name,
 			Remark:         item.Remark,
 			LiveURL:        item.LiveURL,
+			URLType:        item.URLType,
 			Duration:       item.Duration,
 			Width:          item.Width,
 			Height:         item.Height,
@@ -213,7 +219,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 
 // CreateLiveMaterial 创建直播素材
 // @Summary      创建直播素材
-// @Description  添加一条直播素材，name、live_url 为必填
+// @Description  添加一条直播素材，name、live_url 为必填；url_type 可选（file/m3u8，省略则按链接推断）
 // @Tags         直播素材
 // @Accept       json
 // @Produce      json
@@ -238,7 +244,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 	}
 
 	material, err := h.liveMaterialService.Create(
-		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext,
+		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext, req.URLType,
 	)
 	if err != nil {
 		response.BadRequest(c, err.Error())
