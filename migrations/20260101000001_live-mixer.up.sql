@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS live_material (
     remark       VARCHAR(256),
     live_url     VARCHAR(1024) NOT NULL,
     live_asr        JSONB         NOT NULL DEFAULT '{}',
+    -- AI 对完整 ASR 的总结与分段：[{"summary":"...","start_time":0,"end_time":100}]
+    asr_summaries   JSONB         NOT NULL DEFAULT '[]',
+    -- 全文段落划分（单段不宜过长）：[{"text":"...","start_time":0,"end_time":100}]
+    asr_paragraphs  JSONB         NOT NULL DEFAULT '[]',
     duration        BIGINT        NOT NULL DEFAULT 0,
     -- 直播画面分辨率（像素）；0 表示未知/未探测
     width           INTEGER       NOT NULL DEFAULT 0,
@@ -72,6 +76,8 @@ COMMENT ON COLUMN live_material.name IS '素材名称';
 COMMENT ON COLUMN live_material.remark IS '备注';
 COMMENT ON COLUMN live_material.live_url IS '直播链接';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
+COMMENT ON COLUMN live_material.asr_summaries IS 'AI 总结分段（JSON 数组），格式：[{"summary":"...","start_time":0,"end_time":100}]，时间单位毫秒';
+COMMENT ON COLUMN live_material.asr_paragraphs IS '全文段落划分（JSON 数组），格式：[{"text":"...","start_time":0,"end_time":100}]，时间单位毫秒，单段字数宜不超过约 300';
 COMMENT ON COLUMN live_material.duration IS '直播时长（毫秒）';
 COMMENT ON COLUMN live_material.width IS '直播画面宽度（像素），0 表示未知';
 COMMENT ON COLUMN live_material.height IS '直播画面高度（像素），0 表示未知';

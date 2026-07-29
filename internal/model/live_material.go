@@ -12,6 +12,20 @@ const (
 	ASRStatusFailed     = "failed"     // 失败
 )
 
+// ASRSummarySegment AI 对完整 ASR 的总结与分段（毫秒）。
+type ASRSummarySegment struct {
+	Summary   string `json:"summary"`
+	StartTime int64  `json:"start_time"`
+	EndTime   int64  `json:"end_time"`
+}
+
+// ASRParagraph 全文段落划分（毫秒）；单段字数宜不超过约 300。
+type ASRParagraph struct {
+	Text      string `json:"text"`
+	StartTime int64  `json:"start_time"`
+	EndTime   int64  `json:"end_time"`
+}
+
 // LiveMaterial 直播素材实体。
 type LiveMaterial struct {
 	ID           uint       `gorm:"primaryKey;comment:主键" json:"id"`
@@ -19,6 +33,9 @@ type LiveMaterial struct {
 	Remark       string     `gorm:"size:256;comment:备注" json:"remark"`
 	LiveURL      string     `gorm:"size:1024;not null;comment:直播链接" json:"live_url"`
 	LiveASR      string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
+	// ASRSummaries AI 总结分段；ASRParagraphs 全文段落划分。默认空数组。
+	ASRSummaries  []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI总结分段" json:"asr_summaries"`
+	ASRParagraphs []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
 	Duration     int64      `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
 	// Width / Height 直播画面分辨率（像素）；0 表示未知。
 	Width        int        `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`

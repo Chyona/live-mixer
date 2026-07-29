@@ -56,6 +56,8 @@ type LiveMaterialDetailResponse struct {
 	Remark       string          `json:"remark"`
 	LiveURL      string          `json:"live_url"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
+	ASRSummaries  []model.ASRSummarySegment `json:"asr_summaries"`
+	ASRParagraphs []model.ASRParagraph      `json:"asr_paragraphs"`
 	Duration     int64           `json:"duration"`
 	Width        int             `json:"width"`
 	Height       int             `json:"height"`
@@ -72,12 +74,22 @@ type LiveMaterialDetailResponse struct {
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, material *model.LiveMaterial) LiveMaterialDetailResponse {
+	summaries := material.ASRSummaries
+	if summaries == nil {
+		summaries = []model.ASRSummarySegment{}
+	}
+	paragraphs := material.ASRParagraphs
+	if paragraphs == nil {
+		paragraphs = []model.ASRParagraph{}
+	}
 	return LiveMaterialDetailResponse{
 		ID:             material.ID,
 		Name:           material.Name,
 		Remark:         material.Remark,
 		LiveURL:        material.LiveURL,
 		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
+		ASRSummaries:   summaries,
+		ASRParagraphs:  paragraphs,
 		Duration:       material.Duration,
 		Width:          material.Width,
 		Height:         material.Height,
@@ -159,7 +171,7 @@ type ListLiveMaterialsRequest struct {
 
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr 字段，默认每页 10 条
+// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries / asr_paragraphs，默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
 // @Param        start_date      query  string  false  "开始日期 YYYY-MM-DD"
@@ -237,7 +249,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 
 // GetLiveMaterial 获取直播素材详情
 // @Summary      获取直播素材详情
-// @Description  根据 ID 查询直播素材完整信息；live_asr 为分句数组，含 speaker、时间戳与字级 words
+// @Description  根据 ID 查询直播素材完整信息；live_asr 为分句数组；含 asr_summaries（AI 总结分段）与 asr_paragraphs（全文段落划分）
 // @Tags         直播素材
 // @Produce      json
 // @Param        id   path  int  true  "素材 ID"

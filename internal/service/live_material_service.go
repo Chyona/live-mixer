@@ -94,6 +94,8 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 		LiveURL:     liveURL,
 		Ext:         ext,
 		LiveASR:     "{}",
+		ASRSummaries:  []model.ASRSummarySegment{},
+		ASRParagraphs: []model.ASRParagraph{},
 		Duration:    0,
 		// 分辨率由 ASR Worker 下载源媒体后 ffprobe 回写，创建时固定为 0。
 		Width:       0,
