@@ -43,9 +43,11 @@ type AISliceWorker interface {
 	Start(ctx context.Context)
 }
 
-// LLMChatClient AI 切片所需的大模型对话接口，便于单测替换。
+// LLMChatClient AI 切片 / ASR 后处理所需的大模型对话接口，便于单测替换。
 type LLMChatClient interface {
 	Chat(ctx context.Context, messages []llm.ChatMessage) (string, error)
+	// ChatStructured 优先用于需严格 JSON 的场景（temperature=0 + json_object）。
+	ChatStructured(ctx context.Context, messages []llm.ChatMessage) (string, error)
 }
 
 type aiSliceWorker struct {

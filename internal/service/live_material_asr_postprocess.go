@@ -20,23 +20,26 @@ const (
 	asrSummaryTitleMaxRunes     = 6
 	asrSummaryTextMaxRunes      = 30
 	asrParagraphMaxRunes        = 300
-	asrParagraphWindowMs        = int64(25 * 60 * 1000) // 超长文本段落窗口约 25 分钟
-	asrSummaryWindowMs          = int64(60 * 60 * 1000) // 超长文本总结窗口约 60 分钟
+	asrParagraphWindowMs        = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
+	asrSummaryWindowMs          = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
+	asrPostprocessMaxRepair     = 1                     // 校验失败最多再修 1 次
 )
 
 const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据带编号的 ASR 句段列表，提炼若干「核心主题」分段。
 要求：
-1. 只输出一个 JSON 数组，不要输出其它文字或 markdown。
-2. 每项格式：{"title":"...","summary":"...","start_time":0,"end_time":0}，时间为毫秒。
-3. title 不超过 6 个字；summary 不超过 30 个字，提炼核心主题，不要复述全文。
-4. 每段时长默认应在 5~60 分钟；若整场时长不足 5 分钟，可输出覆盖全场的一段。
-5. 各段是核心主题，不必覆盖全文；段与段可以连续、间断或时间相交。
-6. 至少输出 1 段。`
+1. 只输出一个 JSON 对象，格式严格为 {"items":[...]}，不要输出其它文字或 markdown。
+2. items 每项格式：{"title":"...","summary":"...","start_index":0,"end_index":3}，为句段编号闭区间（含两端）。
+3. title 必须严格不超过 6 个汉字（按 Unicode 字符计，含标点）；禁止写成短句。优先用 2~4 字主题词，例如「开场互动」「产品讲解」「福利促销」。坏例：「今天给大家介绍优惠活动」。
+4. summary 不超过 30 个字，提炼核心主题，不要复述全文。
+5. 每段对应时长（由 start_index~end_index 句段时间推算）默认应在 5~60 分钟；若整场时长不足 5 分钟，可输出覆盖全场句段的一段。
+6. 各段是核心主题，不必覆盖全文；段与段可以连续、间断或索引相交。
+7. start_index/end_index 必须落在输入句段编号范围内，且 start_index<=end_index。
+8. 至少输出 1 段。`
 
 const asrParagraphsSystemPrompt = `你是直播 ASR 段落划分助手。根据带编号的 ASR 句段列表，将全文划分为连续段落。
 要求：
-1. 只输出一个 JSON 数组，不要输出其它文字或 markdown。
-2. 每项格式：{"start_index":0,"end_index":3}，为句段编号闭区间（含两端）。
+1. 只输出一个 JSON 对象，格式严格为 {"items":[...]}，不要输出其它文字或 markdown。
+2. items 每项格式：{"start_index":0,"end_index":3}，为句段编号闭区间（含两端）。
 3. 所有编号必须恰好覆盖输入中的全部句段一次：无遗漏、无重叠。
 4. 每个区间内只能有一个说话人（speaker 相同）。
 5. 每个区间拼接后的正文字数必须小于 300 字。
@@ -48,6 +51,14 @@ type asrParagraphRange struct {
 	EndIndex   int `json:"end_index"`
 }
 
+// asrSummaryLLMItem LLM 返回的总结项（句段 index 锚点）。
+type asrSummaryLLMItem struct {
+	Title      string `json:"title"`
+	Summary    string `json:"summary"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
+}
+
 // asrPostprocessResult ASR 后处理产出。
 type asrPostprocessResult struct {
 	Summaries  []model.ASRSummarySegment
@@ -55,11 +66,13 @@ type asrPostprocessResult struct {
 }
 
 type asrLLMWindowDebug struct {
-	Offset      int                         `json:"offset"`
-	UserPrompt  string                      `json:"user_prompt"`
-	RawResponse string                      `json:"raw_response"`
-	Segments    []model.ASRSummarySegment   `json:"segments,omitempty"`
-	Ranges      []asrParagraphRange         `json:"ranges,omitempty"`
+	Offset       int                       `json:"offset"`
+	UserPrompt   string                    `json:"user_prompt"`
+	RawResponse  string                    `json:"raw_response"`
+	RepairPrompt string                    `json:"repair_prompt,omitempty"`
+	RepairRaw    string                    `json:"repair_raw_response,omitempty"`
+	Segments     []model.ASRSummarySegment `json:"segments,omitempty"`
+	Ranges       []asrParagraphRange       `json:"ranges,omitempty"`
 }
 
 // runASRPostprocess 调用 LLM 生成 summaries 与 paragraphs；任一步失败返回 error。
@@ -90,6 +103,10 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	return out, nil
 }
 
+func asrChatStructured(ctx context.Context, llmClient LLMChatClient, messages []llm.ChatMessage) (string, error) {
+	return llmClient.ChatStructured(ctx, messages)
+}
+
 func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder) ([]model.ASRSummarySegment, error) {
 	windows := splitUtterancesByDuration(utterances, asrSummaryWindowMs, asrPostprocessMaxInputRunes)
 	var all []model.ASRSummarySegment
@@ -104,28 +121,14 @@ func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utteranc
 		})
 	}()
 	for _, win := range windows {
-		userPrompt := buildASRSummariesUserPrompt(win.Utterances, win.Offset, durationMs)
-		content, err := llmClient.Chat(ctx, []llm.ChatMessage{
-			{Role: "system", Content: asrSummariesSystemPrompt},
-			{Role: "user", Content: userPrompt},
-		})
-		dbg := asrLLMWindowDebug{
-			Offset:      win.Offset,
-			UserPrompt:  userPrompt,
-			RawResponse: content,
-		}
-		if err != nil {
-			debugWindows = append(debugWindows, dbg)
-			return nil, err
-		}
-		segs, err := parseASRSummaries(content)
-		dbg.Segments = segs
+		segs, dbg, err := generateASRSummariesWindow(ctx, llmClient, win, durationMs)
 		debugWindows = append(debugWindows, dbg)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, segs...)
 	}
+	normalizeASRSummaries(all, durationMs)
 	if err := validateASRSummaries(all, durationMs); err != nil {
 		return nil, err
 	}
@@ -136,6 +139,64 @@ func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utteranc
 		return all[i].StartTime < all[j].StartTime
 	})
 	return all, nil
+}
+
+func generateASRSummariesWindow(
+	ctx context.Context,
+	llmClient LLMChatClient,
+	win utteranceWindow,
+	durationMs int64,
+) ([]model.ASRSummarySegment, asrLLMWindowDebug, error) {
+	userPrompt := buildASRSummariesUserPrompt(win.Utterances, win.Offset, durationMs)
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: asrSummariesSystemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+	dbg := asrLLMWindowDebug{Offset: win.Offset, UserPrompt: userPrompt}
+
+	content, err := asrChatStructured(ctx, llmClient, messages)
+	dbg.RawResponse = content
+	if err != nil {
+		return nil, dbg, err
+	}
+
+	segs, err := parseAndResolveASRSummaries(content, win, durationMs)
+	if err == nil {
+		normalizeASRSummaries(segs, durationMs)
+		if vErr := validateASRSummaries(segs, durationMs); vErr == nil {
+			dbg.Segments = segs
+			return segs, dbg, nil
+		} else {
+			err = vErr
+		}
+	}
+
+	// 校验/解析失败：带上错误原因再修一次。
+	for attempt := 0; attempt < asrPostprocessMaxRepair; attempt++ {
+		repairPrompt := buildASRSummariesRepairPrompt(err, content)
+		dbg.RepairPrompt = repairPrompt
+		repairMsgs := append(append([]llm.ChatMessage{}, messages...),
+			llm.ChatMessage{Role: "assistant", Content: content},
+			llm.ChatMessage{Role: "user", Content: repairPrompt},
+		)
+		repaired, rErr := asrChatStructured(ctx, llmClient, repairMsgs)
+		dbg.RepairRaw = repaired
+		if rErr != nil {
+			return nil, dbg, rErr
+		}
+		content = repaired
+		segs, err = parseAndResolveASRSummaries(content, win, durationMs)
+		if err != nil {
+			continue
+		}
+		normalizeASRSummaries(segs, durationMs)
+		if err = validateASRSummaries(segs, durationMs); err != nil {
+			continue
+		}
+		dbg.Segments = segs
+		return segs, dbg, nil
+	}
+	return nil, dbg, err
 }
 
 func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, rec *asrDebugRecorder) ([]model.ASRParagraph, error) {
@@ -152,22 +213,7 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 		})
 	}()
 	for _, win := range windows {
-		userPrompt := buildASRParagraphsUserPrompt(win.Utterances)
-		content, err := llmClient.Chat(ctx, []llm.ChatMessage{
-			{Role: "system", Content: asrParagraphsSystemPrompt},
-			{Role: "user", Content: userPrompt},
-		})
-		dbg := asrLLMWindowDebug{
-			Offset:      win.Offset,
-			UserPrompt:  userPrompt,
-			RawResponse: content,
-		}
-		if err != nil {
-			debugWindows = append(debugWindows, dbg)
-			return nil, err
-		}
-		local, err := parseASRParagraphRanges(content)
-		dbg.Ranges = local
+		local, dbg, err := generateASRParagraphsWindow(ctx, llmClient, win)
 		debugWindows = append(debugWindows, dbg)
 		if err != nil {
 			return nil, err
@@ -182,19 +228,69 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 	return stitchASRParagraphs(utterances, ranges)
 }
 
+func generateASRParagraphsWindow(
+	ctx context.Context,
+	llmClient LLMChatClient,
+	win utteranceWindow,
+) ([]asrParagraphRange, asrLLMWindowDebug, error) {
+	userPrompt := buildASRParagraphsUserPrompt(win.Utterances)
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: asrParagraphsSystemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+	dbg := asrLLMWindowDebug{Offset: win.Offset, UserPrompt: userPrompt}
+
+	content, err := asrChatStructured(ctx, llmClient, messages)
+	dbg.RawResponse = content
+	if err != nil {
+		return nil, dbg, err
+	}
+
+	local, err := parseASRParagraphRanges(content)
+	if err == nil {
+		if _, sErr := stitchASRParagraphs(win.Utterances, local); sErr == nil {
+			dbg.Ranges = local
+			return local, dbg, nil
+		} else {
+			err = sErr
+		}
+	}
+
+	for attempt := 0; attempt < asrPostprocessMaxRepair; attempt++ {
+		repairPrompt := buildASRParagraphsRepairPrompt(err, content, len(win.Utterances))
+		dbg.RepairPrompt = repairPrompt
+		repairMsgs := append(append([]llm.ChatMessage{}, messages...),
+			llm.ChatMessage{Role: "assistant", Content: content},
+			llm.ChatMessage{Role: "user", Content: repairPrompt},
+		)
+		repaired, rErr := asrChatStructured(ctx, llmClient, repairMsgs)
+		dbg.RepairRaw = repaired
+		if rErr != nil {
+			return nil, dbg, rErr
+		}
+		content = repaired
+		local, err = parseASRParagraphRanges(content)
+		if err != nil {
+			continue
+		}
+		if _, err = stitchASRParagraphs(win.Utterances, local); err != nil {
+			continue
+		}
+		dbg.Ranges = local
+		return local, dbg, nil
+	}
+	return nil, dbg, err
+}
+
 type utteranceWindow struct {
 	Offset     int
 	Utterances []asr.Utterance
 }
 
-// splitUtterancesByDuration 按时长窗口切分；单窗输入过长时再按条数收缩。
+// splitUtterancesByDuration 始终按 windowMs 切窗；单窗输入超过 maxRunes 时再按条数收缩。
 func splitUtterancesByDuration(utterances []asr.Utterance, windowMs int64, maxRunes int) []utteranceWindow {
 	if len(utterances) == 0 {
 		return nil
-	}
-	full := formatASRTranscriptLines(utterances, 0)
-	if utf8.RuneCountInString(full) <= maxRunes {
-		return []utteranceWindow{{Offset: 0, Utterances: utterances}}
 	}
 
 	var windows []utteranceWindow
@@ -204,7 +300,7 @@ func splitUtterancesByDuration(utterances []asr.Utterance, windowMs int64, maxRu
 		windowStart := utterances[start].StartTime
 		for end+1 < len(utterances) {
 			next := utterances[end+1]
-			if next.EndTime-windowStart > windowMs {
+			if windowMs > 0 && next.EndTime-windowStart > windowMs {
 				break
 			}
 			end++
@@ -245,9 +341,21 @@ func buildASRSummariesUserPrompt(utterances []asr.Utterance, indexOffset int, du
 	var b strings.Builder
 	b.WriteString("整场时长(毫秒)：")
 	fmt.Fprintf(&b, "%d\n", durationMs)
+	fmt.Fprintf(&b, "本窗句段编号范围：%d~%d（闭区间）\n", indexOffset, indexOffset+len(utterances)-1)
 	b.WriteString("ASR 句段列表：\n")
 	b.WriteString(formatASRTranscriptLines(utterances, indexOffset))
-	b.WriteString("\n请输出 JSON 数组。")
+	b.WriteString("\n请输出 JSON 对象 {\"items\":[...]}。")
+	return b.String()
+}
+
+func buildASRSummariesRepairPrompt(prevErr error, prevContent string) string {
+	var b strings.Builder
+	b.WriteString("上一次输出未通过校验：")
+	b.WriteString(prevErr.Error())
+	b.WriteString("\n请只输出修正后的完整 JSON 对象 {\"items\":[...]}。")
+	b.WriteString("title 必须 ≤6 字，summary 必须 ≤30 字；start_index/end_index 必须合法。")
+	b.WriteString("\n上次输出摘要：\n")
+	b.WriteString(truncateRunes(prevContent, 800))
 	return b.String()
 }
 
@@ -255,26 +363,89 @@ func buildASRParagraphsUserPrompt(utterances []asr.Utterance) string {
 	var b strings.Builder
 	b.WriteString("ASR 句段列表（本窗局部编号从 0 开始）：\n")
 	b.WriteString(formatASRTranscriptLines(utterances, 0))
-	b.WriteString("\n请输出覆盖本窗全部句段的 JSON 数组。")
+	b.WriteString("\n请输出覆盖本窗全部句段的 JSON 对象 {\"items\":[...]}。")
 	return b.String()
 }
 
-func parseASRSummaries(content string) ([]model.ASRSummarySegment, error) {
-	raw, err := extractLLMJSONArray(content)
+func buildASRParagraphsRepairPrompt(prevErr error, prevContent string, utteranceCount int) string {
+	var b strings.Builder
+	b.WriteString("上一次输出未通过校验：")
+	b.WriteString(prevErr.Error())
+	fmt.Fprintf(&b, "\n本窗共有 %d 个句段，局部编号 0~%d，必须恰好覆盖一次。", utteranceCount, utteranceCount-1)
+	b.WriteString("\n请只输出修正后的完整 JSON 对象 {\"items\":[...]}。")
+	b.WriteString("\n上次输出摘要：\n")
+	b.WriteString(truncateRunes(prevContent, 800))
+	return b.String()
+}
+
+func parseAndResolveASRSummaries(content string, win utteranceWindow, durationMs int64) ([]model.ASRSummarySegment, error) {
+	items, err := parseASRSummaryItems(content)
 	if err != nil {
 		return nil, err
 	}
-	var segs []model.ASRSummarySegment
-	if err := json.Unmarshal(raw, &segs); err != nil {
+	return resolveASRSummaries(items, win, durationMs)
+}
+
+func parseASRSummaryItems(content string) ([]asrSummaryLLMItem, error) {
+	raw, err := extractLLMJSON(content)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Items []asrSummaryLLMItem `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.Items != nil {
+		return wrapped.Items, nil
+	}
+	var items []asrSummaryLLMItem
+	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, fmt.Errorf("解析 asr_summaries JSON 失败: %w", err)
+	}
+	return items, nil
+}
+
+func resolveASRSummaries(items []asrSummaryLLMItem, win utteranceWindow, durationMs int64) ([]model.ASRSummarySegment, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("asr_summaries items 不能为空")
+	}
+	n := len(win.Utterances)
+	segs := make([]model.ASRSummarySegment, 0, len(items))
+	for i, it := range items {
+		localStart := it.StartIndex - win.Offset
+		localEnd := it.EndIndex - win.Offset
+		if localStart < 0 || localEnd >= n || localStart > localEnd {
+			return nil, fmt.Errorf("asr_summaries[%d] 下标越界: [%d,%d] (窗 offset=%d, 大小=%d)", i, it.StartIndex, it.EndIndex, win.Offset, n)
+		}
+		start := win.Utterances[localStart].StartTime
+		end := win.Utterances[localEnd].EndTime
+		if durationMs > 0 {
+			if start < 0 {
+				start = 0
+			}
+			if end > durationMs {
+				end = durationMs
+			}
+		}
+		segs = append(segs, model.ASRSummarySegment{
+			Title:     it.Title,
+			Summary:   it.Summary,
+			StartTime: start,
+			EndTime:   end,
+		})
 	}
 	return segs, nil
 }
 
 func parseASRParagraphRanges(content string) ([]asrParagraphRange, error) {
-	raw, err := extractLLMJSONArray(content)
+	raw, err := extractLLMJSON(content)
 	if err != nil {
 		return nil, err
+	}
+	var wrapped struct {
+		Items []asrParagraphRange `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.Items != nil {
+		return wrapped.Items, nil
 	}
 	var ranges []asrParagraphRange
 	if err := json.Unmarshal(raw, &ranges); err != nil {
@@ -283,7 +454,8 @@ func parseASRParagraphRanges(content string) ([]asrParagraphRange, error) {
 	return ranges, nil
 }
 
-func extractLLMJSONArray(content string) (json.RawMessage, error) {
+// extractLLMJSON 提取 JSON 对象或数组（兼容 markdown 代码块）。
+func extractLLMJSON(content string) (json.RawMessage, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil, fmt.Errorf("LLM 返回内容为空")
@@ -297,18 +469,50 @@ func extractLLMJSONArray(content string) (json.RawMessage, error) {
 		}
 		content = strings.TrimSpace(content)
 	}
-	if json.Valid([]byte(content)) && strings.HasPrefix(content, "[") {
+	if json.Valid([]byte(content)) && (strings.HasPrefix(content, "{") || strings.HasPrefix(content, "[")) {
 		return json.RawMessage(content), nil
 	}
-	extracted := extractJSONArrayLiteral(content)
+	if obj := extractJSONObjectLiteral(content); obj != "" && json.Valid([]byte(obj)) {
+		return json.RawMessage(obj), nil
+	}
+	if arr := extractJSONArrayLiteral(content); arr != "" && json.Valid([]byte(arr)) {
+		return json.RawMessage(arr), nil
+	}
+	return nil, fmt.Errorf("无法解析 LLM 返回的 JSON: %s", truncateRunes(content, 256))
+}
+
+// extractLLMJSONArray 保留给测试/兼容：优先抽数组。
+func extractLLMJSONArray(content string) (json.RawMessage, error) {
+	raw, err := extractLLMJSON(content)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), "[") {
+		return raw, nil
+	}
+	var wrapped struct {
+		Items json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Items) > 0 && strings.HasPrefix(strings.TrimSpace(string(wrapped.Items)), "[") {
+		return wrapped.Items, nil
+	}
+	extracted := extractJSONArrayLiteral(string(raw))
 	if extracted == "" || !json.Valid([]byte(extracted)) {
-		return nil, fmt.Errorf("无法解析 LLM 返回的 JSON 数组: %s", truncateRunes(content, 256))
+		return nil, fmt.Errorf("无法解析 LLM 返回的 JSON 数组: %s", truncateRunes(string(raw), 256))
 	}
 	return json.RawMessage(extracted), nil
 }
 
 func extractJSONArrayLiteral(s string) string {
-	start := strings.Index(s, "[")
+	return extractJSONBracketLiteral(s, '[', ']')
+}
+
+func extractJSONObjectLiteral(s string) string {
+	return extractJSONBracketLiteral(s, '{', '}')
+}
+
+func extractJSONBracketLiteral(s string, open, close byte) string {
+	start := strings.IndexByte(s, open)
 	if start < 0 {
 		return ""
 	}
@@ -334,9 +538,9 @@ func extractJSONArrayLiteral(s string) string {
 		switch ch {
 		case '"':
 			inString = true
-		case '[':
+		case open:
 			depth++
-		case ']':
+		case close:
 			depth--
 			if depth == 0 {
 				return s[start : i+1]
@@ -344,6 +548,25 @@ func extractJSONArrayLiteral(s string) string {
 		}
 	}
 	return ""
+}
+
+// normalizeASRSummaries 截断字数、纠正时间边界；不返回 error。
+func normalizeASRSummaries(segs []model.ASRSummarySegment, durationMs int64) {
+	for i := range segs {
+		segs[i].Title = truncateRunesHard(strings.TrimSpace(segs[i].Title), asrSummaryTitleMaxRunes)
+		segs[i].Summary = truncateRunesHard(strings.TrimSpace(segs[i].Summary), asrSummaryTextMaxRunes)
+		if segs[i].EndTime < segs[i].StartTime {
+			segs[i].StartTime, segs[i].EndTime = segs[i].EndTime, segs[i].StartTime
+		}
+		if durationMs > 0 {
+			if segs[i].StartTime < 0 {
+				segs[i].StartTime = 0
+			}
+			if segs[i].EndTime > durationMs {
+				segs[i].EndTime = durationMs
+			}
+		}
+	}
 }
 
 func validateASRSummaries(segs []model.ASRSummarySegment, durationMs int64) error {
@@ -357,12 +580,7 @@ func validateASRSummaries(segs []model.ASRSummarySegment, durationMs int64) erro
 		if title == "" || summary == "" {
 			return fmt.Errorf("asr_summaries[%d] title/summary 不能为空", i)
 		}
-		if utf8.RuneCountInString(title) > asrSummaryTitleMaxRunes {
-			return fmt.Errorf("asr_summaries[%d] title 超过 %d 字", i, asrSummaryTitleMaxRunes)
-		}
-		if utf8.RuneCountInString(summary) > asrSummaryTextMaxRunes {
-			return fmt.Errorf("asr_summaries[%d] summary 超过 %d 字", i, asrSummaryTextMaxRunes)
-		}
+		// 字数超限已在 normalize 截断，此处不再报错。
 		if s.EndTime < s.StartTime {
 			return fmt.Errorf("asr_summaries[%d] 时间非法", i)
 		}
@@ -465,4 +683,12 @@ func truncateRunes(s string, max int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:max]) + "..."
+}
+
+// truncateRunesHard 按 rune 截断到 max，不加省略号；max<=0 时返回原串。
+func truncateRunesHard(s string, max int) string {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	return string([]rune(s)[:max])
 }

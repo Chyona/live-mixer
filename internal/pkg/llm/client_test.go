@@ -101,6 +101,38 @@ func TestClient_Chat(t *testing.T) {
 	}
 }
 
+func TestClient_ChatStructured_SendsTempAndJSONMode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Temperature == nil || *req.Temperature != 0 {
+			t.Errorf("temperature = %v, want 0", req.Temperature)
+		}
+		if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_object" {
+			t.Errorf("response_format = %+v, want json_object", req.ResponseFormat)
+		}
+		_ = json.NewEncoder(w).Encode(chatResponse{
+			Choices: []struct {
+				Message ChatMessage `json:"message"`
+			}{
+				{Message: ChatMessage{Role: "assistant", Content: `{"items":[]}`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{APIKey: "test-key", BaseURL: srv.URL, Model: DefaultModel, HTTPClient: srv.Client()})
+	content, err := client.ChatStructured(context.Background(), []ChatMessage{
+		{Role: "user", Content: "return json"},
+	})
+	if err != nil {
+		t.Fatalf("ChatStructured() error = %v", err)
+	}
+	if content != `{"items":[]}` {
+		t.Errorf("content = %q", content)
+	}
+}
+
 func TestClient_Chat_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

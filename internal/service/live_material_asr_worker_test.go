@@ -51,7 +51,7 @@ func (m *workerMockLLM) Chat(ctx context.Context, messages []llm.ChatMessage) (s
 		}
 	}
 	if strings.Contains(sys, "主题提炼") {
-		return `[{"title":"开场","summary":"打招呼闲聊内容","start_time":0,"end_time":1200}]`, nil
+		return `{"items":[{"title":"开场","summary":"打招呼闲聊内容","start_index":0,"end_index":0}]}`, nil
 	}
 	maxIdx := 0
 	for _, m := range asrIndexLineRE.FindAllStringSubmatch(user, -1) {
@@ -60,7 +60,11 @@ func (m *workerMockLLM) Chat(ctx context.Context, messages []llm.ChatMessage) (s
 			maxIdx = idx
 		}
 	}
-	return fmt.Sprintf(`[{"start_index":0,"end_index":%d}]`, maxIdx), nil
+	return fmt.Sprintf(`{"items":[{"start_index":0,"end_index":%d}]}`, maxIdx), nil
+}
+
+func (m *workerMockLLM) ChatStructured(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+	return m.Chat(ctx, messages)
 }
 
 func defaultWorkerLLM() LLMChatClient {

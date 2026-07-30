@@ -61,9 +61,23 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+// ChatOptions 单次 Chat Completions 可选参数。
+type ChatOptions struct {
+	// Temperature 采样温度；nil 表示不传（由上游默认）。
+	Temperature *float64
+	// JSONMode 启用 response_format=json_object，要求模型返回合法 JSON。
+	JSONMode bool
+}
+
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
+	Model          string           `json:"model"`
+	Messages       []ChatMessage    `json:"messages"`
+	Temperature    *float64         `json:"temperature,omitempty"`
+	ResponseFormat *responseFormat  `json:"response_format,omitempty"`
+}
+
+type responseFormat struct {
+	Type string `json:"type"`
 }
 
 type chatResponse struct {
@@ -79,6 +93,15 @@ type chatResponse struct {
 
 // ChatCompletions 调用 /chat/completions，返回上游模型的完整 JSON 响应体。
 func (c *Client) ChatCompletions(ctx context.Context, messages []ChatMessage) (json.RawMessage, error) {
+	return c.chatCompletions(ctx, messages, ChatOptions{})
+}
+
+// ChatCompletionsWithOptions 带可选参数调用 /chat/completions。
+func (c *Client) ChatCompletionsWithOptions(ctx context.Context, messages []ChatMessage, opts ChatOptions) (json.RawMessage, error) {
+	return c.chatCompletions(ctx, messages, opts)
+}
+
+func (c *Client) chatCompletions(ctx context.Context, messages []ChatMessage, opts ChatOptions) (json.RawMessage, error) {
 	if c.cfg.APIKey == "" {
 		return nil, fmt.Errorf("LLM API Key 未配置")
 	}
@@ -86,10 +109,16 @@ func (c *Client) ChatCompletions(ctx context.Context, messages []ChatMessage) (j
 		return nil, fmt.Errorf("messages 不能为空")
 	}
 
-	body, err := json.Marshal(chatRequest{
-		Model:    c.cfg.Model,
-		Messages: messages,
-	})
+	reqBody := chatRequest{
+		Model:       c.cfg.Model,
+		Messages:    messages,
+		Temperature: opts.Temperature,
+	}
+	if opts.JSONMode {
+		reqBody.ResponseFormat = &responseFormat{Type: "json_object"}
+	}
+
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
@@ -131,7 +160,20 @@ func (c *Client) ChatCompletions(ctx context.Context, messages []ChatMessage) (j
 
 // Chat 调用 /chat/completions，返回助手文本内容。
 func (c *Client) Chat(ctx context.Context, messages []ChatMessage) (string, error) {
-	raw, err := c.ChatCompletions(ctx, messages)
+	return c.chat(ctx, messages, ChatOptions{})
+}
+
+// ChatStructured 以 temperature=0 + JSON mode 调用，提高结构化输出稳定性。
+func (c *Client) ChatStructured(ctx context.Context, messages []ChatMessage) (string, error) {
+	temp := 0.0
+	return c.chat(ctx, messages, ChatOptions{
+		Temperature: &temp,
+		JSONMode:    true,
+	})
+}
+
+func (c *Client) chat(ctx context.Context, messages []ChatMessage, opts ChatOptions) (string, error) {
+	raw, err := c.chatCompletions(ctx, messages, opts)
 	if err != nil {
 		return "", err
 	}
