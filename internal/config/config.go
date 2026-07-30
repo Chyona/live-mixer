@@ -57,13 +57,15 @@ type CapCutMateConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 }
 
-// WebConfig 本地暂存根目录：切片与 capcut-mate 请求记录落盘路径。
+// WebConfig 本地暂存根目录：切片与 capcut-mate 请求记录、ASR 调试落盘路径。
 // 切片对外 URL 由对象存储上传提供，不再需要 root_url。
 type WebConfig struct {
 	// RootDir 本地暂存根目录（切片落盘根路径），例如 D:\code\GitHub\live-mixer\docker\html
 	RootDir string `mapstructure:"root_dir"`
 	// StagingMaxDirs staging 下最多保留的任务子目录数（按 mtime 保留最新）；超出删除最旧；默认 80。
 	StagingMaxDirs int `mapstructure:"staging_max_dirs"`
+	// ASRStagingMaxDirs staging/asr 下最多保留的 ASR 调试子目录数（按 mtime 保留最新）；默认 20。
+	ASRStagingMaxDirs int `mapstructure:"asr_staging_max_dirs"`
 	// StagingCleanupIntervalMin staging 清理任务执行间隔（分钟）；默认 60。
 	StagingCleanupIntervalMin int `mapstructure:"staging_cleanup_interval_min"`
 }
@@ -238,6 +240,9 @@ const DefaultAISliceDraftStaleTimeoutMin = 90
 // DefaultStagingMaxDirs staging 下默认最多保留的任务子目录数。
 const DefaultStagingMaxDirs = 80
 
+// DefaultASRStagingMaxDirs staging/asr 下默认最多保留的 ASR 调试子目录数。
+const DefaultASRStagingMaxDirs = 20
+
 // DefaultStagingCleanupIntervalMin staging 清理任务默认执行间隔（分钟）。
 const DefaultStagingCleanupIntervalMin = 60
 
@@ -341,6 +346,9 @@ func (w WorkerConfig) AISliceDraftStaleTimeout() time.Duration {
 func normalizeWebConfig(w *WebConfig) {
 	if w.StagingMaxDirs <= 0 {
 		w.StagingMaxDirs = DefaultStagingMaxDirs
+	}
+	if w.ASRStagingMaxDirs <= 0 {
+		w.ASRStagingMaxDirs = DefaultASRStagingMaxDirs
 	}
 	if w.StagingCleanupIntervalMin <= 0 {
 		w.StagingCleanupIntervalMin = DefaultStagingCleanupIntervalMin
@@ -562,6 +570,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_WEB_STAGING_MAX_DIRS"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Web.StagingMaxDirs = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WEB_ASR_STAGING_MAX_DIRS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Web.ASRStagingMaxDirs = n
 		}
 	}
 	if val, ok := os.LookupEnv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN"); ok {

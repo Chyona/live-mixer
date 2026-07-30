@@ -16,6 +16,7 @@ import (
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
+	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
@@ -241,7 +242,7 @@ func (m *workerMockASR) TranscribeWithProgress(ctx context.Context, audioURL str
 }
 
 func TestLiveMaterialASRWorker_DefaultConcurrencyIsSix(t *testing.T) {
-	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0)
+	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0, webroot.Config{})
 	impl, ok := w.(*liveMaterialASRWorker)
 	if !ok {
 		t.Fatal("unexpected worker type")
@@ -255,7 +256,7 @@ func TestLiveMaterialASRWorker_DefaultConcurrencyIsSix(t *testing.T) {
 }
 
 func TestLiveMaterialASRWorker_UsesConfiguredConcurrency(t *testing.T) {
-	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 3, 0).(*liveMaterialASRWorker)
+	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 3, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	if w.concurrency != 3 {
 		t.Fatalf("concurrency = %d, want 3", w.concurrency)
 	}
@@ -263,11 +264,11 @@ func TestLiveMaterialASRWorker_UsesConfiguredConcurrency(t *testing.T) {
 
 // TestLiveMaterialASRWorker_DefaultAndConfiguredStaleTimeout ?????????????????
 func TestLiveMaterialASRWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
-	defaultW := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	defaultW := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	if defaultW.staleTimeout != liveMaterialASRStaleTimeout {
 		t.Fatalf("default staleTimeout = %v, want %v", defaultW.staleTimeout, liveMaterialASRStaleTimeout)
 	}
-	custom := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 15*time.Minute).(*liveMaterialASRWorker)
+	custom := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 15*time.Minute, webroot.Config{}).(*liveMaterialASRWorker)
 	if custom.staleTimeout != 15*time.Minute {
 		t.Fatalf("custom staleTimeout = %v, want 15m", custom.staleTimeout)
 	}
@@ -304,7 +305,7 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/video_editing/temp/asr/1/test.mp3", Width: 1280, Height: 720, Cleanup: func() {}}, nil
 		},
 	}
-	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, defaultWorkerLLM(), nil, 0, 0)
+	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, defaultWorkerLLM(), nil, 0, 0, webroot.Config{})
 
 	if err := worker.Process(context.Background(), repo.materials[1]); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -363,7 +364,7 @@ func TestLiveMaterialASRWorker_Process_StaleVersionIgnored(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/stale.mp3", Cleanup: func() {}}, nil
 		},
-	}, defaultWorkerLLM(), nil, 0, 0)
+	}, defaultWorkerLLM(), nil, 0, 0, webroot.Config{})
 
 	// 模拟 pollLoop 超时回收：version 递增、status 改回 pending，保留 started_at。
 	repo.mu.Lock()
@@ -421,7 +422,7 @@ func TestLiveMaterialASRWorker_Process_Failed(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/asr.mp3", Cleanup: func() {}}, nil
 		},
-	}, nil, nil, 0, 0)
+	}, nil, nil, 0, 0, webroot.Config{})
 
 	if err := worker.Process(context.Background(), repo.materials[2]); err == nil {
 		t.Fatal("Process() error = nil, want error")
@@ -455,7 +456,7 @@ func TestLiveMaterialASRWorker_Process_SkipNonProcessing(t *testing.T) {
 			prepareCalled = true
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/asr.mp3", Cleanup: func() {}}, nil
 		},
-	}, nil, nil, 0, 0)
+	}, nil, nil, 0, 0, webroot.Config{})
 
 	if err := worker.Process(context.Background(), repo.materials[3]); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -475,7 +476,7 @@ func TestLiveMaterialASRWorker_Process_PrepareFailed(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{}, errors.New("download failed")
 		},
-	}, nil, nil, 0, 0)
+	}, nil, nil, 0, 0, webroot.Config{})
 
 	if err := worker.Process(context.Background(), repo.materials[4]); err == nil {
 		t.Fatal("Process() error = nil, want prepare error")
@@ -497,7 +498,7 @@ func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 			asrURL = audioURL
 			return sampleLiveASRJSON(1, "hi"), nil
 		},
-	}, nil, defaultWorkerLLM(), nil, 0, 0)
+	}, nil, defaultWorkerLLM(), nil, 0, 0, webroot.Config{})
 
 	if err := worker.Process(context.Background(), repo.materials[5]); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -508,7 +509,7 @@ func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 }
 
 func TestLiveMaterialASRWorker_Enqueue_NonBlockingAndCoalesced(t *testing.T) {
-	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	w.Enqueue()
 	w.Enqueue()
 	w.Enqueue()
@@ -607,7 +608,7 @@ func TestLiveMaterialASRWorker_Start_ProcessesAtMostSixConcurrently(t *testing.T
 		},
 	}
 
-	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, defaultWorkerLLM(), nil, 0, 0).(*liveMaterialASRWorker)
+	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, defaultWorkerLLM(), nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	// ? poll?wake ??? 1??? poll ?????? worker ???? 6 ????
 	worker.pollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
@@ -654,7 +655,7 @@ func TestLiveMaterialASRWorker_Start_DrainsPendingAfterWake(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/asr.mp3", Cleanup: func() {}}, nil
 		},
-	}, defaultWorkerLLM(), nil, 0, 0).(*liveMaterialASRWorker)
+	}, defaultWorkerLLM(), nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	worker.pollInterval = time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -681,7 +682,7 @@ func TestLiveMaterialASRWorker_PollLoop_RequeuesStale(t *testing.T) {
 			return 2, nil
 		},
 	}
-	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	worker.pollInterval = 20 * time.Millisecond
 	worker.staleTimeout = 45 * time.Minute
 
@@ -712,7 +713,7 @@ func TestLiveMaterialASRWorker_Start_RequeuesStaleImmediately(t *testing.T) {
 			return 1, nil
 		},
 	}
-	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	// ?? poll??????????? Start ????????? pollLoop?
 	worker.pollInterval = time.Hour
 

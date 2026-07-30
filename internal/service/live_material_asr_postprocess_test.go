@@ -9,6 +9,7 @@ import (
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
+	"live-mixer/internal/pkg/webroot"
 )
 
 func TestFormatASRTranscriptLines(t *testing.T) {
@@ -92,7 +93,7 @@ func TestParseASRSummaries_FromMarkdown(t *testing.T) {
 
 func TestRunASRPostprocess_Success(t *testing.T) {
 	liveASR := string(sampleLiveASRJSON(1200, "你好世界"))
-	out, err := runASRPostprocess(context.Background(), defaultWorkerLLM(), liveASR, 1200)
+	out, err := runASRPostprocess(context.Background(), defaultWorkerLLM(), liveASR, 1200, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
@@ -110,7 +111,7 @@ func TestRunASRPostprocess_LLMErrorFails(t *testing.T) {
 			return "", context.DeadlineExceeded
 		},
 	}
-	_, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(100, "hi")), 100)
+	_, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(100, "hi")), 100, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -136,7 +137,7 @@ func TestLiveMaterialASRWorker_Process_LLMFailedMarksFailed(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/a.mp3", Cleanup: func() {}}, nil
 		},
-	}, llmClient, nil, 0, 0)
+	}, llmClient, nil, 0, 0, webroot.Config{})
 
 	if err := worker.Process(context.Background(), repo.materials[9]); err == nil {
 		t.Fatal("Process() error = nil, want LLM failure")

@@ -9,6 +9,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
+	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
 	"go.uber.org/zap"
@@ -39,6 +40,7 @@ type liveMaterialASRWorker struct {
 	asrService    ASRService
 	audioPreparer LiveMaterialASRAudioPreparer
 	llmClient     LLMChatClient
+	web           webroot.Config
 	logger        *zap.Logger
 	concurrency   int
 	pollInterval  time.Duration
@@ -52,6 +54,7 @@ type liveMaterialASRWorker struct {
 // concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
 // staleTimeout 为 processing 孤儿回收阈值；<=0 时使用内置默认值（60 分钟）。
 // llmClient 用于 ASR 完成后的 summaries/paragraphs 后处理；可为 nil（后处理将失败）。
+// web.RootDir 非空时将处理过程调试数据落盘到 staging/asr/。
 func NewLiveMaterialASRWorker(
 	repo repository.LiveMaterialRepository,
 	asrService ASRService,
@@ -60,6 +63,7 @@ func NewLiveMaterialASRWorker(
 	logger *zap.Logger,
 	concurrency int,
 	staleTimeout time.Duration,
+	web webroot.Config,
 ) LiveMaterialASRWorker {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -75,6 +79,7 @@ func NewLiveMaterialASRWorker(
 		asrService:    asrService,
 		audioPreparer: audioPreparer,
 		llmClient:     llmClient,
+		web:           web,
 		logger:        logger,
 		concurrency:   concurrency,
 		pollInterval:  liveMaterialASRPollInterval,
@@ -196,6 +201,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 	}
 
 	asrVersion := material.ASRVersion
+	rec := newASRDebugRecorder(w.web.ASRStagingDir(materialID, asrVersion), w.logger)
 	w.logger.Info("开始处理直播素材 ASR",
 		zap.Uint("material_id", materialID),
 		zap.Int64("asr_version", asrVersion),
@@ -227,8 +233,15 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		defer prep.Cleanup()
 	}
 	if err != nil {
-		return w.failASR(ctx, materialID, asrVersion, lastProgress, err)
+		return w.failASR(ctx, materialID, asrVersion, lastProgress, "prepare", rec, err)
 	}
+	rec.Write("001_prepare.json", map[string]any{
+		"recorded_at": asrDebugRecordedAt(),
+		"source_url":  material.LiveURL,
+		"audio_url":   prep.AudioURL,
+		"width":       prep.Width,
+		"height":      prep.Height,
+	})
 	w.logger.Info("音频预处理完成",
 		zap.Uint("material_id", materialID),
 		zap.String("audio_url", prep.AudioURL),
@@ -249,7 +262,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		updateProgress(mapped)
 	})
 	if err != nil {
-		return w.failASR(ctx, materialID, asrVersion, lastProgress, err)
+		return w.failASR(ctx, materialID, asrVersion, lastProgress, "asr", rec, err)
 	}
 
 	duration := asr.ParseDurationMs(raw)
@@ -257,16 +270,26 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 	if !json.Valid(raw) {
 		liveASR = "{}"
 	}
+	rec.Write("002_asr_raw.json", map[string]any{
+		"recorded_at": asrDebugRecordedAt(),
+		"duration_ms": duration,
+		"live_asr":    json.RawMessage(liveASR),
+	})
 
 	updateProgress(96)
 	w.logger.Info("开始 ASR LLM 后处理",
 		zap.Uint("material_id", materialID),
 	)
-	post, err := runASRPostprocess(ctx, w.llmClient, liveASR, duration)
+	post, err := runASRPostprocess(ctx, w.llmClient, liveASR, duration, rec)
 	if err != nil {
-		return w.failASR(ctx, materialID, asrVersion, lastProgress, err)
+		return w.failASR(ctx, materialID, asrVersion, lastProgress, "postprocess", rec, err)
 	}
 	updateProgress(98)
+	rec.Write("005_postprocess_result.json", map[string]any{
+		"recorded_at": asrDebugRecordedAt(),
+		"summaries":   post.Summaries,
+		"paragraphs":  post.Paragraphs,
+	})
 
 	if err := w.repo.UpdateASRCompleted(
 		ctx, materialID, asrVersion, liveASR, duration, prep.Width, prep.Height,
@@ -298,9 +321,16 @@ func (w *liveMaterialASRWorker) prepareAudio(
 	return w.audioPreparer.Prepare(ctx, materialID, sourceURL, updateProgress)
 }
 
-func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, asrVersion int64, progress int16, err error) error {
+func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, asrVersion int64, progress int16, stage string, rec *asrDebugRecorder, err error) error {
+	rec.Write("999_fail.json", map[string]any{
+		"recorded_at": asrDebugRecordedAt(),
+		"stage":       stage,
+		"error":       err.Error(),
+		"progress":    progress,
+	})
 	w.logger.Error("直播素材 ASR 流程失败",
 		zap.Uint("material_id", materialID),
+		zap.String("stage", stage),
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)

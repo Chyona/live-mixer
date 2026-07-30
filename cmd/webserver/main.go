@@ -80,6 +80,7 @@ func main() {
 	audioPreparer := service.NewLiveMaterialASRAudioPreparer(fileDownloader, nil, storageClient, "", logger, nil)
 	// OpenAI 兼容协议 LLM 客户端，供 ASR 后处理、AI 切片 Worker 与同步对话接口共用。
 	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
+	webCfg := webroot.Config{RootDir: cfg.Web.RootDir}
 	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(
 		liveMaterialRepo,
 		asrService,
@@ -88,6 +89,7 @@ func main() {
 		logger,
 		cfg.Worker.ASRConcurrencyOrDefault(),
 		cfg.Worker.ASRStaleTimeout(),
+		webCfg,
 	)
 	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, liveMaterialASRWorker)
 	llmSystemPromptService := service.NewLLMSystemPromptService(llmSystemPromptRepo)
@@ -118,12 +120,10 @@ func main() {
 		LiveMaterialRepo: liveMaterialRepo,
 		VideoProjectRepo: videoProjectRepo,
 		Generator:        draftGenerator,
-		Web: webroot.Config{
-			RootDir: cfg.Web.RootDir,
-		},
-		Logger:       logger,
-		Concurrency:  cfg.Worker.DraftConcurrencyOrDefault(),
-		StaleTimeout: cfg.Worker.DraftStaleTimeout(),
+		Web:              webCfg,
+		Logger:           logger,
+		Concurrency:      cfg.Worker.DraftConcurrencyOrDefault(),
+		StaleTimeout:     cfg.Worker.DraftStaleTimeout(),
 	})
 	aiSliceDraftWorker := service.NewAISliceDraftWorker(
 		taskRepo,
@@ -146,6 +146,7 @@ func main() {
 	sched := scheduler.New(logger)
 	webRoot := cfg.Web.RootDir
 	maxDirs := cfg.Web.StagingMaxDirs
+	asrMaxDirs := cfg.Web.ASRStagingMaxDirs
 	sched.Register(scheduler.Job{
 		Name:     "staging-cleanup",
 		Interval: cfg.Web.StagingCleanupInterval(),
@@ -158,13 +159,29 @@ func main() {
 					zap.Int("removed", removed),
 					zap.Error(err),
 				)
-				return
-			}
-			if removed > 0 {
+			} else if removed > 0 {
 				logger.Info("staging 清理完成",
 					zap.String("root_dir", webRoot),
 					zap.Int("max_dirs", maxDirs),
 					zap.Int("removed", removed),
+				)
+			}
+
+			asrRemoved, asrErr := webroot.CleanupASRStaging(webRoot, asrMaxDirs)
+			if asrErr != nil {
+				logger.Warn("ASR staging 清理未完全成功",
+					zap.String("root_dir", webRoot),
+					zap.Int("max_dirs", asrMaxDirs),
+					zap.Int("removed", asrRemoved),
+					zap.Error(asrErr),
+				)
+				return
+			}
+			if asrRemoved > 0 {
+				logger.Info("ASR staging 清理完成",
+					zap.String("root_dir", webRoot),
+					zap.Int("max_dirs", asrMaxDirs),
+					zap.Int("removed", asrRemoved),
 				)
 			}
 		},

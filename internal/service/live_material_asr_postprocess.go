@@ -54,8 +54,17 @@ type asrPostprocessResult struct {
 	Paragraphs []model.ASRParagraph
 }
 
+type asrLLMWindowDebug struct {
+	Offset      int                         `json:"offset"`
+	UserPrompt  string                      `json:"user_prompt"`
+	RawResponse string                      `json:"raw_response"`
+	Segments    []model.ASRSummarySegment   `json:"segments,omitempty"`
+	Ranges      []asrParagraphRange         `json:"ranges,omitempty"`
+}
+
 // runASRPostprocess 调用 LLM 生成 summaries 与 paragraphs；任一步失败返回 error。
-func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64) (asrPostprocessResult, error) {
+// rec 非空时将 LLM 中间过程写入 003/004 调试文件。
+func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64, rec *asrDebugRecorder) (asrPostprocessResult, error) {
 	var out asrPostprocessResult
 	if llmClient == nil {
 		return out, fmt.Errorf("LLM 客户端未配置")
@@ -68,11 +77,11 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 		durationMs = utterances[len(utterances)-1].EndTime
 	}
 
-	summaries, err := generateASRSummaries(ctx, llmClient, utterances, durationMs)
+	summaries, err := generateASRSummaries(ctx, llmClient, utterances, durationMs, rec)
 	if err != nil {
 		return out, fmt.Errorf("生成 asr_summaries 失败: %w", err)
 	}
-	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances)
+	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances, rec)
 	if err != nil {
 		return out, fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
 	}
@@ -81,18 +90,37 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	return out, nil
 }
 
-func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64) ([]model.ASRSummarySegment, error) {
+func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder) ([]model.ASRSummarySegment, error) {
 	windows := splitUtterancesByDuration(utterances, asrSummaryWindowMs, asrPostprocessMaxInputRunes)
 	var all []model.ASRSummarySegment
+	debugWindows := make([]asrLLMWindowDebug, 0, len(windows))
+	defer func() {
+		if rec == nil || len(debugWindows) == 0 {
+			return
+		}
+		rec.Write("003_llm_summaries.json", map[string]any{
+			"recorded_at": asrDebugRecordedAt(),
+			"windows":     debugWindows,
+		})
+	}()
 	for _, win := range windows {
+		userPrompt := buildASRSummariesUserPrompt(win.Utterances, win.Offset, durationMs)
 		content, err := llmClient.Chat(ctx, []llm.ChatMessage{
 			{Role: "system", Content: asrSummariesSystemPrompt},
-			{Role: "user", Content: buildASRSummariesUserPrompt(win.Utterances, win.Offset, durationMs)},
+			{Role: "user", Content: userPrompt},
 		})
+		dbg := asrLLMWindowDebug{
+			Offset:      win.Offset,
+			UserPrompt:  userPrompt,
+			RawResponse: content,
+		}
 		if err != nil {
+			debugWindows = append(debugWindows, dbg)
 			return nil, err
 		}
 		segs, err := parseASRSummaries(content)
+		dbg.Segments = segs
+		debugWindows = append(debugWindows, dbg)
 		if err != nil {
 			return nil, err
 		}
@@ -110,18 +138,37 @@ func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utteranc
 	return all, nil
 }
 
-func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance) ([]model.ASRParagraph, error) {
+func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, rec *asrDebugRecorder) ([]model.ASRParagraph, error) {
 	windows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrPostprocessMaxInputRunes)
 	var ranges []asrParagraphRange
+	debugWindows := make([]asrLLMWindowDebug, 0, len(windows))
+	defer func() {
+		if rec == nil || len(debugWindows) == 0 {
+			return
+		}
+		rec.Write("004_llm_paragraphs.json", map[string]any{
+			"recorded_at": asrDebugRecordedAt(),
+			"windows":     debugWindows,
+		})
+	}()
 	for _, win := range windows {
+		userPrompt := buildASRParagraphsUserPrompt(win.Utterances)
 		content, err := llmClient.Chat(ctx, []llm.ChatMessage{
 			{Role: "system", Content: asrParagraphsSystemPrompt},
-			{Role: "user", Content: buildASRParagraphsUserPrompt(win.Utterances)},
+			{Role: "user", Content: userPrompt},
 		})
+		dbg := asrLLMWindowDebug{
+			Offset:      win.Offset,
+			UserPrompt:  userPrompt,
+			RawResponse: content,
+		}
 		if err != nil {
+			debugWindows = append(debugWindows, dbg)
 			return nil, err
 		}
 		local, err := parseASRParagraphRanges(content)
+		dbg.Ranges = local
+		debugWindows = append(debugWindows, dbg)
 		if err != nil {
 			return nil, err
 		}

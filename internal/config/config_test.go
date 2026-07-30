@@ -151,6 +151,9 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 	if cfg.Web.StagingMaxDirs != DefaultStagingMaxDirs {
 		t.Errorf("Web.StagingMaxDirs = %d, want %d", cfg.Web.StagingMaxDirs, DefaultStagingMaxDirs)
 	}
+	if cfg.Web.ASRStagingMaxDirs != DefaultASRStagingMaxDirs {
+		t.Errorf("Web.ASRStagingMaxDirs = %d, want %d", cfg.Web.ASRStagingMaxDirs, DefaultASRStagingMaxDirs)
+	}
 	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
 		t.Errorf("Web.StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)
 	}
@@ -177,6 +180,7 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 
 func TestLoad_WebStagingCleanupEnvOverride(t *testing.T) {
 	t.Setenv("APP_WEB_STAGING_MAX_DIRS", "120")
+	t.Setenv("APP_WEB_ASR_STAGING_MAX_DIRS", "8")
 	t.Setenv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN", "30")
 
 	cfg, err := Load("")
@@ -186,6 +190,9 @@ func TestLoad_WebStagingCleanupEnvOverride(t *testing.T) {
 	if cfg.Web.StagingMaxDirs != 120 {
 		t.Errorf("StagingMaxDirs = %d, want 120", cfg.Web.StagingMaxDirs)
 	}
+	if cfg.Web.ASRStagingMaxDirs != 8 {
+		t.Errorf("ASRStagingMaxDirs = %d, want 8", cfg.Web.ASRStagingMaxDirs)
+	}
 	if cfg.Web.StagingCleanupIntervalMin != 30 {
 		t.Errorf("StagingCleanupIntervalMin = %d, want 30", cfg.Web.StagingCleanupIntervalMin)
 	}
@@ -193,6 +200,7 @@ func TestLoad_WebStagingCleanupEnvOverride(t *testing.T) {
 
 func TestLoad_WebStagingCleanupInvalidEnvFallsBackToDefault(t *testing.T) {
 	t.Setenv("APP_WEB_STAGING_MAX_DIRS", "0")
+	t.Setenv("APP_WEB_ASR_STAGING_MAX_DIRS", "0")
 	t.Setenv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN", "-1")
 
 	cfg, err := Load("")
@@ -201,6 +209,9 @@ func TestLoad_WebStagingCleanupInvalidEnvFallsBackToDefault(t *testing.T) {
 	}
 	if cfg.Web.StagingMaxDirs != DefaultStagingMaxDirs {
 		t.Errorf("StagingMaxDirs = %d, want %d", cfg.Web.StagingMaxDirs, DefaultStagingMaxDirs)
+	}
+	if cfg.Web.ASRStagingMaxDirs != DefaultASRStagingMaxDirs {
+		t.Errorf("ASRStagingMaxDirs = %d, want %d", cfg.Web.ASRStagingMaxDirs, DefaultASRStagingMaxDirs)
 	}
 	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
 		t.Errorf("StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)
