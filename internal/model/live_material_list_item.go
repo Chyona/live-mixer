@@ -11,6 +11,7 @@ type LiveMaterialListItem struct {
 	Remark       string     `gorm:"size:256" json:"remark"`
 	LiveURL      string     `gorm:"size:1024;not null" json:"live_url"`
 	URLType      string     `gorm:"column:url_type;size:16;not null;default:file" json:"url_type"`
+	LiveStatus   string     `gorm:"column:live_status;size:16;not null;default:none" json:"live_status"`
 	Duration     int64      `gorm:"not null;default:0" json:"duration"`
 	Width        int        `gorm:"not null;default:0" json:"width"`
 	Height       int        `gorm:"not null;default:0" json:"height"`

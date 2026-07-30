@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS live_material (
     live_url     VARCHAR(1024) NOT NULL,
     -- live_url 类型：file=音视频文件，m3u8=HLS 流
     url_type     VARCHAR(16)  NOT NULL DEFAULT 'file',
+    -- 推流直播生命周期：none=非推流；live=推流中可定时 ASR；ending=已关播再跑最后一轮；ended=终态不再调度
+    live_status  VARCHAR(16)  NOT NULL DEFAULT 'none',
     live_asr        JSONB         NOT NULL DEFAULT '{}',
     -- AI 总结分段：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟
     asr_summaries   JSONB         NOT NULL DEFAULT '[]',
@@ -69,6 +71,7 @@ CREATE TABLE IF NOT EXISTS live_material (
     CONSTRAINT chk_live_material_asr_progress CHECK (asr_progress BETWEEN 0 AND 100),
     CONSTRAINT chk_live_material_asr_status CHECK (asr_status IN ('pending', 'processing', 'completed', 'failed')),
     CONSTRAINT chk_live_material_url_type CHECK (url_type IN ('file', 'm3u8')),
+    CONSTRAINT chk_live_material_live_status CHECK (live_status IN ('none', 'live', 'ending', 'ended')),
     CONSTRAINT chk_live_material_width CHECK (width >= 0),
     CONSTRAINT chk_live_material_height CHECK (height >= 0)
 );
@@ -79,6 +82,7 @@ COMMENT ON COLUMN live_material.name IS '素材名称（唯一）';
 COMMENT ON COLUMN live_material.remark IS '备注';
 COMMENT ON COLUMN live_material.live_url IS '直播链接（唯一）';
 COMMENT ON COLUMN live_material.url_type IS '直播链接类型：file=音视频文件，m3u8=HLS 流媒体';
+COMMENT ON COLUMN live_material.live_status IS '推流直播状态：none=非推流默认；live=推流中允许定时 ASR；ending=已判定关播再跑最后一轮；ended=终态不再调度';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.asr_summaries IS 'AI 总结分段（JSON 数组），格式：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟，时间单位毫秒';
 COMMENT ON COLUMN live_material.asr_paragraphs IS '全文段落划分（JSON 数组），格式：[{"speaker":"1","text":"...","start_time":0,"end_time":100,"words":[{"text":"...","start_time":0,"end_time":0}]}]，时间单位毫秒';
@@ -99,6 +103,7 @@ COMMENT ON COLUMN live_material.ext IS '扩展字段';
 
 CREATE INDEX IF NOT EXISTS idx_live_material_created_by ON live_material (created_by);
 CREATE INDEX IF NOT EXISTS idx_live_material_asr_status ON live_material (asr_status);
+CREATE INDEX IF NOT EXISTS idx_live_material_live_status ON live_material (live_status);
 -- 多实例 Worker 按创建时间 FIFO 抢占 pending ASR 时使用
 CREATE INDEX IF NOT EXISTS idx_live_material_asr_status_created_at ON live_material (asr_status, created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_name ON live_material (name);

@@ -104,6 +104,8 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 		Remark:        remark,
 		LiveURL:       liveURL,
 		URLType:       urlType,
+		// 创建时默认为非推流；后续由推流跟播逻辑写入 live/ending/ended。
+		LiveStatus:    model.LiveStatusNone,
 		Ext:           ext,
 		LiveASR:       "{}",
 		ASRSummaries:  []model.ASRSummarySegment{},

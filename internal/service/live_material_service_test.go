@@ -76,7 +76,7 @@ func (m *mockLiveMaterialRepo) UpdateASRProcessing(ctx context.Context, id uint)
 func (m *mockLiveMaterialRepo) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return nil
 }
-func (m *mockLiveMaterialRepo) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
+func (m *mockLiveMaterialRepo) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int, summaries []model.ASRSummarySegment, paragraphs []model.ASRParagraph) error {
 	return nil
 }
 func (m *mockLiveMaterialRepo) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {
@@ -130,6 +130,9 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	}
 	if material.URLType != model.URLTypeFile {
 		t.Errorf("URLType = %q, want %q", material.URLType, model.URLTypeFile)
+	}
+	if material.LiveStatus != model.LiveStatusNone {
+		t.Errorf("LiveStatus = %q, want %q", material.LiveStatus, model.LiveStatusNone)
 	}
 	if material.CreatedBy != 2 {
 		t.Errorf("CreatedBy = %d, want 2", material.CreatedBy)

@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,10 +15,56 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
+	"live-mixer/internal/pkg/llm"
 	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
 )
+
+var asrIndexLineRE = regexp.MustCompile(`\[(\d+)\]`)
+
+// sampleLiveASRJSON 含单句 utterance，供后处理与完成态测试使用。
+func sampleLiveASRJSON(durationMs int64, text string) json.RawMessage {
+	payload := fmt.Sprintf(
+		`{"audio_info":{"duration":%d},"result":{"utterances":[{"additions":{"speaker":"1"},"start_time":0,"end_time":%d,"text":%q,"words":[{"start_time":0,"end_time":%d,"text":%q}]}]}}`,
+		durationMs, durationMs, text, durationMs, text,
+	)
+	return json.RawMessage(payload)
+}
+
+type workerMockLLM struct {
+	chatFn func(ctx context.Context, messages []llm.ChatMessage) (string, error)
+}
+
+func (m *workerMockLLM) Chat(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+	if m != nil && m.chatFn != nil {
+		return m.chatFn(ctx, messages)
+	}
+	sys, user := "", ""
+	for _, msg := range messages {
+		switch msg.Role {
+		case "system":
+			sys = msg.Content
+		case "user":
+			user = msg.Content
+		}
+	}
+	if strings.Contains(sys, "主题提炼") {
+		return `[{"title":"开场","summary":"打招呼闲聊内容","start_time":0,"end_time":1200}]`, nil
+	}
+	maxIdx := 0
+	for _, m := range asrIndexLineRE.FindAllStringSubmatch(user, -1) {
+		idx, _ := strconv.Atoi(m[1])
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+	return fmt.Sprintf(`[{"start_index":0,"end_index":%d}]`, maxIdx), nil
+}
+
+func defaultWorkerLLM() LLMChatClient {
+	return &workerMockLLM{}
+}
 
 type workerMockRepo struct {
 	mu        sync.Mutex
@@ -101,7 +151,7 @@ func (m *workerMockRepo) UpdateASRProgress(ctx context.Context, id uint, asrVers
 	return nil
 }
 
-func (m *workerMockRepo) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
+func (m *workerMockRepo) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int, summaries []model.ASRSummarySegment, paragraphs []model.ASRParagraph) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	material := m.materials[id]
@@ -117,6 +167,8 @@ func (m *workerMockRepo) UpdateASRCompleted(ctx context.Context, id uint, asrVer
 	material.Duration = duration
 	material.Width = width
 	material.Height = height
+	material.ASRSummaries = summaries
+	material.ASRParagraphs = paragraphs
 	return nil
 }
 
@@ -146,6 +198,8 @@ func (m *workerMockRepo) ResetASRToPending(ctx context.Context, id uint) error {
 	material.ASRStatus = model.ASRStatusPending
 	material.ASRProgress = 0
 	material.LiveASR = "{}"
+	material.ASRSummaries = nil
+	material.ASRParagraphs = nil
 	material.ASRErrorMsg = ""
 	material.ASRStartedAt = nil
 	return nil
@@ -187,7 +241,7 @@ func (m *workerMockASR) TranscribeWithProgress(ctx context.Context, audioURL str
 }
 
 func TestLiveMaterialASRWorker_DefaultConcurrencyIsSix(t *testing.T) {
-	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, 0, 0)
+	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0)
 	impl, ok := w.(*liveMaterialASRWorker)
 	if !ok {
 		t.Fatal("unexpected worker type")
@@ -201,7 +255,7 @@ func TestLiveMaterialASRWorker_DefaultConcurrencyIsSix(t *testing.T) {
 }
 
 func TestLiveMaterialASRWorker_UsesConfiguredConcurrency(t *testing.T) {
-	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, 3, 0).(*liveMaterialASRWorker)
+	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 3, 0).(*liveMaterialASRWorker)
 	if w.concurrency != 3 {
 		t.Fatalf("concurrency = %d, want 3", w.concurrency)
 	}
@@ -209,11 +263,11 @@ func TestLiveMaterialASRWorker_UsesConfiguredConcurrency(t *testing.T) {
 
 // TestLiveMaterialASRWorker_DefaultAndConfiguredStaleTimeout ?????????????????
 func TestLiveMaterialASRWorker_DefaultAndConfiguredStaleTimeout(t *testing.T) {
-	defaultW := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	defaultW := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
 	if defaultW.staleTimeout != liveMaterialASRStaleTimeout {
 		t.Fatalf("default staleTimeout = %v, want %v", defaultW.staleTimeout, liveMaterialASRStaleTimeout)
 	}
-	custom := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, 0, 15*time.Minute).(*liveMaterialASRWorker)
+	custom := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 15*time.Minute).(*liveMaterialASRWorker)
 	if custom.staleTimeout != 15*time.Minute {
 		t.Fatalf("custom staleTimeout = %v, want 15m", custom.staleTimeout)
 	}
@@ -236,7 +290,7 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 			if onProgress != nil {
 				onProgress(50)
 			}
-			return json.RawMessage(`{"audio_info":{"duration":1200},"result":{"text":"hello"}}`), nil
+			return sampleLiveASRJSON(1200, "hello"), nil
 		},
 	}
 	preparer := &mockASRAudioPreparer{
@@ -250,7 +304,7 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/video_editing/temp/asr/1/test.mp3", Width: 1280, Height: 720, Cleanup: func() {}}, nil
 		},
 	}
-	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, nil, 0, 0)
+	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, defaultWorkerLLM(), nil, 0, 0)
 
 	if err := worker.Process(context.Background(), repo.materials[1]); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -275,6 +329,15 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 	if material.Width != 1280 || material.Height != 720 {
 		t.Errorf("Width/Height = %d/%d, want 1280x720", material.Width, material.Height)
 	}
+	if len(material.ASRSummaries) == 0 {
+		t.Error("ASRSummaries should not be empty after LLM postprocess")
+	}
+	if len(material.ASRParagraphs) == 0 {
+		t.Error("ASRParagraphs should not be empty after LLM postprocess")
+	}
+	if material.ASRParagraphs[0].Text != "hello" {
+		t.Errorf("ASRParagraphs[0].Text = %q, want hello", material.ASRParagraphs[0].Text)
+	}
 }
 
 // TestLiveMaterialASRWorker_Process_StaleVersionIgnored 验证超时回收后旧 Worker 写回被忽略，asr_started_at 不被清空。
@@ -293,14 +356,14 @@ func TestLiveMaterialASRWorker_Process_StaleVersionIgnored(t *testing.T) {
 	}
 	asrSvc := &workerMockASR{
 		transcribeFn: func(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
-			return json.RawMessage(`{"audio_info":{"duration":500},"result":{"text":"stale"}}`), nil
+			return sampleLiveASRJSON(500, "stale"), nil
 		},
 	}
 	worker := NewLiveMaterialASRWorker(repo, asrSvc, &mockASRAudioPreparer{
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/stale.mp3", Cleanup: func() {}}, nil
 		},
-	}, nil, 0, 0)
+	}, defaultWorkerLLM(), nil, 0, 0)
 
 	// 模拟 pollLoop 超时回收：version 递增、status 改回 pending，保留 started_at。
 	repo.mu.Lock()
@@ -358,7 +421,7 @@ func TestLiveMaterialASRWorker_Process_Failed(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/asr.mp3", Cleanup: func() {}}, nil
 		},
-	}, nil, 0, 0)
+	}, nil, nil, 0, 0)
 
 	if err := worker.Process(context.Background(), repo.materials[2]); err == nil {
 		t.Fatal("Process() error = nil, want error")
@@ -392,7 +455,7 @@ func TestLiveMaterialASRWorker_Process_SkipNonProcessing(t *testing.T) {
 			prepareCalled = true
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/asr.mp3", Cleanup: func() {}}, nil
 		},
-	}, nil, 0, 0)
+	}, nil, nil, 0, 0)
 
 	if err := worker.Process(context.Background(), repo.materials[3]); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -412,7 +475,7 @@ func TestLiveMaterialASRWorker_Process_PrepareFailed(t *testing.T) {
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{}, errors.New("download failed")
 		},
-	}, nil, 0, 0)
+	}, nil, nil, 0, 0)
 
 	if err := worker.Process(context.Background(), repo.materials[4]); err == nil {
 		t.Fatal("Process() error = nil, want prepare error")
@@ -432,9 +495,9 @@ func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{
 		transcribeFn: func(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
 			asrURL = audioURL
-			return json.RawMessage(`{"audio_info":{"duration":1}}`), nil
+			return sampleLiveASRJSON(1, "hi"), nil
 		},
-	}, nil, nil, 0, 0)
+	}, nil, defaultWorkerLLM(), nil, 0, 0)
 
 	if err := worker.Process(context.Background(), repo.materials[5]); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -445,7 +508,7 @@ func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 }
 
 func TestLiveMaterialASRWorker_Enqueue_NonBlockingAndCoalesced(t *testing.T) {
-	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
 	w.Enqueue()
 	w.Enqueue()
 	w.Enqueue()
@@ -535,7 +598,7 @@ func TestLiveMaterialASRWorker_Start_ProcessesAtMostSixConcurrently(t *testing.T
 			time.Sleep(300 * time.Millisecond)
 			atomic.AddInt32(&inFlight, -1)
 			atomic.AddInt32(&processed, 1)
-			return json.RawMessage(`{"audio_info":{"duration":100}}`), nil
+			return sampleLiveASRJSON(100, "ok"), nil
 		},
 	}
 	preparer := &mockASRAudioPreparer{
@@ -544,7 +607,7 @@ func TestLiveMaterialASRWorker_Start_ProcessesAtMostSixConcurrently(t *testing.T
 		},
 	}
 
-	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, nil, 0, 0).(*liveMaterialASRWorker)
+	worker := NewLiveMaterialASRWorker(repo, asrSvc, preparer, defaultWorkerLLM(), nil, 0, 0).(*liveMaterialASRWorker)
 	// ? poll?wake ??? 1??? poll ?????? worker ???? 6 ????
 	worker.pollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
@@ -585,13 +648,13 @@ func TestLiveMaterialASRWorker_Start_DrainsPendingAfterWake(t *testing.T) {
 	}
 	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{
 		transcribeFn: func(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
-			return json.RawMessage(`{"audio_info":{"duration":10}}`), nil
+			return sampleLiveASRJSON(10, "ok"), nil
 		},
 	}, &mockASRAudioPreparer{
 		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
 			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/temp/asr.mp3", Cleanup: func() {}}, nil
 		},
-	}, nil, 0, 0).(*liveMaterialASRWorker)
+	}, defaultWorkerLLM(), nil, 0, 0).(*liveMaterialASRWorker)
 	worker.pollInterval = time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -618,7 +681,7 @@ func TestLiveMaterialASRWorker_PollLoop_RequeuesStale(t *testing.T) {
 			return 2, nil
 		},
 	}
-	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
 	worker.pollInterval = 20 * time.Millisecond
 	worker.staleTimeout = 45 * time.Minute
 
@@ -649,7 +712,7 @@ func TestLiveMaterialASRWorker_Start_RequeuesStaleImmediately(t *testing.T) {
 			return 1, nil
 		},
 	}
-	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, 0, 0).(*liveMaterialASRWorker)
+	worker := NewLiveMaterialASRWorker(repo, &workerMockASR{}, nil, nil, nil, 0, 0).(*liveMaterialASRWorker)
 	// ?? poll??????????? Start ????????? pollLoop?
 	worker.pollInterval = time.Hour
 

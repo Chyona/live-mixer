@@ -56,6 +56,7 @@ type LiveMaterialDetailResponse struct {
 	Remark       string          `json:"remark"`
 	LiveURL      string          `json:"live_url"`
 	URLType      string          `json:"url_type"`
+	LiveStatus   string          `json:"live_status"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
 	ASRSummaries  []model.ASRSummarySegment `json:"asr_summaries"`
 	ASRParagraphs []model.ASRParagraph      `json:"asr_paragraphs"`
@@ -89,6 +90,7 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		Remark:         material.Remark,
 		LiveURL:        material.LiveURL,
 		URLType:        material.URLType,
+		LiveStatus:     material.LiveStatus,
 		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
 		ASRSummaries:   summaries,
 		ASRParagraphs:  paragraphs,
@@ -115,6 +117,7 @@ type LiveMaterialListResponse struct {
 	Remark       string     `json:"remark"`
 	LiveURL      string     `json:"live_url"`
 	URLType      string     `json:"url_type"`
+	LiveStatus   string     `json:"live_status"`
 	Duration     int64      `json:"duration"`
 	Width        int        `json:"width"`
 	Height       int        `json:"height"`
@@ -145,6 +148,7 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 			Remark:         item.Remark,
 			LiveURL:        item.LiveURL,
 			URLType:        item.URLType,
+			LiveStatus:     item.LiveStatus,
 			Duration:       item.Duration,
 			Width:          item.Width,
 			Height:         item.Height,

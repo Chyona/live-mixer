@@ -38,6 +38,7 @@ type liveMaterialASRWorker struct {
 	repo          repository.LiveMaterialRepository
 	asrService    ASRService
 	audioPreparer LiveMaterialASRAudioPreparer
+	llmClient     LLMChatClient
 	logger        *zap.Logger
 	concurrency   int
 	pollInterval  time.Duration
@@ -50,10 +51,12 @@ type liveMaterialASRWorker struct {
 // NewLiveMaterialASRWorker 创建直播素材 ASR 后台 worker。
 // concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
 // staleTimeout 为 processing 孤儿回收阈值；<=0 时使用内置默认值（60 分钟）。
+// llmClient 用于 ASR 完成后的 summaries/paragraphs 后处理；可为 nil（后处理将失败）。
 func NewLiveMaterialASRWorker(
 	repo repository.LiveMaterialRepository,
 	asrService ASRService,
 	audioPreparer LiveMaterialASRAudioPreparer,
+	llmClient LLMChatClient,
 	logger *zap.Logger,
 	concurrency int,
 	staleTimeout time.Duration,
@@ -71,6 +74,7 @@ func NewLiveMaterialASRWorker(
 		repo:          repo,
 		asrService:    asrService,
 		audioPreparer: audioPreparer,
+		llmClient:     llmClient,
 		logger:        logger,
 		concurrency:   concurrency,
 		pollInterval:  liveMaterialASRPollInterval,
@@ -177,7 +181,7 @@ func (w *liveMaterialASRWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 执行已抢占素材的 ASR：音频预处理 → 识别 → 写回结果。
+// Process 执行已抢占素材的 ASR：音频预处理 → 识别 → LLM 后处理 → 写回结果。
 func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.LiveMaterial) error {
 	if material == nil {
 		return fmt.Errorf("素材不能为空")
@@ -254,7 +258,20 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		liveASR = "{}"
 	}
 
-	if err := w.repo.UpdateASRCompleted(ctx, materialID, asrVersion, liveASR, duration, prep.Width, prep.Height); err != nil {
+	updateProgress(96)
+	w.logger.Info("开始 ASR LLM 后处理",
+		zap.Uint("material_id", materialID),
+	)
+	post, err := runASRPostprocess(ctx, w.llmClient, liveASR, duration)
+	if err != nil {
+		return w.failASR(ctx, materialID, asrVersion, lastProgress, err)
+	}
+	updateProgress(98)
+
+	if err := w.repo.UpdateASRCompleted(
+		ctx, materialID, asrVersion, liveASR, duration, prep.Width, prep.Height,
+		post.Summaries, post.Paragraphs,
+	); err != nil {
 		return fmt.Errorf("写入 ASR 成功结果失败: %w", err)
 	}
 	w.logger.Info("直播素材 ASR 处理完成",
@@ -262,6 +279,8 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 		zap.Int64("duration_ms", duration),
 		zap.Int("width", prep.Width),
 		zap.Int("height", prep.Height),
+		zap.Int("summaries", len(post.Summaries)),
+		zap.Int("paragraphs", len(post.Paragraphs)),
 	)
 	return nil
 }

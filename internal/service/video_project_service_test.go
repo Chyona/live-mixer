@@ -102,7 +102,7 @@ func (m *mockLiveMaterialRepoForProject) UpdateASRProcessing(ctx context.Context
 func (m *mockLiveMaterialRepoForProject) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return nil
 }
-func (m *mockLiveMaterialRepoForProject) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
+func (m *mockLiveMaterialRepoForProject) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int, summaries []model.ASRSummarySegment, paragraphs []model.ASRParagraph) error {
 	return nil
 }
 func (m *mockLiveMaterialRepoForProject) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {

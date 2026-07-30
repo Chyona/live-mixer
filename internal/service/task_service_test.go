@@ -60,7 +60,7 @@ func (m *mockLiveRepoForTask) UpdateASRProcessing(ctx context.Context, id uint) 
 func (m *mockLiveRepoForTask) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return nil
 }
-func (m *mockLiveRepoForTask) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
+func (m *mockLiveRepoForTask) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int, summaries []model.ASRSummarySegment, paragraphs []model.ASRParagraph) error {
 	return nil
 }
 func (m *mockLiveRepoForTask) UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error {

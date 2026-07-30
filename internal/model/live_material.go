@@ -18,6 +18,14 @@ const (
 	URLTypeM3U8 = "m3u8" // HLS 流媒体
 )
 
+// 推流直播生命周期状态（live_status）。
+const (
+	LiveStatusNone   = "none"   // 默认：非推流直播（文件/点播等）
+	LiveStatusLive   = "live"   // 推流中，允许定时 ASR
+	LiveStatusEnding = "ending" // 已判定关播，再跑最后一轮后停
+	LiveStatusEnded  = "ended"  // 终态，不再调度
+)
+
 // ASRSummarySegment AI 对完整 ASR 的总结与分段（毫秒）。
 // Title 长度宜 ≤6 字；单段总结对应时长宜在 5~60 分钟。
 type ASRSummarySegment struct {
@@ -44,6 +52,8 @@ type LiveMaterial struct {
 	LiveURL      string     `gorm:"size:1024;not null;uniqueIndex;comment:直播链接" json:"live_url"`
 	// URLType live_url 类型：file=音视频文件，m3u8=HLS 流。
 	URLType      string     `gorm:"column:url_type;size:16;not null;default:file;comment:直播链接类型file或m3u8" json:"url_type"`
+	// LiveStatus 推流直播生命周期：none/live/ending/ended。
+	LiveStatus   string     `gorm:"column:live_status;size:16;not null;default:none;index;comment:推流直播状态none/live/ending/ended" json:"live_status"`
 	LiveASR      string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	// ASRSummaries AI 总结分段；ASRParagraphs 全文段落划分。默认空数组。
 	ASRSummaries  []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI总结分段" json:"asr_summaries"`

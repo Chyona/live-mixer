@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -29,9 +30,9 @@ type LiveMaterialRepository interface {
 	// UpdateASRProgress 更新 ASR 识别进度。
 	// 仅当 asr_status=processing 且 asr_version 匹配时生效，避免超时回收后旧 Worker 继续写回。
 	UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error
-	// UpdateASRCompleted 写入 ASR 成功结果，并回写探测到的分辨率（0 表示未知/无视频轨）。
+	// UpdateASRCompleted 写入 ASR 成功结果（含 summaries/paragraphs）并回写分辨率。
 	// 仅当 asr_status=processing 且 asr_version 匹配时生效。
-	UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error
+	UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int, summaries []model.ASRSummarySegment, paragraphs []model.ASRParagraph) error
 	// UpdateASRFailed 标记 ASR 识别失败。
 	// 仅当 asr_status=processing 且 asr_version 匹配时生效。
 	UpdateASRFailed(ctx context.Context, id uint, asrVersion int64, progress int16, errorMsg string) error
@@ -183,12 +184,20 @@ func (r *liveMaterialRepository) UpdateASRProgress(ctx context.Context, id uint,
 		}).Error
 }
 
-func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int) error {
+func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint, asrVersion int64, liveASR string, duration int64, width, height int, summaries []model.ASRSummarySegment, paragraphs []model.ASRParagraph) error {
 	if width < 0 {
 		width = 0
 	}
 	if height < 0 {
 		height = 0
+	}
+	summariesJSON, err := marshalASRJSONArray(summaries)
+	if err != nil {
+		return err
+	}
+	paragraphsJSON, err := marshalASRJSONArray(paragraphs)
+	if err != nil {
+		return err
 	}
 	now := time.Now()
 	return r.db.WithContext(ctx).
@@ -201,6 +210,8 @@ func (r *liveMaterialRepository) UpdateASRCompleted(ctx context.Context, id uint
 			"duration":         duration,
 			"width":            width,
 			"height":           height,
+			"asr_summaries":    summariesJSON,
+			"asr_paragraphs":   paragraphsJSON,
 			"asr_error_msg":    "",
 			"asr_updated_at":   now,
 			"asr_completed_at": now,
@@ -228,6 +239,8 @@ func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint)
 			"asr_status":       model.ASRStatusPending,
 			"asr_progress":     int16(0),
 			"live_asr":         "{}",
+			"asr_summaries":    "[]",
+			"asr_paragraphs":   "[]",
 			"asr_error_msg":    "",
 			"asr_started_at":   nil,
 			"asr_updated_at":   now,
@@ -300,4 +313,19 @@ func (r *liveMaterialRepository) Delete(ctx context.Context, id uint) error {
 		}
 		return nil
 	})
+}
+
+// marshalASRJSONArray 将 summaries/paragraphs 序列化为 JSON 数组字符串，供 JSONB 写入。
+func marshalASRJSONArray(v any) (string, error) {
+	if v == nil {
+		return "[]", nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	if len(b) == 0 || string(b) == "null" {
+		return "[]", nil
+	}
+	return string(b), nil
 }

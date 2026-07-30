@@ -123,7 +123,7 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 	for i, name := range names {
 		material := &model.LiveMaterial{
 			Name:        name,
-			LiveURL:     "https://example.com/live.mp4",
+			LiveURL:     fmt.Sprintf("https://example.com/live-%d.mp4", i+1),
 			LiveASR:     asrPayloads[i],
 			ASRStatus:   model.ASRStatusPending,
 			ASRProgress: 0,
@@ -373,7 +373,7 @@ func TestLiveMaterialRepository_ASRWrites_VersionCAS(t *testing.T) {
 	if err := repo.UpdateASRProgress(ctx, material.ID, oldVersion, 80); err != nil {
 		t.Fatalf("UpdateASRProgress(stale) error = %v", err)
 	}
-	if err := repo.UpdateASRCompleted(ctx, material.ID, oldVersion, `{"ok":true}`, 1000, 1280, 720); err != nil {
+	if err := repo.UpdateASRCompleted(ctx, material.ID, oldVersion, `{"ok":true}`, 1000, 1280, 720, nil, nil); err != nil {
 		t.Fatalf("UpdateASRCompleted(stale) error = %v", err)
 	}
 	if err := repo.UpdateASRFailed(ctx, material.ID, oldVersion, 40, "旧失败"); err != nil {
@@ -402,7 +402,7 @@ func TestLiveMaterialRepository_ASRWrites_VersionCAS(t *testing.T) {
 	if err != nil || claimed2 == nil {
 		t.Fatalf("second ClaimPendingASR() = %v, %v", claimed2, err)
 	}
-	if err := repo.UpdateASRCompleted(ctx, material.ID, claimed2.ASRVersion, `{"result":"ok"}`, 2000, 1920, 1080); err != nil {
+	if err := repo.UpdateASRCompleted(ctx, material.ID, claimed2.ASRVersion, `{"result":"ok"}`, 2000, 1920, 1080, nil, nil); err != nil {
 		t.Fatalf("UpdateASRCompleted(current) error = %v", err)
 	}
 	final, _ := repo.GetByID(ctx, material.ID)
@@ -422,7 +422,9 @@ func TestLiveMaterialRepository_ResetASRToPending_OnlyFailed(t *testing.T) {
 
 	failed := &model.LiveMaterial{
 		Name: "失败", LiveURL: "https://example.com/f.mp4",
-		LiveASR: "{}", ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "x", CreatedBy: 1,
+		LiveASR: `{"leftover":true}`, ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "x", CreatedBy: 1,
+		ASRSummaries: []model.ASRSummarySegment{{Title: "旧题", Summary: "旧摘要", StartTime: 0, EndTime: 100}},
+		ASRParagraphs: []model.ASRParagraph{{Speaker: "1", Text: "旧段", StartTime: 0, EndTime: 100}},
 	}
 	completed := &model.LiveMaterial{
 		Name: "完成", LiveURL: "https://example.com/c.mp4",
@@ -440,6 +442,15 @@ func TestLiveMaterialRepository_ResetASRToPending_OnlyFailed(t *testing.T) {
 	}
 	if got.ASRVersion != 1 {
 		t.Errorf("ASRVersion = %d, want 1 after reset", got.ASRVersion)
+	}
+	if got.LiveASR != "{}" {
+		t.Errorf("LiveASR = %q, want {}", got.LiveASR)
+	}
+	if len(got.ASRSummaries) != 0 {
+		t.Errorf("ASRSummaries = %+v, want empty", got.ASRSummaries)
+	}
+	if len(got.ASRParagraphs) != 0 {
+		t.Errorf("ASRParagraphs = %+v, want empty", got.ASRParagraphs)
 	}
 
 	if err := repo.ResetASRToPending(ctx, completed.ID); err == nil {
@@ -485,7 +496,7 @@ func TestLiveMaterialRepository_UpdateASRStates(t *testing.T) {
 	}
 
 	asrJSON := `{"audio_info":{"duration":3000},"result":{"text":"ok"}}`
-	if err := repo.UpdateASRCompleted(ctx, material.ID, got.ASRVersion, asrJSON, 3000, 1920, 1080); err != nil {
+	if err := repo.UpdateASRCompleted(ctx, material.ID, got.ASRVersion, asrJSON, 3000, 1920, 1080, nil, nil); err != nil {
 		t.Fatalf("UpdateASRCompleted() error = %v", err)
 	}
 	got, _ = repo.GetByID(ctx, material.ID)
