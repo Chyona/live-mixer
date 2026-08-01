@@ -257,7 +257,7 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 
 // GetLiveMaterial 获取直播素材详情
 // @Summary      获取直播素材详情
-// @Description  根据 ID 查询直播素材完整信息；live_asr 为分句数组；含 asr_summaries（AI 总结分段）与 asr_paragraphs（全文段落划分）
+// @Description  根据 ID 查询直播素材完整信息；live_asr 为分句数组；含 asr_summaries（AI 主题分段）与 asr_paragraphs（全文段落划分）
 // @Tags         直播素材
 // @Produce      json
 // @Param        id   path  int  true  "素材 ID"

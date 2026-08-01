@@ -18,7 +18,6 @@ const (
 	asrSummaryMinDurationMs     = int64(5 * 60 * 1000)  // 5 分钟
 	asrSummaryMaxDurationMs     = int64(60 * 60 * 1000) // 60 分钟
 	asrSummaryTitleMaxRunes     = 6
-	asrSummaryTextMaxRunes      = 30
 	asrParagraphMaxRunes        = 300
 	asrParagraphWindowMs        = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
 	asrSummaryWindowMs          = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
@@ -28,13 +27,12 @@ const (
 const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据带编号的 ASR 句段列表，提炼若干「核心主题」分段。
 要求：
 1. 只输出一个 JSON 对象，格式严格为 {"items":[...]}，不要输出其它文字或 markdown。
-2. items 每项格式：{"title":"...","summary":"...","start_index":0,"end_index":3}，为句段编号闭区间（含两端）。
+2. items 每项格式：{"title":"...","start_index":0,"end_index":3}，为句段编号闭区间（含两端）。不要输出 summary 或其它字段。
 3. title 必须严格不超过 6 个汉字（按 Unicode 字符计，含标点）；禁止写成短句。优先用 2~4 字主题词，例如「开场互动」「产品讲解」「福利促销」。坏例：「今天给大家介绍优惠活动」。
-4. summary 不超过 30 个字，提炼核心主题，不要复述全文。
-5. 每段对应时长（由 start_index~end_index 句段时间推算）默认应在 5~60 分钟；若整场时长不足 5 分钟，可输出覆盖全场句段的一段。
-6. 各段是核心主题，不必覆盖全文；段与段可以连续、间断或索引相交。
-7. start_index/end_index 必须落在输入句段编号范围内，且 start_index<=end_index。
-8. 至少输出 1 段。`
+4. 每段对应时长（由 start_index~end_index 句段时间推算）应在 5~60 分钟；服务端会丢弃不合此时长的段。
+5. 各段是核心主题，不必覆盖全文；段与段可以连续、间断或索引相交。
+6. start_index/end_index 必须落在输入句段编号范围内，且 start_index<=end_index。
+7. 可以输出 0 段（items 为空数组），表示本窗无合适主题。`
 
 const asrParagraphsSystemPrompt = `你是直播 ASR 段落划分助手。根据带编号的 ASR 句段列表，将全文划分为连续段落。
 要求：
@@ -54,7 +52,6 @@ type asrParagraphRange struct {
 // asrSummaryLLMItem LLM 返回的总结项（句段 index 锚点）。
 type asrSummaryLLMItem struct {
 	Title      string `json:"title"`
-	Summary    string `json:"summary"`
 	StartIndex int    `json:"start_index"`
 	EndIndex   int    `json:"end_index"`
 }
@@ -129,7 +126,8 @@ func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utteranc
 		all = append(all, segs...)
 	}
 	normalizeASRSummaries(all, durationMs)
-	if err := validateASRSummaries(all, durationMs); err != nil {
+	all = filterASRSummariesByDuration(all)
+	if err := validateASRSummaries(all); err != nil {
 		return nil, err
 	}
 	sort.SliceStable(all, func(i, j int) bool {
@@ -138,6 +136,9 @@ func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utteranc
 		}
 		return all[i].StartTime < all[j].StartTime
 	})
+	if all == nil {
+		all = []model.ASRSummarySegment{}
+	}
 	return all, nil
 }
 
@@ -163,7 +164,8 @@ func generateASRSummariesWindow(
 	segs, err := parseAndResolveASRSummaries(content, win, durationMs)
 	if err == nil {
 		normalizeASRSummaries(segs, durationMs)
-		if vErr := validateASRSummaries(segs, durationMs); vErr == nil {
+		segs = filterASRSummariesByDuration(segs)
+		if vErr := validateASRSummaries(segs); vErr == nil {
 			dbg.Segments = segs
 			return segs, dbg, nil
 		} else {
@@ -171,7 +173,7 @@ func generateASRSummariesWindow(
 		}
 	}
 
-	// 校验/解析失败：带上错误原因再修一次。
+	// 解析/结构校验失败：带上错误原因再修一次（过滤后为空不算失败，不会走到这里）。
 	for attempt := 0; attempt < asrPostprocessMaxRepair; attempt++ {
 		repairPrompt := buildASRSummariesRepairPrompt(err, content)
 		dbg.RepairPrompt = repairPrompt
@@ -190,7 +192,8 @@ func generateASRSummariesWindow(
 			continue
 		}
 		normalizeASRSummaries(segs, durationMs)
-		if err = validateASRSummaries(segs, durationMs); err != nil {
+		segs = filterASRSummariesByDuration(segs)
+		if err = validateASRSummaries(segs); err != nil {
 			continue
 		}
 		dbg.Segments = segs
@@ -353,7 +356,8 @@ func buildASRSummariesRepairPrompt(prevErr error, prevContent string) string {
 	b.WriteString("上一次输出未通过校验：")
 	b.WriteString(prevErr.Error())
 	b.WriteString("\n请只输出修正后的完整 JSON 对象 {\"items\":[...]}。")
-	b.WriteString("title 必须 ≤6 字，summary 必须 ≤30 字；start_index/end_index 必须合法。")
+	b.WriteString("每项仅含 title/start_index/end_index；title 必须 ≤6 字；索引必须合法。")
+	b.WriteString("每段推算时长应在 5~60 分钟，否则该段会被丢弃。")
 	b.WriteString("\n上次输出摘要：\n")
 	b.WriteString(truncateRunes(prevContent, 800))
 	return b.String()
@@ -406,7 +410,7 @@ func parseASRSummaryItems(content string) ([]asrSummaryLLMItem, error) {
 
 func resolveASRSummaries(items []asrSummaryLLMItem, win utteranceWindow, durationMs int64) ([]model.ASRSummarySegment, error) {
 	if len(items) == 0 {
-		return nil, fmt.Errorf("asr_summaries items 不能为空")
+		return []model.ASRSummarySegment{}, nil
 	}
 	n := len(win.Utterances)
 	segs := make([]model.ASRSummarySegment, 0, len(items))
@@ -428,7 +432,6 @@ func resolveASRSummaries(items []asrSummaryLLMItem, win utteranceWindow, duratio
 		}
 		segs = append(segs, model.ASRSummarySegment{
 			Title:     it.Title,
-			Summary:   it.Summary,
 			StartTime: start,
 			EndTime:   end,
 		})
@@ -550,11 +553,10 @@ func extractJSONBracketLiteral(s string, open, close byte) string {
 	return ""
 }
 
-// normalizeASRSummaries 截断字数、纠正时间边界；不返回 error。
+// normalizeASRSummaries 截断 title、纠正时间边界；不返回 error。
 func normalizeASRSummaries(segs []model.ASRSummarySegment, durationMs int64) {
 	for i := range segs {
 		segs[i].Title = truncateRunesHard(strings.TrimSpace(segs[i].Title), asrSummaryTitleMaxRunes)
-		segs[i].Summary = truncateRunesHard(strings.TrimSpace(segs[i].Summary), asrSummaryTextMaxRunes)
 		if segs[i].EndTime < segs[i].StartTime {
 			segs[i].StartTime, segs[i].EndTime = segs[i].EndTime, segs[i].StartTime
 		}
@@ -569,27 +571,30 @@ func normalizeASRSummaries(segs []model.ASRSummarySegment, durationMs int64) {
 	}
 }
 
-func validateASRSummaries(segs []model.ASRSummarySegment, durationMs int64) error {
+// filterASRSummariesByDuration 丢弃时长不在 [5,60] 分钟的段；可返回空切片。
+func filterASRSummariesByDuration(segs []model.ASRSummarySegment) []model.ASRSummarySegment {
 	if len(segs) == 0 {
-		return fmt.Errorf("asr_summaries 不能为空")
+		return []model.ASRSummarySegment{}
 	}
-	allowShortFull := durationMs > 0 && durationMs < asrSummaryMinDurationMs
-	for i, s := range segs {
-		title := strings.TrimSpace(s.Title)
-		summary := strings.TrimSpace(s.Summary)
-		if title == "" || summary == "" {
-			return fmt.Errorf("asr_summaries[%d] title/summary 不能为空", i)
-		}
-		// 字数超限已在 normalize 截断，此处不再报错。
-		if s.EndTime < s.StartTime {
-			return fmt.Errorf("asr_summaries[%d] 时间非法", i)
-		}
+	out := make([]model.ASRSummarySegment, 0, len(segs))
+	for _, s := range segs {
 		dur := s.EndTime - s.StartTime
-		if allowShortFull {
+		if dur < asrSummaryMinDurationMs || dur > asrSummaryMaxDurationMs {
 			continue
 		}
-		if dur < asrSummaryMinDurationMs || dur > asrSummaryMaxDurationMs {
-			return fmt.Errorf("asr_summaries[%d] 时长须在 5~60 分钟", i)
+		out = append(out, s)
+	}
+	return out
+}
+
+// validateASRSummaries 校验保留段；允许空列表（过滤后无合法段时不失败）。
+func validateASRSummaries(segs []model.ASRSummarySegment) error {
+	for i, s := range segs {
+		if strings.TrimSpace(s.Title) == "" {
+			return fmt.Errorf("asr_summaries[%d] title 不能为空", i)
+		}
+		if s.EndTime < s.StartTime {
+			return fmt.Errorf("asr_summaries[%d] 时间非法", i)
 		}
 	}
 	return nil

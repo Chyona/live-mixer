@@ -26,11 +26,10 @@ const (
 	LiveStatusEnded  = "ended"  // 终态，不再调度
 )
 
-// ASRSummarySegment AI 对完整 ASR 的总结与分段（毫秒）。
-// Title 长度宜 ≤6 字；单段总结对应时长宜在 5~60 分钟。
+// ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
+// Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。
 type ASRSummarySegment struct {
 	Title     string `json:"title"`
-	Summary   string `json:"summary"`
 	StartTime int64  `json:"start_time"`
 	EndTime   int64  `json:"end_time"`
 }
@@ -55,8 +54,8 @@ type LiveMaterial struct {
 	// LiveStatus 推流直播生命周期：none/live/ending/ended。
 	LiveStatus   string     `gorm:"column:live_status;size:16;not null;default:none;index;comment:推流直播状态none/live/ending/ended" json:"live_status"`
 	LiveASR      string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
-	// ASRSummaries AI 总结分段；ASRParagraphs 全文段落划分。默认空数组。
-	ASRSummaries  []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI总结分段" json:"asr_summaries"`
+	// ASRSummaries AI 主题分段（仅 title + 时间）；ASRParagraphs 全文段落划分。默认空数组。
+	ASRSummaries  []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
 	ASRParagraphs []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
 	Duration     int64      `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
 	// Width / Height 直播画面分辨率（像素）；0 表示未知。

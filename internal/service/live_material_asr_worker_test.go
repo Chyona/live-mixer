@@ -51,7 +51,7 @@ func (m *workerMockLLM) Chat(ctx context.Context, messages []llm.ChatMessage) (s
 		}
 	}
 	if strings.Contains(sys, "主题提炼") {
-		return `{"items":[{"title":"开场","summary":"打招呼闲聊内容","start_index":0,"end_index":0}]}`, nil
+		return `{"items":[{"title":"开场","start_index":0,"end_index":0}]}`, nil
 	}
 	maxIdx := 0
 	for _, m := range asrIndexLineRE.FindAllStringSubmatch(user, -1) {
@@ -299,7 +299,8 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 			if onProgress != nil {
 				onProgress(50)
 			}
-			return sampleLiveASRJSON(1200, "hello"), nil
+			// 10 分钟：summary 段可通过 [5,60] 分钟过滤。
+			return sampleLiveASRJSON(10*60*1000, "hello"), nil
 		},
 	}
 	preparer := &mockASRAudioPreparer{
@@ -326,8 +327,8 @@ func TestLiveMaterialASRWorker_Process_Success(t *testing.T) {
 	if material.ASRProgress != 100 {
 		t.Errorf("ASRProgress = %d, want 100", material.ASRProgress)
 	}
-	if material.Duration != 1200 {
-		t.Errorf("Duration = %d, want 1200", material.Duration)
+	if material.Duration != 10*60*1000 {
+		t.Errorf("Duration = %d, want %d", material.Duration, 10*60*1000)
 	}
 	if material.LiveASR == "" {
 		t.Error("LiveASR should not be empty")

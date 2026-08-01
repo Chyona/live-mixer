@@ -423,7 +423,7 @@ func TestLiveMaterialRepository_ResetASRToPending_OnlyFailed(t *testing.T) {
 	failed := &model.LiveMaterial{
 		Name: "失败", LiveURL: "https://example.com/f.mp4",
 		LiveASR: `{"leftover":true}`, ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "x", CreatedBy: 1,
-		ASRSummaries: []model.ASRSummarySegment{{Title: "旧题", Summary: "旧摘要", StartTime: 0, EndTime: 100}},
+		ASRSummaries: []model.ASRSummarySegment{{Title: "旧题", StartTime: 0, EndTime: 100}},
 		ASRParagraphs: []model.ASRParagraph{{Speaker: "1", Text: "旧段", StartTime: 0, EndTime: 100}},
 	}
 	completed := &model.LiveMaterial{
