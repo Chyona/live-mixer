@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"live-mixer/internal/model"
@@ -14,14 +17,14 @@ import (
 )
 
 const (
-	asrPostprocessMaxInputRunes = 80000
-	asrSummaryMinDurationMs     = int64(5 * 60 * 1000)  // 5 分钟
-	asrSummaryMaxDurationMs     = int64(60 * 60 * 1000) // 60 分钟
-	asrSummaryTitleMaxRunes     = 6
-	asrParagraphMaxRunes        = 300
-	asrParagraphWindowMs        = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
-	asrSummaryWindowMs          = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
-	asrPostprocessMaxRepair     = 1                     // 校验失败最多再修 1 次
+	asrPostprocessMaxInputRunes  = 80000
+	asrSummaryMinDurationMs      = int64(5 * 60 * 1000)  // 5 分钟
+	asrSummaryMaxDurationMs      = int64(60 * 60 * 1000) // 60 分钟
+	asrSummaryTitleMaxRunes      = 6
+	asrParagraphWindowMs         = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
+	asrSummaryWindowMs           = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
+	asrLLMTransportMaxAttempts   = 3                     // 仅网络/接口异常重试（含首次）
+	asrLLMTransportBackoffBase   = 100 * time.Millisecond
 )
 
 const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据带编号的 ASR 句段列表，提炼若干「核心主题」分段。
@@ -91,7 +94,7 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	if err != nil {
 		return out, fmt.Errorf("生成 asr_summaries 失败: %w", err)
 	}
-	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances, rec)
+	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances, durationMs, rec)
 	if err != nil {
 		return out, fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
 	}
@@ -100,8 +103,56 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	return out, nil
 }
 
+// asrChatStructured 调用结构化 LLM；仅对网络/接口异常重试，最多 asrLLMTransportMaxAttempts 次。
+// 模型一旦返回内容即交给调用方，不做内容向重试。
 func asrChatStructured(ctx context.Context, llmClient LLMChatClient, messages []llm.ChatMessage) (string, error) {
-	return llmClient.ChatStructured(ctx, messages)
+	var lastErr error
+	for attempt := 1; attempt <= asrLLMTransportMaxAttempts; attempt++ {
+		content, err := llmClient.ChatStructured(ctx, messages)
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+		if !isASRLLMTransportError(err) || attempt == asrLLMTransportMaxAttempts {
+			return "", err
+		}
+		delay := asrLLMTransportBackoffBase * time.Duration(attempt)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return "", lastErr
+}
+
+func isASRLLMTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	for _, p := range []string{
+		"请求 LLM 失败",
+		"读取 LLM 响应失败",
+		"创建请求失败",
+		"LLM HTTP",
+		"LLM 返回错误",
+		"LLM 响应无 choices",
+		"LLM 响应内容为空",
+		"解析 LLM 响应失败",
+	} {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder) ([]model.ASRSummarySegment, error) {
@@ -161,48 +212,23 @@ func generateASRSummariesWindow(
 		return nil, dbg, err
 	}
 
+	// 模型已有输出：不再内容重试；解析/校验失败则兜底为空列表。
 	segs, err := parseAndResolveASRSummaries(content, win, durationMs)
-	if err == nil {
-		normalizeASRSummaries(segs, durationMs)
-		segs = filterASRSummariesByDuration(segs)
-		if vErr := validateASRSummaries(segs); vErr == nil {
-			dbg.Segments = segs
-			return segs, dbg, nil
-		} else {
-			err = vErr
-		}
+	if err != nil {
+		dbg.Segments = []model.ASRSummarySegment{}
+		return dbg.Segments, dbg, nil
 	}
-
-	// 解析/结构校验失败：带上错误原因再修一次（过滤后为空不算失败，不会走到这里）。
-	for attempt := 0; attempt < asrPostprocessMaxRepair; attempt++ {
-		repairPrompt := buildASRSummariesRepairPrompt(err, content)
-		dbg.RepairPrompt = repairPrompt
-		repairMsgs := append(append([]llm.ChatMessage{}, messages...),
-			llm.ChatMessage{Role: "assistant", Content: content},
-			llm.ChatMessage{Role: "user", Content: repairPrompt},
-		)
-		repaired, rErr := asrChatStructured(ctx, llmClient, repairMsgs)
-		dbg.RepairRaw = repaired
-		if rErr != nil {
-			return nil, dbg, rErr
-		}
-		content = repaired
-		segs, err = parseAndResolveASRSummaries(content, win, durationMs)
-		if err != nil {
-			continue
-		}
-		normalizeASRSummaries(segs, durationMs)
-		segs = filterASRSummariesByDuration(segs)
-		if err = validateASRSummaries(segs); err != nil {
-			continue
-		}
-		dbg.Segments = segs
-		return segs, dbg, nil
+	normalizeASRSummaries(segs, durationMs)
+	segs = filterASRSummariesByDuration(segs)
+	if vErr := validateASRSummaries(segs); vErr != nil {
+		dbg.Segments = []model.ASRSummarySegment{}
+		return dbg.Segments, dbg, nil
 	}
-	return nil, dbg, err
+	dbg.Segments = segs
+	return segs, dbg, nil
 }
 
-func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, rec *asrDebugRecorder) ([]model.ASRParagraph, error) {
+func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder) ([]model.ASRParagraph, error) {
 	windows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrPostprocessMaxInputRunes)
 	var ranges []asrParagraphRange
 	debugWindows := make([]asrLLMWindowDebug, 0, len(windows))
@@ -228,7 +254,16 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 			})
 		}
 	}
-	return stitchASRParagraphs(utterances, ranges)
+	paragraphs, err := stitchASRParagraphs(utterances, ranges)
+	if err != nil {
+		ranges = buildParagraphRangesLocally(utterances)
+		paragraphs, err = stitchASRParagraphs(utterances, ranges)
+		if err != nil {
+			return nil, err
+		}
+	}
+	normalizeASRParagraphTimeline(paragraphs, durationMs)
+	return paragraphs, nil
 }
 
 func generateASRParagraphsWindow(
@@ -249,40 +284,34 @@ func generateASRParagraphsWindow(
 		return nil, dbg, err
 	}
 
+	// 模型已有输出：不再内容重试；结构不可用时本地按说话人重建。
 	local, err := parseASRParagraphRanges(content)
 	if err == nil {
 		if _, sErr := stitchASRParagraphs(win.Utterances, local); sErr == nil {
 			dbg.Ranges = local
 			return local, dbg, nil
-		} else {
-			err = sErr
 		}
 	}
+	local = buildParagraphRangesLocally(win.Utterances)
+	dbg.Ranges = local
+	return local, dbg, nil
+}
 
-	for attempt := 0; attempt < asrPostprocessMaxRepair; attempt++ {
-		repairPrompt := buildASRParagraphsRepairPrompt(err, content, len(win.Utterances))
-		dbg.RepairPrompt = repairPrompt
-		repairMsgs := append(append([]llm.ChatMessage{}, messages...),
-			llm.ChatMessage{Role: "assistant", Content: content},
-			llm.ChatMessage{Role: "user", Content: repairPrompt},
-		)
-		repaired, rErr := asrChatStructured(ctx, llmClient, repairMsgs)
-		dbg.RepairRaw = repaired
-		if rErr != nil {
-			return nil, dbg, rErr
-		}
-		content = repaired
-		local, err = parseASRParagraphRanges(content)
-		if err != nil {
-			continue
-		}
-		if _, err = stitchASRParagraphs(win.Utterances, local); err != nil {
-			continue
-		}
-		dbg.Ranges = local
-		return local, dbg, nil
+// buildParagraphRangesLocally 按说话人切换切段，保证全覆盖、无重叠。
+func buildParagraphRangesLocally(utterances []asr.Utterance) []asrParagraphRange {
+	if len(utterances) == 0 {
+		return nil
 	}
-	return nil, dbg, err
+	ranges := make([]asrParagraphRange, 0)
+	start := 0
+	for i := 1; i < len(utterances); i++ {
+		if strings.TrimSpace(utterances[i].Speaker) != strings.TrimSpace(utterances[start].Speaker) {
+			ranges = append(ranges, asrParagraphRange{StartIndex: start, EndIndex: i - 1})
+			start = i
+		}
+	}
+	ranges = append(ranges, asrParagraphRange{StartIndex: start, EndIndex: len(utterances) - 1})
+	return ranges
 }
 
 type utteranceWindow struct {
@@ -638,9 +667,6 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 			}
 		}
 		text := textBuilder.String()
-		if utf8.RuneCountInString(text) >= asrParagraphMaxRunes {
-			return nil, fmt.Errorf("asr_paragraphs[%d] 字数须小于 %d", i, asrParagraphMaxRunes)
-		}
 		paragraphs = append(paragraphs, model.ASRParagraph{
 			Speaker:   speaker,
 			Text:      text,
@@ -662,11 +688,6 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 		}
 		return paragraphs[i].StartTime < paragraphs[j].StartTime
 	})
-	for i := 1; i < len(paragraphs); i++ {
-		if paragraphs[i].StartTime < paragraphs[i-1].EndTime {
-			return nil, fmt.Errorf("asr_paragraphs 时间线相交: [%d,%d) 与后续段", paragraphs[i-1].StartTime, paragraphs[i-1].EndTime)
-		}
-	}
 
 	var full strings.Builder
 	for _, u := range utterances {
@@ -680,6 +701,41 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 		return nil, fmt.Errorf("asr_paragraphs 拼接结果与完整 ASR 不一致")
 	}
 	return paragraphs, nil
+}
+
+// normalizeASRParagraphTimeline 保证段时间不重叠，首尾对齐完整直播时长；相邻静音空隙允许保留。
+func normalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
+	if len(paragraphs) == 0 {
+		return
+	}
+	sort.SliceStable(paragraphs, func(i, j int) bool {
+		if paragraphs[i].StartTime == paragraphs[j].StartTime {
+			return paragraphs[i].EndTime < paragraphs[j].EndTime
+		}
+		return paragraphs[i].StartTime < paragraphs[j].StartTime
+	})
+	paragraphs[0].StartTime = 0
+	for i := range paragraphs {
+		if paragraphs[i].EndTime < paragraphs[i].StartTime {
+			paragraphs[i].EndTime = paragraphs[i].StartTime
+		}
+		if i == 0 {
+			continue
+		}
+		if paragraphs[i].StartTime < paragraphs[i-1].EndTime {
+			paragraphs[i].StartTime = paragraphs[i-1].EndTime
+		}
+		if paragraphs[i].EndTime < paragraphs[i].StartTime {
+			paragraphs[i].EndTime = paragraphs[i].StartTime
+		}
+	}
+	if durationMs > 0 {
+		last := &paragraphs[len(paragraphs)-1]
+		last.EndTime = durationMs
+		if last.EndTime < last.StartTime {
+			last.EndTime = last.StartTime
+		}
+	}
 }
 
 func truncateRunes(s string, max int) string {

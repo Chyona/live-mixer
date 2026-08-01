@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
@@ -204,7 +207,7 @@ func TestRunASRPostprocess_KeepsInRangeSummary(t *testing.T) {
 	}
 }
 
-func TestRunASRPostprocess_RepairOnceOnBadJSON(t *testing.T) {
+func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 	calls := 0
 	const dur = int64(10 * 60 * 1000)
 	llmClient := &workerMockLLM{
@@ -217,29 +220,31 @@ func TestRunASRPostprocess_RepairOnceOnBadJSON(t *testing.T) {
 				}
 			}
 			if strings.Contains(sys, "主题提炼") {
-				if calls == 1 {
-					return "not-json", nil
-				}
-				return `{"items":[{"title":"开场","start_index":0,"end_index":0}]}`, nil
+				return "not-json", nil
 			}
-			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+			return "also-not-json", nil
 		},
 	}
 	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好")), dur, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
-	if len(out.Summaries) != 1 || out.Summaries[0].Title != "开场" {
-		t.Fatalf("summaries = %+v", out.Summaries)
+	if len(out.Summaries) != 0 {
+		t.Fatalf("summaries = %+v, want empty fallback", out.Summaries)
 	}
-	if calls < 2 {
-		t.Fatalf("calls = %d, want repair path (>=2)", calls)
+	if len(out.Paragraphs) == 0 || out.Paragraphs[0].Text != "你好" {
+		t.Fatalf("paragraphs = %+v, want local fallback", out.Paragraphs)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 (no content repair)", calls)
 	}
 }
 
-func TestRunASRPostprocess_LLMErrorFails(t *testing.T) {
+func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
+	calls := 0
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			calls++
 			return "", context.DeadlineExceeded
 		},
 	}
@@ -247,9 +252,126 @@ func TestRunASRPostprocess_LLMErrorFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	if calls != asrLLMTransportMaxAttempts {
+		t.Fatalf("calls = %d, want %d transport retries", calls, asrLLMTransportMaxAttempts)
+	}
 }
 
-func TestLiveMaterialASRWorker_Process_LLMFailedMarksFailed(t *testing.T) {
+func TestASRChatStructured_TransportRetryThenSuccess(t *testing.T) {
+	calls := 0
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			calls++
+			if calls < 3 {
+				return "", fmt.Errorf("请求 LLM 失败: connection reset")
+			}
+			return `{"items":[]}`, nil
+		},
+	}
+	got, err := asrChatStructured(context.Background(), llmClient, []llm.ChatMessage{{Role: "user", Content: "x"}})
+	if err != nil {
+		t.Fatalf("asrChatStructured() error = %v", err)
+	}
+	if got != `{"items":[]}` {
+		t.Fatalf("got = %q", got)
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
+	}
+}
+
+func TestIsASRLLMTransportError(t *testing.T) {
+	if !isASRLLMTransportError(context.DeadlineExceeded) {
+		t.Fatal("DeadlineExceeded should be transport")
+	}
+	if !isASRLLMTransportError(errors.New("LLM HTTP 503: busy")) {
+		t.Fatal("HTTP error should be transport")
+	}
+	if isASRLLMTransportError(errors.New("LLM API Key 未配置")) {
+		t.Fatal("API key missing should not retry")
+	}
+	if isASRLLMTransportError(errors.New("解析 asr_summaries JSON 失败")) {
+		t.Fatal("content parse error should not be transport")
+	}
+}
+
+func TestStitchASRParagraphs_AllowsLongText(t *testing.T) {
+	long := strings.Repeat("字", 400)
+	utterances := []asr.Utterance{
+		{Speaker: "1", StartTime: 0, EndTime: 1000, Text: long},
+	}
+	paras, err := stitchASRParagraphs(utterances, []asrParagraphRange{{StartIndex: 0, EndIndex: 0}})
+	if err != nil {
+		t.Fatalf("stitchASRParagraphs() error = %v", err)
+	}
+	if utf8.RuneCountInString(paras[0].Text) != 400 {
+		t.Fatalf("runes = %d, want 400", utf8.RuneCountInString(paras[0].Text))
+	}
+}
+
+func TestBuildParagraphRangesLocally_BySpeaker(t *testing.T) {
+	uts := []asr.Utterance{
+		{Speaker: "1", Text: "a"},
+		{Speaker: "1", Text: "b"},
+		{Speaker: "2", Text: "c"},
+		{Speaker: "1", Text: "d"},
+	}
+	got := buildParagraphRangesLocally(uts)
+	want := []asrParagraphRange{
+		{StartIndex: 0, EndIndex: 1},
+		{StartIndex: 2, EndIndex: 2},
+		{StartIndex: 3, EndIndex: 3},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestNormalizeASRParagraphTimeline(t *testing.T) {
+	paras := []model.ASRParagraph{
+		{StartTime: 40, EndTime: 200, Text: "a"},
+		{StartTime: 150, EndTime: 300, Text: "b"}, // overlap
+	}
+	normalizeASRParagraphTimeline(paras, 1000)
+	if paras[0].StartTime != 0 {
+		t.Fatalf("first start = %d, want 0", paras[0].StartTime)
+	}
+	if paras[1].StartTime < paras[0].EndTime {
+		t.Fatalf("overlap remains: %+v", paras)
+	}
+	if paras[1].EndTime != 1000 {
+		t.Fatalf("last end = %d, want 1000", paras[1].EndTime)
+	}
+}
+
+func TestGenerateASRParagraphsWindow_LocalFallbackOnOverlap(t *testing.T) {
+	win := utteranceWindow{
+		Utterances: []asr.Utterance{
+			{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲"},
+			{Speaker: "2", StartTime: 120, EndTime: 200, Text: "乙"},
+		},
+	}
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			// 漏盖：只覆盖一句
+			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+		},
+	}
+	ranges, _, err := generateASRParagraphsWindow(context.Background(), llmClient, win)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(ranges) != 2 || ranges[0].EndIndex != 0 || ranges[1].StartIndex != 1 {
+		t.Fatalf("ranges = %+v, want local by speaker", ranges)
+	}
+}
+
+func TestLiveMaterialASRWorker_Process_BadLLMJSONSucceedsWithFallback(t *testing.T) {
 	repo := &workerMockRepo{
 		materials: map[uint]*model.LiveMaterial{
 			9: {ID: 9, LiveURL: "https://example.com/x.mp4", ASRStatus: model.ASRStatusProcessing},
@@ -271,13 +393,40 @@ func TestLiveMaterialASRWorker_Process_LLMFailedMarksFailed(t *testing.T) {
 		},
 	}, llmClient, nil, 0, 0, webroot.Config{})
 
+	if err := worker.Process(context.Background(), repo.materials[9]); err != nil {
+		t.Fatalf("Process() error = %v, want success via fallback", err)
+	}
+	if repo.materials[9].ASRStatus != model.ASRStatusCompleted {
+		t.Errorf("ASRStatus = %q, want completed", repo.materials[9].ASRStatus)
+	}
+}
+
+func TestLiveMaterialASRWorker_Process_LLMTransportFailedMarksFailed(t *testing.T) {
+	repo := &workerMockRepo{
+		materials: map[uint]*model.LiveMaterial{
+			9: {ID: 9, LiveURL: "https://example.com/x.mp4", ASRStatus: model.ASRStatusProcessing},
+		},
+	}
+	asrSvc := &workerMockASR{
+		transcribeFn: func(ctx context.Context, audioURL string, onProgress asr.ProgressCallback) (json.RawMessage, error) {
+			return sampleLiveASRJSON(100, "hi"), nil
+		},
+	}
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			return "", fmt.Errorf("请求 LLM 失败: timeout")
+		},
+	}
+	worker := NewLiveMaterialASRWorker(repo, asrSvc, &mockASRAudioPreparer{
+		prepareFn: func(ctx context.Context, materialID uint, sourceURL string, onProgress func(progress int16)) (ASRAudioPrepareResult, error) {
+			return ASRAudioPrepareResult{AudioURL: "https://bucket.example.com/a.mp3", Cleanup: func() {}}, nil
+		},
+	}, llmClient, nil, 0, 0, webroot.Config{})
+
 	if err := worker.Process(context.Background(), repo.materials[9]); err == nil {
-		t.Fatal("Process() error = nil, want LLM failure")
+		t.Fatal("Process() error = nil, want transport failure")
 	}
 	if repo.materials[9].ASRStatus != model.ASRStatusFailed {
 		t.Errorf("ASRStatus = %q, want failed", repo.materials[9].ASRStatus)
-	}
-	if repo.materials[9].ASRErrorMsg == "" {
-		t.Error("ASRErrorMsg should not be empty")
 	}
 }
