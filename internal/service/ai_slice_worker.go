@@ -46,8 +46,10 @@ type AISliceWorker interface {
 // LLMChatClient AI 切片 / ASR 后处理所需的大模型对话接口，便于单测替换。
 type LLMChatClient interface {
 	Chat(ctx context.Context, messages []llm.ChatMessage) (string, error)
-	// ChatStructured 优先用于需严格 JSON 的场景（temperature=0 + json_object）。
+	// ChatStructured 用于需严格 JSON 的场景：temperature=0 + json_object，并关闭思考模式。
 	ChatStructured(ctx context.Context, messages []llm.ChatMessage) (string, error)
+	// ChatThinking 显式开启思考模式（AI 切片等需更深推理的场景）。
+	ChatThinking(ctx context.Context, messages []llm.ChatMessage) (string, error)
 }
 
 type aiSliceWorker struct {
@@ -282,7 +284,8 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("LLM 客户端未配置"))
 	}
 
-	content, err := w.llmClient.Chat(ctx, []llm.ChatMessage{
+	// AI 切片显式开启思考模式，提升复杂剪辑决策质量。
+	content, err := w.llmClient.ChatThinking(ctx, []llm.ChatMessage{
 		{Role: "system", Content: sysPrompt},
 		{Role: "user", Content: userContent},
 	})

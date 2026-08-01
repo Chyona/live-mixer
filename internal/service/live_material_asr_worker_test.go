@@ -67,6 +67,10 @@ func (m *workerMockLLM) ChatStructured(ctx context.Context, messages []llm.ChatM
 	return m.Chat(ctx, messages)
 }
 
+func (m *workerMockLLM) ChatThinking(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+	return m.Chat(ctx, messages)
+}
+
 func defaultWorkerLLM() LLMChatClient {
 	return &workerMockLLM{}
 }

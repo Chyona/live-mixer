@@ -101,7 +101,7 @@ func TestClient_Chat(t *testing.T) {
 	}
 }
 
-func TestClient_ChatStructured_SendsTempAndJSONMode(t *testing.T) {
+func TestClient_ChatStructured_SendsTempJSONModeAndDisablesThinking(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -110,6 +110,9 @@ func TestClient_ChatStructured_SendsTempAndJSONMode(t *testing.T) {
 		}
 		if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_object" {
 			t.Errorf("response_format = %+v, want json_object", req.ResponseFormat)
+		}
+		if req.EnableThinking == nil || *req.EnableThinking {
+			t.Errorf("enable_thinking = %v, want false", req.EnableThinking)
 		}
 		_ = json.NewEncoder(w).Encode(chatResponse{
 			Choices: []struct {
@@ -129,6 +132,35 @@ func TestClient_ChatStructured_SendsTempAndJSONMode(t *testing.T) {
 		t.Fatalf("ChatStructured() error = %v", err)
 	}
 	if content != `{"items":[]}` {
+		t.Errorf("content = %q", content)
+	}
+}
+
+func TestClient_ChatThinking_EnablesThinking(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.EnableThinking == nil || !*req.EnableThinking {
+			t.Errorf("enable_thinking = %v, want true", req.EnableThinking)
+		}
+		_ = json.NewEncoder(w).Encode(chatResponse{
+			Choices: []struct {
+				Message ChatMessage `json:"message"`
+			}{
+				{Message: ChatMessage{Role: "assistant", Content: `[0,1]`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{APIKey: "test-key", BaseURL: srv.URL, Model: DefaultModel, HTTPClient: srv.Client()})
+	content, err := client.ChatThinking(context.Background(), []ChatMessage{
+		{Role: "user", Content: "pick clips"},
+	})
+	if err != nil {
+		t.Fatalf("ChatThinking() error = %v", err)
+	}
+	if content != `[0,1]` {
 		t.Errorf("content = %q", content)
 	}
 }

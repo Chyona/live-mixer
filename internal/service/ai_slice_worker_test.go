@@ -38,6 +38,10 @@ func (m *mockLLMChat) ChatStructured(ctx context.Context, messages []llm.ChatMes
 	return m.Chat(ctx, messages)
 }
 
+func (m *mockLLMChat) ChatThinking(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+	return m.Chat(ctx, messages)
+}
+
 func setupAISliceWorkerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

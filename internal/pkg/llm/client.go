@@ -67,13 +67,17 @@ type ChatOptions struct {
 	Temperature *float64
 	// JSONMode 启用 response_format=json_object，要求模型返回合法 JSON。
 	JSONMode bool
+	// EnableThinking 控制 DashScope/Qwen 混合思考模式；nil 表示不传（由上游默认）。
+	// HTTP 直连时作为顶层字段 enable_thinking 发送。
+	EnableThinking *bool
 }
 
 type chatRequest struct {
-	Model          string           `json:"model"`
-	Messages       []ChatMessage    `json:"messages"`
-	Temperature    *float64         `json:"temperature,omitempty"`
-	ResponseFormat *responseFormat  `json:"response_format,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []ChatMessage   `json:"messages"`
+	Temperature    *float64        `json:"temperature,omitempty"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+	EnableThinking *bool           `json:"enable_thinking,omitempty"`
 }
 
 type responseFormat struct {
@@ -110,9 +114,10 @@ func (c *Client) chatCompletions(ctx context.Context, messages []ChatMessage, op
 	}
 
 	reqBody := chatRequest{
-		Model:       c.cfg.Model,
-		Messages:    messages,
-		Temperature: opts.Temperature,
+		Model:          c.cfg.Model,
+		Messages:       messages,
+		Temperature:    opts.Temperature,
+		EnableThinking: opts.EnableThinking,
 	}
 	if opts.JSONMode {
 		reqBody.ResponseFormat = &responseFormat{Type: "json_object"}
@@ -163,12 +168,22 @@ func (c *Client) Chat(ctx context.Context, messages []ChatMessage) (string, erro
 	return c.chat(ctx, messages, ChatOptions{})
 }
 
-// ChatStructured 以 temperature=0 + JSON mode 调用，提高结构化输出稳定性。
+// ChatStructured 以 temperature=0 + JSON mode 调用，并显式关闭思考模式（适合 ASR 后处理等结构化抽取）。
 func (c *Client) ChatStructured(ctx context.Context, messages []ChatMessage) (string, error) {
 	temp := 0.0
+	thinking := false
 	return c.chat(ctx, messages, ChatOptions{
-		Temperature: &temp,
-		JSONMode:    true,
+		Temperature:    &temp,
+		JSONMode:       true,
+		EnableThinking: &thinking,
+	})
+}
+
+// ChatThinking 显式开启思考模式调用（适合 AI 切片等需更深推理的场景）。
+func (c *Client) ChatThinking(ctx context.Context, messages []ChatMessage) (string, error) {
+	thinking := true
+	return c.chat(ctx, messages, ChatOptions{
+		EnableThinking: &thinking,
 	})
 }
 
