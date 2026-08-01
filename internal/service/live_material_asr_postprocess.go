@@ -17,14 +17,14 @@ import (
 )
 
 const (
-	asrPostprocessMaxInputRunes  = 80000
-	asrSummaryMinDurationMs      = int64(5 * 60 * 1000)  // 5 分钟
-	asrSummaryMaxDurationMs      = int64(60 * 60 * 1000) // 60 分钟
-	asrSummaryTitleMaxRunes      = 6
-	asrParagraphWindowMs         = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
-	asrSummaryWindowMs           = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
-	asrLLMTransportMaxAttempts   = 3                     // 仅网络/接口异常重试（含首次）
-	asrLLMTransportBackoffBase   = 100 * time.Millisecond
+	asrPostprocessMaxInputRunes = 80000
+	asrSummaryMinDurationMs     = int64(5 * 60 * 1000)  // 5 分钟
+	asrSummaryMaxDurationMs     = int64(60 * 60 * 1000) // 60 分钟
+	asrSummaryTitleMaxRunes     = 6
+	asrParagraphWindowMs        = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
+	asrSummaryWindowMs          = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
+	asrLLMTransportMaxAttempts  = 3                     // 仅网络/接口异常重试（含首次）
+	asrLLMTransportBackoffBase  = 100 * time.Millisecond
 )
 
 const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据带编号的 ASR 句段列表，提炼若干「核心主题」分段。
@@ -43,7 +43,7 @@ const asrParagraphsSystemPrompt = `你是直播 ASR 段落划分助手。根据�
 2. items 每项格式：{"start_index":0,"end_index":3}，为句段编号闭区间（含两端）。
 3. 所有编号必须恰好覆盖输入中的全部句段一次：无遗漏、无重叠。
 4. 每个区间内只能有一个说话人（speaker 相同）。
-5. 每个区间拼接后的正文字数必须小于 300 字。
+5. 每个区间拼接后的正文字数必须小于 200 字。
 6. 按时间顺序输出区间。`
 
 // asrParagraphRange LLM 返回的段落边界（utterance 闭区间下标）。
@@ -73,6 +73,15 @@ type asrLLMWindowDebug struct {
 	RepairRaw    string                    `json:"repair_raw_response,omitempty"`
 	Segments     []model.ASRSummarySegment `json:"segments,omitempty"`
 	Ranges       []asrParagraphRange       `json:"ranges,omitempty"`
+}
+
+// RunASRPostprocess 根据完整 live_asr JSON 生成 asr_summaries 与 asr_paragraphs（供 CLI / 集成调用）。
+func RunASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64) ([]model.ASRSummarySegment, []model.ASRParagraph, error) {
+	out, err := runASRPostprocess(ctx, llmClient, liveASR, durationMs, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out.Summaries, out.Paragraphs, nil
 }
 
 // runASRPostprocess 调用 LLM 生成 summaries 与 paragraphs；任一步失败返回 error。

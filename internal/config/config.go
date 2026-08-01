@@ -139,11 +139,13 @@ type ASRConfig struct {
 	MaxPolls        int    `mapstructure:"max_polls"`
 }
 
-// LLMConfig OpenAI 兼容协议大模型配置（用于 AI 切片等）。
+// LLMConfig OpenAI 兼容协议大模型配置。
+// Model 用于 AI 切片等；FlashModel 用于添加视频后的 ASR 后处理（asr_summaries / asr_paragraphs）。
 type LLMConfig struct {
-	APIKey  string `mapstructure:"api_key"`
-	BaseURL string `mapstructure:"base_url"`
-	Model   string `mapstructure:"model"`
+	APIKey     string `mapstructure:"api_key"`
+	BaseURL    string `mapstructure:"base_url"`
+	Model      string `mapstructure:"model"`
+	FlashModel string `mapstructure:"flash_model"`
 }
 
 // TOSStorageConfig 火山引擎对象存储（TOS）连接配置。
@@ -517,6 +519,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_LLM_MODEL"); ok {
 		cfg.LLM.Model = val
+	}
+	if val, ok := os.LookupEnv("APP_LLM_FLASH_MODEL"); ok {
+		cfg.LLM.FlashModel = val
 	}
 
 	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_CONCURRENCY"); ok {

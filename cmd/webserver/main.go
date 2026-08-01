@@ -78,14 +78,15 @@ func main() {
 	}
 	fileDownloader := service.NewFileDownloader(logger, cfg.Download.URLRewriter())
 	audioPreparer := service.NewLiveMaterialASRAudioPreparer(fileDownloader, nil, storageClient, "", logger, nil)
-	// OpenAI 兼容协议 LLM 客户端，供 ASR 后处理、AI 切片 Worker 与同步对话接口共用。
+	// OpenAI 兼容协议 LLM：默认模型供 AI 切片 / 对话；Flash 模型供添加视频后的 ASR 后处理。
 	llmClient := llm.NewClient(cfg.LLM.LLMClientConfig())
+	asrLLMClient := llm.NewClient(cfg.LLM.LLMClientConfigForASR())
 	webCfg := webroot.Config{RootDir: cfg.Web.RootDir}
 	liveMaterialASRWorker := service.NewLiveMaterialASRWorker(
 		liveMaterialRepo,
 		asrService,
 		audioPreparer,
-		llmClient,
+		asrLLMClient,
 		logger,
 		cfg.Worker.ASRConcurrencyOrDefault(),
 		cfg.Worker.ASRStaleTimeout(),

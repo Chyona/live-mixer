@@ -56,11 +56,13 @@ asr:
   poll_interval_sec: 10        # 轮询间隔（秒）
   max_polls: 360               # 最大轮询次数
 
-# OpenAI 兼容协议大模型（AI 切片）；生产环境通过 APP_LLM_* 注入密钥
+# OpenAI 兼容协议大模型；生产环境通过 APP_LLM_* 注入密钥
+# model：AI 切片等；flash_model：添加视频后 ASR 后处理（asr_summaries / asr_paragraphs）
 llm:
   api_key: ""
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   model: "qwen3.7-plus"
+  flash_model: "qwen3.7-flash"
 
 # 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖
 capcut_mate:
