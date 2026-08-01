@@ -28,7 +28,7 @@ const (
 	asrSummaryWindowMs         = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
 	asrLLMTransportMaxAttempts = 3                     // 仅网络/接口异常重试（含首次）
 	asrLLMTransportBackoffBase = 100 * time.Millisecond
-	asrLLMWindowParallelism    = 4                     // Map 阶段多窗并行上限
+	asrLLMWindowParallelism    = 8                     // Map 阶段多窗并行上限
 )
 
 const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据带编号的 ASR 句段列表，提炼若干「核心主题」分段。
