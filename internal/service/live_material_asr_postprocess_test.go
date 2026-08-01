@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 
@@ -157,10 +158,183 @@ func TestSplitUtterancesByDuration_AlwaysWindows(t *testing.T) {
 		{StartTime: 0, EndTime: 1000, Text: "a"},
 		{StartTime: asrSummaryWindowMs + 1, EndTime: asrSummaryWindowMs + 2000, Text: "b"},
 	}
-	wins := splitUtterancesByDuration(uts, asrSummaryWindowMs, asrPostprocessMaxInputRunes)
+	wins := splitUtterancesByDuration(uts, asrSummaryWindowMs, asrLLMWindowMaxRunes)
 	if len(wins) != 2 {
 		t.Fatalf("windows = %d, want 2", len(wins))
 	}
+}
+
+func TestSplitUtterancesByDuration_RuneBudgetCreatesMultipleWindows(t *testing.T) {
+	// 构造远超 asrLLMWindowMaxRunes 的句段列表（时长仍在单窗内），应被 rune 预算拆成多窗。
+	const n = 80
+	longText := strings.Repeat("测", 250) // 每行约 250+ 元数据 rune
+	uts := make([]asr.Utterance, n)
+	for i := 0; i < n; i++ {
+		start := int64(i * 1000)
+		uts[i] = asr.Utterance{
+			Speaker:   "1",
+			StartTime: start,
+			EndTime:   start + 900,
+			Text:      longText,
+		}
+	}
+	totalRunes := utf8.RuneCountInString(formatASRTranscriptLines(uts, 0))
+	if totalRunes <= asrLLMWindowMaxRunes {
+		t.Fatalf("fixture too small: totalRunes=%d, budget=%d", totalRunes, asrLLMWindowMaxRunes)
+	}
+
+	wins := splitUtterancesByDuration(uts, asrSummaryWindowMs, asrLLMWindowMaxRunes)
+	if len(wins) < 2 {
+		t.Fatalf("windows = %d, want >= 2 (rune budget map)", len(wins))
+	}
+	covered := 0
+	for i, win := range wins {
+		lines := formatASRTranscriptLines(win.Utterances, 0)
+		runes := utf8.RuneCountInString(lines)
+		if len(win.Utterances) > 1 && runes > asrLLMWindowMaxRunes {
+			t.Fatalf("window[%d] runes=%d > budget %d", i, runes, asrLLMWindowMaxRunes)
+		}
+		if win.Offset != covered {
+			t.Fatalf("window[%d] offset=%d, want %d", i, win.Offset, covered)
+		}
+		covered += len(win.Utterances)
+	}
+	if covered != n {
+		t.Fatalf("covered %d utterances, want %d", covered, n)
+	}
+}
+
+func TestGenerateASRSummaries_MultiWindowReduce(t *testing.T) {
+	// 两窗：第一窗 0..0，第二窗因时长切到下一小时；各返回一段，Reduce 后合并为 2。
+	uts := []asr.Utterance{
+		{Speaker: "1", StartTime: 0, EndTime: 300_000, Text: "开场内容足够长用于主题"},
+		{Speaker: "1", StartTime: asrSummaryWindowMs, EndTime: asrSummaryWindowMs + 300_000, Text: "后半场内容足够长用于主题"},
+	}
+	var calls atomic.Int32
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			calls.Add(1)
+			sys := ""
+			user := ""
+			for _, msg := range messages {
+				switch msg.Role {
+				case "system":
+					sys = msg.Content
+				case "user":
+					user = msg.Content
+				}
+			}
+			if strings.Contains(sys, "主题提炼") {
+				if strings.Contains(user, "本窗句段编号范围：0~0") {
+					return `{"items":[{"title":"开场","start_index":0,"end_index":0}]}`, nil
+				}
+				return `{"items":[{"title":"后半","start_index":1,"end_index":1}]}`, nil
+			}
+			// paragraphs：覆盖本窗
+			if strings.Contains(user, "[0]") && !strings.Contains(user, "[1]") {
+				return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+			}
+			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+		},
+	}
+	dur := asrSummaryWindowMs + 300_000
+	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRMultiUtteranceJSON(uts)), dur, nil)
+	if err != nil {
+		t.Fatalf("runASRPostprocess() error = %v", err)
+	}
+	if len(out.Summaries) != 2 {
+		t.Fatalf("summaries = %+v, want 2 after reduce", out.Summaries)
+	}
+	if out.Summaries[0].Title != "开场" || out.Summaries[1].Title != "后半" {
+		t.Fatalf("summaries titles = %+v", out.Summaries)
+	}
+	if n := calls.Load(); n < 4 { // 2 summary windows + 2 paragraph windows
+		t.Fatalf("calls = %d, want >= 4 for multi-window map", n)
+	}
+}
+
+func TestGenerateASRParagraphs_MultiWindowOffsetStitch(t *testing.T) {
+	uts := []asr.Utterance{
+		{Speaker: "1", StartTime: 0, EndTime: 1000, Text: "甲"},
+		{Speaker: "1", StartTime: asrParagraphWindowMs + 1, EndTime: asrParagraphWindowMs + 2000, Text: "乙"},
+	}
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			sys := ""
+			for _, msg := range messages {
+				if msg.Role == "system" {
+					sys = msg.Content
+				}
+			}
+			if strings.Contains(sys, "主题提炼") {
+				return `{"items":[]}`, nil
+			}
+			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+		},
+	}
+	dur := asrParagraphWindowMs + 2000
+	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, dur, nil)
+	if err != nil {
+		t.Fatalf("generateASRParagraphs() error = %v", err)
+	}
+	if len(paras) != 2 {
+		t.Fatalf("paragraphs = %+v, want 2", paras)
+	}
+	joined := paras[0].Text + paras[1].Text
+	if joined != "甲乙" {
+		t.Fatalf("joined text = %q, want 甲乙", joined)
+	}
+	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != dur {
+		t.Fatalf("timeline = %d-%d, want 0-%d", paras[0].StartTime, paras[len(paras)-1].EndTime, dur)
+	}
+}
+
+// sampleLiveASRMultiUtteranceJSON 构造含多句段的豆包 ASR JSON，供后处理测试。
+func sampleLiveASRMultiUtteranceJSON(uts []asr.Utterance) []byte {
+	type word struct {
+		Text      string `json:"text"`
+		StartTime int64  `json:"start_time"`
+		EndTime   int64  `json:"end_time"`
+	}
+	type utterance struct {
+		Additions struct {
+			Speaker string `json:"speaker"`
+		} `json:"additions"`
+		StartTime int64  `json:"start_time"`
+		EndTime   int64  `json:"end_time"`
+		Text      string `json:"text"`
+		Words     []word `json:"words"`
+	}
+	payload := struct {
+		AudioInfo struct {
+			Duration int64 `json:"duration"`
+		} `json:"audio_info"`
+		Result struct {
+			Utterances []utterance `json:"utterances"`
+		} `json:"result"`
+	}{}
+	var maxEnd int64
+	for _, u := range uts {
+		if u.EndTime > maxEnd {
+			maxEnd = u.EndTime
+		}
+		item := utterance{
+			StartTime: u.StartTime,
+			EndTime:   u.EndTime,
+			Text:      u.Text,
+		}
+		item.Additions.Speaker = u.Speaker
+		for _, w := range u.Words {
+			item.Words = append(item.Words, word{Text: w.Text, StartTime: w.StartTime, EndTime: w.EndTime})
+		}
+		if len(item.Words) == 0 {
+			item.Words = []word{{Text: u.Text, StartTime: u.StartTime, EndTime: u.EndTime}}
+		}
+		payload.Result.Utterances = append(payload.Result.Utterances, item)
+	}
+	payload.AudioInfo.Duration = maxEnd
+	raw, _ := json.Marshal(payload)
+	return raw
 }
 
 func TestRunASRPostprocess_EmptySummariesOK(t *testing.T) {

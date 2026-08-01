@@ -14,17 +14,21 @@ import (
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
-	asrPostprocessMaxInputRunes = 80000
-	asrSummaryMinDurationMs     = int64(5 * 60 * 1000)  // 5 分钟
-	asrSummaryMaxDurationMs     = int64(60 * 60 * 1000) // 60 分钟
-	asrSummaryTitleMaxRunes     = 6
-	asrParagraphWindowMs        = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
-	asrSummaryWindowMs          = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
-	asrLLMTransportMaxAttempts  = 3                     // 仅网络/接口异常重试（含首次）
-	asrLLMTransportBackoffBase  = 100 * time.Millisecond
+	// asrLLMWindowMaxRunes 单窗 user 侧句段列表最大 rune 数（Map 预算）；超时长辅约束后再按此收缩。
+	asrLLMWindowMaxRunes       = 16000
+	asrSummaryMinDurationMs    = int64(5 * 60 * 1000)  // 5 分钟
+	asrSummaryMaxDurationMs    = int64(60 * 60 * 1000) // 60 分钟
+	asrSummaryTitleMaxRunes    = 6
+	asrParagraphWindowMs       = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
+	asrSummaryWindowMs         = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
+	asrLLMTransportMaxAttempts = 3                     // 仅网络/接口异常重试（含首次）
+	asrLLMTransportBackoffBase = 100 * time.Millisecond
+	asrLLMWindowParallelism    = 4                     // Map 阶段多窗并行上限
 )
 
 const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据带编号的 ASR 句段列表，提炼若干「核心主题」分段。
@@ -165,26 +169,41 @@ func isASRLLMTransportError(err error) bool {
 }
 
 func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder) ([]model.ASRSummarySegment, error) {
-	windows := splitUtterancesByDuration(utterances, asrSummaryWindowMs, asrPostprocessMaxInputRunes)
+	// Map：按时长 + rune 预算切窗；各窗并行调 LLM。
+	windows := splitUtterancesByDuration(utterances, asrSummaryWindowMs, asrLLMWindowMaxRunes)
+	type winOut struct {
+		segs []model.ASRSummarySegment
+		dbg  asrLLMWindowDebug
+	}
+	outs := make([]winOut, len(windows))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(asrLLMWindowParallelism)
+	for i, win := range windows {
+		i, win := i, win
+		g.Go(func() error {
+			segs, dbg, err := generateASRSummariesWindow(gctx, llmClient, win, durationMs)
+			outs[i] = winOut{segs: segs, dbg: dbg}
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
 	var all []model.ASRSummarySegment
 	debugWindows := make([]asrLLMWindowDebug, 0, len(windows))
-	defer func() {
-		if rec == nil || len(debugWindows) == 0 {
-			return
-		}
+	for _, o := range outs {
+		debugWindows = append(debugWindows, o.dbg)
+		all = append(all, o.segs...)
+	}
+	if rec != nil && len(debugWindows) > 0 {
 		rec.Write("003_llm_summaries.json", map[string]any{
 			"recorded_at": asrDebugRecordedAt(),
 			"windows":     debugWindows,
 		})
-	}()
-	for _, win := range windows {
-		segs, dbg, err := generateASRSummariesWindow(ctx, llmClient, win, durationMs)
-		debugWindows = append(debugWindows, dbg)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, segs...)
 	}
+
+	// Reduce：按窗序拼接 → 规范化 / 按时长过滤 / 校验 / 排序（不做跨窗同 title 合并）。
 	normalizeASRSummaries(all, durationMs)
 	all = filterASRSummariesByDuration(all)
 	if err := validateASRSummaries(all); err != nil {
@@ -238,31 +257,47 @@ func generateASRSummariesWindow(
 }
 
 func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder) ([]model.ASRParagraph, error) {
-	windows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrPostprocessMaxInputRunes)
+	// Map：按时长 + rune 预算切窗；各窗并行调 LLM（失败则窗内本地重建）。
+	windows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrLLMWindowMaxRunes)
+	type winOut struct {
+		ranges []asrParagraphRange
+		dbg    asrLLMWindowDebug
+	}
+	outs := make([]winOut, len(windows))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(asrLLMWindowParallelism)
+	for i, win := range windows {
+		i, win := i, win
+		g.Go(func() error {
+			local, dbg, err := generateASRParagraphsWindow(gctx, llmClient, win)
+			outs[i] = winOut{ranges: local, dbg: dbg}
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
 	var ranges []asrParagraphRange
 	debugWindows := make([]asrLLMWindowDebug, 0, len(windows))
-	defer func() {
-		if rec == nil || len(debugWindows) == 0 {
-			return
+	for i, o := range outs {
+		debugWindows = append(debugWindows, o.dbg)
+		offset := windows[i].Offset
+		for _, r := range o.ranges {
+			ranges = append(ranges, asrParagraphRange{
+				StartIndex: r.StartIndex + offset,
+				EndIndex:   r.EndIndex + offset,
+			})
 		}
+	}
+	if rec != nil && len(debugWindows) > 0 {
 		rec.Write("004_llm_paragraphs.json", map[string]any{
 			"recorded_at": asrDebugRecordedAt(),
 			"windows":     debugWindows,
 		})
-	}()
-	for _, win := range windows {
-		local, dbg, err := generateASRParagraphsWindow(ctx, llmClient, win)
-		debugWindows = append(debugWindows, dbg)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range local {
-			ranges = append(ranges, asrParagraphRange{
-				StartIndex: r.StartIndex + win.Offset,
-				EndIndex:   r.EndIndex + win.Offset,
-			})
-		}
 	}
+
+	// Reduce：局部 index + offset → 全局 ranges → stitch；失败则全文本地重建 → 时间线规范化。
 	paragraphs, err := stitchASRParagraphs(utterances, ranges)
 	if err != nil {
 		ranges = buildParagraphRangesLocally(utterances)
@@ -328,7 +363,7 @@ type utteranceWindow struct {
 	Utterances []asr.Utterance
 }
 
-// splitUtterancesByDuration 始终按 windowMs 切窗；单窗输入超过 maxRunes 时再按条数收缩。
+// splitUtterancesByDuration 先按 windowMs 切窗，再按 maxRunes 收缩（Map 阶段输入预算）。
 func splitUtterancesByDuration(utterances []asr.Utterance, windowMs int64, maxRunes int) []utteranceWindow {
 	if len(utterances) == 0 {
 		return nil
