@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"live-mixer/internal/model"
@@ -21,6 +22,7 @@ import (
 const (
 	// asrLLMWindowMaxRunes 单窗 user 侧句段列表最大 rune 数（Map 预算）；超时长辅约束后再按此收缩。
 	asrLLMWindowMaxRunes       = 16000
+	asrParagraphMaxRunes       = 200 // 段落正文上限（含）；超限按句号兜底拆分
 	asrSummaryMinDurationMs    = int64(5 * 60 * 1000)  // 5 分钟
 	asrSummaryMaxDurationMs    = int64(60 * 60 * 1000) // 60 分钟
 	asrSummaryTitleMaxRunes    = 6
@@ -306,6 +308,7 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 			return nil, err
 		}
 	}
+	paragraphs = enforceASRParagraphMaxRunes(paragraphs)
 	normalizeASRParagraphTimeline(paragraphs, durationMs)
 	return paragraphs, nil
 }
@@ -341,18 +344,25 @@ func generateASRParagraphsWindow(
 	return local, dbg, nil
 }
 
-// buildParagraphRangesLocally 按说话人切换切段，保证全覆盖、无重叠。
+// buildParagraphRangesLocally 按说话人切换，并贪心打包使拼接文本 ≤ asrParagraphMaxRunes。
+// 单句本身超过上限时单独成段，交由后续句号拆分兜底。
 func buildParagraphRangesLocally(utterances []asr.Utterance) []asrParagraphRange {
 	if len(utterances) == 0 {
 		return nil
 	}
 	ranges := make([]asrParagraphRange, 0)
 	start := 0
+	runes := utf8.RuneCountInString(utterances[0].Text)
 	for i := 1; i < len(utterances); i++ {
-		if strings.TrimSpace(utterances[i].Speaker) != strings.TrimSpace(utterances[start].Speaker) {
+		sameSpeaker := strings.TrimSpace(utterances[i].Speaker) == strings.TrimSpace(utterances[start].Speaker)
+		nextRunes := utf8.RuneCountInString(utterances[i].Text)
+		if !sameSpeaker || runes+nextRunes > asrParagraphMaxRunes {
 			ranges = append(ranges, asrParagraphRange{StartIndex: start, EndIndex: i - 1})
 			start = i
+			runes = nextRunes
+			continue
 		}
+		runes += nextRunes
 	}
 	ranges = append(ranges, asrParagraphRange{StartIndex: start, EndIndex: len(utterances) - 1})
 	return ranges
@@ -745,6 +755,202 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 		return nil, fmt.Errorf("asr_paragraphs 拼接结果与完整 ASR 不一致")
 	}
 	return paragraphs, nil
+}
+
+// enforceASRParagraphMaxRunes 将超长段落按句号兜底拆分，保证每段正文 ≤ asrParagraphMaxRunes。
+func enforceASRParagraphMaxRunes(paragraphs []model.ASRParagraph) []model.ASRParagraph {
+	if len(paragraphs) == 0 {
+		return paragraphs
+	}
+	out := make([]model.ASRParagraph, 0, len(paragraphs))
+	for _, p := range paragraphs {
+		if utf8.RuneCountInString(p.Text) <= asrParagraphMaxRunes {
+			out = append(out, p)
+			continue
+		}
+		out = append(out, splitASRParagraphBySentences(p, asrParagraphMaxRunes)...)
+	}
+	return out
+}
+
+// splitASRParagraphBySentences 按句末标点切开后贪心打包；单句仍超限则按 rune 硬切。
+func splitASRParagraphBySentences(p model.ASRParagraph, maxRunes int) []model.ASRParagraph {
+	if maxRunes <= 0 || utf8.RuneCountInString(p.Text) <= maxRunes {
+		return []model.ASRParagraph{p}
+	}
+	parts := splitTextBySentenceEnds(p.Text)
+	chunks := packSentenceParts(parts, maxRunes)
+	if len(chunks) == 0 {
+		return []model.ASRParagraph{p}
+	}
+
+	out := make([]model.ASRParagraph, 0, len(chunks))
+	restWords := p.Words
+	runeOffset := 0
+	totalRunes := utf8.RuneCountInString(p.Text)
+	for _, chunk := range chunks {
+		seg := model.ASRParagraph{
+			Speaker: p.Speaker,
+			Text:    chunk,
+		}
+		var taken []model.ClipWord
+		taken, restWords = takeWordsForText(restWords, chunk)
+		if len(taken) > 0 {
+			seg.Words = taken
+			seg.StartTime = taken[0].StartTime
+			seg.EndTime = taken[len(taken)-1].EndTime
+		} else if totalRunes > 0 {
+			chunkRunes := utf8.RuneCountInString(chunk)
+			seg.StartTime = interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset, totalRunes)
+			seg.EndTime = interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset+chunkRunes, totalRunes)
+		} else {
+			seg.StartTime = p.StartTime
+			seg.EndTime = p.EndTime
+		}
+		runeOffset += utf8.RuneCountInString(chunk)
+		if seg.EndTime < seg.StartTime {
+			seg.EndTime = seg.StartTime
+		}
+		out = append(out, seg)
+	}
+	return out
+}
+
+func interpolateParagraphTime(start, end int64, runePos, totalRunes int) int64 {
+	if totalRunes <= 0 {
+		return start
+	}
+	if runePos <= 0 {
+		return start
+	}
+	if runePos >= totalRunes {
+		return end
+	}
+	span := end - start
+	return start + span*int64(runePos)/int64(totalRunes)
+}
+
+// takeWordsForText 从 words 头部消费与 text 对齐的字级切片。
+func takeWordsForText(words []model.ClipWord, text string) (taken []model.ClipWord, rest []model.ClipWord) {
+	if text == "" {
+		return nil, words
+	}
+	if len(words) == 0 {
+		return nil, nil
+	}
+	var b strings.Builder
+	for i, w := range words {
+		b.WriteString(w.Text)
+		got := b.String()
+		if got == text {
+			return words[:i+1], words[i+1:]
+		}
+		if strings.HasPrefix(text, got) {
+			continue
+		}
+		// 无法精确前缀匹配时，按累计 rune 数近似切分。
+		break
+	}
+	need := utf8.RuneCountInString(text)
+	got := 0
+	for i, w := range words {
+		got += utf8.RuneCountInString(w.Text)
+		if got >= need {
+			return words[:i+1], words[i+1:]
+		}
+	}
+	return words, nil
+}
+
+func splitTextBySentenceEnds(s string) []string {
+	if s == "" {
+		return nil
+	}
+	runes := []rune(s)
+	parts := make([]string, 0)
+	var cur strings.Builder
+	for i := 0; i < len(runes); i++ {
+		cur.WriteRune(runes[i])
+		if isASRSentenceEnd(runes, i) {
+			parts = append(parts, cur.String())
+			cur.Reset()
+		}
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	return parts
+}
+
+func isASRSentenceEnd(runes []rune, i int) bool {
+	r := runes[i]
+	switch r {
+	case '。', '！', '？', '；', '…':
+		return true
+	case '!', '?':
+		return true
+	case '.':
+		if i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1]) {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func packSentenceParts(parts []string, maxRunes int) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(parts))
+	cur := ""
+	flush := func() {
+		if cur == "" {
+			return
+		}
+		out = append(out, cur)
+		cur = ""
+	}
+	for _, part := range parts {
+		if utf8.RuneCountInString(part) > maxRunes {
+			flush()
+			out = append(out, hardSplitRunes(part, maxRunes)...)
+			continue
+		}
+		if cur == "" {
+			cur = part
+			continue
+		}
+		if utf8.RuneCountInString(cur+part) <= maxRunes {
+			cur += part
+			continue
+		}
+		flush()
+		cur = part
+	}
+	flush()
+	return out
+}
+
+func hardSplitRunes(s string, maxRunes int) []string {
+	if maxRunes <= 0 {
+		return []string{s}
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return []string{s}
+	}
+	out := make([]string, 0, (len(runes)+maxRunes-1)/maxRunes)
+	for len(runes) > 0 {
+		n := maxRunes
+		if n > len(runes) {
+			n = len(runes)
+		}
+		out = append(out, string(runes[:n]))
+		runes = runes[n:]
+	}
+	return out
 }
 
 // normalizeASRParagraphTimeline 保证段时间不重叠，首尾对齐完整直播时长；相邻静音空隙允许保留。

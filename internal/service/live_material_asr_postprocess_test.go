@@ -523,6 +523,159 @@ func TestNormalizeASRParagraphTimeline(t *testing.T) {
 	}
 }
 
+func TestEnforceASRParagraphMaxRunes_SplitByPeriod(t *testing.T) {
+	// 两句各 120 字，合计 242 > 200，应按句号拆成两段。
+	s1 := strings.Repeat("甲", 119) + "。"
+	s2 := strings.Repeat("乙", 119) + "。"
+	text := s1 + s2
+	paras := enforceASRParagraphMaxRunes([]model.ASRParagraph{{
+		Speaker:   "1",
+		Text:      text,
+		StartTime: 0,
+		EndTime:   1000,
+	}})
+	if len(paras) < 2 {
+		t.Fatalf("len = %d, want >= 2", len(paras))
+	}
+	var joined strings.Builder
+	for _, p := range paras {
+		if utf8.RuneCountInString(p.Text) > asrParagraphMaxRunes {
+			t.Fatalf("segment runes = %d > %d: %q", utf8.RuneCountInString(p.Text), asrParagraphMaxRunes, truncateRunes(p.Text, 32))
+		}
+		joined.WriteString(p.Text)
+	}
+	if joined.String() != text {
+		t.Fatalf("joined text mismatch")
+	}
+}
+
+func TestEnforceASRParagraphMaxRunes_HardSplitNoPeriod(t *testing.T) {
+	text := strings.Repeat("字", 450)
+	paras := enforceASRParagraphMaxRunes([]model.ASRParagraph{{
+		Speaker:   "1",
+		Text:      text,
+		StartTime: 0,
+		EndTime:   900,
+	}})
+	if len(paras) != 3 { // 200+200+50
+		t.Fatalf("len = %d, want 3", len(paras))
+	}
+	var joined strings.Builder
+	for _, p := range paras {
+		if utf8.RuneCountInString(p.Text) > asrParagraphMaxRunes {
+			t.Fatalf("runes = %d", utf8.RuneCountInString(p.Text))
+		}
+		joined.WriteString(p.Text)
+	}
+	if joined.String() != text {
+		t.Fatal("joined mismatch")
+	}
+}
+
+func TestSplitASRParagraphBySentences_WordsAlign(t *testing.T) {
+	s1 := strings.Repeat("A", 100) + "。"
+	s2 := strings.Repeat("B", 100) + "。"
+	text := s1 + s2
+	words := make([]model.ClipWord, 0, len([]rune(text)))
+	t0 := int64(0)
+	for _, r := range []rune(text) {
+		words = append(words, model.ClipWord{
+			Text:      string(r),
+			StartTime: t0,
+			EndTime:   t0 + 10,
+		})
+		t0 += 10
+	}
+	p := model.ASRParagraph{
+		Speaker:   "1",
+		Text:      text,
+		StartTime: 0,
+		EndTime:   t0,
+		Words:     words,
+	}
+	got := splitASRParagraphBySentences(p, asrParagraphMaxRunes)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	var wordText strings.Builder
+	for i, seg := range got {
+		if utf8.RuneCountInString(seg.Text) > asrParagraphMaxRunes {
+			t.Fatalf("seg[%d] too long", i)
+		}
+		var b strings.Builder
+		for _, w := range seg.Words {
+			b.WriteString(w.Text)
+		}
+		if b.String() != seg.Text {
+			t.Fatalf("seg[%d] words text = %q, want %q", i, b.String(), seg.Text)
+		}
+		wordText.WriteString(seg.Text)
+		if i > 0 && seg.StartTime < got[i-1].EndTime {
+			t.Fatalf("time not monotonic: %+v", got)
+		}
+	}
+	if wordText.String() != text {
+		t.Fatal("full text mismatch")
+	}
+}
+
+func TestBuildParagraphRangesLocally_PacksByMaxRunes(t *testing.T) {
+	longA := strings.Repeat("甲", 120)
+	longB := strings.Repeat("乙", 120) // 120+120 > 200
+	uts := []asr.Utterance{
+		{Speaker: "1", Text: longA},
+		{Speaker: "1", Text: longB},
+	}
+	got := buildParagraphRangesLocally(uts)
+	if len(got) != 2 || got[0].EndIndex != 0 || got[1].StartIndex != 1 {
+		t.Fatalf("got = %+v, want two ranges", got)
+	}
+}
+
+func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
+	s1 := strings.Repeat("开", 110) + "。"
+	s2 := strings.Repeat("场", 110) + "。"
+	text := s1 + s2
+	uts := []asr.Utterance{
+		{Speaker: "1", StartTime: 0, EndTime: 500, Text: text},
+	}
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			sys := ""
+			for _, msg := range messages {
+				if msg.Role == "system" {
+					sys = msg.Content
+				}
+			}
+			if strings.Contains(sys, "主题提炼") {
+				return `{"items":[]}`, nil
+			}
+			// 模型故意返回整段一个区间（超 200）
+			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+		},
+	}
+	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, 1000, nil)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(paras) < 2 {
+		t.Fatalf("paragraphs = %d, want split >= 2", len(paras))
+	}
+	var joined strings.Builder
+	for _, p := range paras {
+		if utf8.RuneCountInString(p.Text) > asrParagraphMaxRunes {
+			t.Fatalf("paragraph exceeds max: %d", utf8.RuneCountInString(p.Text))
+		}
+		joined.WriteString(p.Text)
+	}
+	if joined.String() != text {
+		t.Fatal("joined text mismatch")
+	}
+	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != 1000 {
+		t.Fatalf("timeline = %d-%d", paras[0].StartTime, paras[len(paras)-1].EndTime)
+	}
+}
+
 func TestGenerateASRParagraphsWindow_LocalFallbackOnOverlap(t *testing.T) {
 	win := utteranceWindow{
 		Utterances: []asr.Utterance{
