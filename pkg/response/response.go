@@ -40,9 +40,23 @@ func Fail(c *gin.Context, httpStatus, code int, message string) {
 	})
 }
 
+// FailWithData 返回带 data 的业务失败响应。
+func FailWithData(c *gin.Context, httpStatus, code int, message string, data interface{}) {
+	c.JSON(httpStatus, Body{
+		Code:    code,
+		Message: message,
+		Data:    data,
+	})
+}
+
 // BadRequest 返回 400 错误。
 func BadRequest(c *gin.Context, message string) {
 	Fail(c, http.StatusBadRequest, 400, message)
+}
+
+// Conflict 返回 409 冲突错误（业务 code 可自定义）。
+func Conflict(c *gin.Context, code int, message string, data interface{}) {
+	FailWithData(c, http.StatusConflict, code, message, data)
 }
 
 // NotFound 返回 404 错误。

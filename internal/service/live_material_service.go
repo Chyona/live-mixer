@@ -34,8 +34,37 @@ var ErrLiveMaterialNameExists = errors.New("素材名称已存在")
 // ErrLiveMaterialURLExists 直播链接已存在（唯一约束）。
 var ErrLiveMaterialURLExists = errors.New("直播链接已存在")
 
+// ErrLiveMaterialDuplicate 素材名称或直播链接已存在（无法区分约束时）。
+var ErrLiveMaterialDuplicate = errors.New("素材名称或直播链接已存在")
+
 // ErrLiveMaterialNotFound 直播素材不存在。
 var ErrLiveMaterialNotFound = errors.New("直播素材不存在")
+
+// CodeLiveMaterialExists 创建素材时记录已存在的业务错误码。
+const CodeLiveMaterialExists = 40901
+
+// LiveMaterialExistsError 创建时发现素材已存在；携带已有完整记录供接口返回。
+type LiveMaterialExistsError struct {
+	Material *model.LiveMaterial
+	Cause    error
+}
+
+func (e *LiveMaterialExistsError) Error() string {
+	if e == nil {
+		return ErrLiveMaterialDuplicate.Error()
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return ErrLiveMaterialDuplicate.Error()
+}
+
+func (e *LiveMaterialExistsError) Unwrap() error {
+	if e == nil || e.Cause == nil {
+		return ErrLiveMaterialDuplicate
+	}
+	return e.Cause
+}
 
 // ErrASRAlreadyProcessing ASR 正在识别中，不允许重复提交。
 var ErrASRAlreadyProcessing = errors.New("ASR 进行中，请勿重复提交")
@@ -120,7 +149,7 @@ func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, 
 		CreatedBy:   createdBy,
 	}
 	if err := s.liveMaterialRepo.Create(ctx, material); err != nil {
-		return nil, mapLiveMaterialUniqueError(err)
+		return nil, s.resolveCreateUniqueConflict(ctx, name, liveURL, err)
 	}
 	// 仅写库为 pending；唤醒 Worker 尽快扫库抢占（即使无唤醒，定时 poll 也会兜底）。
 	if s.asrWorker != nil {
@@ -176,7 +205,41 @@ func mapLiveMaterialUniqueError(err error) error {
 	if strings.Contains(msg, "name") {
 		return ErrLiveMaterialNameExists
 	}
-	return errors.New("素材名称或直播链接已存在")
+	return ErrLiveMaterialDuplicate
+}
+
+// resolveCreateUniqueConflict 创建唯一冲突时查出已有记录，包装为 LiveMaterialExistsError。
+func (s *liveMaterialService) resolveCreateUniqueConflict(ctx context.Context, name, liveURL string, createErr error) error {
+	mapped := mapLiveMaterialUniqueError(createErr)
+	if !isLiveMaterialUniqueConflict(mapped) {
+		return mapped
+	}
+
+	var (
+		existing *model.LiveMaterial
+		getErr   error
+	)
+	switch {
+	case errors.Is(mapped, ErrLiveMaterialURLExists):
+		existing, getErr = s.liveMaterialRepo.GetByLiveURL(ctx, liveURL)
+	case errors.Is(mapped, ErrLiveMaterialNameExists):
+		existing, getErr = s.liveMaterialRepo.GetByName(ctx, name)
+	default:
+		existing, getErr = s.liveMaterialRepo.GetByLiveURL(ctx, liveURL)
+		if getErr != nil {
+			existing, getErr = s.liveMaterialRepo.GetByName(ctx, name)
+		}
+	}
+	if getErr != nil || existing == nil {
+		return mapped
+	}
+	return &LiveMaterialExistsError{Material: existing, Cause: mapped}
+}
+
+func isLiveMaterialUniqueConflict(err error) bool {
+	return errors.Is(err, ErrLiveMaterialURLExists) ||
+		errors.Is(err, ErrLiveMaterialNameExists) ||
+		errors.Is(err, ErrLiveMaterialDuplicate)
 }
 
 func (s *liveMaterialService) List(ctx context.Context, page, pageSize int, opts LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {

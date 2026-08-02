@@ -87,6 +87,12 @@ func (m *mockLiveMaterialRepoForProject) GetByID(ctx context.Context, id uint) (
 	stored := *material
 	return &stored, nil
 }
+func (m *mockLiveMaterialRepoForProject) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+func (m *mockLiveMaterialRepoForProject) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
 func (m *mockLiveMaterialRepoForProject) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }

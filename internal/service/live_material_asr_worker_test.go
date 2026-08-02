@@ -95,6 +95,12 @@ func (m *workerMockRepo) GetByID(ctx context.Context, id uint) (*model.LiveMater
 	stored := *material
 	return &stored, nil
 }
+func (m *workerMockRepo) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+func (m *workerMockRepo) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
 func (m *workerMockRepo) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }

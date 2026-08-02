@@ -337,6 +337,53 @@ func TestLiveMaterialHandler_Create_MissingRequired(t *testing.T) {
 	}
 }
 
+// TestLiveMaterialHandler_Create_ExistsReturns40901 验证素材已存在时返回 40901 及已有记录。
+func TestLiveMaterialHandler_Create_ExistsReturns40901(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
+		createFn: func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
+			return nil, &service.LiveMaterialExistsError{
+				Material: &model.LiveMaterial{
+					ID: 9, Name: "已有素材", LiveURL: "https://example.com/exist.mp4",
+					URLType: model.URLTypeFile, ASRStatus: model.ASRStatusCompleted, CreatedBy: 2,
+					LiveASR: "{}",
+				},
+				Cause: service.ErrLiveMaterialURLExists,
+			}
+		},
+	}, accountsStub(&model.Account{ID: 2, Username: "u2", Nickname: "已有用户"}))
+
+	r := newAuthedRouter(secret, handler.CreateLiveMaterial, http.MethodPost, "/live-materials")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+	body := []byte(`{"name":"新名","live_url":"https://example.com/exist.mp4"}`)
+	req := httptest.NewRequest(http.MethodPost, "/live-materials", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body=%s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	var resp struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			ID   uint   `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Code != service.CodeLiveMaterialExists {
+		t.Errorf("code = %d, want %d", resp.Code, service.CodeLiveMaterialExists)
+	}
+	if resp.Data.ID != 9 || resp.Data.Name != "已有素材" {
+		t.Errorf("data = %+v, want existing material", resp.Data)
+	}
+}
+
 // TestLiveMaterialHandler_Create_Unauthorized 验证未登录时返回 401。
 func TestLiveMaterialHandler_Create_Unauthorized(t *testing.T) {
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{}, nil)

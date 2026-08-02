@@ -18,6 +18,10 @@ type LiveMaterialRepository interface {
 	Create(ctx context.Context, material *model.LiveMaterial) error
 	// GetByID 根据主键查询直播素材。
 	GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error)
+	// GetByName 根据素材名称精确查询。
+	GetByName(ctx context.Context, name string) (*model.LiveMaterial, error)
+	// GetByLiveURL 根据直播链接精确查询。
+	GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error)
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
 	// ClaimPendingASR 多实例安全地抢占一条 pending ASR 任务。
@@ -68,6 +72,24 @@ func (r *liveMaterialRepository) Create(ctx context.Context, material *model.Liv
 func (r *liveMaterialRepository) GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error) {
 	var material model.LiveMaterial
 	err := r.db.WithContext(ctx).First(&material, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &material, nil
+}
+
+func (r *liveMaterialRepository) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {
+	var material model.LiveMaterial
+	err := r.db.WithContext(ctx).Where("name = ?", name).First(&material).Error
+	if err != nil {
+		return nil, err
+	}
+	return &material, nil
+}
+
+func (r *liveMaterialRepository) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
+	var material model.LiveMaterial
+	err := r.db.WithContext(ctx).Where("live_url = ?", liveURL).First(&material).Error
 	if err != nil {
 		return nil, err
 	}

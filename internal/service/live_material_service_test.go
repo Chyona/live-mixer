@@ -46,6 +46,26 @@ func (m *mockLiveMaterialRepo) GetByID(ctx context.Context, id uint) (*model.Liv
 	return &stored, nil
 }
 
+func (m *mockLiveMaterialRepo) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {
+	for _, material := range m.materials {
+		if material.Name == name {
+			stored := *material
+			return &stored, nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (m *mockLiveMaterialRepo) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
+	for _, material := range m.materials {
+		if material.LiveURL == liveURL {
+			stored := *material
+			return &stored, nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
 func (m *mockLiveMaterialRepo) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	if m.updateFn != nil {
 		return m.updateFn(ctx, material)
@@ -250,6 +270,35 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "")
 	if err == nil || err.Error() != "db down" {
 		t.Errorf("error = %v, want db down", err)
+	}
+}
+
+// TestLiveMaterialService_Create_URLExistsReturnsExisting 验证 live_url 冲突时返回已有记录。
+func TestLiveMaterialService_Create_URLExistsReturnsExisting(t *testing.T) {
+	existing := &model.LiveMaterial{
+		ID: 3, Name: "旧素材", LiveURL: "https://example.com/same.mp4",
+		ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
+	}
+	repo := &mockLiveMaterialRepo{
+		materials: map[uint]*model.LiveMaterial{3: existing},
+		createFn: func(ctx context.Context, material *model.LiveMaterial) error {
+			return errors.New(`UNIQUE constraint failed: live_material.live_url`)
+		},
+	}
+	svc := NewLiveMaterialService(repo, nil)
+	got, err := svc.Create(context.Background(), 2, "新名称", "https://example.com/same.mp4", "", "")
+	if got != nil {
+		t.Fatalf("material = %+v, want nil", got)
+	}
+	var existsErr *LiveMaterialExistsError
+	if !errors.As(err, &existsErr) {
+		t.Fatalf("error = %v, want LiveMaterialExistsError", err)
+	}
+	if existsErr.Material == nil || existsErr.Material.ID != 3 {
+		t.Fatalf("existing = %+v, want id=3", existsErr.Material)
+	}
+	if !errors.Is(err, ErrLiveMaterialURLExists) {
+		t.Errorf("unwrap = %v, want ErrLiveMaterialURLExists", err)
 	}
 }
 

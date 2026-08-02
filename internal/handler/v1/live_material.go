@@ -230,6 +230,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 // @Param        body  body      CreateLiveMaterialRequest  true  "素材信息"
 // @Success      200   {object}  response.Body
 // @Failure      400   {object}  response.Body
+// @Failure      409   {object}  response.Body  "素材已存在，code=40901，data 为已有记录"
 // @Failure      401   {object}  response.Body
 // @Security     BearerAuth
 // @Router       /v1/live-materials [post]
@@ -251,6 +252,16 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext,
 	)
 	if err != nil {
+		var existsErr *service.LiveMaterialExistsError
+		if errors.As(err, &existsErr) && existsErr.Material != nil {
+			response.Conflict(
+				c,
+				service.CodeLiveMaterialExists,
+				existsErr.Error(),
+				h.toLiveMaterialDetailResponse(c.Request.Context(), existsErr.Material),
+			)
+			return
+		}
 		response.BadRequest(c, err.Error())
 		return
 	}
