@@ -52,7 +52,7 @@ type CreateVideoProjectRequest struct {
 	Width          int                  `json:"width" binding:"omitempty,min=0"`
 	Height         int                  `json:"height" binding:"omitempty,min=0"`
 	ProjectSource  string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
-	EnableCaptions *int                 `json:"enable_captions"`                 // 是否添加字幕：0否 1是；未传默认 1
+	EnableCaptions *bool                `json:"enable_captions"`                 // 是否添加字幕；未传默认 true，入库为 0/1
 }
 
 // UpdateVideoProjectRequest 更新剪辑项目请求体。
@@ -66,7 +66,19 @@ type UpdateVideoProjectRequest struct {
 	Width          *int                  `json:"width" binding:"omitempty,min=0"`
 	Height         *int                  `json:"height" binding:"omitempty,min=0"`
 	ProjectSource  *string               `json:"project_source" binding:"omitempty,max=32"`
-	EnableCaptions *int                  `json:"enable_captions"`
+	EnableCaptions *bool                 `json:"enable_captions"` // 是否添加字幕；入库为 0/1
+}
+
+// enableCaptionsToInt 将前端 bool 转为库内 0/1；nil 表示未传。
+func enableCaptionsToInt(v *bool) *int {
+	if v == nil {
+		return nil
+	}
+	n := model.EnableCaptionsOff
+	if *v {
+		n = model.EnableCaptionsOn
+	}
+	return &n
 }
 
 // VideoProjectResponse 剪辑项目 API 响应。
@@ -223,7 +235,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
-// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（0否 1是，默认 1）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
+// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -256,7 +268,7 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 		Width:          req.Width,
 		Height:         req.Height,
 		ProjectSource:  req.ProjectSource,
-		EnableCaptions: req.EnableCaptions,
+		EnableCaptions: enableCaptionsToInt(req.EnableCaptions),
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -297,7 +309,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 仅支持 0 或 1
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 为 bool，入库为 0/1
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -330,7 +342,7 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 		Width:          req.Width,
 		Height:         req.Height,
 		ProjectSource:  req.ProjectSource,
-		EnableCaptions: req.EnableCaptions,
+		EnableCaptions: enableCaptionsToInt(req.EnableCaptions),
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrVideoProjectNotFound) {
