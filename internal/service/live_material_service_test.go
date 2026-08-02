@@ -575,15 +575,23 @@ func TestLiveMaterialService_Delete_NotFound(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_DownloadASRSubtitle_Success 验证导出已完成的 ASR JSON。
+// TestLiveMaterialService_DownloadASRSubtitle_Success 验证导出已完成的 ASR 字幕 TXT。
 func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
-	rawASR := `{"result":{"utterances":[{"text":"你好"}]}}`
+	rawASR := `{"result":{"utterances":[
+		{"additions":{"speaker":"1"},"start_time":2000,"end_time":3000,"text":"你好"},
+		{"additions":{"speaker":"1"},"start_time":3500,"end_time":4000,"text":"世界"},
+		{"additions":{"speaker":"2"},"start_time":5000,"end_time":6000,"text":"嗨"}
+	]}}`
 	repo := &mockLiveMaterialRepo{
 		materials: map[uint]*model.LiveMaterial{
 			5: {
 				ID:        5,
 				ASRStatus: model.ASRStatusCompleted,
 				LiveASR:   rawASR,
+				ASRSummaries: []model.ASRSummarySegment{
+					{Title: "财富"},
+					{Title: "直播"},
+				},
 			},
 		},
 	}
@@ -593,11 +601,12 @@ func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DownloadASRSubtitle() error = %v", err)
 	}
-	if string(content) != rawASR {
-		t.Errorf("content = %q, want %q", content, rawASR)
+	want := "关键词\n财富 直播\n\n文字记录\n说话人1 00:02\n你好世界\n\n说话人2 00:05\n嗨\n"
+	if string(content) != want {
+		t.Errorf("content =\n%q\nwant\n%q", content, want)
 	}
-	if fileName != "asr_subtitle_5.json" {
-		t.Errorf("fileName = %q, want asr_subtitle_5.json", fileName)
+	if fileName != "asr_subtitle_5.txt" {
+		t.Errorf("fileName = %q, want asr_subtitle_5.txt", fileName)
 	}
 }
 

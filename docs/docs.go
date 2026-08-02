@@ -686,9 +686,9 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "同步返回 live_asr 原始 JSON 文件；仅 asr_status=completed 且内容非空时可下载",
+                "description": "返回 TXT：关键词取自 asr_summaries.title；文字记录取自 live_asr，连续相同说话人合并，显示为「说话人${speaker}」；仅 asr_status=completed 且有分句时可下载",
                 "produces": [
-                    "application/json"
+                    "text/plain"
                 ],
                 "tags": [
                     "直播素材"
@@ -705,7 +705,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "ASR 字幕 JSON 文件",
+                        "description": "ASR 字幕 TXT 文件",
                         "schema": {
                             "type": "file"
                         }

@@ -93,7 +93,7 @@ type LiveMaterialService interface {
 	Delete(ctx context.Context, id uint) error
 	// RetryASR 将失败的 ASR 重置为 pending，由后台 Worker 扫库重试。
 	RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error)
-	// DownloadASRSubtitle 返回可用于直接下载的 ASR JSON 内容与建议文件名。
+	// DownloadASRSubtitle 返回可用于直接下载的 ASR 字幕 TXT 与建议文件名。
 	DownloadASRSubtitle(ctx context.Context, id uint) (content []byte, fileName string, err error)
 }
 
@@ -346,11 +346,18 @@ func (s *liveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) 
 	if material.ASRStatus != model.ASRStatusCompleted {
 		return nil, "", ErrASRSubtitleNotReady
 	}
-	liveASR := strings.TrimSpace(material.LiveASR)
-	if liveASR == "" || liveASR == "{}" {
+
+	utterances := asr.FormatUtterancesForAPI(material.LiveASR)
+	if len(utterances) == 0 {
 		return nil, "", ErrASRSubtitleEmpty
 	}
 
-	fileName := fmt.Sprintf("asr_subtitle_%d.json", material.ID)
-	return []byte(liveASR), fileName, nil
+	titles := make([]string, 0, len(material.ASRSummaries))
+	for _, seg := range material.ASRSummaries {
+		titles = append(titles, seg.Title)
+	}
+
+	content := asr.BuildSubtitleTXT(titles, utterances)
+	fileName := fmt.Sprintf("asr_subtitle_%d.txt", material.ID)
+	return []byte(content), fileName, nil
 }

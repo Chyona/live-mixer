@@ -596,16 +596,16 @@ func errLiveMaterialNotFound() error {
 	return service.ErrLiveMaterialNotFound
 }
 
-// TestLiveMaterialHandler_DownloadASRSubtitle_Success 验证字幕接口直接返回 JSON 文件。
+// TestLiveMaterialHandler_DownloadASRSubtitle_Success 验证字幕接口直接返回 TXT 文件。
 func TestLiveMaterialHandler_DownloadASRSubtitle_Success(t *testing.T) {
 	secret := "handler-test-secret"
-	rawASR := `{"result":{"utterances":[{"text":"你好"}]}}`
+	txt := "关键词\n财富\n\n文字记录\n说话人1 00:02\n你好\n"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
 			if id != 12 {
 				t.Errorf("id = %d, want 12", id)
 			}
-			return []byte(rawASR), "asr_subtitle_12.json", nil
+			return []byte(txt), "asr_subtitle_12.txt", nil
 		},
 	}, nil)
 
@@ -620,14 +620,14 @@ func TestLiveMaterialHandler_DownloadASRSubtitle_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
-	if got := w.Header().Get("Content-Disposition"); got != `attachment; filename="asr_subtitle_12.json"` {
+	if got := w.Header().Get("Content-Disposition"); got != `attachment; filename="asr_subtitle_12.txt"` {
 		t.Errorf("Content-Disposition = %q", got)
 	}
-	if !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
-		t.Errorf("Content-Type = %q, want application/json", w.Header().Get("Content-Type"))
+	if !strings.Contains(w.Header().Get("Content-Type"), "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain", w.Header().Get("Content-Type"))
 	}
-	if w.Body.String() != rawASR {
-		t.Errorf("body = %q, want %q", w.Body.String(), rawASR)
+	if w.Body.String() != txt {
+		t.Errorf("body = %q, want %q", w.Body.String(), txt)
 	}
 }
 

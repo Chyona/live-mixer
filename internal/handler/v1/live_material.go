@@ -407,13 +407,13 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 	})
 }
 
-// DownloadASRSubtitle 下载直播素材 ASR 字幕（JSON 文件）
+// DownloadASRSubtitle 下载直播素材 ASR 字幕（TXT 文件）
 // @Summary      下载 ASR 字幕
-// @Description  同步返回 live_asr 原始 JSON 文件；仅 asr_status=completed 且内容非空时可下载
+// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录取自 live_asr，连续相同说话人合并，显示为「说话人${speaker}」；仅 asr_status=completed 且有分句时可下载
 // @Tags         直播素材
-// @Produce      application/json
+// @Produce      text/plain
 // @Param        id   path  int  true  "素材 ID"
-// @Success      200  {file}    file  "ASR 字幕 JSON 文件"
+// @Success      200  {file}    file  "ASR 字幕 TXT 文件"
 // @Failure      400  {object}  response.Body
 // @Failure      404  {object}  response.Body
 // @Security     BearerAuth
@@ -440,5 +440,5 @@ func (h *LiveMaterialHandler) DownloadASRSubtitle(c *gin.Context) {
 	}
 
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
-	c.Data(http.StatusOK, "application/json; charset=utf-8", content)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 }
