@@ -22,9 +22,10 @@ import (
 const (
 	// asrLLMWindowMaxRunes 单窗 user 侧句段列表最大 rune 数（Map 预算）；超时长辅约束后再按此收缩。
 	asrLLMWindowMaxRunes       = 16000
-	asrParagraphMaxRunes       = 200 // 段落正文上限（含）；超限按句号兜底拆分
+	asrParagraphMaxRunes       = 200                   // 段落正文上限（含）；超限按句号兜底拆分
 	asrSummaryMinDurationMs    = int64(5 * 60 * 1000)  // 5 分钟
 	asrSummaryMaxDurationMs    = int64(60 * 60 * 1000) // 60 分钟
+	asrSummaryMergeGapMs       = int64(2 * 60 * 1000)  // 同主题合并允许的最大时间间隙
 	asrSummaryTitleMaxRunes    = 6
 	asrParagraphWindowMs       = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
 	asrSummaryWindowMs         = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
@@ -205,18 +206,15 @@ func generateASRSummaries(ctx context.Context, llmClient LLMChatClient, utteranc
 		})
 	}
 
-	// Reduce：按窗序拼接 → 规范化 / 按时长过滤 / 校验 / 排序（不做跨窗同 title 合并）。
+	// Reduce：规范化 → 跨窗同主题合并 → 去包含去重 → 按时长过滤 → 校验 / 排序。
 	normalizeASRSummaries(all, durationMs)
+	all = mergeASRSummaries(all)
+	all = dedupeContainedASRSummaries(all)
 	all = filterASRSummariesByDuration(all)
 	if err := validateASRSummaries(all); err != nil {
 		return nil, err
 	}
-	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].StartTime == all[j].StartTime {
-			return all[i].EndTime < all[j].EndTime
-		}
-		return all[i].StartTime < all[j].StartTime
-	})
+	sortASRSummariesByTime(all)
 	if all == nil {
 		all = []model.ASRSummarySegment{}
 	}
@@ -248,8 +246,8 @@ func generateASRSummariesWindow(
 		dbg.Segments = []model.ASRSummarySegment{}
 		return dbg.Segments, dbg, nil
 	}
+	// 窗内不过滤时长：短碎片留给 Reduce 跨窗合并后再按 [5,60] 分钟过滤。
 	normalizeASRSummaries(segs, durationMs)
-	segs = filterASRSummariesByDuration(segs)
 	if vErr := validateASRSummaries(segs); vErr != nil {
 		dbg.Segments = []model.ASRSummarySegment{}
 		return dbg.Segments, dbg, nil
@@ -652,6 +650,97 @@ func normalizeASRSummaries(segs []model.ASRSummarySegment, durationMs int64) {
 			}
 		}
 	}
+}
+
+func sortASRSummariesByTime(segs []model.ASRSummarySegment) {
+	sort.SliceStable(segs, func(i, j int) bool {
+		if segs[i].StartTime == segs[j].StartTime {
+			return segs[i].EndTime < segs[j].EndTime
+		}
+		return segs[i].StartTime < segs[j].StartTime
+	})
+}
+
+// mergeASRSummaries 合并时间相邻/相交且 title 相同的段（跨窗碎片归约）；在时长过滤之前调用。
+func mergeASRSummaries(segs []model.ASRSummarySegment) []model.ASRSummarySegment {
+	if len(segs) == 0 {
+		return []model.ASRSummarySegment{}
+	}
+	sorted := append([]model.ASRSummarySegment(nil), segs...)
+	sortASRSummariesByTime(sorted)
+
+	out := make([]model.ASRSummarySegment, 0, len(sorted))
+	out = append(out, sorted[0])
+	for i := 1; i < len(sorted); i++ {
+		cur := sorted[i]
+		last := &out[len(out)-1]
+		if asrSummaryTitlesEqual(last.Title, cur.Title) && asrSummariesCanMerge(*last, cur) {
+			if cur.StartTime < last.StartTime {
+				last.StartTime = cur.StartTime
+			}
+			if cur.EndTime > last.EndTime {
+				last.EndTime = cur.EndTime
+			}
+			continue
+		}
+		out = append(out, cur)
+	}
+	return out
+}
+
+func asrSummaryTitlesEqual(a, b string) bool {
+	return strings.TrimSpace(a) == strings.TrimSpace(b)
+}
+
+// asrSummariesCanMerge 在已按 StartTime 排序的前提下，判断 a 与后段 b 可否合并。
+func asrSummariesCanMerge(a, b model.ASRSummarySegment) bool {
+	if b.StartTime <= a.EndTime {
+		return true // 相交或相接
+	}
+	return b.StartTime-a.EndTime <= asrSummaryMergeGapMs
+}
+
+// dedupeContainedASRSummaries 去掉被同 title 更长段严格包含的短段。
+func dedupeContainedASRSummaries(segs []model.ASRSummarySegment) []model.ASRSummarySegment {
+	if len(segs) <= 1 {
+		if segs == nil {
+			return []model.ASRSummarySegment{}
+		}
+		return segs
+	}
+	keep := make([]bool, len(segs))
+	for i := range keep {
+		keep[i] = true
+	}
+	for i := range segs {
+		if !keep[i] {
+			continue
+		}
+		for j := range segs {
+			if i == j || !keep[j] {
+				continue
+			}
+			if !asrSummaryTitlesEqual(segs[i].Title, segs[j].Title) {
+				continue
+			}
+			iDur := segs[i].EndTime - segs[i].StartTime
+			jDur := segs[j].EndTime - segs[j].StartTime
+			// i 被 j 包含（允许端点相等）；等长时保留靠前的。
+			if segs[i].StartTime >= segs[j].StartTime && segs[i].EndTime <= segs[j].EndTime {
+				if iDur < jDur || (iDur == jDur && i > j) {
+					keep[i] = false
+					break
+				}
+			}
+		}
+	}
+	out := make([]model.ASRSummarySegment, 0, len(segs))
+	for i, ok := range keep {
+		if ok {
+			out = append(out, segs[i])
+		}
+	}
+	return out
 }
 
 // filterASRSummariesByDuration 丢弃时长不在 [5,60] 分钟的段；可返回空切片。

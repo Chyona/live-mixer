@@ -114,6 +114,94 @@ func TestFilterASRSummariesByDuration_AllDropped(t *testing.T) {
 	}
 }
 
+func TestMergeASRSummaries_SameTitleAcrossGap(t *testing.T) {
+	// 两段同主题，间隙 90s < 2min → 合并后时长满足 5 分钟。
+	segs := []model.ASRSummarySegment{
+		{Title: "产品讲解", StartTime: 0, EndTime: 180_000},             // 3 分钟
+		{Title: "产品讲解", StartTime: 270_000, EndTime: 420_000},         // 间隙 90s，再 2.5 分钟
+		{Title: "福利促销", StartTime: 500_000, EndTime: 800_000},
+	}
+	got := mergeASRSummaries(segs)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 after merge", len(got))
+	}
+	if got[0].Title != "产品讲解" || got[0].StartTime != 0 || got[0].EndTime != 420_000 {
+		t.Fatalf("merged = %+v", got[0])
+	}
+	if got[1].Title != "福利促销" {
+		t.Fatalf("second = %+v", got[1])
+	}
+}
+
+func TestMergeASRSummaries_GapTooLargeNotMerged(t *testing.T) {
+	segs := []model.ASRSummarySegment{
+		{Title: "开场", StartTime: 0, EndTime: 300_000},
+		{Title: "开场", StartTime: 300_000 + asrSummaryMergeGapMs + 1, EndTime: 700_000},
+	}
+	got := mergeASRSummaries(segs)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (gap too large)", len(got))
+	}
+}
+
+func TestMergeASRSummaries_ThenFilterKeepsMerged(t *testing.T) {
+	// 合并前各 <5 分钟，合并后 >=5 分钟，应保留。
+	segs := []model.ASRSummarySegment{
+		{Title: "讲解", StartTime: 0, EndTime: 180_000},
+		{Title: "讲解", StartTime: 180_000, EndTime: 300_000},
+	}
+	got := filterASRSummariesByDuration(mergeASRSummaries(segs))
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].EndTime-got[0].StartTime != 300_000 {
+		t.Fatalf("duration = %d", got[0].EndTime-got[0].StartTime)
+	}
+}
+
+func TestDedupeContainedASRSummaries(t *testing.T) {
+	segs := []model.ASRSummarySegment{
+		{Title: "主题", StartTime: 0, EndTime: 600_000},
+		{Title: "主题", StartTime: 100_000, EndTime: 200_000}, // 被包含
+		{Title: "其它", StartTime: 0, EndTime: 300_000},
+	}
+	got := dedupeContainedASRSummaries(segs)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(got), got)
+	}
+	titles := map[string]bool{}
+	for _, s := range got {
+		titles[s.Title] = true
+		if s.Title == "主题" && (s.StartTime != 0 || s.EndTime != 600_000) {
+			t.Fatalf("kept wrong theme segment: %+v", s)
+		}
+	}
+	if !titles["主题"] || !titles["其它"] {
+		t.Fatalf("titles = %v", titles)
+	}
+}
+
+func TestReduceASRSummaries_PipelineOrder(t *testing.T) {
+	// 模拟跨窗碎片：先合并再过滤，避免短段被提前丢掉。
+	all := []model.ASRSummarySegment{
+		{Title: " 产品讲解 ", StartTime: 0, EndTime: 200_000},
+		{Title: "产品讲解", StartTime: 210_000, EndTime: 400_000}, // 间隙 10s
+	}
+	normalizeASRSummaries(all, 1_000_000)
+	all = mergeASRSummaries(all)
+	all = dedupeContainedASRSummaries(all)
+	all = filterASRSummariesByDuration(all)
+	if err := validateASRSummaries(all); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(all) != 1 || all[0].Title != "产品讲解" {
+		t.Fatalf("got = %+v", all)
+	}
+	if all[0].StartTime != 0 || all[0].EndTime != 400_000 {
+		t.Fatalf("times = %d-%d", all[0].StartTime, all[0].EndTime)
+	}
+}
+
 func TestParseASRSummaryItems_FromObject(t *testing.T) {
 	items, err := parseASRSummaryItems("```json\n{\"items\":[{\"title\":\"主题\",\"start_index\":0,\"end_index\":0}]}\n```")
 	if err != nil {
