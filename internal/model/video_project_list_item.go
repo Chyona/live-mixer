@@ -23,4 +23,6 @@ type VideoProjectListItem struct {
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	Ext           string         `json:"ext"`
+	// TaskCount 关联 task 数量（列表查询时由子查询填充，非表字段）。
+	TaskCount int64 `gorm:"->" json:"task_count"`
 }

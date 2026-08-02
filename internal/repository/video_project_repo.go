@@ -83,7 +83,7 @@ func (r *videoProjectRepository) List(ctx context.Context, filter VideoProjectLi
 
 	query := r.db.WithContext(ctx).
 		Table("video_project").
-		Select("video_project.*, live_material.name AS live_name").
+		Select("video_project.*, live_material.name AS live_name, (SELECT COUNT(*) FROM task WHERE task.video_project_id = video_project.id) AS task_count").
 		Joins("LEFT JOIN live_material ON live_material.id = video_project.live_id")
 	query = applyVideoProjectListFilter(query, filter)
 	if err := query.Offset(offset).Limit(limit).Order("video_project.updated_at DESC, video_project.id DESC").Find(&items).Error; err != nil {

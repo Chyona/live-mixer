@@ -148,6 +148,7 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 			return []model.VideoProjectListItem{{
 				ID: 1, Name: "项目", LiveID: 5, LiveName: "春季发布会", PromptID: 1,
 				Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+				TaskCount: 3,
 			}}, 1, nil
 		},
 	}, nil)
@@ -165,8 +166,9 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 	var resp struct {
 		Data struct {
 			List []struct {
-				LiveName string `json:"live_name"`
-				LiveID   uint   `json:"live_id"`
+				LiveName  string `json:"live_name"`
+				LiveID    uint   `json:"live_id"`
+				TaskCount int64  `json:"task_count"`
 			} `json:"list"`
 		} `json:"data"`
 	}
@@ -178,6 +180,9 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 	}
 	if resp.Data.List[0].LiveID != 5 || resp.Data.List[0].LiveName != "春季发布会" {
 		t.Fatalf("live fields = %+v", resp.Data.List[0])
+	}
+	if resp.Data.List[0].TaskCount != 3 {
+		t.Fatalf("task_count = %d, want 3", resp.Data.List[0].TaskCount)
 	}
 }
 

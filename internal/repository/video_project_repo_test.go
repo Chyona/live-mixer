@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ func setupVideoProjectTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}); err != nil {
+	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}, &model.Task{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
 	return db
@@ -149,6 +150,63 @@ func TestVideoProjectRepository_List_KeywordAndDateFilter(t *testing.T) {
 	}
 	if projects[0].LiveID != material.ID {
 		t.Errorf("LiveID = %d, want %d", projects[0].LiveID, material.ID)
+	}
+	if projects[0].TaskCount != 0 {
+		t.Errorf("TaskCount = %d, want 0 when no task", projects[0].TaskCount)
+	}
+}
+
+// TestVideoProjectRepository_List_TaskCount 验证列表返回关联 task 数量。
+func TestVideoProjectRepository_List_TaskCount(t *testing.T) {
+	db := setupVideoProjectTestDB(t)
+	repo := NewVideoProjectRepository(db)
+	ctx := context.Background()
+	material := seedLiveMaterialForProject(t, db)
+
+	p1 := &model.VideoProject{
+		Name: "有任务", LiveID: material.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
+	}
+	p2 := &model.VideoProject{
+		Name: "无任务", LiveID: material.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, p1); err != nil {
+		t.Fatalf("Create p1: %v", err)
+	}
+	if err := repo.Create(ctx, p2); err != nil {
+		t.Fatalf("Create p2: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		pid := p1.ID
+		task := &model.Task{
+			ID:             fmt.Sprintf("task-%d", i+1),
+			Type:           model.TaskTypeDraft,
+			Status:         model.TaskStatusPending,
+			VideoProjectID: &pid,
+			CreatedBy:      1,
+		}
+		if err := db.Create(task).Error; err != nil {
+			t.Fatalf("Create task: %v", err)
+		}
+	}
+
+	items, total, err := repo.List(ctx, VideoProjectListFilter{}, 0, 20)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total = %d, want 2", total)
+	}
+	byName := map[string]model.VideoProjectListItem{}
+	for _, it := range items {
+		byName[it.Name] = it
+	}
+	if byName["有任务"].TaskCount != 2 {
+		t.Errorf("有任务 TaskCount = %d, want 2", byName["有任务"].TaskCount)
+	}
+	if byName["无任务"].TaskCount != 0 {
+		t.Errorf("无任务 TaskCount = %d, want 0", byName["无任务"].TaskCount)
 	}
 }
 

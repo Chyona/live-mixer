@@ -148,6 +148,7 @@ type VideoProjectListResponse struct {
 	CreatedAt      time.Time            `json:"created_at"`
 	UpdatedAt      time.Time            `json:"updated_at"`
 	Ext            string               `json:"ext"`
+	TaskCount      int64                `json:"task_count"`
 }
 
 func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjectListItem, createdByName string) VideoProjectListResponse {
@@ -176,12 +177,13 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 		CreatedAt:      item.CreatedAt,
 		UpdatedAt:      item.UpdatedAt,
 		Ext:            item.Ext,
+		TaskCount:      item.TaskCount,
 	}
 }
 
 // ListVideoProjects 剪辑项目列表
 // @Summary      剪辑项目列表
-// @Description  分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id 与 live_name（关联 live_material.name）
+// @Description  分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id、live_name（关联 live_material.name）与 task_count（关联 task 总数）
 // @Tags         剪辑项目
 // @Produce      json
 // @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/remark"
