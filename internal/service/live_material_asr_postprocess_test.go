@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"live-mixer/internal/model"
@@ -469,12 +471,70 @@ func TestRunASRPostprocess_KeepsInRangeSummary(t *testing.T) {
 	}
 }
 
+func TestRunASRPostprocess_SummariesAndParagraphsRunInParallel(t *testing.T) {
+	const dur = int64(10 * 60 * 1000)
+	var (
+		summaryEntered   atomic.Bool
+		paragraphEntered atomic.Bool
+		sawOverlap       atomic.Bool
+		closeGate        sync.Once
+	)
+	gate := make(chan struct{})
+
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			sys := ""
+			for _, msg := range messages {
+				if msg.Role == "system" {
+					sys = msg.Content
+				}
+			}
+			isSummary := strings.Contains(sys, "主题提炼")
+			if isSummary {
+				summaryEntered.Store(true)
+				if paragraphEntered.Load() {
+					sawOverlap.Store(true)
+				}
+				// 等待 paragraphs 侧也进入，证明两路重叠。
+				select {
+				case <-gate:
+				case <-time.After(2 * time.Second):
+					return "", errors.New("timed out waiting for paragraph phase")
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+				return `{"items":[{"title":"讲解","start_index":0,"end_index":0}]}`, nil
+			}
+			paragraphEntered.Store(true)
+			if summaryEntered.Load() {
+				sawOverlap.Store(true)
+			}
+			closeGate.Do(func() { close(gate) })
+			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+		},
+	}
+
+	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好世界")), dur, nil)
+	if err != nil {
+		t.Fatalf("runASRPostprocess() error = %v", err)
+	}
+	if !sawOverlap.Load() {
+		t.Fatal("summaries and paragraphs did not overlap in time")
+	}
+	if len(out.Summaries) != 1 || out.Summaries[0].Title != "讲解" {
+		t.Fatalf("Summaries = %+v", out.Summaries)
+	}
+	if len(out.Paragraphs) == 0 || out.Paragraphs[0].Text != "你好世界" {
+		t.Fatalf("Paragraphs = %+v", out.Paragraphs)
+	}
+}
+
 func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	const dur = int64(10 * 60 * 1000)
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			calls++
+			calls.Add(1)
 			sys := ""
 			for _, msg := range messages {
 				if msg.Role == "system" {
@@ -497,16 +557,16 @@ func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 	if len(out.Paragraphs) == 0 || out.Paragraphs[0].Text != "你好" {
 		t.Fatalf("paragraphs = %+v, want local fallback", out.Paragraphs)
 	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, want 2 (no content repair)", calls)
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("calls = %d, want 2 (no content repair)", n)
 	}
 }
 
 func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			calls++
+			calls.Add(1)
 			return "", context.DeadlineExceeded
 		},
 	}
@@ -514,8 +574,10 @@ func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if calls != asrLLMTransportMaxAttempts {
-		t.Fatalf("calls = %d, want %d transport retries", calls, asrLLMTransportMaxAttempts)
+	// 两路并行：每路最多 asrLLMTransportMaxAttempts 次；一路失败后另一路可能被取消，故区间为 [N, 2N]。
+	n := int(calls.Load())
+	if n < asrLLMTransportMaxAttempts || n > 2*asrLLMTransportMaxAttempts {
+		t.Fatalf("calls = %d, want between %d and %d", n, asrLLMTransportMaxAttempts, 2*asrLLMTransportMaxAttempts)
 	}
 }
 

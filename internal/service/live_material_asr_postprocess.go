@@ -92,7 +92,7 @@ func RunASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 }
 
 // runASRPostprocess 调用 LLM 生成 summaries 与 paragraphs；任一步失败返回 error。
-// rec 非空时将 LLM 中间过程写入 003/004 调试文件。
+// summaries 与 paragraphs 两路并行；rec 非空时将 LLM 中间过程写入 003/004 调试文件。
 func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64, rec *asrDebugRecorder) (asrPostprocessResult, error) {
 	var out asrPostprocessResult
 	if llmClient == nil {
@@ -106,13 +106,42 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 		durationMs = utterances[len(utterances)-1].EndTime
 	}
 
-	summaries, err := generateASRSummaries(ctx, llmClient, utterances, durationMs, rec)
-	if err != nil {
-		return out, fmt.Errorf("生成 asr_summaries 失败: %w", err)
-	}
-	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances, durationMs, rec)
-	if err != nil {
-		return out, fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
+	var (
+		summaries  []model.ASRSummarySegment
+		paragraphs []model.ASRParagraph
+		sumErr     error
+		paraErr    error
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		summaries, err = generateASRSummaries(gctx, llmClient, utterances, durationMs, rec)
+		if err != nil {
+			sumErr = fmt.Errorf("生成 asr_summaries 失败: %w", err)
+			return sumErr
+		}
+		return nil
+	})
+	g.Go(func() error {
+		var err error
+		paragraphs, err = generateASRParagraphs(gctx, llmClient, utterances, durationMs, rec)
+		if err != nil {
+			paraErr = fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
+			return paraErr
+		}
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		switch {
+		case sumErr != nil && paraErr != nil:
+			return out, errors.Join(sumErr, paraErr)
+		case sumErr != nil:
+			return out, sumErr
+		case paraErr != nil:
+			return out, paraErr
+		default:
+			return out, err
+		}
 	}
 	out.Summaries = summaries
 	out.Paragraphs = paragraphs
