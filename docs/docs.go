@@ -1303,7 +1303,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "关键词，英文逗号分隔，匹配 name/remark",
+                        "description": "关键词，英文逗号分隔，匹配 name/remark/live_name",
                         "name": "keywords",
                         "in": "query"
                     },

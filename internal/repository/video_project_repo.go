@@ -14,7 +14,7 @@ import (
 type VideoProjectListFilter struct {
 	StartAt  *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt    *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	Keywords []string   // 关键词列表，每个词匹配 name/remark，词之间为「与」
+	Keywords []string   // 关键词列表，每个词匹配 name/remark/live_name，词之间为「与」
 }
 
 // VideoProjectRepository 剪辑项目数据访问接口。
@@ -75,7 +75,10 @@ func (r *videoProjectRepository) List(ctx context.Context, filter VideoProjectLi
 	var items []model.VideoProjectListItem
 	var total int64
 
-	countQuery := r.db.WithContext(ctx).Model(&model.VideoProject{})
+	// Count 与列表共用 JOIN，以便 keywords 可匹配 live_material.name。
+	countQuery := r.db.WithContext(ctx).
+		Table("video_project").
+		Joins("LEFT JOIN live_material ON live_material.id = video_project.live_id")
 	countQuery = applyVideoProjectListFilter(countQuery, filter)
 	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -93,6 +96,7 @@ func (r *videoProjectRepository) List(ctx context.Context, filter VideoProjectLi
 }
 
 // applyVideoProjectListFilter 将列表筛选条件应用到 GORM 查询（列名带表前缀，避免 JOIN 歧义）。
+// 调用方需已 LEFT JOIN live_material，以便 keywords 可匹配源视频名。
 func applyVideoProjectListFilter(query *gorm.DB, filter VideoProjectListFilter) *gorm.DB {
 	const table = "video_project"
 	if filter.StartAt != nil {
@@ -103,7 +107,10 @@ func applyVideoProjectListFilter(query *gorm.DB, filter VideoProjectListFilter) 
 	}
 	for _, kw := range filter.Keywords {
 		pattern := "%" + kw + "%"
-		query = query.Where("LOWER("+table+".name) LIKE ? OR LOWER("+table+".remark) LIKE ?", pattern, pattern)
+		query = query.Where(
+			"LOWER("+table+".name) LIKE ? OR LOWER("+table+".remark) LIKE ? OR LOWER(live_material.name) LIKE ?",
+			pattern, pattern, pattern,
+		)
 	}
 	return query
 }

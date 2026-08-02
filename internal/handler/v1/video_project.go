@@ -186,7 +186,7 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 // @Description  分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id、live_name（关联 live_material.name）与 task_count（关联 task 总数）
 // @Tags         剪辑项目
 // @Produce      json
-// @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/remark"
+// @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/remark/live_name"
 // @Param        start_date   query  string  false  "开始日期 YYYY-MM-DD"
 // @Param        end_date     query  string  false  "结束日期 YYYY-MM-DD"
 // @Param        page         query  int     false  "页码"

@@ -156,6 +156,55 @@ func TestVideoProjectRepository_List_KeywordAndDateFilter(t *testing.T) {
 	}
 }
 
+// TestVideoProjectRepository_List_KeywordMatchesLiveName 验证 keywords 可匹配源视频名 live_name。
+func TestVideoProjectRepository_List_KeywordMatchesLiveName(t *testing.T) {
+	db := setupVideoProjectTestDB(t)
+	repo := NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	m1 := &model.LiveMaterial{
+		Name: "春季发布会源视频", LiveURL: "https://example.com/spring.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	m2 := &model.LiveMaterial{
+		Name: "其它素材", LiveURL: "https://example.com/other.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	for _, m := range []*model.LiveMaterial{m1, m2} {
+		if err := db.Create(m).Error; err != nil {
+			t.Fatalf("create material: %v", err)
+		}
+	}
+	p1 := &model.VideoProject{
+		Name: "项目A", Remark: "无关备注", LiveID: m1.ID,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
+	}
+	p2 := &model.VideoProject{
+		Name: "项目B", Remark: "无关备注", LiveID: m2.ID,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
+	}
+	for _, p := range []*model.VideoProject{p1, p2} {
+		if err := repo.Create(ctx, p); err != nil {
+			t.Fatalf("Create project: %v", err)
+		}
+	}
+
+	projects, total, err := repo.List(ctx, VideoProjectListFilter{
+		Keywords: []string{"发布会"},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(projects) != 1 {
+		t.Fatalf("total=%d len=%d, want 1 hit by live_name", total, len(projects))
+	}
+	if projects[0].Name != "项目A" || projects[0].LiveName != "春季发布会源视频" {
+		t.Fatalf("got = %+v", projects[0])
+	}
+}
+
 // TestVideoProjectRepository_List_TaskCount 验证列表返回关联 task 数量。
 func TestVideoProjectRepository_List_TaskCount(t *testing.T) {
 	db := setupVideoProjectTestDB(t)
