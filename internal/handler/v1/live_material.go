@@ -132,7 +132,7 @@ type LiveMaterialListResponse struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 	Ext            string     `json:"ext"`
 	ProjectCount   int64      `json:"project_count"`
-	// MatchedParagraphs 仅 asr_keyword 搜索时返回命中的 asr_paragraphs 段落。
+	// MatchedParagraphs 仅 asr_keywords 搜索时返回命中的 asr_paragraphs 段落。
 	MatchedParagraphs []model.ASRParagraph `json:"matched_paragraphs,omitempty"`
 }
 
@@ -178,23 +178,23 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 
 // ListLiveMaterialsRequest 直播素材列表查询参数。
 type ListLiveMaterialsRequest struct {
-	StartDate  string `form:"start_date"`
-	EndDate    string `form:"end_date"`
-	Keyword    string `form:"keyword"`     // 原始字符串，如 "游戏,周末"；匹配 name/remark
-	ASRKeyword string `form:"asr_keyword"` // 原始字符串，如 "发布会,2026"；匹配 asr_paragraphs
-	Page       int    `form:"page" binding:"omitempty,min=1"`
-	PageSize   int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+	StartDate   string `form:"start_date"`
+	EndDate     string `form:"end_date"`
+	Keywords    string `form:"keywords"`     // 原始字符串，如 "游戏,周末"；匹配 name/remark
+	ASRKeywords string `form:"asr_keywords"` // 原始字符串，如 "发布会,2026"；匹配 asr_paragraphs
+	Page        int    `form:"page" binding:"omitempty,min=1"`
+	PageSize    int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；asr_keyword 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条
+// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；asr_keywords 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
-// @Param        start_date   query  string  false  "开始日期 YYYY-MM-DD"
-// @Param        end_date     query  string  false  "结束日期 YYYY-MM-DD"
-// @Param        keyword      query  string  false  "标题关键词，英文逗号分隔，匹配 name/remark"
-// @Param        asr_keyword  query  string  false  "ASR 段落关键词，英文逗号分隔，匹配 asr_paragraphs；命中段落见 matched_paragraphs"
+// @Param        start_date    query  string  false  "开始日期 YYYY-MM-DD"
+// @Param        end_date      query  string  false  "结束日期 YYYY-MM-DD"
+// @Param        keywords      query  string  false  "标题关键词，英文逗号分隔，匹配 name/remark"
+// @Param        asr_keywords  query  string  false  "ASR 段落关键词，英文逗号分隔，匹配 asr_paragraphs；命中段落见 matched_paragraphs"
 // @Param        page            query  int     false  "页码"
 // @Param        page_size       query  int     false  "每页数量，默认 10"
 // @Success      200             {object}  response.Body
@@ -211,10 +211,10 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 	page, pageSize := utils.DefaultPage(req.Page, req.PageSize)
 
 	materials, total, err := h.liveMaterialService.List(c.Request.Context(), page, pageSize, service.LiveMaterialListOptions{
-		StartDate:     req.StartDate,
-		EndDate:       req.EndDate,
-		Keyword:    req.Keyword,
-		ASRKeyword: req.ASRKeyword,
+		StartDate:   req.StartDate,
+		EndDate:     req.EndDate,
+		Keywords:    req.Keywords,
+		ASRKeywords: req.ASRKeywords,
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())

@@ -498,7 +498,7 @@ func TestLiveMaterialHandler_List_WithFilters(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		listFn: func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error) {
-			if opts.Keyword != "游戏,周末" || opts.ASRKeyword != "发布会" {
+			if opts.Keywords != "游戏,周末" || opts.ASRKeywords != "发布会" {
 				t.Errorf("unexpected opts: %+v", opts)
 			}
 			if opts.StartDate != "2026-01-01" || opts.EndDate != "2026-01-31" {
@@ -510,7 +510,7 @@ func TestLiveMaterialHandler_List_WithFilters(t *testing.T) {
 	r := newAuthedRouter(secret, handler.ListLiveMaterials, http.MethodGet, "/live-materials")
 	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
 
-	req := httptest.NewRequest(http.MethodGet, "/live-materials?start_date=2026-01-01&end_date=2026-01-31&keyword=游戏,周末&asr_keyword=发布会", nil)
+	req := httptest.NewRequest(http.MethodGet, "/live-materials?start_date=2026-01-01&end_date=2026-01-31&keywords=游戏,周末&asr_keywords=发布会", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

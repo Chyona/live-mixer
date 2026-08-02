@@ -498,8 +498,8 @@ func TestBuildLiveMaterialListFilter(t *testing.T) {
 	filter, err := buildLiveMaterialListFilter(LiveMaterialListOptions{
 		StartDate:  "2026-01-01",
 		EndDate:    "2026-01-31",
-		Keyword:    "游戏,周末",
-		ASRKeyword: "发布会",
+		Keywords:    "游戏,周末",
+		ASRKeywords: "发布会",
 	})
 	if err != nil {
 		t.Fatalf("buildLiveMaterialListFilter() error = %v", err)
@@ -508,7 +508,7 @@ func TestBuildLiveMaterialListFilter(t *testing.T) {
 		t.Fatal("date range should be set")
 	}
 	if len(filter.Keywords) != 2 || len(filter.ASRKeywords) != 1 {
-		t.Fatalf("unexpected keywords: keyword=%v asr=%v", filter.Keywords, filter.ASRKeywords)
+		t.Fatalf("unexpected keywords: keywords=%v asr=%v", filter.Keywords, filter.ASRKeywords)
 	}
 }
 
@@ -542,7 +542,7 @@ func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
 	}
 	svc := NewLiveMaterialService(repo, nil)
 	_, _, err := svc.List(context.Background(), 1, 10, LiveMaterialListOptions{
-		Keyword: "游戏",
+		Keywords: "游戏",
 	})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)

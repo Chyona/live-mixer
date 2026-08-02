@@ -370,7 +370,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；asr_keyword 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条",
+                "description": "分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；asr_keywords 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条",
                 "produces": [
                     "application/json"
                 ],
@@ -394,13 +394,13 @@ const docTemplate = `{
                     {
                         "type": "string",
                         "description": "标题关键词，英文逗号分隔，匹配 name/remark",
-                        "name": "keyword",
+                        "name": "keywords",
                         "in": "query"
                     },
                     {
                         "type": "string",
                         "description": "ASR 段落关键词，英文逗号分隔，匹配 asr_paragraphs；命中段落见 matched_paragraphs",
-                        "name": "asr_keyword",
+                        "name": "asr_keywords",
                         "in": "query"
                     },
                     {
