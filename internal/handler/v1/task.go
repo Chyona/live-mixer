@@ -57,7 +57,7 @@ type ListTasksRequest struct {
 	Status    string   `form:"status"`
 	StartDate string   `form:"start_date"` // 开始日期 YYYY-MM-DD，按 created_at 筛选
 	EndDate   string   `form:"end_date"`   // 结束日期 YYYY-MM-DD，按 created_at 筛选
-	Keywords  []string `form:"keywords"`   // 可选；模糊匹配 task.video_project_name，多词 AND
+	Keywords  string   `form:"keywords"`   // 可选；"," 与、"|" 或；模糊匹配 task.video_project_name
 	Page      int      `form:"page" binding:"omitempty,min=1"`
 	PageSize  int      `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
@@ -281,14 +281,14 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url、live_name、width/height（创建时按 video_project 自动快照）
+// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；keywords 支持 ","=与、"|"=或，模糊匹配 task.video_project_name；列表项含 video_project_name、live_url、live_name、width/height（创建时按 video_project 自动快照）
 // @Tags         异步任务
 // @Produce      json
 // @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
 // @Param        status      query  string  false  "任务状态：pending / processing / completed / failed"
 // @Param        start_date  query  string  false  "开始日期 YYYY-MM-DD，按 created_at 筛选"
 // @Param        end_date    query  string  false  "结束日期 YYYY-MM-DD，按 created_at 筛选"
-// @Param        keywords    query  []string  false  "关键词数组，模糊匹配 task.video_project_name，多词 AND；如 keywords=发布会&keywords=精剪"
+// @Param        keywords    query  string  false  "关键词：\",\"=与，\"|\"=或，模糊匹配 video_project_name；如 发布会,精剪|一键"
 // @Param        page        query  int     false  "页码"
 // @Param        page_size   query  int     false  "每页数量，默认 10"
 // @Success      200         {object}  response.Body

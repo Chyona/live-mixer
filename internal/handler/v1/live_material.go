@@ -180,21 +180,21 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 type ListLiveMaterialsRequest struct {
 	StartDate   string `form:"start_date"`
 	EndDate     string `form:"end_date"`
-	Keywords    string `form:"keywords"`     // 原始字符串，如 "游戏,周末"；匹配 name/remark
-	ASRKeywords string `form:"asr_keywords"` // 原始字符串，如 "发布会,2026"；匹配 asr_paragraphs
+	Keywords    string `form:"keywords"`     // 如 "游戏,周末|发布会"；","=与，"|"=或；匹配 name/remark
+	ASRKeywords string `form:"asr_keywords"` // 如 "发布会,2026|新品"；","=与，"|"=或；匹配 asr_paragraphs
 	Page        int    `form:"page" binding:"omitempty,min=1"`
 	PageSize    int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；asr_keywords 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条
+// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；keywords/asr_keywords 支持 ","=与、"|"=或；asr_keywords 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
 // @Param        start_date    query  string  false  "开始日期 YYYY-MM-DD"
 // @Param        end_date      query  string  false  "结束日期 YYYY-MM-DD"
-// @Param        keywords      query  string  false  "标题关键词，英文逗号分隔，匹配 name/remark"
-// @Param        asr_keywords  query  string  false  "ASR 段落关键词，英文逗号分隔，匹配 asr_paragraphs；命中段落见 matched_paragraphs"
+// @Param        keywords      query  string  false  "标题关键词：\",\"=与，\"|\"=或，匹配 name/remark；如 游戏,周末|发布会"
+// @Param        asr_keywords  query  string  false  "ASR 段落关键词：\",\"=与，\"|\"=或，匹配 asr_paragraphs；命中段落见 matched_paragraphs"
 // @Param        page            query  int     false  "页码"
 // @Param        page_size       query  int     false  "每页数量，默认 10"
 // @Success      200             {object}  response.Body

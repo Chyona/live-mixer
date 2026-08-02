@@ -137,7 +137,7 @@ func TestVideoProjectRepository_List_KeywordAndDateFilter(t *testing.T) {
 	projects, total, err := repo.List(ctx, VideoProjectListFilter{
 		StartAt:  &startAt,
 		EndAt:    &endAt,
-		Keywords: []string{"发布会", "2026"},
+		Keywords: KeywordGroups{{"发布会", "2026"}},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -192,7 +192,7 @@ func TestVideoProjectRepository_List_KeywordMatchesLiveName(t *testing.T) {
 	}
 
 	projects, total, err := repo.List(ctx, VideoProjectListFilter{
-		Keywords: []string{"发布会"},
+		Keywords: KeywordGroups{{"发布会"}},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)

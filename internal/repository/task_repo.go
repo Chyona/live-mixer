@@ -23,7 +23,7 @@ type TaskListFilter struct {
 	Status   string     // 任务状态，空表示不限
 	StartAt  *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt    *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	Keywords []string   // 关键词（已规范化小写），模糊匹配 video_project_name，多词 AND
+	Keywords KeywordGroups // 关键词表达式（已规范化小写）：组内 AND、组间 OR；模糊匹配 video_project_name
 }
 
 // TaskRepository 异步任务数据访问接口。
@@ -118,10 +118,7 @@ func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
 	if filter.EndAt != nil {
 		query = query.Where("created_at < ?", *filter.EndAt)
 	}
-	for _, kw := range filter.Keywords {
-		pattern := "%" + kw + "%"
-		query = query.Where("LOWER(video_project_name) LIKE ?", pattern)
-	}
+	query = applyKeywordGroups(query, filter.Keywords, "LOWER(video_project_name) LIKE ?", 1)
 	return query
 }
 

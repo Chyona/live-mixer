@@ -110,7 +110,7 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 	}
 
 	// 仅匹配 task.video_project_name；多词 AND。
-	list, total, err := repo.List(ctx, TaskListFilter{Keywords: []string{"发布会", "精剪"}}, 0, 10)
+	list, total, err := repo.List(ctx, TaskListFilter{Keywords: KeywordGroups{{"发布会", "精剪"}}}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}

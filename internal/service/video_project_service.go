@@ -366,7 +366,7 @@ func pickProjectCanvasByMaterial(materialW, materialH int) (int, int) {
 // buildVideoProjectListFilter 解析列表筛选参数并转换为仓储层筛选条件。
 func buildVideoProjectListFilter(opts VideoProjectListOptions) (repository.VideoProjectListFilter, error) {
 	filter := repository.VideoProjectListFilter{
-		Keywords: parseCommaKeywords(opts.Keywords),
+		Keywords: parseKeywordExpr(opts.Keywords),
 	}
 
 	if raw := strings.TrimSpace(opts.StartDate); raw != "" {

@@ -463,7 +463,7 @@ func TestVideoProjectService_List_PassesFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(gotFilter.Keywords) != 1 || gotFilter.Keywords[0] != "发布会" {
+	if len(gotFilter.Keywords) != 1 || len(gotFilter.Keywords[0]) != 1 || gotFilter.Keywords[0][0] != "发布会" {
 		t.Errorf("filter keywords = %v", gotFilter.Keywords)
 	}
 }

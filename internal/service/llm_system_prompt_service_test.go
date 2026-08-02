@@ -191,8 +191,8 @@ func TestBuildLLMSystemPromptListFilter(t *testing.T) {
 	if filter.StartAt == nil || filter.EndAt == nil {
 		t.Fatal("date range should be set")
 	}
-	if len(filter.Keywords) != 2 {
-		t.Fatalf("keywords = %v, want len 2", filter.Keywords)
+	if len(filter.Keywords) != 1 || len(filter.Keywords[0]) != 2 {
+		t.Fatalf("keywords = %#v, want one AND group with 2 terms", filter.Keywords)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestLLMSystemPromptService_List_PassesFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(gotFilter.Keywords) != 1 || gotFilter.Keywords[0] != "直播" {
+	if len(gotFilter.Keywords) != 1 || len(gotFilter.Keywords[0]) != 1 || gotFilter.Keywords[0][0] != "直播" {
 		t.Errorf("filter = %+v", gotFilter)
 	}
 }

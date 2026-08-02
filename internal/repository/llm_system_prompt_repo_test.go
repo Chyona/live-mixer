@@ -149,7 +149,7 @@ func TestLLMSystemPromptRepository_List_KeywordFilter(t *testing.T) {
 	})
 
 	prompts, total, err := repo.List(ctx, LLMSystemPromptListFilter{
-		Keywords: []string{"直播", "周末"},
+		Keywords: KeywordGroups{{"直播", "周末"}},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)

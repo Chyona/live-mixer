@@ -482,23 +482,12 @@ func TestLiveMaterialService_Get_NotFound(t *testing.T) {
 	}
 }
 
-// TestParseCommaKeywords 验证逗号分隔关键词解析与去空白。
-func TestParseCommaKeywords(t *testing.T) {
-	got := parseCommaKeywords(" 游戏, 周末 ,, ")
-	if len(got) != 2 || got[0] != "游戏" || got[1] != "周末" {
-		t.Errorf("parseCommaKeywords() = %v", got)
-	}
-	if parseCommaKeywords("   ") != nil {
-		t.Error("empty input should return nil")
-	}
-}
-
 // TestBuildLiveMaterialListFilter 验证日期与关键词筛选条件构建。
 func TestBuildLiveMaterialListFilter(t *testing.T) {
 	filter, err := buildLiveMaterialListFilter(LiveMaterialListOptions{
-		StartDate:  "2026-01-01",
-		EndDate:    "2026-01-31",
-		Keywords:    "游戏,周末",
+		StartDate:   "2026-01-01",
+		EndDate:     "2026-01-31",
+		Keywords:    "游戏,周末|发布会",
 		ASRKeywords: "发布会",
 	})
 	if err != nil {
@@ -507,8 +496,11 @@ func TestBuildLiveMaterialListFilter(t *testing.T) {
 	if filter.StartAt == nil || filter.EndAt == nil {
 		t.Fatal("date range should be set")
 	}
-	if len(filter.Keywords) != 2 || len(filter.ASRKeywords) != 1 {
-		t.Fatalf("unexpected keywords: keywords=%v asr=%v", filter.Keywords, filter.ASRKeywords)
+	if len(filter.Keywords) != 2 || len(filter.Keywords[0]) != 2 || filter.Keywords[0][0] != "游戏" {
+		t.Fatalf("unexpected keywords: %#v", filter.Keywords)
+	}
+	if len(filter.ASRKeywords) != 1 || len(filter.ASRKeywords[0]) != 1 || filter.ASRKeywords[0][0] != "发布会" {
+		t.Fatalf("unexpected asr keywords: %#v", filter.ASRKeywords)
 	}
 }
 
@@ -547,7 +539,7 @@ func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(gotFilter.Keywords) != 1 || gotFilter.Keywords[0] != "游戏" {
+	if len(gotFilter.Keywords) != 1 || len(gotFilter.Keywords[0]) != 1 || gotFilter.Keywords[0][0] != "游戏" {
 		t.Errorf("filter = %+v", gotFilter)
 	}
 }

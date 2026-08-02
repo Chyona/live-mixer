@@ -53,8 +53,8 @@ type LiveMaterialRepository interface {
 type LiveMaterialListFilter struct {
 	StartAt        *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt          *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	Keywords    []string // 标题/备注关键词，每个词匹配 name 或 remark，词之间为「与」
-	ASRKeywords []string // ASR 段落关键词，每个词匹配 asr_paragraphs 文本，词之间为「与」
+	Keywords    KeywordGroups // 标题/备注关键词：组内 AND、组间 OR；单组内词匹配 name 或 remark
+	ASRKeywords KeywordGroups // ASR 段落关键词：组内 AND、组间 OR；匹配 asr_paragraphs 文本
 }
 
 type liveMaterialRepository struct {
@@ -291,7 +291,7 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 		return nil, 0, err
 	}
 
-	needParagraphs := len(filter.ASRKeywords) > 0
+	needParagraphs := !KeywordGroupsEmpty(filter.ASRKeywords)
 	const projectCountExpr = "(SELECT COUNT(*) FROM video_project WHERE video_project.live_id = live_material.id) AS project_count"
 	if needParagraphs {
 		// 带关键词时额外取出 asr_paragraphs，供内存侧筛出命中段落。
@@ -329,35 +329,23 @@ func applyLiveMaterialListFilter(query *gorm.DB, filter LiveMaterialListFilter) 
 	if filter.EndAt != nil {
 		query = query.Where("created_at < ?", *filter.EndAt)
 	}
-	for _, kw := range filter.Keywords {
-		pattern := "%" + kw + "%"
-		// 单个关键词命中 name 或 remark 即可，多个关键词之间为「与」。
-		query = query.Where("LOWER(name) LIKE ? OR LOWER(remark) LIKE ?", pattern, pattern)
-	}
-	for _, kw := range filter.ASRKeywords {
-		pattern := "%" + kw + "%"
-		// 仅在 asr_paragraphs JSON 文本中匹配；多词 AND。
-		query = query.Where("LOWER(CAST(asr_paragraphs AS TEXT)) LIKE ?", pattern)
-	}
+	// 单组内：词匹配 name 或 remark；组内 AND、组间 OR。
+	query = applyKeywordGroups(query, filter.Keywords, "LOWER(name) LIKE ? OR LOWER(remark) LIKE ?", 2)
+	// ASR：仅在 asr_paragraphs JSON 文本中匹配；组内 AND、组间 OR。
+	query = applyKeywordGroups(query, filter.ASRKeywords, "LOWER(CAST(asr_paragraphs AS TEXT)) LIKE ?", 1)
 	return query
 }
 
-// filterMatchedASRParagraphs 返回正文命中任一关键词的段落（不含 words，减小列表体积）。
-func filterMatchedASRParagraphs(paragraphs []model.ASRParagraph, keywords []string) []model.ASRParagraph {
-	if len(paragraphs) == 0 || len(keywords) == 0 {
+// filterMatchedASRParagraphs 返回满足关键词表达式的段落（不含 words，减小列表体积）。
+// 段落命中规则与列表筛选一致：任一组（OR）内全部词（AND）均出现在正文中。
+func filterMatchedASRParagraphs(paragraphs []model.ASRParagraph, groups KeywordGroups) []model.ASRParagraph {
+	if len(paragraphs) == 0 || KeywordGroupsEmpty(groups) {
 		return nil
 	}
 	out := make([]model.ASRParagraph, 0)
 	for _, p := range paragraphs {
 		text := strings.ToLower(p.Text)
-		hit := false
-		for _, kw := range keywords {
-			if kw != "" && strings.Contains(text, kw) {
-				hit = true
-				break
-			}
-		}
-		if !hit {
+		if !keywordGroupsMatchText(groups, text) {
 			continue
 		}
 		out = append(out, model.ASRParagraph{
@@ -371,6 +359,26 @@ func filterMatchedASRParagraphs(paragraphs []model.ASRParagraph, keywords []stri
 		return nil
 	}
 	return out
+}
+
+// keywordGroupsMatchText 判断文本是否满足关键词表达式（组间 OR、组内 AND）。
+func keywordGroupsMatchText(groups KeywordGroups, text string) bool {
+	for _, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		all := true
+		for _, kw := range group {
+			if kw == "" || !strings.Contains(text, kw) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete 物理删除直播素材，并在同一事务内级联删除 live_id 关联的剪辑项目。

@@ -617,13 +617,49 @@ func TestLiveMaterialRepository_List_KeywordFilter(t *testing.T) {
 	}
 
 	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
-		Keywords: []string{"游戏", "周末"},
+		Keywords: KeywordGroups{{"游戏", "周末"}},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
 	if total != 1 || len(materials) != 1 || materials[0].Name != "游戏直播" {
 		t.Errorf("unexpected result: total=%d materials=%+v", total, materials)
+	}
+}
+
+// TestLiveMaterialRepository_List_KeywordORFilter 验证 "|" 组间为「或」。
+func TestLiveMaterialRepository_List_KeywordORFilter(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	seed := []model.LiveMaterial{
+		{Name: "游戏直播", Remark: "周末场", LiveURL: "https://a.com/1.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1},
+		{Name: "美食分享", Remark: "厨房", LiveURL: "https://a.com/2.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1},
+		{Name: "其它", Remark: "无", LiveURL: "https://a.com/3.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1},
+	}
+	for i := range seed {
+		if err := repo.Create(ctx, &seed[i]); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
+		// (游戏 AND 周末) OR 美食
+		Keywords: KeywordGroups{{"游戏", "周末"}, {"美食"}},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 2 || len(materials) != 2 {
+		t.Fatalf("total/len = %d/%d, want 2/2", total, len(materials))
+	}
+	names := map[string]bool{}
+	for _, m := range materials {
+		names[m.Name] = true
+	}
+	if !names["游戏直播"] || !names["美食分享"] {
+		t.Errorf("names = %v", names)
 	}
 }
 
@@ -662,7 +698,7 @@ func TestLiveMaterialRepository_List_ASRKeywordFilter(t *testing.T) {
 	}
 
 	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
-		ASRKeywords: []string{"发布会", "2026"},
+		ASRKeywords: KeywordGroups{{"发布会", "2026"}},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -686,9 +722,14 @@ func TestFilterMatchedASRParagraphs(t *testing.T) {
 		{Text: "Hello World", StartTime: 0, EndTime: 1},
 		{Text: "发布会开场", StartTime: 1, EndTime: 2},
 	}
-	got := filterMatchedASRParagraphs(paras, []string{"发布会"})
+	got := filterMatchedASRParagraphs(paras, KeywordGroups{{"发布会"}})
 	if len(got) != 1 || got[0].Text != "发布会开场" {
 		t.Fatalf("got = %+v", got)
+	}
+	// 组间 OR：命中「Hello」或同时命中「发布会」+「开场」
+	gotOR := filterMatchedASRParagraphs(paras, KeywordGroups{{"hello"}, {"发布会", "开场"}})
+	if len(gotOR) != 2 {
+		t.Fatalf("OR groups matched = %+v, want 2", gotOR)
 	}
 }
 

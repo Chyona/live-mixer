@@ -254,8 +254,8 @@ func (s *liveMaterialService) List(ctx context.Context, page, pageSize int, opts
 // buildLiveMaterialListFilter 解析列表筛选参数并转换为仓储层筛选条件。
 func buildLiveMaterialListFilter(opts LiveMaterialListOptions) (repository.LiveMaterialListFilter, error) {
 	filter := repository.LiveMaterialListFilter{
-		Keywords:    parseCommaKeywords(opts.Keywords),
-		ASRKeywords: parseCommaKeywords(opts.ASRKeywords),
+		Keywords:    parseKeywordExpr(opts.Keywords),
+		ASRKeywords: parseKeywordExpr(opts.ASRKeywords),
 	}
 
 	if raw := strings.TrimSpace(opts.StartDate); raw != "" {
@@ -277,23 +277,6 @@ func buildLiveMaterialListFilter(opts LiveMaterialListOptions) (repository.LiveM
 		return filter, errors.New("start_date 不能晚于 end_date")
 	}
 	return filter, nil
-}
-
-// parseCommaKeywords 将英文逗号分隔的关键词字符串解析为去重空白后的列表（统一转小写）。
-func parseCommaKeywords(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	keywords := make([]string, 0, len(parts))
-	for _, part := range parts {
-		kw := strings.ToLower(strings.TrimSpace(part))
-		if kw != "" {
-			keywords = append(keywords, kw)
-		}
-	}
-	return keywords
 }
 
 func (s *liveMaterialService) Get(ctx context.Context, id uint) (*model.LiveMaterial, error) {

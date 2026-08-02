@@ -111,7 +111,7 @@ func (h *LLMSystemPromptHandler) toLLMSystemPromptListResponse(ctx context.Conte
 // @Description  分页查询系统提示词，支持关键词与日期筛选，列表返回完整 content；created_by 为创建人展示名
 // @Tags         大模型系统提示词
 // @Produce      json
-// @Param        keywords     query  string  false  "关键词，英文逗号分隔，匹配 name/content/remark"
+// @Param        keywords     query  string  false  "关键词：\",\"=与，\"|\"=或，匹配 name/content/remark；如 直播,话术|周末"
 // @Param        start_date   query  string  false  "开始日期 YYYY-MM-DD"
 // @Param        end_date     query  string  false  "结束日期 YYYY-MM-DD"
 // @Param        page         query  int     false  "页码"

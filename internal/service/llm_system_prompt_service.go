@@ -164,7 +164,7 @@ func (s *llmSystemPromptService) List(ctx context.Context, page, pageSize int, o
 // buildLLMSystemPromptListFilter 解析列表筛选参数并转换为仓储层筛选条件。
 func buildLLMSystemPromptListFilter(opts LLMSystemPromptListOptions) (repository.LLMSystemPromptListFilter, error) {
 	filter := repository.LLMSystemPromptListFilter{
-		Keywords: parseCommaKeywords(opts.Keywords),
+		Keywords: parseKeywordExpr(opts.Keywords),
 	}
 
 	if raw := strings.TrimSpace(opts.StartDate); raw != "" {

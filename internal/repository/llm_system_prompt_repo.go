@@ -14,7 +14,7 @@ import (
 type LLMSystemPromptListFilter struct {
 	StartAt   *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt     *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	Keywords  []string   // 关键词列表，每个词匹配 name/content/remark，词之间为「与」
+	Keywords KeywordGroups // 关键词表达式：组内 AND、组间 OR；匹配 name/content/remark
 }
 
 // LLMSystemPromptRepository 大模型系统提示词数据访问接口。
@@ -89,13 +89,11 @@ func applyLLMSystemPromptListFilter(query *gorm.DB, filter LLMSystemPromptListFi
 	if filter.EndAt != nil {
 		query = query.Where("created_at < ?", *filter.EndAt)
 	}
-	for _, kw := range filter.Keywords {
-		pattern := "%" + kw + "%"
-		// 单个关键词命中 name、content 或 remark 即可，多个关键词之间为「与」。
-		query = query.Where(
-			"LOWER(name) LIKE ? OR LOWER(content) LIKE ? OR LOWER(remark) LIKE ?",
-			pattern, pattern, pattern,
-		)
-	}
+	query = applyKeywordGroups(
+		query,
+		filter.Keywords,
+		"LOWER(name) LIKE ? OR LOWER(content) LIKE ? OR LOWER(remark) LIKE ?",
+		3,
+	)
 	return query
 }

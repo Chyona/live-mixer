@@ -31,7 +31,7 @@ type TaskListOptions struct {
 	Status    string
 	StartDate string   // YYYY-MM-DD，按 created_at 筛选
 	EndDate   string   // YYYY-MM-DD，按 created_at 筛选
-	Keywords  []string // 模糊匹配 task.video_project_name，多词 AND
+	Keywords  string // 关键词表达式："," 为与，"|" 为或；模糊匹配 task.video_project_name
 }
 
 // CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。
@@ -357,7 +357,7 @@ func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error
 	filter := repository.TaskListFilter{
 		Type:     opts.Type,
 		Status:   opts.Status,
-		Keywords: normalizeTaskKeywords(opts.Keywords),
+		Keywords: parseKeywordExpr(opts.Keywords),
 	}
 
 	if raw := strings.TrimSpace(opts.StartDate); raw != "" {
@@ -379,24 +379,6 @@ func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error
 		return filter, errors.New("start_date 不能晚于 end_date")
 	}
 	return filter, nil
-}
-
-// normalizeTaskKeywords 去空白并转小写，忽略空项。
-func normalizeTaskKeywords(raw []string) []string {
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, part := range raw {
-		kw := strings.ToLower(strings.TrimSpace(part))
-		if kw != "" {
-			out = append(out, kw)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // requireASRCompletedMaterial 校验直播素材 ASR 已完成，并返回素材实体供创建任务时写入 live_url / live_name 快照。
