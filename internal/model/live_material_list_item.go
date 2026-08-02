@@ -28,7 +28,7 @@ type LiveMaterialListItem struct {
 	Ext          string     `gorm:"size:1024" json:"ext"`
 	// ProjectCount 关联 video_project 数量（列表查询时由子查询填充，非表字段）。
 	ProjectCount int64 `gorm:"->" json:"project_count"`
-	// MatchedParagraphs global_keyword 命中的 asr_paragraphs 段落（仅有关键词时填充）。
+	// MatchedParagraphs asr_keyword 命中的 asr_paragraphs 段落（仅有关键词时填充）。
 	MatchedParagraphs []ASRParagraph `gorm:"-" json:"matched_paragraphs,omitempty"`
 }
 

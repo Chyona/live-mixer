@@ -496,10 +496,10 @@ func TestParseCommaKeywords(t *testing.T) {
 // TestBuildLiveMaterialListFilter 验证日期与关键词筛选条件构建。
 func TestBuildLiveMaterialListFilter(t *testing.T) {
 	filter, err := buildLiveMaterialListFilter(LiveMaterialListOptions{
-		StartDate:     "2026-01-01",
-		EndDate:       "2026-01-31",
-		TitleKeyword:  "游戏,周末",
-		GlobalKeyword: "发布会",
+		StartDate:  "2026-01-01",
+		EndDate:    "2026-01-31",
+		Keyword:    "游戏,周末",
+		ASRKeyword: "发布会",
 	})
 	if err != nil {
 		t.Fatalf("buildLiveMaterialListFilter() error = %v", err)
@@ -507,8 +507,8 @@ func TestBuildLiveMaterialListFilter(t *testing.T) {
 	if filter.StartAt == nil || filter.EndAt == nil {
 		t.Fatal("date range should be set")
 	}
-	if len(filter.TitleKeywords) != 2 || len(filter.GlobalKeywords) != 1 {
-		t.Fatalf("unexpected keywords: title=%v global=%v", filter.TitleKeywords, filter.GlobalKeywords)
+	if len(filter.Keywords) != 2 || len(filter.ASRKeywords) != 1 {
+		t.Fatalf("unexpected keywords: keyword=%v asr=%v", filter.Keywords, filter.ASRKeywords)
 	}
 }
 
@@ -542,12 +542,12 @@ func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
 	}
 	svc := NewLiveMaterialService(repo, nil)
 	_, _, err := svc.List(context.Background(), 1, 10, LiveMaterialListOptions{
-		TitleKeyword: "游戏",
+		Keyword: "游戏",
 	})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(gotFilter.TitleKeywords) != 1 || gotFilter.TitleKeywords[0] != "游戏" {
+	if len(gotFilter.Keywords) != 1 || gotFilter.Keywords[0] != "游戏" {
 		t.Errorf("filter = %+v", gotFilter)
 	}
 }

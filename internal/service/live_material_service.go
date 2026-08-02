@@ -17,10 +17,10 @@ import (
 
 // LiveMaterialListOptions 直播素材列表查询选项（来自 HTTP 查询参数）。
 type LiveMaterialListOptions struct {
-	StartDate     string
-	EndDate       string
-	TitleKeyword  string
-	GlobalKeyword string
+	StartDate  string
+	EndDate    string
+	Keyword    string
+	ASRKeyword string
 }
 
 const liveMaterialListDateLayout = "2006-01-02"
@@ -254,8 +254,8 @@ func (s *liveMaterialService) List(ctx context.Context, page, pageSize int, opts
 // buildLiveMaterialListFilter 解析列表筛选参数并转换为仓储层筛选条件。
 func buildLiveMaterialListFilter(opts LiveMaterialListOptions) (repository.LiveMaterialListFilter, error) {
 	filter := repository.LiveMaterialListFilter{
-		TitleKeywords:  parseCommaKeywords(opts.TitleKeyword),
-		GlobalKeywords: parseCommaKeywords(opts.GlobalKeyword),
+		Keywords:    parseCommaKeywords(opts.Keyword),
+		ASRKeywords: parseCommaKeywords(opts.ASRKeyword),
 	}
 
 	if raw := strings.TrimSpace(opts.StartDate); raw != "" {

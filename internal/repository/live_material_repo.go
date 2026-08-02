@@ -53,8 +53,8 @@ type LiveMaterialRepository interface {
 type LiveMaterialListFilter struct {
 	StartAt        *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt          *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	TitleKeywords  []string   // 标题关键词，每个词匹配 name 或 remark，词之间为「与」
-	GlobalKeywords []string   // 全局关键词，每个词匹配 asr_paragraphs 文本，词之间为「与」
+	Keywords    []string // 标题/备注关键词，每个词匹配 name 或 remark，词之间为「与」
+	ASRKeywords []string // ASR 段落关键词，每个词匹配 asr_paragraphs 文本，词之间为「与」
 }
 
 type liveMaterialRepository struct {
@@ -291,7 +291,7 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 		return nil, 0, err
 	}
 
-	needParagraphs := len(filter.GlobalKeywords) > 0
+	needParagraphs := len(filter.ASRKeywords) > 0
 	const projectCountExpr = "(SELECT COUNT(*) FROM video_project WHERE video_project.live_id = live_material.id) AS project_count"
 	if needParagraphs {
 		// 带关键词时额外取出 asr_paragraphs，供内存侧筛出命中段落。
@@ -307,7 +307,7 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 		materials := make([]model.LiveMaterialListItem, 0, len(rows))
 		for i := range rows {
 			item := rows[i].LiveMaterialListItem
-			item.MatchedParagraphs = filterMatchedASRParagraphs(rows[i].ASRParagraphs, filter.GlobalKeywords)
+			item.MatchedParagraphs = filterMatchedASRParagraphs(rows[i].ASRParagraphs, filter.ASRKeywords)
 			materials = append(materials, item)
 		}
 		return materials, total, nil
@@ -329,12 +329,12 @@ func applyLiveMaterialListFilter(query *gorm.DB, filter LiveMaterialListFilter) 
 	if filter.EndAt != nil {
 		query = query.Where("created_at < ?", *filter.EndAt)
 	}
-	for _, kw := range filter.TitleKeywords {
+	for _, kw := range filter.Keywords {
 		pattern := "%" + kw + "%"
 		// 单个关键词命中 name 或 remark 即可，多个关键词之间为「与」。
 		query = query.Where("LOWER(name) LIKE ? OR LOWER(remark) LIKE ?", pattern, pattern)
 	}
-	for _, kw := range filter.GlobalKeywords {
+	for _, kw := range filter.ASRKeywords {
 		pattern := "%" + kw + "%"
 		// 仅在 asr_paragraphs JSON 文本中匹配；多词 AND。
 		query = query.Where("LOWER(CAST(asr_paragraphs AS TEXT)) LIKE ?", pattern)

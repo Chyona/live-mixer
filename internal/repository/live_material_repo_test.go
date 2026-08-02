@@ -599,8 +599,8 @@ func TestLiveMaterialRepository_List_Empty(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialRepository_List_TitleKeywordFilter 验证标题关键词按「与」匹配 name/remark。
-func TestLiveMaterialRepository_List_TitleKeywordFilter(t *testing.T) {
+// TestLiveMaterialRepository_List_KeywordFilter 验证标题关键词按「与」匹配 name/remark。
+func TestLiveMaterialRepository_List_KeywordFilter(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
 	repo := NewLiveMaterialRepository(db)
 	ctx := context.Background()
@@ -617,7 +617,7 @@ func TestLiveMaterialRepository_List_TitleKeywordFilter(t *testing.T) {
 	}
 
 	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
-		TitleKeywords: []string{"游戏", "周末"},
+		Keywords: []string{"游戏", "周末"},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -627,8 +627,8 @@ func TestLiveMaterialRepository_List_TitleKeywordFilter(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialRepository_List_GlobalKeywordFilter 验证全局关键词仅匹配 asr_paragraphs，并返回命中段落。
-func TestLiveMaterialRepository_List_GlobalKeywordFilter(t *testing.T) {
+// TestLiveMaterialRepository_List_ASRKeywordFilter 验证 ASR 关键词仅匹配 asr_paragraphs，并返回命中段落。
+func TestLiveMaterialRepository_List_ASRKeywordFilter(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
 	repo := NewLiveMaterialRepository(db)
 	ctx := context.Background()
@@ -662,7 +662,7 @@ func TestLiveMaterialRepository_List_GlobalKeywordFilter(t *testing.T) {
 	}
 
 	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
-		GlobalKeywords: []string{"发布会", "2026"},
+		ASRKeywords: []string{"发布会", "2026"},
 	}, 0, 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
