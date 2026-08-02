@@ -257,6 +257,11 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	if err := w.taskRepo.UpdateDraftURL(ctx, task.ID, result.DraftURL); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写 task.draft_url 失败: %w", err))
 	}
+	if result.ClipsTarURL != "" {
+		if err := w.taskRepo.UpdateClipsTarURL(ctx, task.ID, result.ClipsTarURL); err != nil {
+			return w.fail(ctx, task.ID, progress, fmt.Errorf("回写 task.clips_tar_url 失败: %w", err))
+		}
+	}
 
 	ext.LiveID = liveID
 	ext.VideoProjectID = project.ID
@@ -277,6 +282,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.String("draft_url", result.DraftURL),
+		zap.String("clips_tar_url", result.ClipsTarURL),
 		zap.Bool("mark_complete", opts.MarkComplete),
 	)
 	return nil

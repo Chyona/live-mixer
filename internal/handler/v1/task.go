@@ -101,6 +101,7 @@ type TaskResponse struct {
 	Height           int        `json:"height"`
 	DraftURL         string     `json:"draft_url"`
 	VideoURL         string     `json:"video_url"`
+	ClipsTarURL      string     `json:"clips_tar_url"`
 	CreatedBy        string     `json:"created_by"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
@@ -127,6 +128,7 @@ func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) Task
 		Height:           task.Height,
 		DraftURL:         task.DraftURL,
 		VideoURL:         task.VideoURL,
+		ClipsTarURL:      task.ClipsTarURL,
 		CreatedBy:        h.createdBy.nameOf(ctx, task.CreatedBy),
 		CreatedAt:        task.CreatedAt,
 		UpdatedAt:        task.UpdatedAt,
@@ -162,6 +164,7 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.Task
 			Height:           item.Height,
 			DraftURL:         item.DraftURL,
 			VideoURL:         item.VideoURL,
+			ClipsTarURL:      item.ClipsTarURL,
 			CreatedBy:        names[item.CreatedBy],
 			CreatedAt:        item.CreatedAt,
 			UpdatedAt:        item.UpdatedAt,
@@ -281,7 +284,7 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；keywords 支持 ","=与、"|"=或，模糊匹配 task.video_project_name；列表项含 video_project_name、live_url、live_name、width/height（创建时按 video_project 自动快照）
+// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；keywords 支持 ","=与、"|"=或，模糊匹配 task.video_project_name；列表项含 video_project_name、live_url、live_name、clips_tar_url、width/height（创建时按 video_project 自动快照）
 // @Tags         异步任务
 // @Produce      json
 // @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
@@ -325,7 +328,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 
 // GetTask 获取任务详情
 // @Summary      获取任务详情
-// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、width/height/live_url/live_name 等字段，用于轮询异步任务进度；created_by 为创建人展示名
+// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、clips_tar_url、width/height/live_url/live_name 等字段，用于轮询异步任务进度；created_by 为创建人展示名
 // @Tags         异步任务
 // @Produce      json
 // @Param        id   path  string  true  "任务 ID（UUID）"

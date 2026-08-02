@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS task (
     -- 草稿/成片结果 URL：草稿生成与一键成片完成后写入 draft_url；video_url 可由客户端回写
     draft_url              VARCHAR(1024),
     video_url              VARCHAR(1024),
+    -- 草稿类任务将 clip_XXX.mp4 打成 {task.id}.tar 后上传对象存储的下载地址；ai_slice 不写入
+    clips_tar_url          VARCHAR(1024),
     created_by             BIGINT      NOT NULL REFERENCES account (id),
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -239,6 +241,7 @@ COMMENT ON COLUMN task.live_url IS '直播链接，创建时按 video_project.li
 COMMENT ON COLUMN task.live_name IS '源视频名称，创建时按 video_project.live_id 从 live_material.name 自动快照；无外键';
 COMMENT ON COLUMN task.draft_url IS '剪映草稿 URL（草稿生成/一键成片完成后写入）';
 COMMENT ON COLUMN task.video_url IS '视频地址 URL';
+COMMENT ON COLUMN task.clips_tar_url IS '切片 tar 包下载地址；draft / ai_slice_draft 将 clip_XXX.mp4 打包为 {task.id}.tar 上传后回写；ai_slice 为空';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';
 COMMENT ON COLUMN task.created_at IS '创建时间';
 COMMENT ON COLUMN task.updated_at IS '更新时间';

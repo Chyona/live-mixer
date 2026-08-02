@@ -227,6 +227,14 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 	if got.DraftURL != "http://example.com/draft" {
 		t.Errorf("task.draft_url = %s", got.DraftURL)
 	}
+	wantTar := "https://oss.example/temp/draft/" + claimed.ID + "/" + claimed.ID + ".tar"
+	if got.ClipsTarURL != wantTar {
+		t.Errorf("task.clips_tar_url = %q, want %q", got.ClipsTarURL, wantTar)
+	}
+	stagingTar := filepath.Join(webRoot, "staging", claimed.ID, claimed.ID+".tar")
+	if _, err := os.Stat(stagingTar); err != nil {
+		t.Errorf("local tar missing: %v", err)
+	}
 	if capcut.lastWidth != 1080 || capcut.lastHeight != 1920 {
 		t.Errorf("CreateDraft size = %dx%d", capcut.lastWidth, capcut.lastHeight)
 	}

@@ -102,7 +102,19 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	if s.DraftURL == "" {
 		return nil, fmt.Errorf("草稿组装完成但 draft_url 为空")
 	}
-	return &Result{DraftURL: s.DraftURL}, nil
+
+	result := &Result{DraftURL: s.DraftURL}
+	// 将本地 clip_XXX.mp4 打成 {jobID}.tar 并上传；失败仅记日志，不阻断草稿成功。
+	clipsTarURL, err := PackAndUploadClipsTar(ctx, b.Uploader, s.StagingDir, s.JobID, s.ClipPaths)
+	if err != nil {
+		b.Logger.Error("切片 tar 打包上传失败",
+			zap.String("job_id", s.JobID),
+			zap.Error(err),
+		)
+	} else {
+		result.ClipsTarURL = clipsTarURL
+	}
+	return result, nil
 }
 
 // 确保 steps 包被引用（DefaultRecipe 已引用）。

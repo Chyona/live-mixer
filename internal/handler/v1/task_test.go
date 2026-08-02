@@ -40,7 +40,7 @@ func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts ser
 	return nil, 0, nil
 }
 
-// TestTaskHandler_Get_ReturnsDraftURL 验证详情接口返回 draft_url / video_url / live_url / live_name / width / height。
+// TestTaskHandler_Get_ReturnsDraftURL 验证详情接口返回 draft_url / video_url / clips_tar_url / live_url / live_name / width / height。
 func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewTaskHandler(&mockTaskService{
@@ -52,6 +52,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 			return &model.Task{
 				ID: wantID, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
 				DraftURL: "http://example.com/draft", VideoURL: "https://video.example.com/a.mp4",
+				ClipsTarURL: "https://oss.example/temp/draft/" + wantID + "/" + wantID + ".tar",
 				LiveURL: "https://example.com/live.mp4", LiveName: "春季发布会", Width: 1080, Height: 1920,
 			}, nil
 		},
@@ -69,13 +70,14 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 	var resp struct {
 		Data struct {
-			DraftURL  string `json:"draft_url"`
-			VideoURL  string `json:"video_url"`
-			LiveURL   string `json:"live_url"`
-			LiveName  string `json:"live_name"`
-			Width     int    `json:"width"`
-			Height    int    `json:"height"`
-			CreatedBy string `json:"created_by"`
+			DraftURL    string `json:"draft_url"`
+			VideoURL    string `json:"video_url"`
+			ClipsTarURL string `json:"clips_tar_url"`
+			LiveURL     string `json:"live_url"`
+			LiveName    string `json:"live_name"`
+			Width       int    `json:"width"`
+			Height      int    `json:"height"`
+			CreatedBy   string `json:"created_by"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -86,6 +88,10 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 	if resp.Data.VideoURL != "https://video.example.com/a.mp4" {
 		t.Errorf("video_url = %q", resp.Data.VideoURL)
+	}
+	wantTar := "https://oss.example/temp/draft/11111111-1111-1111-1111-111111111111/11111111-1111-1111-1111-111111111111.tar"
+	if resp.Data.ClipsTarURL != wantTar {
+		t.Errorf("clips_tar_url = %q", resp.Data.ClipsTarURL)
 	}
 	if resp.Data.LiveURL != "https://example.com/live.mp4" {
 		t.Errorf("live_url = %q", resp.Data.LiveURL)

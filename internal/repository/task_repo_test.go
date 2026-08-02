@@ -474,3 +474,24 @@ func TestTaskRepository_UpdateDraftURL(t *testing.T) {
 		t.Errorf("VideoURL should remain empty, got %q", got.VideoURL)
 	}
 }
+
+// TestTaskRepository_UpdateClipsTarURL 验证切片 tar 包 URL 回写。
+func TestTaskRepository_UpdateClipsTarURL(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+	task := &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing, CreatedBy: 1}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want := "https://oss.example/temp/draft/" + task.ID + "/" + task.ID + ".tar"
+	if err := repo.UpdateClipsTarURL(ctx, task.ID, want); err != nil {
+		t.Fatalf("UpdateClipsTarURL: %v", err)
+	}
+	got, err := repo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ClipsTarURL != want {
+		t.Errorf("ClipsTarURL = %q, want %q", got.ClipsTarURL, want)
+	}
+}

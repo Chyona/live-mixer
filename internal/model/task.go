@@ -43,8 +43,10 @@ type Task struct {
 	// DraftURL 剪映草稿地址：草稿生成与一键成片 Worker 成功后回写。
 	DraftURL string `gorm:"column:draft_url;size:1024;comment:剪映草稿URL" json:"draft_url"`
 	// VideoURL 成片/导出视频地址，可由客户端通过更新接口写入。
-	VideoURL  string `gorm:"column:video_url;size:1024;comment:视频地址URL" json:"video_url"`
-	CreatedBy uint   `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
+	VideoURL string `gorm:"column:video_url;size:1024;comment:视频地址URL" json:"video_url"`
+	// ClipsTarURL 切片 tar 包下载地址：draft / ai_slice_draft 将 clip_XXX.mp4 打包为 {task.id}.tar 上传后回写。
+	ClipsTarURL string `gorm:"column:clips_tar_url;size:1024;comment:切片tar包下载地址" json:"clips_tar_url"`
+	CreatedBy   uint   `gorm:"not null;index;comment:任务创建人账号ID" json:"created_by"`
 	CreatedAt      time.Time  `gorm:"comment:创建时间" json:"created_at"`
 	UpdatedAt      time.Time  `gorm:"comment:更新时间" json:"updated_at"`
 	StartedAt      *time.Time `gorm:"comment:开始执行时间" json:"started_at,omitempty"`

@@ -185,7 +185,7 @@ func TestGenerator_Build_Success(t *testing.T) {
 		]}}`,
 	}
 	project := &model.VideoProject{
-		ID: 9, Width: 1080, Height: 1920,
+		ID: 9, Width: 1080, Height: 1920, EnableCaptions: model.EnableCaptionsOn,
 		Clips1: []model.ClipWithText{
 			{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
 			{Text: "b", StartTime: 2000, EndTime: 3500, Words: []model.ClipWord{}},
@@ -208,6 +208,9 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if result.DraftURL != "http://example.com/draft" {
 		t.Errorf("DraftURL = %s", result.DraftURL)
 	}
+	if result.ClipsTarURL != "https://oss.example/temp/draft/job-1/job-1.tar" {
+		t.Errorf("ClipsTarURL = %q", result.ClipsTarURL)
+	}
 	if capcut.createCalls != 1 || capcut.addCalls != 1 || capcut.captionsCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d captions=%d", capcut.createCalls, capcut.addCalls, capcut.captionsCalls)
 	}
@@ -225,8 +228,9 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if !strings.Contains(capcut.lastAdd.VideoInfos, "https://oss.example/temp/draft/job-1/clip_000.mp4") {
 		t.Errorf("video_infos = %s, want object storage URL", capcut.lastAdd.VideoInfos)
 	}
-	if len(uploader.calls) != 2 {
-		t.Errorf("upload calls = %d, want 2", len(uploader.calls))
+	// 2 个切片 + 1 个 tar 包。
+	if len(uploader.calls) != 3 {
+		t.Errorf("upload calls = %d, want 3", len(uploader.calls))
 	}
 	if len(progressLog) == 0 {
 		t.Error("expected progress callbacks")

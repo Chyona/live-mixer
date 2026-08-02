@@ -25,10 +25,11 @@ type Request struct {
 
 // Result 草稿组装产出。
 type Result struct {
-	DraftURL string
+	DraftURL    string
+	ClipsTarURL string // 切片 tar 包下载地址；打包/上传失败时为空
 }
 
-// Generator 纯草稿组装能力：给定素材与 clips，产出 draft_url。
+// Generator 纯草稿组装能力：给定素材与 clips，产出 draft_url（及可选 clips_tar_url）。
 type Generator interface {
 	Build(ctx context.Context, req Request) (*Result, error)
 }
