@@ -181,10 +181,11 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 			}
 			return []model.LiveMaterialListItem{
 				{
-					ID:        1,
-					Name:      "素材A",
-					LiveURL:   "https://example.com/a.mp4",
-					ASRStatus: model.ASRStatusCompleted,
+					ID:           1,
+					Name:         "素材A",
+					LiveURL:      "https://example.com/a.mp4",
+					ASRStatus:    model.ASRStatusCompleted,
+					ProjectCount: 4,
 				},
 			}, 1, nil
 		},
@@ -205,13 +206,14 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			List     []struct {
-				Name      string `json:"name"`
-				CreatedBy string `json:"created_by"`
+			List []struct {
+				Name         string `json:"name"`
+				CreatedBy    string `json:"created_by"`
+				ProjectCount int64  `json:"project_count"`
 			} `json:"list"`
-			Total    int64                        `json:"total"`
-			Page     int                          `json:"page"`
-			PageSize int                          `json:"page_size"`
+			Total    int64 `json:"total"`
+			Page     int   `json:"page"`
+			PageSize int   `json:"page_size"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -225,6 +227,9 @@ func TestLiveMaterialHandler_List_Success(t *testing.T) {
 	}
 	if resp.Data.List[0].Name != "素材A" {
 		t.Errorf("name = %q, want 素材A", resp.Data.List[0].Name)
+	}
+	if resp.Data.List[0].ProjectCount != 4 {
+		t.Errorf("project_count = %d, want 4", resp.Data.List[0].ProjectCount)
 	}
 	if strings.Contains(w.Body.String(), `"live_asr"`) {
 		t.Error("response should not contain live_asr field")

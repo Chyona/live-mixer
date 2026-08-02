@@ -131,6 +131,7 @@ type LiveMaterialListResponse struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	Ext            string     `json:"ext"`
+	ProjectCount   int64      `json:"project_count"`
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, items []model.LiveMaterialListItem) []LiveMaterialListResponse {
@@ -162,6 +163,7 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 			CreatedAt:      item.CreatedAt,
 			UpdatedAt:      item.UpdatedAt,
 			Ext:            item.Ext,
+			ProjectCount:   item.ProjectCount,
 		})
 	}
 	return out
@@ -179,7 +181,7 @@ type ListLiveMaterialsRequest struct {
 
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries / asr_paragraphs，默认每页 10 条
+// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries / asr_paragraphs；列表项含 project_count（关联 video_project 总数），默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
 // @Param        start_date      query  string  false  "开始日期 YYYY-MM-DD"

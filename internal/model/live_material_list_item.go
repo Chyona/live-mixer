@@ -26,6 +26,8 @@ type LiveMaterialListItem struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	Ext          string     `gorm:"size:1024" json:"ext"`
+	// ProjectCount 关联 video_project 数量（列表查询时由子查询填充，非表字段）。
+	ProjectCount int64 `gorm:"->" json:"project_count"`
 }
 
 // TableName 指定直播素材表名，与 LiveMaterial 共用同一张表。

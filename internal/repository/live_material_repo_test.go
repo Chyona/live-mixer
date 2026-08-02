@@ -151,6 +151,54 @@ func TestLiveMaterialRepository_List_ReturnsAllFieldsExceptLiveASR(t *testing.T)
 	if materials[0].LiveURL == "" {
 		t.Error("live_url should be returned in list")
 	}
+	if materials[0].ProjectCount != 0 {
+		t.Errorf("ProjectCount = %d, want 0 when no video_project", materials[0].ProjectCount)
+	}
+}
+
+// TestLiveMaterialRepository_List_ProjectCount 验证列表返回关联 video_project 数量。
+func TestLiveMaterialRepository_List_ProjectCount(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	m1 := &model.LiveMaterial{Name: "有项目", LiveURL: "https://example.com/a.mp4", ASRStatus: model.ASRStatusPending, CreatedBy: 1}
+	m2 := &model.LiveMaterial{Name: "无项目", LiveURL: "https://example.com/b.mp4", ASRStatus: model.ASRStatusPending, CreatedBy: 1}
+	if err := repo.Create(ctx, m1); err != nil {
+		t.Fatalf("Create m1: %v", err)
+	}
+	if err := repo.Create(ctx, m2); err != nil {
+		t.Fatalf("Create m2: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		p := &model.VideoProject{
+			Name:      fmt.Sprintf("项目-%d", i+1),
+			LiveID:    m1.ID,
+			PromptID:  model.DefaultVideoProjectPromptID,
+			CreatedBy: 1,
+		}
+		if err := db.Create(p).Error; err != nil {
+			t.Fatalf("Create project: %v", err)
+		}
+	}
+
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{}, 0, 20)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total = %d, want 2", total)
+	}
+	byName := map[string]model.LiveMaterialListItem{}
+	for _, m := range materials {
+		byName[m.Name] = m
+	}
+	if byName["有项目"].ProjectCount != 3 {
+		t.Errorf("有项目 ProjectCount = %d, want 3", byName["有项目"].ProjectCount)
+	}
+	if byName["无项目"].ProjectCount != 0 {
+		t.Errorf("无项目 ProjectCount = %d, want 0", byName["无项目"].ProjectCount)
+	}
 }
 
 // TestLiveMaterialRepository_ClaimPendingASR 验证乐观锁抢占 pending → processing。

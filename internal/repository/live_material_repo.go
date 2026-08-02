@@ -268,7 +268,9 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Offset(offset).Limit(limit).Order("id DESC").Find(&materials).Error; err != nil {
+	// project_count：关联 video_project 行数；Count 已完成后再 Select，避免影响 total。
+	const listSelect = "live_material.*, (SELECT COUNT(*) FROM video_project WHERE video_project.live_id = live_material.id) AS project_count"
+	if err := query.Select(listSelect).Offset(offset).Limit(limit).Order("live_material.id DESC").Find(&materials).Error; err != nil {
 		return nil, 0, err
 	}
 	return materials, total, nil
