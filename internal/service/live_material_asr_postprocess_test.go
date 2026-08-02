@@ -16,6 +16,9 @@ import (
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
 	"live-mixer/internal/pkg/webroot"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestFormatASRTranscriptLines(t *testing.T) {
@@ -98,7 +101,7 @@ func TestFilterASRSummariesByDuration(t *testing.T) {
 		{Title: "过长", StartTime: 0, EndTime: 65 * 60 * 1000},                 // 65 分钟
 		{Title: "上限", StartTime: 0, EndTime: asrSummaryMaxDurationMs},        // 60 分钟
 	}
-	got := filterASRSummariesByDuration(segs)
+	got := filterASRSummariesByDuration(segs, nil)
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -110,7 +113,7 @@ func TestFilterASRSummariesByDuration(t *testing.T) {
 func TestFilterASRSummariesByDuration_AllDropped(t *testing.T) {
 	got := filterASRSummariesByDuration([]model.ASRSummarySegment{
 		{Title: "短", StartTime: 0, EndTime: 1000},
-	})
+	}, nil)
 	if len(got) != 0 {
 		t.Fatalf("len = %d, want 0", len(got))
 	}
@@ -152,7 +155,7 @@ func TestMergeASRSummaries_ThenFilterKeepsMerged(t *testing.T) {
 		{Title: "讲解", StartTime: 0, EndTime: 180_000},
 		{Title: "讲解", StartTime: 180_000, EndTime: 300_000},
 	}
-	got := filterASRSummariesByDuration(mergeASRSummaries(segs))
+	got := filterASRSummariesByDuration(mergeASRSummaries(segs), nil)
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
@@ -192,7 +195,7 @@ func TestReduceASRSummaries_PipelineOrder(t *testing.T) {
 	normalizeASRSummaries(all, 1_000_000)
 	all = mergeASRSummaries(all)
 	all = dedupeContainedASRSummaries(all)
-	all = filterASRSummariesByDuration(all)
+	all = filterASRSummariesByDuration(all, nil)
 	if err := validateASRSummaries(all); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -328,7 +331,7 @@ func TestGenerateASRSummaries_MultiWindowReduce(t *testing.T) {
 		},
 	}
 	dur := asrSummaryWindowMs + 300_000
-	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRMultiUtteranceJSON(uts)), dur, nil)
+	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRMultiUtteranceJSON(uts)), dur, nil, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
@@ -363,7 +366,7 @@ func TestGenerateASRParagraphs_MultiWindowOffsetStitch(t *testing.T) {
 		},
 	}
 	dur := asrParagraphWindowMs + 2000
-	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, dur, nil)
+	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, dur, nil, nil)
 	if err != nil {
 		t.Fatalf("generateASRParagraphs() error = %v", err)
 	}
@@ -430,7 +433,7 @@ func sampleLiveASRMultiUtteranceJSON(uts []asr.Utterance) []byte {
 func TestRunASRPostprocess_EmptySummariesOK(t *testing.T) {
 	// 短素材：summary 段会被时长过滤掉，paragraphs 仍成功，整体不失败。
 	liveASR := string(sampleLiveASRJSON(1200, "你好世界"))
-	out, err := runASRPostprocess(context.Background(), defaultWorkerLLM(), liveASR, 1200, nil)
+	out, err := runASRPostprocess(context.Background(), defaultWorkerLLM(), liveASR, 1200, nil, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
@@ -459,7 +462,7 @@ func TestRunASRPostprocess_KeepsInRangeSummary(t *testing.T) {
 			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
 		},
 	}
-	out, err := runASRPostprocess(context.Background(), llmClient, liveASR, dur, nil)
+	out, err := runASRPostprocess(context.Background(), llmClient, liveASR, dur, nil, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
@@ -514,7 +517,7 @@ func TestRunASRPostprocess_SummariesAndParagraphsRunInParallel(t *testing.T) {
 		},
 	}
 
-	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好世界")), dur, nil)
+	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好世界")), dur, nil, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
@@ -532,6 +535,8 @@ func TestRunASRPostprocess_SummariesAndParagraphsRunInParallel(t *testing.T) {
 func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 	var calls atomic.Int32
 	const dur = int64(10 * 60 * 1000)
+	core, logs := observer.New(zap.WarnLevel)
+	logger := zap.New(core)
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
 			calls.Add(1)
@@ -547,7 +552,7 @@ func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 			return "also-not-json", nil
 		},
 	}
-	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好")), dur, nil)
+	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好")), dur, nil, logger)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
@@ -560,6 +565,9 @@ func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 	if n := calls.Load(); n != 2 {
 		t.Fatalf("calls = %d, want 2 (no content repair)", n)
 	}
+	if n := logs.FilterMessageSnippet("窗结果不可用").Len(); n < 2 {
+		t.Fatalf("fallback warn logs = %d, want >= 2", n)
+	}
 }
 
 func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
@@ -570,7 +578,7 @@ func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
 			return "", context.DeadlineExceeded
 		},
 	}
-	_, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(100, "hi")), 100, nil)
+	_, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(100, "hi")), 100, nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -583,6 +591,8 @@ func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
 
 func TestASRChatStructured_TransportRetryThenSuccess(t *testing.T) {
 	calls := 0
+	core, logs := observer.New(zap.WarnLevel)
+	logger := zap.New(core)
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
 			calls++
@@ -592,7 +602,7 @@ func TestASRChatStructured_TransportRetryThenSuccess(t *testing.T) {
 			return `{"items":[]}`, nil
 		},
 	}
-	got, err := asrChatStructured(context.Background(), llmClient, []llm.ChatMessage{{Role: "user", Content: "x"}})
+	got, err := asrChatStructured(context.Background(), llmClient, []llm.ChatMessage{{Role: "user", Content: "x"}}, logger)
 	if err != nil {
 		t.Fatalf("asrChatStructured() error = %v", err)
 	}
@@ -601,6 +611,9 @@ func TestASRChatStructured_TransportRetryThenSuccess(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("calls = %d, want 3", calls)
+	}
+	if n := logs.FilterMessageSnippet("准备重试").Len(); n != 2 {
+		t.Fatalf("retry warn logs = %d, want 2", n)
 	}
 }
 
@@ -678,12 +691,15 @@ func TestEnforceASRParagraphMaxRunes_SplitByPeriod(t *testing.T) {
 	s1 := strings.Repeat("甲", 119) + "。"
 	s2 := strings.Repeat("乙", 119) + "。"
 	text := s1 + s2
-	paras := enforceASRParagraphMaxRunes([]model.ASRParagraph{{
+	paras, splitCount := enforceASRParagraphMaxRunes([]model.ASRParagraph{{
 		Speaker:   "1",
 		Text:      text,
 		StartTime: 0,
 		EndTime:   1000,
 	}})
+	if splitCount != 1 {
+		t.Fatalf("splitCount = %d, want 1", splitCount)
+	}
 	if len(paras) < 2 {
 		t.Fatalf("len = %d, want >= 2", len(paras))
 	}
@@ -701,12 +717,15 @@ func TestEnforceASRParagraphMaxRunes_SplitByPeriod(t *testing.T) {
 
 func TestEnforceASRParagraphMaxRunes_HardSplitNoPeriod(t *testing.T) {
 	text := strings.Repeat("字", 450)
-	paras := enforceASRParagraphMaxRunes([]model.ASRParagraph{{
+	paras, splitCount := enforceASRParagraphMaxRunes([]model.ASRParagraph{{
 		Speaker:   "1",
 		Text:      text,
 		StartTime: 0,
 		EndTime:   900,
 	}})
+	if splitCount != 1 {
+		t.Fatalf("splitCount = %d, want 1", splitCount)
+	}
 	if len(paras) != 3 { // 200+200+50
 		t.Fatalf("len = %d, want 3", len(paras))
 	}
@@ -804,7 +823,7 @@ func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
 			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
 		},
 	}
-	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, 1000, nil)
+	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, 1000, nil, nil)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -839,7 +858,7 @@ func TestGenerateASRParagraphsWindow_LocalFallbackOnOverlap(t *testing.T) {
 			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
 		},
 	}
-	ranges, _, err := generateASRParagraphsWindow(context.Background(), llmClient, win)
+	ranges, _, err := generateASRParagraphsWindow(context.Background(), llmClient, win, nil)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}

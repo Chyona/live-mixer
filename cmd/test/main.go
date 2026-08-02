@@ -20,6 +20,8 @@ import (
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
 	"live-mixer/internal/service"
+
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -66,12 +68,19 @@ func main() {
 	fmt.Fprintf(os.Stderr, "时长: %dms  句段数: %d  模型: %s (flash)\n", durationMs, len(utterances), asrModel)
 	fmt.Fprintln(os.Stderr, "开始调用 ASR 后处理（summaries + paragraphs，深度思考）...")
 
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync() //nolint:errcheck
+
 	capture := &captureLLM{inner: llm.NewClient(cfg.LLM.LLMClientConfigForASR())}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	started := time.Now()
-	summaries, paragraphs, err := service.RunASRPostprocess(ctx, capture, liveASR, durationMs)
+	summaries, paragraphs, err := service.RunASRPostprocess(ctx, capture, liveASR, durationMs, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ASR 后处理失败: %v\n", err)
 		os.Exit(1)

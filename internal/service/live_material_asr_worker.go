@@ -280,7 +280,7 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 	w.logger.Info("开始 ASR LLM 后处理",
 		zap.Uint("material_id", materialID),
 	)
-	post, err := runASRPostprocess(ctx, w.llmClient, liveASR, duration, rec)
+	post, err := runASRPostprocess(ctx, w.llmClient, liveASR, duration, rec, w.logger)
 	if err != nil {
 		return w.failASR(ctx, materialID, asrVersion, lastProgress, "postprocess", rec, err)
 	}
