@@ -132,6 +132,8 @@ type LiveMaterialListResponse struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 	Ext            string     `json:"ext"`
 	ProjectCount   int64      `json:"project_count"`
+	// MatchedParagraphs 仅 global_keyword 搜索时返回命中的 asr_paragraphs 段落。
+	MatchedParagraphs []model.ASRParagraph `json:"matched_paragraphs,omitempty"`
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, items []model.LiveMaterialListItem) []LiveMaterialListResponse {
@@ -143,27 +145,32 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 	out := make([]LiveMaterialListResponse, 0, len(items))
 	for i := range items {
 		item := items[i]
+		matched := item.MatchedParagraphs
+		if matched == nil {
+			matched = []model.ASRParagraph{}
+		}
 		out = append(out, LiveMaterialListResponse{
-			ID:             item.ID,
-			Name:           item.Name,
-			Remark:         item.Remark,
-			LiveURL:        item.LiveURL,
-			URLType:        item.URLType,
-			LiveStatus:     item.LiveStatus,
-			Duration:       item.Duration,
-			Width:          item.Width,
-			Height:         item.Height,
-			ASRStatus:      item.ASRStatus,
-			ASRProgress:    item.ASRProgress,
-			ASRErrorMsg:    item.ASRErrorMsg,
-			ASRStartedAt:   item.ASRStartedAt,
-			ASRUpdatedAt:   item.ASRUpdatedAt,
-			ASRCompletedAt: item.ASRCompletedAt,
-			CreatedBy:      names[item.CreatedBy],
-			CreatedAt:      item.CreatedAt,
-			UpdatedAt:      item.UpdatedAt,
-			Ext:            item.Ext,
-			ProjectCount:   item.ProjectCount,
+			ID:                item.ID,
+			Name:              item.Name,
+			Remark:            item.Remark,
+			LiveURL:           item.LiveURL,
+			URLType:           item.URLType,
+			LiveStatus:        item.LiveStatus,
+			Duration:          item.Duration,
+			Width:             item.Width,
+			Height:            item.Height,
+			ASRStatus:         item.ASRStatus,
+			ASRProgress:       item.ASRProgress,
+			ASRErrorMsg:       item.ASRErrorMsg,
+			ASRStartedAt:      item.ASRStartedAt,
+			ASRUpdatedAt:      item.ASRUpdatedAt,
+			ASRCompletedAt:    item.ASRCompletedAt,
+			CreatedBy:         names[item.CreatedBy],
+			CreatedAt:         item.CreatedAt,
+			UpdatedAt:         item.UpdatedAt,
+			Ext:               item.Ext,
+			ProjectCount:      item.ProjectCount,
+			MatchedParagraphs: matched,
 		})
 	}
 	return out
@@ -174,20 +181,20 @@ type ListLiveMaterialsRequest struct {
 	StartDate     string `form:"start_date"`
 	EndDate       string `form:"end_date"`
 	TitleKeyword  string `form:"title_keyword"`  // 原始字符串，如 "游戏,周末"
-	GlobalKeyword string `form:"global_keyword"` // 原始字符串，如 "发布会,2026"
+	GlobalKeyword string `form:"global_keyword"` // 原始字符串，如 "发布会,2026"；匹配 asr_paragraphs
 	Page          int    `form:"page" binding:"omitempty,min=1"`
 	PageSize      int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
 // ListLiveMaterials 直播素材列表
 // @Summary      直播素材列表
-// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries / asr_paragraphs；列表项含 project_count（关联 video_project 总数），默认每页 10 条
+// @Description  分页查询直播素材，支持日期与关键词筛选，不含 live_asr / asr_summaries；global_keyword 匹配 asr_paragraphs 并返回 matched_paragraphs；列表项含 project_count，默认每页 10 条
 // @Tags         直播素材
 // @Produce      json
 // @Param        start_date      query  string  false  "开始日期 YYYY-MM-DD"
 // @Param        end_date        query  string  false  "结束日期 YYYY-MM-DD"
 // @Param        title_keyword   query  string  false  "标题关键词，英文逗号分隔，匹配 name/remark"
-// @Param        global_keyword  query  string  false  "全局关键词，英文逗号分隔，匹配 live_url/asr_error_msg/name/remark"
+// @Param        global_keyword  query  string  false  "全局关键词，英文逗号分隔，匹配 asr_paragraphs；命中段落见 matched_paragraphs"
 // @Param        page            query  int     false  "页码"
 // @Param        page_size       query  int     false  "每页数量，默认 10"
 // @Success      200             {object}  response.Body

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"live-mixer/internal/model"
@@ -53,7 +54,7 @@ type LiveMaterialListFilter struct {
 	StartAt        *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt          *time.Time // 结束日期次日零点（不含），按 created_at 筛选
 	TitleKeywords  []string   // 标题关键词，每个词匹配 name 或 remark，词之间为「与」
-	GlobalKeywords []string   // 全局关键词，每个词匹配 live_url/asr_error_msg/name/remark，词之间为「与」
+	GlobalKeywords []string   // 全局关键词，每个词匹配 asr_paragraphs 文本，词之间为「与」
 }
 
 type liveMaterialRepository struct {
@@ -280,7 +281,6 @@ func (r *liveMaterialRepository) ResetASRToPending(ctx context.Context, id uint)
 }
 
 func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialListFilter, offset, limit int) ([]model.LiveMaterialListItem, int64, error) {
-	var materials []model.LiveMaterialListItem
 	var total int64
 
 	// 使用列表专用结构体，GORM 不会查询 live_asr 列，减少 IO 与响应体积。
@@ -290,8 +290,31 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	// project_count：关联 video_project 行数；Count 已完成后再 Select，避免影响 total。
-	const listSelect = "live_material.*, (SELECT COUNT(*) FROM video_project WHERE video_project.live_id = live_material.id) AS project_count"
+
+	needParagraphs := len(filter.GlobalKeywords) > 0
+	const projectCountExpr = "(SELECT COUNT(*) FROM video_project WHERE video_project.live_id = live_material.id) AS project_count"
+	if needParagraphs {
+		// 带关键词时额外取出 asr_paragraphs，供内存侧筛出命中段落。
+		type listRow struct {
+			model.LiveMaterialListItem
+			ASRParagraphs []model.ASRParagraph `gorm:"column:asr_paragraphs;serializer:json"`
+		}
+		var rows []listRow
+		listSelect := "live_material.*, " + projectCountExpr
+		if err := query.Select(listSelect).Offset(offset).Limit(limit).Order("live_material.id DESC").Find(&rows).Error; err != nil {
+			return nil, 0, err
+		}
+		materials := make([]model.LiveMaterialListItem, 0, len(rows))
+		for i := range rows {
+			item := rows[i].LiveMaterialListItem
+			item.MatchedParagraphs = filterMatchedASRParagraphs(rows[i].ASRParagraphs, filter.GlobalKeywords)
+			materials = append(materials, item)
+		}
+		return materials, total, nil
+	}
+
+	var materials []model.LiveMaterialListItem
+	listSelect := "live_material.*, " + projectCountExpr
 	if err := query.Select(listSelect).Offset(offset).Limit(limit).Order("live_material.id DESC").Find(&materials).Error; err != nil {
 		return nil, 0, err
 	}
@@ -313,13 +336,41 @@ func applyLiveMaterialListFilter(query *gorm.DB, filter LiveMaterialListFilter) 
 	}
 	for _, kw := range filter.GlobalKeywords {
 		pattern := "%" + kw + "%"
-		// 全局关键词覆盖链接、错误信息，并包含标题字段的匹配能力。
-		query = query.Where(
-			"LOWER(live_url) LIKE ? OR LOWER(asr_error_msg) LIKE ? OR LOWER(name) LIKE ? OR LOWER(remark) LIKE ?",
-			pattern, pattern, pattern, pattern,
-		)
+		// 仅在 asr_paragraphs JSON 文本中匹配；多词 AND。
+		query = query.Where("LOWER(CAST(asr_paragraphs AS TEXT)) LIKE ?", pattern)
 	}
 	return query
+}
+
+// filterMatchedASRParagraphs 返回正文命中任一关键词的段落（不含 words，减小列表体积）。
+func filterMatchedASRParagraphs(paragraphs []model.ASRParagraph, keywords []string) []model.ASRParagraph {
+	if len(paragraphs) == 0 || len(keywords) == 0 {
+		return nil
+	}
+	out := make([]model.ASRParagraph, 0)
+	for _, p := range paragraphs {
+		text := strings.ToLower(p.Text)
+		hit := false
+		for _, kw := range keywords {
+			if kw != "" && strings.Contains(text, kw) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
+		out = append(out, model.ASRParagraph{
+			Speaker:   p.Speaker,
+			Text:      p.Text,
+			StartTime: p.StartTime,
+			EndTime:   p.EndTime,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Delete 物理删除直播素材，并在同一事务内级联删除 live_id 关联的剪辑项目。

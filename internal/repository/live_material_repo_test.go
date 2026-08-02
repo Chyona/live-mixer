@@ -627,15 +627,34 @@ func TestLiveMaterialRepository_List_TitleKeywordFilter(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialRepository_List_GlobalKeywordFilter 验证全局关键词匹配链接与标题字段。
+// TestLiveMaterialRepository_List_GlobalKeywordFilter 验证全局关键词仅匹配 asr_paragraphs，并返回命中段落。
 func TestLiveMaterialRepository_List_GlobalKeywordFilter(t *testing.T) {
 	db := setupLiveMaterialTestDB(t)
 	repo := NewLiveMaterialRepository(db)
 	ctx := context.Background()
 
-	m1 := &model.LiveMaterial{Name: "素材A", LiveURL: "https://launch.com/2026.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "timeout", CreatedBy: 1}
-	m2 := &model.LiveMaterial{Name: "发布会回顾", Remark: "2026", LiveURL: "https://other.com/a.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1}
-	m3 := &model.LiveMaterial{Name: "其它", Remark: "无", LiveURL: "https://other.com/b.mp4", LiveASR: "{}", ASRStatus: model.ASRStatusPending, CreatedBy: 1}
+	m1 := &model.LiveMaterial{
+		Name: "素材A", LiveURL: "https://launch.com/2026.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
+		ASRParagraphs: []model.ASRParagraph{
+			{Speaker: "1", Text: "今天天气不错", StartTime: 0, EndTime: 1000},
+			{Speaker: "1", Text: "欢迎来到发布会现场看看2026新品", StartTime: 1000, EndTime: 3000},
+		},
+	}
+	m2 := &model.LiveMaterial{
+		Name: "发布会回顾", Remark: "2026", LiveURL: "https://other.com/a.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+		ASRParagraphs: []model.ASRParagraph{
+			{Speaker: "1", Text: "只有发布会没有年份", StartTime: 0, EndTime: 500},
+		},
+	}
+	m3 := &model.LiveMaterial{
+		Name: "其它", Remark: "无", LiveURL: "https://other.com/b.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+		ASRParagraphs: []model.ASRParagraph{
+			{Speaker: "1", Text: "无关内容", StartTime: 0, EndTime: 100},
+		},
+	}
 	for _, m := range []*model.LiveMaterial{m1, m2, m3} {
 		if err := repo.Create(ctx, m); err != nil {
 			t.Fatalf("Create() error = %v", err)
@@ -648,8 +667,28 @@ func TestLiveMaterialRepository_List_GlobalKeywordFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if total != 1 || len(materials) != 1 || materials[0].Name != "发布会回顾" {
-		t.Errorf("unexpected result: total=%d materials=%+v", total, materials)
+	if total != 1 || len(materials) != 1 || materials[0].Name != "素材A" {
+		t.Fatalf("unexpected result: total=%d materials=%+v", total, materials)
+	}
+	if len(materials[0].MatchedParagraphs) != 1 {
+		t.Fatalf("MatchedParagraphs = %+v, want 1 hit", materials[0].MatchedParagraphs)
+	}
+	if materials[0].MatchedParagraphs[0].Text != "欢迎来到发布会现场看看2026新品" {
+		t.Errorf("matched text = %q", materials[0].MatchedParagraphs[0].Text)
+	}
+	if materials[0].MatchedParagraphs[0].Words != nil {
+		t.Errorf("matched paragraph should omit words")
+	}
+}
+
+func TestFilterMatchedASRParagraphs(t *testing.T) {
+	paras := []model.ASRParagraph{
+		{Text: "Hello World", StartTime: 0, EndTime: 1},
+		{Text: "发布会开场", StartTime: 1, EndTime: 2},
+	}
+	got := filterMatchedASRParagraphs(paras, []string{"发布会"})
+	if len(got) != 1 || got[0].Text != "发布会开场" {
+		t.Fatalf("got = %+v", got)
 	}
 }
 
