@@ -26,7 +26,7 @@ type LiveMaterialListOptions struct {
 const liveMaterialListDateLayout = "2006-01-02"
 
 // ErrUnsupportedMediaFormat 创建素材时不支持的音视频格式。
-var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持: mp3, wav, mp4, ogg, raw")
+var ErrUnsupportedMediaFormat = errors.New("不支持的音视频格式，支持: mp3, wav, mp4, mov, ogg, raw")
 
 // ErrLiveMaterialNameExists 素材名称已存在（唯一约束）。
 var ErrLiveMaterialNameExists = errors.New("素材名称已存在")

@@ -8,11 +8,12 @@ import (
 	"strings"
 )
 
-// 支持的音频/视频格式，与豆包 ASR API 要求一致。
+// 支持的音频/视频格式（创建素材校验与 ASR 链路识别后缀）；mov 经 ffmpeg 转码后送 ASR。
 var supportedFormats = map[string]struct{}{
 	"mp3": {},
 	"wav": {},
 	"mp4": {},
+	"mov": {},
 	"ogg": {},
 	"raw": {},
 }
@@ -35,7 +36,7 @@ func DetectFormat(audioURL string) (string, error) {
 	}
 
 	if _, ok := supportedFormats[ext]; !ok {
-		return "", fmt.Errorf("不支持的音频格式 %q，支持: mp3, wav, mp4, ogg, raw", ext)
+		return "", fmt.Errorf("不支持的音频格式 %q，支持: mp3, wav, mp4, mov, ogg, raw", ext)
 	}
 	return ext, nil
 }

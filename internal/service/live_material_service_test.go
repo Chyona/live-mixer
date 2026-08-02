@@ -319,6 +319,21 @@ func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 	}
 }
 
+// TestLiveMaterialService_Create_MOV 验证 mov 视频链接可创建。
+func TestLiveMaterialService_Create_MOV(t *testing.T) {
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
+	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mov", "", "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if material.LiveURL != "https://example.com/live.mov" {
+		t.Errorf("LiveURL = %q", material.LiveURL)
+	}
+	if material.URLType != model.URLTypeFile {
+		t.Errorf("URLType = %q, want %q", material.URLType, model.URLTypeFile)
+	}
+}
+
 // TestLiveMaterialService_Create_M3U8 验证 m3u8 链接由后台识别为 m3u8 且跳过文件格式校验。
 func TestLiveMaterialService_Create_M3U8(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
