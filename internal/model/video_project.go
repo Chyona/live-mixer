@@ -21,11 +21,19 @@ type VideoProject struct {
 	Width         int            `gorm:"not null;default:0;comment:剪映草稿工程宽度像素" json:"width"`
 	Height        int            `gorm:"not null;default:0;comment:剪映草稿工程高度像素" json:"height"`
 	ProjectSource string         `gorm:"column:project_source;size:32;not null;default:'';comment:项目来源" json:"project_source"`
+	// EnableCaptions 是否添加字幕：0否 1是，默认 1。
+	EnableCaptions int            `gorm:"column:enable_captions;not null;default:1;comment:是否添加字幕0否1是" json:"enable_captions"`
 	CreatedBy     uint           `gorm:"not null;index;comment:创建人账号ID" json:"created_by"`
 	CreatedAt     time.Time      `gorm:"comment:创建时间" json:"created_at"`
 	UpdatedAt     time.Time      `gorm:"comment:最后编辑时间" json:"updated_at"`
 	Ext           string         `gorm:"size:1024;comment:扩展字段" json:"ext"`
 }
+
+// EnableCaptions 取值：0=不添加字幕，1=添加字幕。
+const (
+	EnableCaptionsOff = 0
+	EnableCaptionsOn  = 1
+)
 
 // TableName 指定剪辑项目表名。
 func (VideoProject) TableName() string {

@@ -42,48 +42,51 @@ func NewVideoProjectHandler(videoProjectService service.VideoProjectService, acc
 // CreateVideoProjectRequest 创建剪辑项目请求体。
 // Clips0 / Clips1 为可选 JSON 数组；未传时存为空数组。
 type CreateVideoProjectRequest struct {
-	Name          string               `json:"name" binding:"required,max=64"`
-	Remark        string               `json:"remark" binding:"max=256"`
-	LiveID        uint                 `json:"live_id" binding:"required"`
-	PromptID      uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
-	Clips0        []model.ClipRange    `json:"clips0"`
-	Clips1        []model.ClipWithText `json:"clips1"`
+	Name           string               `json:"name" binding:"required,max=64"`
+	Remark         string               `json:"remark" binding:"max=256"`
+	LiveID         uint                 `json:"live_id" binding:"required"`
+	PromptID       uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
+	Clips0         []model.ClipRange    `json:"clips0"`
+	Clips1         []model.ClipWithText `json:"clips1"`
 	// Width / Height 可选：仅支持 1920×1080 或 1080×1920；都不传时按素材分辨率自动选档。
-	Width         int                  `json:"width" binding:"omitempty,min=0"`
-	Height        int                  `json:"height" binding:"omitempty,min=0"`
-	ProjectSource string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
+	Width          int                  `json:"width" binding:"omitempty,min=0"`
+	Height         int                  `json:"height" binding:"omitempty,min=0"`
+	ProjectSource  string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
+	EnableCaptions *int                 `json:"enable_captions"`                 // 是否添加字幕：0否 1是；未传默认 1
 }
 
 // UpdateVideoProjectRequest 更新剪辑项目请求体。
 // 指针字段为 nil 表示未传，不更新；非 nil（含空数组/空字符串）表示要更新为该值。
 type UpdateVideoProjectRequest struct {
-	Name          *string               `json:"name" binding:"omitempty,max=64"`
-	Remark        *string               `json:"remark" binding:"omitempty,max=256"`
-	PromptID      *uint                 `json:"prompt_id"`
-	Clips0        *[]model.ClipRange    `json:"clips0"`
-	Clips1        *[]model.ClipWithText `json:"clips1"`
-	Width         *int                  `json:"width" binding:"omitempty,min=0"`
-	Height        *int                  `json:"height" binding:"omitempty,min=0"`
-	ProjectSource *string               `json:"project_source" binding:"omitempty,max=32"`
+	Name           *string               `json:"name" binding:"omitempty,max=64"`
+	Remark         *string               `json:"remark" binding:"omitempty,max=256"`
+	PromptID       *uint                 `json:"prompt_id"`
+	Clips0         *[]model.ClipRange    `json:"clips0"`
+	Clips1         *[]model.ClipWithText `json:"clips1"`
+	Width          *int                  `json:"width" binding:"omitempty,min=0"`
+	Height         *int                  `json:"height" binding:"omitempty,min=0"`
+	ProjectSource  *string               `json:"project_source" binding:"omitempty,max=32"`
+	EnableCaptions *int                  `json:"enable_captions"`
 }
 
 // VideoProjectResponse 剪辑项目 API 响应。
 // created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
 type VideoProjectResponse struct {
-	ID            uint                 `json:"id"`
-	Name          string               `json:"name"`
-	Remark        string               `json:"remark"`
-	LiveID        uint                 `json:"live_id"`
-	PromptID      uint                 `json:"prompt_id"`
-	Clips0        []model.ClipRange    `json:"clips0"`
-	Clips1        []model.ClipWithText `json:"clips1"`
-	Width         int                  `json:"width"`
-	Height        int                  `json:"height"`
-	ProjectSource string               `json:"project_source"`
-	CreatedBy     string               `json:"created_by"`
-	CreatedAt     time.Time            `json:"created_at"`
-	UpdatedAt     time.Time            `json:"updated_at"`
-	Ext           string               `json:"ext"`
+	ID             uint                 `json:"id"`
+	Name           string               `json:"name"`
+	Remark         string               `json:"remark"`
+	LiveID         uint                 `json:"live_id"`
+	PromptID       uint                 `json:"prompt_id"`
+	Clips0         []model.ClipRange    `json:"clips0"`
+	Clips1         []model.ClipWithText `json:"clips1"`
+	Width          int                  `json:"width"`
+	Height         int                  `json:"height"`
+	ProjectSource  string               `json:"project_source"`
+	EnableCaptions int                  `json:"enable_captions"`
+	CreatedBy      string               `json:"created_by"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
+	Ext            string               `json:"ext"`
 }
 
 func (h *VideoProjectHandler) toVideoProjectResponse(ctx context.Context, project *model.VideoProject) VideoProjectResponse {
@@ -96,20 +99,21 @@ func (h *VideoProjectHandler) toVideoProjectResponse(ctx context.Context, projec
 		clips1 = []model.ClipWithText{}
 	}
 	return VideoProjectResponse{
-		ID:            project.ID,
-		Name:          project.Name,
-		Remark:        project.Remark,
-		LiveID:        project.LiveID,
-		PromptID:      project.PromptID,
-		Clips0:        clips0,
-		Clips1:        clips1,
-		Width:         project.Width,
-		Height:        project.Height,
-		ProjectSource: project.ProjectSource,
-		CreatedBy:     h.createdBy.nameOf(ctx, project.CreatedBy),
-		CreatedAt:     project.CreatedAt,
-		UpdatedAt:     project.UpdatedAt,
-		Ext:           project.Ext,
+		ID:             project.ID,
+		Name:           project.Name,
+		Remark:         project.Remark,
+		LiveID:         project.LiveID,
+		PromptID:       project.PromptID,
+		Clips0:         clips0,
+		Clips1:         clips1,
+		Width:          project.Width,
+		Height:         project.Height,
+		ProjectSource:  project.ProjectSource,
+		EnableCaptions: project.EnableCaptions,
+		CreatedBy:      h.createdBy.nameOf(ctx, project.CreatedBy),
+		CreatedAt:      project.CreatedAt,
+		UpdatedAt:      project.UpdatedAt,
+		Ext:            project.Ext,
 	}
 }
 
@@ -128,21 +132,22 @@ func (h *VideoProjectHandler) toVideoProjectResponseList(ctx context.Context, it
 
 // VideoProjectListResponse 剪辑项目列表项响应；含 live_id 与关联素材名称 live_name。
 type VideoProjectListResponse struct {
-	ID            uint                 `json:"id"`
-	Name          string               `json:"name"`
-	Remark        string               `json:"remark"`
-	LiveID        uint                 `json:"live_id"`
-	LiveName      string               `json:"live_name"`
-	PromptID      uint                 `json:"prompt_id"`
-	Clips0        []model.ClipRange    `json:"clips0"`
-	Clips1        []model.ClipWithText `json:"clips1"`
-	Width         int                  `json:"width"`
-	Height        int                  `json:"height"`
-	ProjectSource string               `json:"project_source"`
-	CreatedBy     string               `json:"created_by"`
-	CreatedAt     time.Time            `json:"created_at"`
-	UpdatedAt     time.Time            `json:"updated_at"`
-	Ext           string               `json:"ext"`
+	ID             uint                 `json:"id"`
+	Name           string               `json:"name"`
+	Remark         string               `json:"remark"`
+	LiveID         uint                 `json:"live_id"`
+	LiveName       string               `json:"live_name"`
+	PromptID       uint                 `json:"prompt_id"`
+	Clips0         []model.ClipRange    `json:"clips0"`
+	Clips1         []model.ClipWithText `json:"clips1"`
+	Width          int                  `json:"width"`
+	Height         int                  `json:"height"`
+	ProjectSource  string               `json:"project_source"`
+	EnableCaptions int                  `json:"enable_captions"`
+	CreatedBy      string               `json:"created_by"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
+	Ext            string               `json:"ext"`
 }
 
 func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjectListItem, createdByName string) VideoProjectListResponse {
@@ -155,21 +160,22 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 		clips1 = []model.ClipWithText{}
 	}
 	return VideoProjectListResponse{
-		ID:            item.ID,
-		Name:          item.Name,
-		Remark:        item.Remark,
-		LiveID:        item.LiveID,
-		LiveName:      item.LiveName,
-		PromptID:      item.PromptID,
-		Clips0:        clips0,
-		Clips1:        clips1,
-		Width:         item.Width,
-		Height:        item.Height,
-		ProjectSource: item.ProjectSource,
-		CreatedBy:     createdByName,
-		CreatedAt:     item.CreatedAt,
-		UpdatedAt:     item.UpdatedAt,
-		Ext:           item.Ext,
+		ID:             item.ID,
+		Name:           item.Name,
+		Remark:         item.Remark,
+		LiveID:         item.LiveID,
+		LiveName:       item.LiveName,
+		PromptID:       item.PromptID,
+		Clips0:         clips0,
+		Clips1:         clips1,
+		Width:          item.Width,
+		Height:         item.Height,
+		ProjectSource:  item.ProjectSource,
+		EnableCaptions: item.EnableCaptions,
+		CreatedBy:      createdByName,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
+		Ext:            item.Ext,
 	}
 }
 
@@ -215,7 +221,7 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
-// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
+// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（0否 1是，默认 1）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -239,15 +245,16 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 	}
 
 	project, err := h.videoProjectService.Create(c.Request.Context(), user.ID, service.CreateVideoProjectInput{
-		Name:          req.Name,
-		Remark:        req.Remark,
-		LiveID:        req.LiveID,
-		PromptID:      req.PromptID,
-		Clips0:        req.Clips0,
-		Clips1:        req.Clips1,
-		Width:         req.Width,
-		Height:        req.Height,
-		ProjectSource: req.ProjectSource,
+		Name:           req.Name,
+		Remark:         req.Remark,
+		LiveID:         req.LiveID,
+		PromptID:       req.PromptID,
+		Clips0:         req.Clips0,
+		Clips1:         req.Clips1,
+		Width:          req.Width,
+		Height:         req.Height,
+		ProjectSource:  req.ProjectSource,
+		EnableCaptions: req.EnableCaptions,
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -288,7 +295,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 仅支持 0 或 1
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -313,14 +320,15 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 	}
 
 	project, err := h.videoProjectService.Update(c.Request.Context(), id, service.VideoProjectUpdateInput{
-		Name:          req.Name,
-		Remark:        req.Remark,
-		PromptID:      req.PromptID,
-		Clips0:        req.Clips0,
-		Clips1:        req.Clips1,
-		Width:         req.Width,
-		Height:        req.Height,
-		ProjectSource: req.ProjectSource,
+		Name:           req.Name,
+		Remark:         req.Remark,
+		PromptID:       req.PromptID,
+		Clips0:         req.Clips0,
+		Clips1:         req.Clips1,
+		Width:          req.Width,
+		Height:         req.Height,
+		ProjectSource:  req.ProjectSource,
+		EnableCaptions: req.EnableCaptions,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrVideoProjectNotFound) {

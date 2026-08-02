@@ -18,6 +18,7 @@ type VideoProjectListItem struct {
 	Width         int            `json:"width"`
 	Height        int            `json:"height"`
 	ProjectSource string         `json:"project_source"`
+	EnableCaptions int           `json:"enable_captions"`
 	CreatedBy     uint           `json:"created_by"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`

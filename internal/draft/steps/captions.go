@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"live-mixer/internal/draft/session"
+	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/capcutmate"
 
@@ -48,6 +49,15 @@ func (st CaptionsStep) Run(ctx context.Context, s *session.Session) error {
 	logger := st.Logger
 	if logger == nil {
 		logger = zap.NewNop()
+	}
+
+	if s.Project != nil && s.Project.EnableCaptions == model.EnableCaptionsOff {
+		logger.Info("项目未开启字幕，跳过 add_captions",
+			zap.String("job_id", s.JobID),
+			zap.Uint("video_project_id", s.Project.ID),
+		)
+		s.ReportProgress(95)
+		return nil
 	}
 
 	liveASR := ""

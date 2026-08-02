@@ -124,12 +124,15 @@ CREATE TABLE IF NOT EXISTS video_project (
     height          INTEGER     NOT NULL DEFAULT 0,
     -- 项目来源标识，默认为空
     project_source  VARCHAR(32) NOT NULL DEFAULT '',
+    -- 是否添加字幕：0否 1是，默认开启
+    enable_captions INTEGER     NOT NULL DEFAULT 1,
     created_by      BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ext             VARCHAR(1024),
     CONSTRAINT chk_video_project_width CHECK (width >= 0),
-    CONSTRAINT chk_video_project_height CHECK (height >= 0)
+    CONSTRAINT chk_video_project_height CHECK (height >= 0),
+    CONSTRAINT chk_video_project_enable_captions CHECK (enable_captions IN (0, 1))
 );
 
 COMMENT ON TABLE video_project IS '剪辑项目表';
@@ -143,6 +146,7 @@ COMMENT ON COLUMN video_project.clips1 IS '带文本与词级时间戳的切片�
 COMMENT ON COLUMN video_project.width IS '剪映草稿工程宽度（像素），0 表示未设置';
 COMMENT ON COLUMN video_project.height IS '剪映草稿工程高度（像素），0 表示未设置';
 COMMENT ON COLUMN video_project.project_source IS '项目来源，默认为空';
+COMMENT ON COLUMN video_project.enable_captions IS '是否添加字幕：0否 1是，默认 1';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
 COMMENT ON COLUMN video_project.updated_at IS '最后编辑时间';

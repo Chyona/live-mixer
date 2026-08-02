@@ -132,6 +132,7 @@ func TestCaptionsStep_Run_Success(t *testing.T) {
 	s := &session.Session{
 		JobID:    "job-1",
 		DraftURL: "http://example.com/draft",
+		Project:  &model.VideoProject{ID: 1, EnableCaptions: model.EnableCaptionsOn},
 		Material: &model.LiveMaterial{
 			LiveASR: `{"result":{"utterances":[
 				{"additions":{},"start_time":0,"end_time":500,"text":"你好","words":[]}
@@ -160,6 +161,27 @@ func TestCaptionsStep_Run_Success(t *testing.T) {
 	tr := s.Timeline.Tracks[session.TrackSubtitle]
 	if tr == nil || tr.TrackID != "cap-track" {
 		t.Errorf("subtitle track = %#v", tr)
+	}
+}
+
+func TestCaptionsStep_Run_SkipsWhenDisabled(t *testing.T) {
+	api := &mockCaptionsAPI{}
+	step := CaptionsStep{API: api, Logger: zap.NewNop()}
+	err := step.Run(context.Background(), &session.Session{
+		DraftURL: "http://d",
+		Project:  &model.VideoProject{ID: 9, EnableCaptions: model.EnableCaptionsOff},
+		Material: &model.LiveMaterial{
+			LiveASR: `{"result":{"utterances":[{"start_time":0,"end_time":100,"text":"有字","words":[]}]}}`,
+		},
+		ClipPlacements: []session.ClipPlacement{
+			{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if api.called != 0 {
+		t.Fatalf("AddCaptions should be skipped, calls=%d", api.called)
 	}
 }
 

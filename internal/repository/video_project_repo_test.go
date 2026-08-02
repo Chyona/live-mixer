@@ -46,7 +46,8 @@ func TestVideoProjectRepository_CreateAndGetByID(t *testing.T) {
 
 	project := &model.VideoProject{
 		Name: "项目A", Remark: "备注", LiveID: material.ID,
-		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
 	}
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -58,6 +59,9 @@ func TestVideoProjectRepository_CreateAndGetByID(t *testing.T) {
 	}
 	if got.Name != "项目A" {
 		t.Errorf("Name = %q, want 项目A", got.Name)
+	}
+	if got.EnableCaptions != model.EnableCaptionsOn {
+		t.Errorf("EnableCaptions = %d, want 1", got.EnableCaptions)
 	}
 }
 
@@ -79,6 +83,7 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	project.Remark = "新备注"
 	project.PromptID = 8
 	project.ProjectSource = "manual"
+	project.EnableCaptions = model.EnableCaptionsOff
 	project.LiveID = 999
 	project.CreatedBy = 99
 	if err := repo.Update(ctx, project); err != nil {
@@ -94,6 +99,9 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	}
 	if got.ProjectSource != "manual" {
 		t.Errorf("ProjectSource = %q, want manual", got.ProjectSource)
+	}
+	if got.EnableCaptions != model.EnableCaptionsOff {
+		t.Errorf("EnableCaptions = %d, want 0", got.EnableCaptions)
 	}
 	if got.LiveID != material.ID || got.CreatedBy != 1 {
 		t.Errorf("live_id/created_by should remain unchanged: %+v", got)

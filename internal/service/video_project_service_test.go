@@ -148,6 +148,42 @@ func TestVideoProjectService_Create_Success(t *testing.T) {
 	if project.ProjectSource != "" {
 		t.Errorf("ProjectSource = %q, want empty", project.ProjectSource)
 	}
+	if project.EnableCaptions != model.EnableCaptionsOn {
+		t.Errorf("EnableCaptions = %d, want %d", project.EnableCaptions, model.EnableCaptionsOn)
+	}
+}
+
+// TestVideoProjectService_Create_EnableCaptionsOff 验证显式关闭字幕。
+func TestVideoProjectService_Create_EnableCaptionsOff(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{1: {ID: 1, Name: "素材"}},
+	}
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, liveRepo)
+	off := model.EnableCaptionsOff
+	project, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "关字幕", LiveID: 1, Width: 1080, Height: 1920, EnableCaptions: &off,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if project.EnableCaptions != model.EnableCaptionsOff {
+		t.Errorf("EnableCaptions = %d, want 0", project.EnableCaptions)
+	}
+}
+
+// TestVideoProjectService_Create_InvalidEnableCaptions 验证非法开关被拒绝。
+func TestVideoProjectService_Create_InvalidEnableCaptions(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{1: {ID: 1, Name: "素材"}},
+	}
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, liveRepo)
+	bad := 2
+	_, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "坏开关", LiveID: 1, EnableCaptions: &bad,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid enable_captions")
+	}
 }
 
 // TestVideoProjectService_Create_WithTypedClips 验证按结构化 clips 创建并落库。
@@ -345,6 +381,24 @@ func TestVideoProjectService_Update_PartialFields(t *testing.T) {
 	}
 	if len(updated.Clips0) != 1 || updated.Clips0[0].EndTime != 1 {
 		t.Errorf("Clips0 should remain unchanged, got %#v", updated.Clips0)
+	}
+}
+
+// TestVideoProjectService_Update_EnableCaptions 验证可更新字幕开关。
+func TestVideoProjectService_Update_EnableCaptions(t *testing.T) {
+	projectRepo := &mockVideoProjectRepo{
+		projects: map[uint]*model.VideoProject{
+			1: {ID: 1, Name: "项目", LiveID: 1, EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1},
+		},
+	}
+	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
+	off := model.EnableCaptionsOff
+	updated, err := svc.Update(context.Background(), 1, VideoProjectUpdateInput{EnableCaptions: &off})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.EnableCaptions != model.EnableCaptionsOff {
+		t.Errorf("EnableCaptions = %d, want 0", updated.EnableCaptions)
 	}
 }
 

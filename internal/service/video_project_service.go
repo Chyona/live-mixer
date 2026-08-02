@@ -44,29 +44,32 @@ type VideoProjectListOptions struct {
 // Clips0 / Clips1 为可选：nil 或空切片均写入 JSON 空数组 []。
 // ProjectSource 可选，未传时为空字符串。
 // Width / Height 可选：未传（均为 0）时按关联素材分辨率在 1920×1080 / 1080×1920 中自动选档。
+// EnableCaptions 可选：nil 时默认 1（添加字幕）；非 nil 时须为 0 或 1。
 type CreateVideoProjectInput struct {
-	Name          string
-	Remark        string
-	LiveID        uint
-	PromptID      uint
-	Clips0        []model.ClipRange
-	Clips1        []model.ClipWithText
-	Width         int
-	Height        int
-	ProjectSource string
+	Name           string
+	Remark         string
+	LiveID         uint
+	PromptID       uint
+	Clips0         []model.ClipRange
+	Clips1         []model.ClipWithText
+	Width          int
+	Height         int
+	ProjectSource  string
+	EnableCaptions *int
 }
 
 // VideoProjectUpdateInput 剪辑项目更新入参。
 // 指针字段为 nil 表示「请求未传该字段，保持原值」；非 nil 则校验通过后写入。
 type VideoProjectUpdateInput struct {
-	Name          *string
-	Remark        *string
-	PromptID      *uint
-	Clips0        *[]model.ClipRange
-	Clips1        *[]model.ClipWithText
-	Width         *int
-	Height        *int
-	ProjectSource *string
+	Name           *string
+	Remark         *string
+	PromptID       *uint
+	Clips0         *[]model.ClipRange
+	Clips1         *[]model.ClipWithText
+	Width          *int
+	Height         *int
+	ProjectSource  *string
+	EnableCaptions *int
 }
 
 // VideoProjectService 剪辑项目业务接口。
@@ -164,17 +167,26 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		return nil, err
 	}
 
+	enableCaptions := model.EnableCaptionsOn
+	if input.EnableCaptions != nil {
+		if err := validateEnableCaptions(*input.EnableCaptions); err != nil {
+			return nil, err
+		}
+		enableCaptions = *input.EnableCaptions
+	}
+
 	project := &model.VideoProject{
-		Name:          name,
-		Remark:        input.Remark,
-		LiveID:        input.LiveID,
-		PromptID:      promptID,
-		Clips0:        clips0,
-		Clips1:        clips1,
-		Width:         width,
-		Height:        height,
-		ProjectSource: strings.TrimSpace(input.ProjectSource),
-		CreatedBy:     createdBy,
+		Name:           name,
+		Remark:         input.Remark,
+		LiveID:         input.LiveID,
+		PromptID:       promptID,
+		Clips0:         clips0,
+		Clips1:         clips1,
+		Width:          width,
+		Height:         height,
+		ProjectSource:  strings.TrimSpace(input.ProjectSource),
+		EnableCaptions: enableCaptions,
+		CreatedBy:      createdBy,
 	}
 	if err := s.videoProjectRepo.Create(ctx, project); err != nil {
 		return nil, mapVideoProjectUniqueError(err)
@@ -236,6 +248,12 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 	}
 	if input.ProjectSource != nil {
 		project.ProjectSource = strings.TrimSpace(*input.ProjectSource)
+	}
+	if input.EnableCaptions != nil {
+		if err := validateEnableCaptions(*input.EnableCaptions); err != nil {
+			return nil, err
+		}
+		project.EnableCaptions = *input.EnableCaptions
 	}
 
 	if err := s.videoProjectRepo.Update(ctx, project); err != nil {
@@ -318,6 +336,14 @@ func validateProjectCanvasPair(width, height int) error {
 		projectCanvasLandscapeW, projectCanvasLandscapeH,
 		projectCanvasPortraitW, projectCanvasPortraitH,
 	)
+}
+
+// validateEnableCaptions 校验是否添加字幕开关（仅允许 0/1）。
+func validateEnableCaptions(v int) error {
+	if v != model.EnableCaptionsOff && v != model.EnableCaptionsOn {
+		return errors.New("enable_captions 仅支持 0 或 1")
+	}
+	return nil
 }
 
 // pickProjectCanvasByMaterial 按素材宽高比选择更接近的画布档；素材无效时默认竖屏。
