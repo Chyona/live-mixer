@@ -178,7 +178,7 @@ func (m *mockAISliceDraftWorkerEnqueue) Start(ctx context.Context) {}
 
 func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
-		ID: 1, LiveURL: "https://live.example/a.mp4", ASRStatus: model.ASRStatusCompleted,
+		ID: 1, Name: "春季发布会", LiveURL: "https://live.example/a.mp4", ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 5, Name: "slice-project-A", LiveID: 1, PromptID: 1,
@@ -215,6 +215,9 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	// 创建时应按 video_project / live_material 自动写入冗余快照字段。
 	if tasks.created == nil || tasks.created.LiveURL != "https://live.example/a.mp4" {
 		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
+	}
+	if tasks.created == nil || tasks.created.LiveName != "春季发布会" {
+		t.Errorf("LiveName = %q, want 春季发布会", tasks.created.LiveName)
 	}
 	if tasks.created == nil || tasks.created.Width != 1080 || tasks.created.Height != 1920 {
 		t.Errorf("Width/Height = %d/%d, want 1080/1920", tasks.created.Width, tasks.created.Height)
@@ -277,7 +280,7 @@ func TestTaskService_CreateAISlice_MissingProjectID(t *testing.T) {
 }
 
 func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
-	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, LiveURL: "https://x/a.mp4"}}
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{ID: 9, Name: "源视频A", LiveURL: "https://x/a.mp4"}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 3, Name: "draft-project-B", LiveID: 9,
 		Clips1: []model.ClipWithText{{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}}},
@@ -305,6 +308,9 @@ func TestTaskService_CreateDraft_EnqueuesWorker(t *testing.T) {
 	}
 	if tasks.created == nil || tasks.created.LiveURL != "https://x/a.mp4" {
 		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
+	}
+	if tasks.created == nil || tasks.created.LiveName != "源视频A" {
+		t.Errorf("LiveName = %q, want 源视频A", tasks.created.LiveName)
 	}
 	// 未传画布且项目未设置时，写入默认竖屏尺寸。
 	if tasks.created == nil || tasks.created.Width != draft.DefaultCanvasWidth || tasks.created.Height != draft.DefaultCanvasHeight {
@@ -359,7 +365,7 @@ func TestTaskService_CreateDraft_EmptyClips(t *testing.T) {
 
 func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
-		ID: 1, LiveURL: "https://live.example/one.mp4", ASRStatus: model.ASRStatusCompleted,
+		ID: 1, Name: "一键源视频", LiveURL: "https://live.example/one.mp4", ASRStatus: model.ASRStatusCompleted,
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
@@ -391,12 +397,15 @@ func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	if tasks.created == nil || tasks.created.SysPrompt != "sys-prompt" {
 		t.Errorf("SysPrompt = %q", tasks.created.SysPrompt)
 	}
-	// 请求画布覆盖应写入 task.width/height；live_url 来自素材快照。
+	// 请求画布覆盖应写入 task.width/height；live_url/live_name 来自素材快照。
 	if tasks.created == nil || tasks.created.Width != 720 || tasks.created.Height != 1280 {
 		t.Errorf("Width/Height = %d/%d, want 720/1280", tasks.created.Width, tasks.created.Height)
 	}
 	if tasks.created == nil || tasks.created.LiveURL != "https://live.example/one.mp4" {
 		t.Errorf("LiveURL = %q", tasks.created.LiveURL)
+	}
+	if tasks.created == nil || tasks.created.LiveName != "一键源视频" {
+		t.Errorf("LiveName = %q, want 一键源视频", tasks.created.LiveName)
 	}
 }
 

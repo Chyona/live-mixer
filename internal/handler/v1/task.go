@@ -83,7 +83,7 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 
 // TaskResponse 任务详情/列表 API 响应。
 // created_by 为创建人展示名（nickname 优先，否则 username），不是账号 ID。
-// width/height/live_url 为创建任务时按 video_project 自动快照的冗余字段。
+// width/height/live_url/live_name 为创建任务时按 video_project 自动快照的冗余字段。
 type TaskResponse struct {
 	ID               string     `json:"id"`
 	Type             string     `json:"type"`
@@ -96,6 +96,7 @@ type TaskResponse struct {
 	VideoProjectID   *uint      `json:"video_project_id,omitempty"`
 	VideoProjectName string     `json:"video_project_name"`
 	LiveURL          string     `json:"live_url"`
+	LiveName         string     `json:"live_name"`
 	Width            int        `json:"width"`
 	Height           int        `json:"height"`
 	DraftURL         string     `json:"draft_url"`
@@ -121,6 +122,7 @@ func (h *TaskHandler) toTaskResponse(ctx context.Context, task *model.Task) Task
 		VideoProjectID:   task.VideoProjectID,
 		VideoProjectName: task.VideoProjectName,
 		LiveURL:          task.LiveURL,
+		LiveName:         task.LiveName,
 		Width:            task.Width,
 		Height:           task.Height,
 		DraftURL:         task.DraftURL,
@@ -155,6 +157,7 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.Task
 			VideoProjectID:   item.VideoProjectID,
 			VideoProjectName: item.VideoProjectName,
 			LiveURL:          item.LiveURL,
+			LiveName:         item.LiveName,
 			Width:            item.Width,
 			Height:           item.Height,
 			DraftURL:         item.DraftURL,
@@ -278,7 +281,7 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 // ListTasks 任务列表
 // @Summary      任务列表
-// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url、width/height（创建时按 video_project 自动快照）
+// @Description  分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url、live_name、width/height（创建时按 video_project 自动快照）
 // @Tags         异步任务
 // @Produce      json
 // @Param        type        query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
@@ -322,7 +325,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 
 // GetTask 获取任务详情
 // @Summary      获取任务详情
-// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、width/height/live_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名
+// @Description  根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、width/height/live_url/live_name 等字段，用于轮询异步任务进度；created_by 为创建人展示名
 // @Tags         异步任务
 // @Produce      json
 // @Param        id   path  string  true  "任务 ID（UUID）"

@@ -40,7 +40,7 @@ func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts ser
 	return nil, 0, nil
 }
 
-// TestTaskHandler_Get_ReturnsDraftURL 验证详情接口返回 draft_url / video_url / live_url / width / height。
+// TestTaskHandler_Get_ReturnsDraftURL 验证详情接口返回 draft_url / video_url / live_url / live_name / width / height。
 func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewTaskHandler(&mockTaskService{
@@ -52,7 +52,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 			return &model.Task{
 				ID: wantID, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
 				DraftURL: "http://example.com/draft", VideoURL: "https://video.example.com/a.mp4",
-				LiveURL: "https://example.com/live.mp4", Width: 1080, Height: 1920,
+				LiveURL: "https://example.com/live.mp4", LiveName: "春季发布会", Width: 1080, Height: 1920,
 			}, nil
 		},
 	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
@@ -72,6 +72,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 			DraftURL  string `json:"draft_url"`
 			VideoURL  string `json:"video_url"`
 			LiveURL   string `json:"live_url"`
+			LiveName  string `json:"live_name"`
 			Width     int    `json:"width"`
 			Height    int    `json:"height"`
 			CreatedBy string `json:"created_by"`
@@ -89,6 +90,9 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	if resp.Data.LiveURL != "https://example.com/live.mp4" {
 		t.Errorf("live_url = %q", resp.Data.LiveURL)
 	}
+	if resp.Data.LiveName != "春季发布会" {
+		t.Errorf("live_name = %q", resp.Data.LiveName)
+	}
 	if resp.Data.Width != 1080 || resp.Data.Height != 1920 {
 		t.Errorf("width/height = %d/%d", resp.Data.Width, resp.Data.Height)
 	}
@@ -97,7 +101,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 	}
 }
 
-// TestTaskHandler_List_ReturnsLiveURLAndCanvasSize 验证列表接口返回 live_url / width / height。
+// TestTaskHandler_List_ReturnsLiveURLAndCanvasSize 验证列表接口返回 live_url / live_name / width / height。
 func TestTaskHandler_List_ReturnsLiveURLAndCanvasSize(t *testing.T) {
 	secret := "handler-test-secret"
 	projectID := uint(9)
@@ -107,7 +111,7 @@ func TestTaskHandler_List_ReturnsLiveURLAndCanvasSize(t *testing.T) {
 				ID: "22222222-2222-2222-2222-222222222222", Type: model.TaskTypeDraft,
 				Status: model.TaskStatusCompleted, CreatedBy: 1,
 				VideoProjectID: &projectID, VideoProjectName: "精剪",
-				LiveURL: "https://example.com/live.mp4", Width: 1080, Height: 1920,
+				LiveURL: "https://example.com/live.mp4", LiveName: "春季发布会", Width: 1080, Height: 1920,
 			}}, 1, nil
 		},
 	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
@@ -125,9 +129,10 @@ func TestTaskHandler_List_ReturnsLiveURLAndCanvasSize(t *testing.T) {
 	var resp struct {
 		Data struct {
 			List []struct {
-				LiveURL string `json:"live_url"`
-				Width   int    `json:"width"`
-				Height  int    `json:"height"`
+				LiveURL  string `json:"live_url"`
+				LiveName string `json:"live_name"`
+				Width    int    `json:"width"`
+				Height   int    `json:"height"`
 			} `json:"list"`
 		} `json:"data"`
 	}
@@ -140,6 +145,9 @@ func TestTaskHandler_List_ReturnsLiveURLAndCanvasSize(t *testing.T) {
 	item := resp.Data.List[0]
 	if item.LiveURL != "https://example.com/live.mp4" {
 		t.Errorf("live_url = %q", item.LiveURL)
+	}
+	if item.LiveName != "春季发布会" {
+		t.Errorf("live_name = %q", item.LiveName)
 	}
 	if item.Width != 1080 || item.Height != 1920 {
 		t.Errorf("width/height = %d/%d, want 1080/1920", item.Width, item.Height)

@@ -122,7 +122,7 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 	}
 }
 
-// TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize 验证列表直接返回 task 上冗余的 live_url / width / height。
+// TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize 验证列表直接返回 task 上冗余的 live_url / live_name / width / height。
 func TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize(t *testing.T) {
 	db := setupTaskTestDB(t)
 	repo := NewTaskRepository(db)
@@ -132,6 +132,7 @@ func TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize(t *testing.T) {
 		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
 		VideoProjectName: "项目",
 		LiveURL:          "https://example.com/live.mp4",
+		LiveName:         "春季发布会",
 		Width:            1920,
 		Height:           1080,
 	}
@@ -161,6 +162,9 @@ func TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize(t *testing.T) {
 	got := byID[withSnapshot.ID]
 	if got.LiveURL != "https://example.com/live.mp4" {
 		t.Errorf("LiveURL = %q, want https://example.com/live.mp4", got.LiveURL)
+	}
+	if got.LiveName != "春季发布会" {
+		t.Errorf("LiveName = %q, want 春季发布会", got.LiveName)
 	}
 	if got.Width != 1920 || got.Height != 1080 {
 		t.Errorf("Width/Height = %d/%d, want 1920/1080", got.Width, got.Height)

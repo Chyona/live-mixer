@@ -1008,7 +1008,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url（live_material）、width/height（video_project）",
+                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；关键词模糊匹配 task.video_project_name，多个关键词为 AND；列表项含 video_project_name、live_url、live_name、width/height（创建时按 video_project 自动快照）",
                 "produces": [
                     "application/json"
                 ],
@@ -1246,7 +1246,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url 等字段，用于轮询异步任务进度；created_by 为创建人展示名",
+                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、width/height/live_url/live_name 等字段，用于轮询异步任务进度；created_by 为创建人展示名",
                 "produces": [
                     "application/json"
                 ],

@@ -32,7 +32,7 @@ type TaskRepository interface {
 	Create(ctx context.Context, task *model.Task) error
 	// GetByID 根据主键查询任务。
 	GetByID(ctx context.Context, id string) (*model.Task, error)
-	// List 分页查询任务列表，按创建时间倒序；width/height/live_url 直接读 task 冗余字段。
+	// List 分页查询任务列表，按创建时间倒序；width/height/live_url/live_name 直接读 task 冗余字段。
 	List(ctx context.Context, filter TaskListFilter, offset, limit int) ([]model.TaskListItem, int64, error)
 	// ClaimPendingByType 多实例安全地抢占一条指定类型的 pending 任务。
 	// 使用乐观锁（version CAS）：将状态改为 processing 并返回；无待处理任务时返回 nil。
@@ -94,7 +94,7 @@ func (r *taskRepository) List(ctx context.Context, filter TaskListFilter, offset
 		return nil, 0, err
 	}
 
-	// 直接查 task 表：创建时已快照 width/height/live_url，无需再 JOIN 关联表。
+	// 直接查 task 表：创建时已快照 width/height/live_url/live_name，无需再 JOIN 关联表。
 	query := r.db.WithContext(ctx).Model(&model.Task{})
 	query = applyTaskListFilter(query, filter)
 	// UUID 主键无序，列表按创建时间倒序保证「新任务在前」。

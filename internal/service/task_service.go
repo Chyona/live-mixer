@@ -54,7 +54,7 @@ type CreateAISliceDraftInput struct {
 }
 
 // TaskExt 写入 task.ext 的结构化元数据。
-// 画布尺寸与直播链接已冗余落在 task.width/height/live_url，不再写入 ext。
+// 画布尺寸与源视频链接/名称已冗余落在 task.width/height/live_url/live_name，不再写入 ext。
 type TaskExt struct {
 	LiveID           uint              `json:"live_id,omitempty"`
 	VideoProjectID   uint              `json:"video_project_id,omitempty"`
@@ -129,7 +129,7 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 	if err := prepare.ValidateClipRanges(project.Clips0); err != nil {
 		return nil, err
 	}
-	// 校验 ASR 完成的同时取出素材，用于写入 task.live_url 快照。
+	// 校验 ASR 完成的同时取出素材，用于写入 task.live_url / live_name 快照。
 	material, err := s.requireASRCompletedMaterial(ctx, project.LiveID)
 	if err != nil {
 		return nil, err
@@ -166,10 +166,11 @@ func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input C
 		// usr_prompt 由 Worker 根据 clips0 + live_asr 组装内置模板后回写。
 		VideoProjectID:   model.NewUintPtr(project.ID),
 		VideoProjectName: project.Name,
-		// 按 video_project 自动快照画布尺寸与直播链接（无外键）。
+		// 按 video_project 自动快照画布尺寸与源视频链接/名称（无外键）。
 		Width:     project.Width,
 		Height:    project.Height,
 		LiveURL:   material.LiveURL,
+		LiveName:  material.Name,
 		CreatedBy: createdBy,
 		Ext:       ext,
 	}
@@ -236,6 +237,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 		Width:            width,
 		Height:           height,
 		LiveURL:          material.LiveURL,
+		LiveName:         material.Name,
 		CreatedBy:        createdBy,
 		Ext:              ext,
 	}
@@ -288,7 +290,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		return nil, errors.New("系统提示词内容为空")
 	}
 
-	// 一键成片同样落库解析后的画布尺寸与直播链接快照。
+	// 一键成片同样落库解析后的画布尺寸与源视频链接/名称快照。
 	width, height := draft.ResolveCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
 
 	ext, err := marshalTaskExt(TaskExt{
@@ -311,6 +313,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		Width:            width,
 		Height:           height,
 		LiveURL:          material.LiveURL,
+		LiveName:         material.Name,
 		CreatedBy:        createdBy,
 		Ext:              ext,
 	}
@@ -396,7 +399,7 @@ func normalizeTaskKeywords(raw []string) []string {
 	return out
 }
 
-// requireASRCompletedMaterial 校验直播素材 ASR 已完成，并返回素材实体供创建任务时写入 live_url 快照。
+// requireASRCompletedMaterial 校验直播素材 ASR 已完成，并返回素材实体供创建任务时写入 live_url / live_name 快照。
 func (s *taskService) requireASRCompletedMaterial(ctx context.Context, liveID uint) (*model.LiveMaterial, error) {
 	material, err := s.liveMaterialRepo.GetByID(ctx, liveID)
 	if err != nil {
