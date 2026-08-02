@@ -19,9 +19,9 @@ const (
 	defaultCaptionAlpha       = 1.0
 	defaultCaptionTextColor   = "#ffde00"
 	defaultCaptionBorderColor = "#000000"
-	defaultCaptionFontSize    = 13
+	defaultCaptionFontSize    = 10
 	defaultCaptionScale       = 1.0
-	defaultCaptionTransformY  = -800.0
+	defaultCaptionTransformY  = -360.0
 	defaultCaptionFont        = "得意黑"
 )
 

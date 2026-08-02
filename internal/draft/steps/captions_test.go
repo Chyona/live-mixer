@@ -155,6 +155,9 @@ func TestCaptionsStep_Run_Success(t *testing.T) {
 	if api.lastReq.Font != defaultCaptionFont || api.lastReq.TransformY != defaultCaptionTransformY {
 		t.Errorf("style = font=%q ty=%v", api.lastReq.Font, api.lastReq.TransformY)
 	}
+	if api.lastReq.FontSize != defaultCaptionFontSize {
+		t.Errorf("font_size = %d, want %d", api.lastReq.FontSize, defaultCaptionFontSize)
+	}
 	if api.lastReq.TextColor != defaultCaptionTextColor || api.lastReq.BorderColor != defaultCaptionBorderColor {
 		t.Errorf("colors = text=%q border=%q", api.lastReq.TextColor, api.lastReq.BorderColor)
 	}
