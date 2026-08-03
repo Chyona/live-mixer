@@ -393,13 +393,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "标题关键词：\",\"=与，\"|\"=或，匹配 name/remark；如 游戏,周末|发布会",
+                        "description": "标题关键词：\\",
                         "name": "keywords",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "ASR 段落关键词：\",\"=与，\"|\"=或，匹配 asr_paragraphs；命中段落见 matched_paragraphs",
+                        "description": "ASR 段落关键词：\\",
                         "name": "asr_keywords",
                         "in": "query"
                     },
@@ -443,7 +443,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "添加一条直播素材，name、live_url 为必填",
+                "description": "添加一条直播素材，name、live_url 为必填；url_type 由后台按 live_url 自动识别写入",
                 "consumes": [
                     "application/json"
                 ],
@@ -483,6 +483,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/response.Body"
                         }
+                    },
+                    "409": {
+                        "description": "素材已存在，code=40901，data 为已有记录",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
                     }
                 }
             }
@@ -494,7 +500,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "根据 ID 查询直播素材完整信息；live_asr 为分句数组，含 speaker、时间戳与字级 words",
+                "description": "根据 ID 查询直播素材完整信息；live_asr 为分句数组；含 asr_summaries（AI 主题分段）与 asr_paragraphs（全文段落划分）",
                 "produces": [
                     "application/json"
                 ],
@@ -743,7 +749,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "关键词：\",\"=与，\"|\"=或，匹配 name/content/remark；如 直播,话术|周末",
+                        "description": "关键词：\\",
                         "name": "keywords",
                         "in": "query"
                     },
@@ -1008,7 +1014,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；keywords 支持 \",\"=与、\"|\"=或，模糊匹配 task.video_project_name；列表项含 video_project_name、live_url、live_name、width/height（创建时按 video_project 自动快照）",
+                "description": "分页查询异步任务，支持按 type、status、创建日期与关键词筛选；keywords 支持 \",\"=与、\"|\"=或，模糊匹配 task.video_project_name；列表项含 video_project_name、live_url、live_name、clips_tar_url、width/height（创建时按 video_project 自动快照）",
                 "produces": [
                     "application/json"
                 ],
@@ -1043,7 +1049,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "关键词：\",\"=与，\"|\"=或，模糊匹配 video_project_name；如 发布会,精剪|一键",
+                        "description": "关键词：\\",
                         "name": "keywords",
                         "in": "query"
                     },
@@ -1140,7 +1146,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
+                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1191,7 +1197,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
+                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1242,7 +1248,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、width/height/live_url/live_name 等字段，用于轮询异步任务进度；created_by 为创建人展示名",
+                "description": "根据 ID 查询任务；直接读取数据库中的 status、progress、draft_url、video_url、clips_tar_url、width/height/live_url/live_name 等字段，用于轮询异步任务进度；created_by 为创建人展示名",
                 "produces": [
                     "application/json"
                 ],
@@ -1288,7 +1294,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id 与 live_name（关联 live_material.name）",
+                "description": "分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id、live_name（关联 live_material.name）与 task_count（关联 task 总数）",
                 "produces": [
                     "application/json"
                 ],
@@ -1299,7 +1305,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "关键词：\",\"=与，\"|\"=或，匹配 name/remark/live_name；如 发布会,2026|精剪",
+                        "description": "关键词：\\",
                         "name": "keywords",
                         "in": "query"
                     },
@@ -1355,7 +1361,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目",
+                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目",
                 "consumes": [
                     "application/json"
                 ],
@@ -1450,7 +1456,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 为 bool，入库为 0/1",
                 "consumes": [
                     "application/json"
                 ],
@@ -1532,6 +1538,70 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/video-projects/{id}/running-tasks": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回指定剪辑项目下未结束的任务（默认 pending + processing）；active_only=true 时仅返回 processing；可选按 type 筛选；返回 task 全字段（created_by 为展示名）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "异步任务"
+                ],
+                "summary": "查询项目运行中的任务",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "剪辑项目 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "任务类型：ai_slice / draft / ai_slice_draft",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "仅返回 processing 状态",
+                        "name": "active_only",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/response.Body"
                         }
@@ -1804,6 +1874,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.ClipWithText"
                     }
                 },
+                "enable_captions": {
+                    "description": "是否添加字幕；未传默认 true，入库为 0/1",
+                    "type": "boolean"
+                },
                 "height": {
                     "type": "integer",
                     "minimum": 0
@@ -1963,6 +2037,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.ClipWithText"
                     }
+                },
+                "enable_captions": {
+                    "description": "是否添加字幕；入库为 0/1",
+                    "type": "boolean"
                 },
                 "height": {
                     "type": "integer",
