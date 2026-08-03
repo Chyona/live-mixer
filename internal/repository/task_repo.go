@@ -19,11 +19,13 @@ const claimOptimisticMaxAttempts = 64
 
 // TaskListFilter 任务列表查询筛选条件。
 type TaskListFilter struct {
-	Type     string     // 任务类型，空表示不限
-	Status   string     // 任务状态，空表示不限
-	StartAt  *time.Time // 开始日期（含），按 created_at 筛选
-	EndAt    *time.Time // 结束日期次日零点（不含），按 created_at 筛选
-	Keywords KeywordGroups // 关键词表达式（已规范化小写）：组内 AND、组间 OR；模糊匹配 video_project_name
+	Type           string     // 任务类型，空表示不限
+	Status         string     // 任务状态，空表示不限；与 Statuses 互斥，Statuses 优先
+	Statuses       []string   // 多状态 IN 查询；非空时忽略 Status
+	VideoProjectID *uint      // 关联剪辑项目 ID，nil 表示不限
+	StartAt        *time.Time // 开始日期（含），按 created_at 筛选
+	EndAt          *time.Time // 结束日期次日零点（不含），按 created_at 筛选
+	Keywords       KeywordGroups // 关键词表达式（已规范化小写）：组内 AND、组间 OR；模糊匹配 video_project_name
 }
 
 // TaskRepository 异步任务数据访问接口。
@@ -111,8 +113,13 @@ func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
 	if filter.Type != "" {
 		query = query.Where("type = ?", filter.Type)
 	}
-	if filter.Status != "" {
+	if len(filter.Statuses) > 0 {
+		query = query.Where("status IN ?", filter.Statuses)
+	} else if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.VideoProjectID != nil {
+		query = query.Where("video_project_id = ?", *filter.VideoProjectID)
 	}
 	if filter.StartAt != nil {
 		query = query.Where("created_at >= ?", *filter.StartAt)

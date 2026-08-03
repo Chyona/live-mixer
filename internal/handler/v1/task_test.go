@@ -14,8 +14,9 @@ import (
 
 // mockTaskService 用于任务 handler 单元测试。
 type mockTaskService struct {
-	getFn  func(ctx context.Context, id string) (*model.Task, error)
-	listFn func(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.TaskListItem, int64, error)
+	getFn         func(ctx context.Context, id string) (*model.Task, error)
+	listFn        func(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.TaskListItem, int64, error)
+	listRunningFn func(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error)
 }
 
 func (m *mockTaskService) CreateAISlice(ctx context.Context, createdBy uint, input service.CreateAISliceInput) (*model.Task, error) {
@@ -36,6 +37,12 @@ func (m *mockTaskService) Get(ctx context.Context, id string) (*model.Task, erro
 func (m *mockTaskService) List(ctx context.Context, page, pageSize int, opts service.TaskListOptions) ([]model.TaskListItem, int64, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, page, pageSize, opts)
+	}
+	return nil, 0, nil
+}
+func (m *mockTaskService) ListRunningByVideoProject(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error) {
+	if m.listRunningFn != nil {
+		return m.listRunningFn(ctx, videoProjectID, taskType, activeOnly)
 	}
 	return nil, 0, nil
 }
@@ -157,5 +164,90 @@ func TestTaskHandler_List_ReturnsLiveURLAndCanvasSize(t *testing.T) {
 	}
 	if item.Width != 1080 || item.Height != 1920 {
 		t.Errorf("width/height = %d/%d, want 1080/1920", item.Width, item.Height)
+	}
+}
+
+// TestTaskHandler_ListRunningTasksByProject 验证项目运行中任务接口传参与响应。
+func TestTaskHandler_ListRunningTasksByProject(t *testing.T) {
+	secret := "handler-test-secret"
+	projectID := uint(12)
+	handler := NewTaskHandler(&mockTaskService{
+		listRunningFn: func(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error) {
+			if videoProjectID != 12 {
+				t.Errorf("videoProjectID = %d, want 12", videoProjectID)
+			}
+			if taskType != model.TaskTypeDraft {
+				t.Errorf("taskType = %q, want draft", taskType)
+			}
+			if !activeOnly {
+				t.Error("activeOnly = false, want true")
+			}
+			return []model.TaskListItem{{
+				ID: "33333333-3333-3333-3333-333333333333", Type: model.TaskTypeDraft,
+				Status: model.TaskStatusProcessing, Progress: 40, CreatedBy: 1,
+				VideoProjectID: &projectID, VideoProjectName: "精剪",
+				LiveURL: "https://example.com/live.mp4", LiveName: "春季发布会", Width: 1080, Height: 1920,
+			}}, 1, nil
+		},
+	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
+	r := newAuthedRouter(secret, handler.ListRunningTasksByProject, http.MethodGet, "/video-projects/:id/running-tasks")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/video-projects/12/running-tasks?type=draft&active_only=true", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			List []struct {
+				ID       string `json:"id"`
+				Status   string `json:"status"`
+				Progress int16  `json:"progress"`
+				LiveURL  string `json:"live_url"`
+				CreatedBy string `json:"created_by"`
+			} `json:"list"`
+			Total int64 `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Data.Total != 1 || len(resp.Data.List) != 1 {
+		t.Fatalf("total/list = %d/%d, want 1/1", resp.Data.Total, len(resp.Data.List))
+	}
+	item := resp.Data.List[0]
+	if item.Status != model.TaskStatusProcessing || item.Progress != 40 {
+		t.Errorf("status/progress = %s/%d", item.Status, item.Progress)
+	}
+	if item.LiveURL != "https://example.com/live.mp4" {
+		t.Errorf("live_url = %q", item.LiveURL)
+	}
+	if item.CreatedBy != "AdminNick" {
+		t.Errorf("created_by = %q, want AdminNick", item.CreatedBy)
+	}
+}
+
+// TestTaskHandler_ListRunningTasksByProject_NotFound 验证项目不存在时返回 404。
+func TestTaskHandler_ListRunningTasksByProject_NotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewTaskHandler(&mockTaskService{
+		listRunningFn: func(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error) {
+			return nil, 0, service.ErrVideoProjectNotFound
+		},
+	}, accountsStub())
+	r := newAuthedRouter(secret, handler.ListRunningTasksByProject, http.MethodGet, "/video-projects/:id/running-tasks")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/video-projects/99/running-tasks", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", w.Code, w.Body.String())
 	}
 }

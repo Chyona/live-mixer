@@ -62,6 +62,18 @@ type ListTasksRequest struct {
 	PageSize  int      `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
+// ListRunningTasksByProjectRequest 项目运行中任务查询参数。
+type ListRunningTasksByProjectRequest struct {
+	Type       string `form:"type"`        // 可选：ai_slice / draft / ai_slice_draft
+	ActiveOnly bool   `form:"active_only"` // true 时仅返回 processing
+}
+
+// RunningTasksData 项目运行中任务列表响应（无分页）。
+type RunningTasksData struct {
+	List  []TaskResponse `json:"list"`
+	Total int64          `json:"total"`
+}
+
 // TaskCreateResponse 创建任务立即返回的摘要。
 type TaskCreateResponse struct {
 	ID        string    `json:"id"`
@@ -323,6 +335,56 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
+	})
+}
+
+// ListRunningTasksByProject 查询项目运行中的任务
+// @Summary      查询项目运行中的任务
+// @Description  返回指定剪辑项目下未结束的任务（默认 pending + processing）；active_only=true 时仅返回 processing；可选按 type 筛选；返回 task 全字段（created_by 为展示名）
+// @Tags         异步任务
+// @Produce      json
+// @Param        id           path   int     true   "剪辑项目 ID"
+// @Param        type         query  string  false  "任务类型：ai_slice / draft / ai_slice_draft"
+// @Param        active_only  query  bool    false  "仅返回 processing 状态"
+// @Success      200          {object}  response.Body
+// @Failure      400          {object}  response.Body
+// @Failure      401          {object}  response.Body
+// @Failure      404          {object}  response.Body
+// @Security     BearerAuth
+// @Router       /v1/video-projects/{id}/running-tasks [get]
+func (h *TaskHandler) ListRunningTasksByProject(c *gin.Context) {
+	projectID, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的项目 ID")
+		return
+	}
+	var req ListRunningTasksByProjectRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	tasks, total, err := h.taskService.ListRunningByVideoProject(
+		c.Request.Context(),
+		projectID,
+		req.Type,
+		req.ActiveOnly,
+	)
+	if err != nil {
+		if errors.Is(err, service.ErrVideoProjectNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrTaskInvalidType) {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, RunningTasksData{
+		List:  h.toTaskResponseList(c.Request.Context(), tasks),
+		Total: total,
 	})
 }
 

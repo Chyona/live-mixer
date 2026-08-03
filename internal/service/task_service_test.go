@@ -140,7 +140,7 @@ func (m *mockVideoProjectRepoForDraft) GetByID(ctx context.Context, id uint) (*m
 	if m.err != nil {
 		return nil, m.err
 	}
-	if m.project == nil {
+	if m.project == nil || m.project.ID != id {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return m.project, nil
@@ -499,6 +499,68 @@ func TestTaskService_List_InvalidDate(t *testing.T) {
 	_, _, err := svc.List(context.Background(), 1, 10, TaskListOptions{StartDate: "2026/01/01"})
 	if err == nil || !strings.Contains(err.Error(), "start_date") {
 		t.Fatalf("error = %v, want start_date format error", err)
+	}
+}
+
+func TestTaskService_ListRunningByVideoProject(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.AutoMigrate(&model.Task{})
+	repo := repository.NewTaskRepository(db)
+	ctx := context.Background()
+
+	projectID := uint(7)
+	otherID := uint(8)
+	tasks := []*model.Task{
+		{Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1, VideoProjectID: &projectID},
+		{Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing, CreatedBy: 1, VideoProjectID: &projectID},
+		{Type: model.TaskTypeAISlice, Status: model.TaskStatusPending, CreatedBy: 1, VideoProjectID: &projectID},
+		{Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1, VideoProjectID: &projectID},
+		{Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1, VideoProjectID: &otherID},
+	}
+	for _, task := range tasks {
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	projectRepo := &mockVideoProjectRepoForDraft{project: &model.VideoProject{ID: projectID}}
+	svc := NewTaskService(repo, &mockLiveRepoForTask{}, projectRepo, &mockPromptRepo{}, nil, nil, nil)
+
+	list, total, err := svc.ListRunningByVideoProject(ctx, projectID, "", false)
+	if err != nil {
+		t.Fatalf("ListRunningByVideoProject() error = %v", err)
+	}
+	if total != 3 || len(list) != 3 {
+		t.Fatalf("default total/len = %d/%d, want 3/3", total, len(list))
+	}
+
+	list, total, err = svc.ListRunningByVideoProject(ctx, projectID, "", true)
+	if err != nil {
+		t.Fatalf("activeOnly error = %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Status != model.TaskStatusProcessing {
+		t.Fatalf("activeOnly total/len/status = %d/%d/%v", total, len(list), list)
+	}
+
+	list, total, err = svc.ListRunningByVideoProject(ctx, projectID, model.TaskTypeDraft, false)
+	if err != nil {
+		t.Fatalf("type filter error = %v", err)
+	}
+	if total != 2 || len(list) != 2 {
+		t.Fatalf("type filter total/len = %d/%d, want 2/2", total, len(list))
+	}
+
+	_, _, err = svc.ListRunningByVideoProject(ctx, 99, "", false)
+	if !errors.Is(err, ErrVideoProjectNotFound) {
+		t.Fatalf("error = %v, want ErrVideoProjectNotFound", err)
+	}
+
+	_, _, err = svc.ListRunningByVideoProject(ctx, projectID, "bad_type", false)
+	if !errors.Is(err, ErrTaskInvalidType) {
+		t.Fatalf("error = %v, want ErrTaskInvalidType", err)
 	}
 }
 

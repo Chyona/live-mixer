@@ -122,6 +122,55 @@ func TestTaskRepository_List_Keywords(t *testing.T) {
 	}
 }
 
+// TestTaskRepository_List_ByVideoProjectAndStatuses 验证按项目 ID + 多状态筛选。
+func TestTaskRepository_List_ByVideoProjectAndStatuses(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+
+	projectA := uint(10)
+	projectB := uint(20)
+	pending := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: &projectA,
+	}
+	processing := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing, CreatedBy: 1,
+		VideoProjectID: &projectA,
+	}
+	completed := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
+		VideoProjectID: &projectA,
+	}
+	otherProject := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: &projectB,
+	}
+	for _, task := range []*model.Task{pending, processing, completed, otherProject} {
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	list, total, err := repo.List(ctx, TaskListFilter{
+		VideoProjectID: &projectA,
+		Statuses:       []string{model.TaskStatusPending, model.TaskStatusProcessing},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 2 || len(list) != 2 {
+		t.Fatalf("total/len = %d/%d, want 2/2", total, len(list))
+	}
+	for _, item := range list {
+		if model.UintValue(item.VideoProjectID) != projectA {
+			t.Errorf("video_project_id = %v, want %d", item.VideoProjectID, projectA)
+		}
+		if item.Status != model.TaskStatusPending && item.Status != model.TaskStatusProcessing {
+			t.Errorf("unexpected status %q", item.Status)
+		}
+	}
+}
+
 // TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize 验证列表直接返回 task 上冗余的 live_url / live_name / width / height。
 func TestTaskRepository_List_ReturnsStoredLiveURLAndCanvasSize(t *testing.T) {
 	db := setupTaskTestDB(t)

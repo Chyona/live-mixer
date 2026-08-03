@@ -65,6 +65,7 @@ func RegisterRoutes(
 		videoProjects.GET("", videoProjectHandler.ListVideoProjects)
 		videoProjects.POST("", videoProjectHandler.CreateVideoProject)
 		videoProjects.GET("/:id", videoProjectHandler.GetVideoProject)
+		videoProjects.GET("/:id/running-tasks", taskHandler.ListRunningTasksByProject)
 		videoProjects.PUT("/:id", videoProjectHandler.UpdateVideoProject)
 		videoProjects.DELETE("/:id", videoProjectHandler.DeleteVideoProject)
 	}

@@ -65,6 +65,9 @@ type TaskExt struct {
 	Clips0           []model.ClipRange `json:"clips0,omitempty"`
 }
 
+// runningTasksListLimit 单项目运行中任务查询上限，防止异常堆积时一次拉回过多行。
+const runningTasksListLimit = 100
+
 // TaskService 异步任务业务接口。
 type TaskService interface {
 	CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) (*model.Task, error)
@@ -72,6 +75,8 @@ type TaskService interface {
 	CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error)
 	Get(ctx context.Context, id string) (*model.Task, error)
 	List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.TaskListItem, int64, error)
+	// ListRunningByVideoProject 查询指定项目下未结束的任务（pending + processing；activeOnly 时仅 processing）。
+	ListRunningByVideoProject(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error)
 }
 
 type taskService struct {
@@ -350,6 +355,33 @@ func (s *taskService) List(ctx context.Context, page, pageSize int, opts TaskLis
 	}
 	offset := (page - 1) * pageSize
 	return s.taskRepo.List(ctx, filter, offset, pageSize)
+}
+
+func (s *taskService) ListRunningByVideoProject(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error) {
+	if videoProjectID == 0 {
+		return nil, 0, errors.New("video_project_id 不能为空")
+	}
+	if taskType != "" && !isValidTaskType(taskType) {
+		return nil, 0, ErrTaskInvalidType
+	}
+	if _, err := s.videoProjectRepo.GetByID(ctx, videoProjectID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, ErrVideoProjectNotFound
+		}
+		return nil, 0, err
+	}
+
+	statuses := []string{model.TaskStatusPending, model.TaskStatusProcessing}
+	if activeOnly {
+		statuses = []string{model.TaskStatusProcessing}
+	}
+	projectID := videoProjectID
+	filter := repository.TaskListFilter{
+		Type:           taskType,
+		Statuses:       statuses,
+		VideoProjectID: &projectID,
+	}
+	return s.taskRepo.List(ctx, filter, 0, runningTasksListLimit)
 }
 
 // buildTaskListFilter 解析列表筛选参数并转换为仓储层筛选条件。
