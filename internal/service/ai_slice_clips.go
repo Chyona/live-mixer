@@ -2,14 +2,50 @@ package service
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 )
 
-// filterUtterancesByClips0 按 video_project.clips0 时间段筛选 ASR 分句。
-// 分句与任一 clips0 区间有时间重叠即纳入；保持原 ASR 顺序，同一分句只出现一次。
+// sortAndMergeOverlappingClipRanges 对 clips0 做 AI 选片预处理：
+// 1. 按 start_time 升序（相同则按 end_time）；
+// 2. 重叠或端点相接（next.Start <= cur.End）的区间取并集合并。
+// 返回新切片，不修改入参；空入参返回 nil。
+func sortAndMergeOverlappingClipRanges(clips []model.ClipRange) []model.ClipRange {
+	if len(clips) == 0 {
+		return nil
+	}
+	sorted := make([]model.ClipRange, len(clips))
+	copy(sorted, clips)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].StartTime != sorted[j].StartTime {
+			return sorted[i].StartTime < sorted[j].StartTime
+		}
+		return sorted[i].EndTime < sorted[j].EndTime
+	})
+
+	out := make([]model.ClipRange, 0, len(sorted))
+	cur := sorted[0]
+	for i := 1; i < len(sorted); i++ {
+		next := sorted[i]
+		// 重叠或端点相接 → 并集；有间隙则新开一段。
+		if next.StartTime <= cur.EndTime {
+			if next.EndTime > cur.EndTime {
+				cur.EndTime = next.EndTime
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = next
+	}
+	out = append(out, cur)
+	return out
+}
+
+// filterUtterancesByClips0 按 clips0 时间段筛选 ASR 分句。
+// 分句与任一区间有时间重叠即纳入；保持原 ASR 顺序，同一分句只出现一次。
 func filterUtterancesByClips0(utterances []asr.Utterance, clips0 []model.ClipRange) []asr.Utterance {
 	if len(utterances) == 0 || len(clips0) == 0 {
 		return nil

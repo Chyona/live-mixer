@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/llm"
+	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
 	"go.uber.org/zap"
@@ -57,6 +59,7 @@ type aiSliceWorker struct {
 	liveMaterialRepo repository.LiveMaterialRepository
 	videoProjectRepo repository.VideoProjectRepository
 	llmClient        LLMChatClient
+	web              webroot.Config
 	logger           *zap.Logger
 	concurrency      int
 	pollInterval     time.Duration
@@ -69,6 +72,7 @@ type aiSliceWorker struct {
 // NewAISliceWorker 创建 AI 切片后台 Worker。
 // concurrency 为单实例并行 Worker 数；<=0 时使用内置默认值（6）。
 // staleTimeout 为 processing 孤儿回收阈值；<=0 时使用内置默认值（20 分钟）。
+// web.RootDir 非空时将 clips0 预处理前后快照落盘到 staging/{task_id}/ai_slice/。
 func NewAISliceWorker(
 	taskRepo repository.TaskRepository,
 	liveMaterialRepo repository.LiveMaterialRepository,
@@ -77,6 +81,7 @@ func NewAISliceWorker(
 	logger *zap.Logger,
 	concurrency int,
 	staleTimeout time.Duration,
+	web webroot.Config,
 ) AISliceWorker {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -92,6 +97,7 @@ func NewAISliceWorker(
 		liveMaterialRepo: liveMaterialRepo,
 		videoProjectRepo: videoProjectRepo,
 		llmClient:        llmClient,
+		web:              web,
 		logger:           logger,
 		concurrency:      concurrency,
 		pollInterval:     aiSlicePollInterval,
@@ -259,9 +265,37 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 
 	progress = setProgress(20)
 
-	// 完整 ASR → 按 clips0 时间段筛选 → 得到带下标的待分析句段列表。
+	// clips0 预处理：排序 + 重叠并集合并；仅作本任务筛选入参，不回写 video_project.clips0。
+	rawClips0 := project.Clips0
+	w.logger.Info("AI 切片读取 clips0",
+		zap.String("task_id", task.ID),
+		zap.Uint("video_project_id", project.ID),
+		zap.Int("clips0_raw_count", len(rawClips0)),
+	)
+	stagingDir := ""
+	if strings.TrimSpace(w.web.RootDir) != "" {
+		stagingDir = filepath.Join(w.web.StagingDir(task.ID), "ai_slice")
+	}
+	writeAISliceClips0Debug(stagingDir, "clips0_before.json", task.ID, project.ID, "before", rawClips0, w.logger)
+
+	mergedClips0 := sortAndMergeOverlappingClipRanges(rawClips0)
+	writeAISliceClips0Debug(stagingDir, "clips0_after.json", task.ID, project.ID, "after", mergedClips0, w.logger)
+	w.logger.Info("AI 切片 clips0 预处理完成",
+		zap.String("task_id", task.ID),
+		zap.Uint("video_project_id", project.ID),
+		zap.Int("before_count", len(rawClips0)),
+		zap.Int("after_count", len(mergedClips0)),
+		zap.Int("merged_count", len(rawClips0)-len(mergedClips0)),
+		zap.String("staging_dir", stagingDir),
+	)
+
+	// 完整 ASR → 按预处理后的 clips0 时间段筛选 → 得到带下标的待分析句段列表。
 	allUtterances := asr.FormatUtterancesForAPI(material.LiveASR)
-	segments := filterUtterancesByClips0(allUtterances, project.Clips0)
+	segments := filterUtterancesByClips0(allUtterances, mergedClips0)
+	w.logger.Info("AI 切片按 clips0 筛选 ASR 完成",
+		zap.String("task_id", task.ID),
+		zap.Int("segments_count", len(segments)),
+	)
 	if len(segments) == 0 {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("clips0 时间段内无可用 ASR 分句"))
 	}

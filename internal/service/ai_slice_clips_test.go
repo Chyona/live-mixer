@@ -1,11 +1,99 @@
 package service
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
+
+	"go.uber.org/zap"
 )
+
+func TestSortAndMergeOverlappingClipRanges(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []model.ClipRange
+		want []model.ClipRange
+	}{
+		{name: "nil", in: nil, want: nil},
+		{name: "empty", in: []model.ClipRange{}, want: nil},
+		{
+			name: "single",
+			in:   []model.ClipRange{{StartTime: 10, EndTime: 20}},
+			want: []model.ClipRange{{StartTime: 10, EndTime: 20}},
+		},
+		{
+			name: "sort_only",
+			in: []model.ClipRange{
+				{StartTime: 5000, EndTime: 6000},
+				{StartTime: 1000, EndTime: 2000},
+			},
+			want: []model.ClipRange{
+				{StartTime: 1000, EndTime: 2000},
+				{StartTime: 5000, EndTime: 6000},
+			},
+		},
+		{
+			name: "overlap_merge",
+			in: []model.ClipRange{
+				{StartTime: 5000, EndTime: 8000},
+				{StartTime: 1000, EndTime: 3000},
+				{StartTime: 2500, EndTime: 6000},
+			},
+			want: []model.ClipRange{{StartTime: 1000, EndTime: 8000}},
+		},
+		{
+			name: "abut_merge",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 100},
+				{StartTime: 100, EndTime: 200},
+			},
+			want: []model.ClipRange{{StartTime: 0, EndTime: 200}},
+		},
+		{
+			name: "gap_keep",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 100},
+				{StartTime: 101, EndTime: 200},
+			},
+			want: []model.ClipRange{
+				{StartTime: 0, EndTime: 100},
+				{StartTime: 101, EndTime: 200},
+			},
+		},
+		{
+			name: "contained",
+			in: []model.ClipRange{
+				{StartTime: 0, EndTime: 1000},
+				{StartTime: 100, EndTime: 200},
+			},
+			want: []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sortAndMergeOverlappingClipRanges(tt.in)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSortAndMergeOverlappingClipRanges_DoesNotMutateInput(t *testing.T) {
+	in := []model.ClipRange{
+		{StartTime: 5000, EndTime: 8000},
+		{StartTime: 1000, EndTime: 3000},
+	}
+	_ = sortAndMergeOverlappingClipRanges(in)
+	if in[0].StartTime != 5000 || in[1].StartTime != 1000 {
+		t.Fatalf("input mutated: %#v", in)
+	}
+}
 
 func TestFilterUtterancesByClips0(t *testing.T) {
 	utterances := []asr.Utterance{
@@ -105,4 +193,30 @@ func TestFormatASRSegmentLine(t *testing.T) {
 	if line != want {
 		t.Errorf("line = %q\nwant = %q", line, want)
 	}
+}
+
+func TestWriteAISliceClips0Debug(t *testing.T) {
+	dir := t.TempDir()
+	clips := []model.ClipRange{{StartTime: 1, EndTime: 2}, {StartTime: 10, EndTime: 20}}
+	writeAISliceClips0Debug(dir, "clips0_before.json", "task-1", 9, "before", clips, zap.NewNop())
+
+	raw, err := os.ReadFile(filepath.Join(dir, "clips0_before.json"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var got aiSliceClips0DebugRecord
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Phase != "before" || got.TaskID != "task-1" || got.VideoProjectID != 9 || got.Count != 2 {
+		t.Fatalf("record = %#v", got)
+	}
+	if !reflect.DeepEqual(got.Clips, clips) {
+		t.Fatalf("clips = %#v", got.Clips)
+	}
+}
+
+func TestWriteAISliceClips0Debug_EmptyDirNoop(t *testing.T) {
+	// 不应 panic。
+	writeAISliceClips0Debug("", "x.json", "t", 1, "before", nil, zap.NewNop())
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
 	"go.uber.org/zap"
@@ -69,7 +70,7 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 		t.Fatalf("claim: %v %#v", err, claimed)
 	}
 
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop(), 0, 0)
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop(), 0, 0, webroot.Config{})
 	capcut := &mockCapCutAPI{}
 	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, capcut, webRoot)
 	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
@@ -131,7 +132,7 @@ func TestAISliceDraftWorker_Process_SliceFail(t *testing.T) {
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
 
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{err: errors.New("llm down")}, zap.NewNop(), 0, 0)
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{err: errors.New("llm down")}, zap.NewNop(), 0, 0, webroot.Config{})
 	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, &mockCapCutAPI{}, t.TempDir())
 	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
 	if err := worker.Process(ctx, claimed); err == nil {
@@ -174,7 +175,7 @@ func TestAISliceDraftWorker_Process_EmptyClips1(t *testing.T) {
 	_ = taskRepo.Create(ctx, task)
 	claimed, _ := taskRepo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
 
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0, 0)
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[]`}, zap.NewNop(), 0, 0, webroot.Config{})
 	capcut := &mockCapCutAPI{}
 	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, capcut, t.TempDir())
 	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
