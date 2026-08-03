@@ -105,6 +105,7 @@ func main() {
 		logger,
 		cfg.Worker.AISliceConcurrencyOrDefault(),
 		cfg.Worker.AISliceStaleTimeout(),
+		webCfg,
 	)
 
 	// 剪映草稿：纯组装 Generator + 任务适配 Worker。
