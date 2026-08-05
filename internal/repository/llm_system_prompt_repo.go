@@ -27,7 +27,7 @@ type LLMSystemPromptRepository interface {
 	Update(ctx context.Context, prompt *model.LLMSystemPrompt) error
 	// Delete 物理删除系统提示词记录。
 	Delete(ctx context.Context, id uint) error
-	// List 分页查询系统提示词，支持日期与关键词筛选，按更新时间倒序。
+	// List 分页查询系统提示词，支持日期与关键词筛选，按 id 升序。
 	List(ctx context.Context, filter LLMSystemPromptListFilter, offset, limit int) ([]model.LLMSystemPrompt, int64, error)
 }
 
@@ -75,7 +75,7 @@ func (r *llmSystemPromptRepository) List(ctx context.Context, filter LLMSystemPr
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Offset(offset).Limit(limit).Order("updated_at DESC, id DESC").Find(&prompts).Error; err != nil {
+	if err := query.Offset(offset).Limit(limit).Order("id ASC").Find(&prompts).Error; err != nil {
 		return nil, 0, err
 	}
 	return prompts, total, nil
