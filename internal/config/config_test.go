@@ -145,6 +145,9 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 	if cfg.CapCutMate.BaseURL != "http://192.168.3.219:81" {
 		t.Errorf("CapCutMate.BaseURL = %q", cfg.CapCutMate.BaseURL)
 	}
+	if !cfg.CapCutMate.GenVideoEnabled() {
+		t.Errorf("CapCutMate.GenVideoEnabled() = false, want true")
+	}
 	if cfg.Web.RootDir != "docker/html" {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
 	}
@@ -166,6 +169,7 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	t.Setenv("CAPCUT_MATE_URL", "http://10.0.0.1:81")
 	t.Setenv("CAPCUT_MATE_API_KEY", "capcut-key-from-env")
 	t.Setenv("APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL", "https://capcut.example")
+	t.Setenv("APP_CAPCUT_MATE_ENABLE_GEN_VIDEO", "false")
 	t.Setenv("WEB_ROOT_DIR", `D:\html`)
 
 	cfg, err := Load("")
@@ -181,8 +185,21 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	if cfg.CapCutMate.GenVideoBaseURL != "https://capcut.example" {
 		t.Errorf("CapCutMate.GenVideoBaseURL = %q", cfg.CapCutMate.GenVideoBaseURL)
 	}
+	if cfg.CapCutMate.GenVideoEnabled() {
+		t.Errorf("CapCutMate.GenVideoEnabled() = true, want false")
+	}
 	if cfg.Web.RootDir != `D:\html` {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
+	}
+}
+
+func TestCapCutMateConfig_GenVideoEnabledDefault(t *testing.T) {
+	if !(CapCutMateConfig{}).GenVideoEnabled() {
+		t.Error("zero CapCutMateConfig should enable gen_video by default")
+	}
+	off := false
+	if (CapCutMateConfig{EnableGenVideo: &off}).GenVideoEnabled() {
+		t.Error("EnableGenVideo=false should disable")
 	}
 }
 

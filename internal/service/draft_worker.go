@@ -45,6 +45,7 @@ type draftWorker struct {
 	videoProjectRepo repository.VideoProjectRepository
 	generator        draft.Generator
 	videoExporter    VideoExporter
+	enableGenVideo   bool
 	web              webroot.Config
 	logger           *zap.Logger
 	concurrency      int
@@ -63,8 +64,10 @@ type DraftWorkerDeps struct {
 	Generator        draft.Generator
 	// VideoExporter 草稿成功后生成成片；为 nil 时跳过视频生成（仍写 draft_url 并完成任务）。
 	VideoExporter VideoExporter
-	Web           webroot.Config
-	Logger        *zap.Logger
+	// EnableGenVideo 是否调用 gen_video；nil 时默认 true。为 false 时跳过视频生成并直接完成任务。
+	EnableGenVideo *bool
+	Web            webroot.Config
+	Logger         *zap.Logger
 	// Concurrency 单实例并行 Worker 数；<=0 时使用内置默认值（3）。
 	Concurrency int
 	// StaleTimeout processing 孤儿回收阈值；<=0 时使用内置默认值（60 分钟）。
@@ -85,12 +88,17 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 	if staleTimeout <= 0 {
 		staleTimeout = draftStaleTimeout
 	}
+	enableGenVideo := true
+	if deps.EnableGenVideo != nil {
+		enableGenVideo = *deps.EnableGenVideo
+	}
 	return &draftWorker{
 		taskRepo:         deps.TaskRepo,
 		liveMaterialRepo: deps.LiveMaterialRepo,
 		videoProjectRepo: deps.VideoProjectRepo,
 		generator:        deps.Generator,
 		videoExporter:    deps.VideoExporter,
+		enableGenVideo:   enableGenVideo,
 		web:              deps.Web,
 		logger:           logger,
 		concurrency:      concurrency,
@@ -328,6 +336,10 @@ func (w *draftWorker) exportVideo(
 	taskID, draftURL string,
 	setProgress func(int16) int16,
 ) (videoURL string, warn string) {
+	if !w.enableGenVideo {
+		w.logger.Info("已关闭 gen_video，跳过视频生成", zap.String("task_id", taskID))
+		return "", ""
+	}
 	if w.videoExporter == nil {
 		w.logger.Info("未配置视频导出器，跳过 gen_video", zap.String("task_id", taskID))
 		return "", ""

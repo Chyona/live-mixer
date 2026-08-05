@@ -123,6 +123,7 @@ func main() {
 		VideoProjectRepo: videoProjectRepo,
 		Generator:        draftGenerator,
 		VideoExporter:    capcutClient,
+		EnableGenVideo:   cfg.CapCutMate.EnableGenVideo,
 		Web:              webCfg,
 		Logger:           logger,
 		Concurrency:      cfg.Worker.DraftConcurrencyOrDefault(),

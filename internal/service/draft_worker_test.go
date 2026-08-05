@@ -553,3 +553,42 @@ func TestDraftWorker_Process_VideoExportFailKeepsDraft(t *testing.T) {
 		t.Errorf("error_message = %q", got.ErrorMessage)
 	}
 }
+
+func TestDraftWorker_Process_SkipGenVideoWhenDisabled(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	claimed := seedDraftTask(t, ctx, taskRepo, liveRepo, projectRepo)
+
+	off := false
+	exporter := &mockVideoExporter{videoURL: "https://example.com/out.mp4"}
+	worker := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		Generator:      newTestDraftGenerator(&mockCapCutAPI{}),
+		VideoExporter:  exporter,
+		EnableGenVideo: &off,
+		Web:            webroot.Config{RootDir: t.TempDir()},
+		Logger:         zap.NewNop(),
+	})
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if exporter.calls != 0 {
+		t.Errorf("exporter.calls = %d, want 0", exporter.calls)
+	}
+	got, _ := taskRepo.GetByID(ctx, claimed.ID)
+	if got.Status != model.TaskStatusCompleted || got.Progress != 100 {
+		t.Errorf("task = %s/%d", got.Status, got.Progress)
+	}
+	if got.DraftURL != "http://example.com/draft" {
+		t.Errorf("draft_url = %s", got.DraftURL)
+	}
+	if got.VideoURL != "" {
+		t.Errorf("video_url = %q, want empty", got.VideoURL)
+	}
+	if got.ErrorMessage != "" {
+		t.Errorf("error_message = %q, want empty", got.ErrorMessage)
+	}
+}

@@ -60,10 +60,21 @@ type CapCutMateConfig struct {
 	// GenVideoBaseURL 可选：gen_video / gen_video_status 共用的根地址；未配置时使用 BaseURL。
 	// 可用 APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL 覆盖。
 	GenVideoBaseURL string `mapstructure:"gen_video_base_url"`
+	// EnableGenVideo 是否在草稿成功后调用 gen_video；nil/未配置时默认 true。
+	// 可用 APP_CAPCUT_MATE_ENABLE_GEN_VIDEO 覆盖（true/false、1/0、yes/no、on/off）。
+	EnableGenVideo *bool `mapstructure:"enable_gen_video"`
 	// GenVideoPollIntervalSec 视频生成状态轮询间隔（秒）；默认 5。
 	GenVideoPollIntervalSec int `mapstructure:"gen_video_poll_interval_sec"`
 	// GenVideoMaxPolls 视频生成最大轮询次数；默认 360（约 30 分钟）。
 	GenVideoMaxPolls int `mapstructure:"gen_video_max_polls"`
+}
+
+// GenVideoEnabled 返回是否启用视频生成；未配置时默认启用。
+func (c CapCutMateConfig) GenVideoEnabled() bool {
+	if c.EnableGenVideo == nil {
+		return true
+	}
+	return *c.EnableGenVideo
 }
 
 // WebConfig 本地暂存根目录：切片与 capcut-mate 请求记录、ASR 调试落盘路径。
@@ -584,6 +595,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL"); ok {
 		cfg.CapCutMate.GenVideoBaseURL = val
 	}
+	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_ENABLE_GEN_VIDEO"); ok {
+		if b, err := parseEnvBool(val); err == nil {
+			cfg.CapCutMate.EnableGenVideo = &b
+		}
+	}
 	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_GEN_VIDEO_POLL_INTERVAL_SEC"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.CapCutMate.GenVideoPollIntervalSec = n
@@ -635,4 +651,16 @@ func lookupEnvPrefer(keys ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// parseEnvBool 解析常见布尔环境变量写法（true/false、1/0、yes/no、on/off）。
+func parseEnvBool(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true, nil
+	case "0", "false", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid bool %q", raw)
+	}
 }
