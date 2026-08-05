@@ -29,9 +29,11 @@ const (
 type Config struct {
 	BaseURL string
 	// APIKey 视频生成（gen_video）所需密钥；create_draft 等草稿接口可不填。
-	APIKey     string
-	HTTPClient *http.Client
-	Timeout    time.Duration
+	APIKey string
+	// GenVideoBaseURL 可选：gen_video / gen_video_status 共用根地址；为空则使用 BaseURL。
+	GenVideoBaseURL string
+	HTTPClient      *http.Client
+	Timeout         time.Duration
 	// PollInterval / MaxPolls 控制 GenerateVideoAndWait 轮询行为。
 	PollInterval time.Duration
 	MaxPolls     int
@@ -39,11 +41,12 @@ type Config struct {
 
 // Client 调用 capcut-mate REST API 的客户端。
 type Client struct {
-	baseURL      string
-	apiKey       string
-	http         *http.Client
-	pollInterval time.Duration
-	maxPolls     int
+	baseURL         string
+	apiKey          string
+	genVideoBaseURL string
+	http            *http.Client
+	pollInterval    time.Duration
+	maxPolls        int
 }
 
 // NewClient 创建 capcut-mate 客户端；未设置的字段使用默认值。
@@ -71,12 +74,22 @@ func NewClient(cfg Config) *Client {
 		maxPolls = DefaultGenVideoMaxPolls
 	}
 	return &Client{
-		baseURL:      base,
-		apiKey:       strings.TrimSpace(cfg.APIKey),
-		http:         httpClient,
-		pollInterval: pollInterval,
-		maxPolls:     maxPolls,
+		baseURL:         base,
+		apiKey:          strings.TrimSpace(cfg.APIKey),
+		genVideoBaseURL: strings.TrimRight(strings.TrimSpace(cfg.GenVideoBaseURL), "/"),
+		http:            httpClient,
+		pollInterval:    pollInterval,
+		maxPolls:        maxPolls,
 	}
+}
+
+// genVideoEndpoint 解析视频生成相关接口地址：优先 GenVideoBaseURL，否则 BaseURL。
+func (c *Client) genVideoEndpoint(path string) string {
+	base := c.genVideoBaseURL
+	if base == "" {
+		base = c.baseURL
+	}
+	return base + path
 }
 
 // apiCallRecord 落盘到 staging/{task_id}/capcut_mate 的请求/响应记录结构。
@@ -90,35 +103,44 @@ type apiCallRecord struct {
 	Response           json.RawMessage `json:"response"`
 }
 
-// doJSON 发送 JSON POST，可选落盘完整请求/响应记录。
+// doJSON 发送 JSON POST（地址为 baseURL + path），可选落盘完整请求/响应记录。
 func (c *Client) doJSON(ctx context.Context, path, name string, reqBody any, respBody any, recordDir string) error {
+	return c.doJSONURL(ctx, c.baseURL+path, path, name, reqBody, respBody, recordDir)
+}
+
+// doJSONURL 向指定 URL 发送 JSON POST；recordPath 用于落盘记录中的 path 字段。
+func (c *Client) doJSONURL(ctx context.Context, url, recordPath, name string, reqBody any, respBody any, recordDir string) error {
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	url := c.baseURL + path
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	label := recordPath
+	if label == "" {
+		label = url
+	}
+
 	httpResp, err := c.http.Do(httpReq)
 	status := 0
 	var respBytes []byte
 	if err != nil {
-		_ = c.writeRecord(recordDir, name, path, payload, status, map[string]string{
+		_ = c.writeRecord(recordDir, name, label, payload, status, map[string]string{
 			"_error": err.Error(),
 		})
-		return fmt.Errorf("请求 capcut-mate %s 失败: %w", path, err)
+		return fmt.Errorf("请求 capcut-mate %s 失败: %w", label, err)
 	}
 	defer httpResp.Body.Close()
 	status = httpResp.StatusCode
 
 	respBytes, readErr := io.ReadAll(httpResp.Body)
 	if readErr != nil {
-		_ = c.writeRecord(recordDir, name, path, payload, status, map[string]string{
+		_ = c.writeRecord(recordDir, name, label, payload, status, map[string]string{
 			"_raw_text": "",
 			"_error":    readErr.Error(),
 		})
@@ -134,10 +156,10 @@ func (c *Client) doJSON(ctx context.Context, path, name string, reqBody any, res
 	} else {
 		recordedResp = map[string]string{"_raw_text": string(respBytes)}
 	}
-	_ = c.writeRecord(recordDir, name, path, payload, status, recordedResp)
+	_ = c.writeRecord(recordDir, name, label, payload, status, recordedResp)
 
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("capcut-mate %s HTTP %d: %s", path, status, strings.TrimSpace(string(respBytes)))
+		return fmt.Errorf("capcut-mate %s HTTP %d: %s", label, status, strings.TrimSpace(string(respBytes)))
 	}
 	if err := json.Unmarshal(respBytes, respBody); err != nil {
 		return fmt.Errorf("解析 capcut-mate 响应失败: %w, body=%s", err, strings.TrimSpace(string(respBytes)))

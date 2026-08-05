@@ -93,3 +93,46 @@ func TestClient_GenVideo_MissingAPIKey(t *testing.T) {
 		t.Fatalf("error = %v, want API Key", err)
 	}
 }
+
+func TestClient_GenVideo_OverrideBaseURL(t *testing.T) {
+	var gotGenPath, gotStatusPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		switch r.URL.Path {
+		case pathGenVideo:
+			gotGenPath = r.URL.Path
+			_ = json.NewEncoder(w).Encode(GenVideoResponse{Code: 0, Message: "ok"})
+		case pathGenVideoStatus:
+			gotStatusPath = r.URL.Path
+			_ = json.NewEncoder(w).Encode(GenVideoStatusResponse{
+				Code: 0, Status: GenVideoStatusCompleted, Progress: 100,
+				VideoURL: "https://example.com/out.mp4",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		BaseURL:         "http://unused.invalid",
+		APIKey:          "k",
+		GenVideoBaseURL: srv.URL,
+		HTTPClient:      srv.Client(),
+		PollInterval:    time.Millisecond,
+		MaxPolls:        3,
+	})
+	videoURL, err := client.GenerateVideoAndWait(context.Background(), "http://draft", "", nil)
+	if err != nil {
+		t.Fatalf("GenerateVideoAndWait() error = %v", err)
+	}
+	if videoURL != "https://example.com/out.mp4" {
+		t.Errorf("videoURL = %q", videoURL)
+	}
+	if gotGenPath != pathGenVideo {
+		t.Errorf("gen path = %q, want %s", gotGenPath, pathGenVideo)
+	}
+	if gotStatusPath != pathGenVideoStatus {
+		t.Errorf("status path = %q, want %s", gotStatusPath, pathGenVideoStatus)
+	}
+}

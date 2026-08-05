@@ -65,7 +65,8 @@ func (c *Client) GenVideo(ctx context.Context, draftURL, recordDir string) (*Gen
 
 	reqBody := GenVideoRequest{APIKey: apiKey, DraftURL: draftURL}
 	var resp GenVideoResponse
-	if err := c.doJSON(ctx, pathGenVideo, "gen_video", reqBody, &resp, recordDir); err != nil {
+	url := c.genVideoEndpoint(pathGenVideo)
+	if err := c.doJSONURL(ctx, url, pathGenVideo, "gen_video", reqBody, &resp, recordDir); err != nil {
 		return nil, err
 	}
 	if resp.Code != 0 {
@@ -83,7 +84,8 @@ func (c *Client) GenVideoStatus(ctx context.Context, draftURL, recordDir string)
 
 	reqBody := GenVideoStatusRequest{DraftURL: draftURL}
 	var resp GenVideoStatusResponse
-	if err := c.doJSON(ctx, pathGenVideoStatus, "gen_video_status", reqBody, &resp, recordDir); err != nil {
+	url := c.genVideoEndpoint(pathGenVideoStatus)
+	if err := c.doJSONURL(ctx, url, pathGenVideoStatus, "gen_video_status", reqBody, &resp, recordDir); err != nil {
 		return nil, err
 	}
 	if resp.Code != 0 {

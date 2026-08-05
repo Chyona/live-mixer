@@ -165,6 +165,7 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	t.Setenv("CAPCUT_MATE_URL", "http://10.0.0.1:81")
 	t.Setenv("CAPCUT_MATE_API_KEY", "capcut-key-from-env")
+	t.Setenv("APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL", "https://capcut.example")
 	t.Setenv("WEB_ROOT_DIR", `D:\html`)
 
 	cfg, err := Load("")
@@ -177,6 +178,9 @@ func TestLoad_CapCutMateEnvOverride(t *testing.T) {
 	if cfg.CapCutMate.APIKey != "capcut-key-from-env" {
 		t.Errorf("CapCutMate.APIKey = %q", cfg.CapCutMate.APIKey)
 	}
+	if cfg.CapCutMate.GenVideoBaseURL != "https://capcut.example" {
+		t.Errorf("CapCutMate.GenVideoBaseURL = %q", cfg.CapCutMate.GenVideoBaseURL)
+	}
 	if cfg.Web.RootDir != `D:\html` {
 		t.Errorf("Web.RootDir = %q", cfg.Web.RootDir)
 	}
@@ -186,11 +190,15 @@ func TestCapCutMateClientConfig_IncludesAPIKey(t *testing.T) {
 	cfg := CapCutMateConfig{
 		BaseURL:                 "http://capcut",
 		APIKey:                  "k1",
+		GenVideoBaseURL:         "https://v.example",
 		GenVideoPollIntervalSec: 3,
 		GenVideoMaxPolls:        10,
 	}.CapCutMateClientConfig()
 	if cfg.BaseURL != "http://capcut" || cfg.APIKey != "k1" {
 		t.Errorf("cfg = %#v", cfg)
+	}
+	if cfg.GenVideoBaseURL != "https://v.example" {
+		t.Errorf("GenVideoBaseURL = %q", cfg.GenVideoBaseURL)
 	}
 	if cfg.PollInterval != 3*time.Second || cfg.MaxPolls != 10 {
 		t.Errorf("poll = %v max=%d", cfg.PollInterval, cfg.MaxPolls)

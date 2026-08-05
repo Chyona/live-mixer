@@ -84,6 +84,7 @@ cp .env.example .env
 | `APP_ASR_API_KEY` | 豆包语音识别 Key |
 | `APP_LLM_API_KEY` | 大模型 Key |
 | `APP_CAPCUT_MATE_BASE_URL` | 剪映服务地址；Compose 内一般填 `http://nginx` |
+| `APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL` | 可选；`gen_video` / `gen_video_status` 共用根地址，未设置时走 `BASE_URL` |
 
 非敏感项（端口、Worker 并发、日志级别等）已在 `docker-compose.yaml` 的 `environment` 中声明，可按需调整。配置优先级：**环境变量 `APP_*` > 外部 yaml > 内嵌默认配置**。
 

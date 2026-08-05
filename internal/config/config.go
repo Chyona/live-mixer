@@ -57,6 +57,9 @@ type CapCutMateConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 	// APIKey 视频生成（gen_video）API 密钥；可用 APP_CAPCUT_MATE_API_KEY 覆盖。
 	APIKey string `mapstructure:"api_key"`
+	// GenVideoBaseURL 可选：gen_video / gen_video_status 共用的根地址；未配置时使用 BaseURL。
+	// 可用 APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL 覆盖。
+	GenVideoBaseURL string `mapstructure:"gen_video_base_url"`
 	// GenVideoPollIntervalSec 视频生成状态轮询间隔（秒）；默认 5。
 	GenVideoPollIntervalSec int `mapstructure:"gen_video_poll_interval_sec"`
 	// GenVideoMaxPolls 视频生成最大轮询次数；默认 360（约 30 分钟）。
@@ -577,6 +580,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := lookupEnvPrefer("APP_CAPCUT_MATE_API_KEY", "CAPCUT_MATE_API_KEY"); ok {
 		cfg.CapCutMate.APIKey = val
+	}
+	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL"); ok {
+		cfg.CapCutMate.GenVideoBaseURL = val
 	}
 	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_GEN_VIDEO_POLL_INTERVAL_SEC"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
