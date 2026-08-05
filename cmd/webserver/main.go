@@ -122,6 +122,7 @@ func main() {
 		LiveMaterialRepo: liveMaterialRepo,
 		VideoProjectRepo: videoProjectRepo,
 		Generator:        draftGenerator,
+		VideoExporter:    capcutClient,
 		Web:              webCfg,
 		Logger:           logger,
 		Concurrency:      cfg.Worker.DraftConcurrencyOrDefault(),

@@ -55,6 +55,12 @@ type WorkerConfig struct {
 type CapCutMateConfig struct {
 	// BaseURL capcut-mate REST API 根地址，默认 http://192.168.3.219:81
 	BaseURL string `mapstructure:"base_url"`
+	// APIKey 视频生成（gen_video）API 密钥；可用 APP_CAPCUT_MATE_API_KEY 覆盖。
+	APIKey string `mapstructure:"api_key"`
+	// GenVideoPollIntervalSec 视频生成状态轮询间隔（秒）；默认 5。
+	GenVideoPollIntervalSec int `mapstructure:"gen_video_poll_interval_sec"`
+	// GenVideoMaxPolls 视频生成最大轮询次数；默认 360（约 30 分钟）。
+	GenVideoMaxPolls int `mapstructure:"gen_video_max_polls"`
 }
 
 // WebConfig 本地暂存根目录：切片与 capcut-mate 请求记录、ASR 调试落盘路径。
@@ -568,6 +574,19 @@ func applyEnvOverrides(cfg *Config) {
 	// 剪映草稿服务与本地暂存目录（也可兼容无 APP_ 前缀的环境变量名）
 	if val, ok := lookupEnvPrefer("APP_CAPCUT_MATE_BASE_URL", "CAPCUT_MATE_URL"); ok {
 		cfg.CapCutMate.BaseURL = val
+	}
+	if val, ok := lookupEnvPrefer("APP_CAPCUT_MATE_API_KEY", "CAPCUT_MATE_API_KEY"); ok {
+		cfg.CapCutMate.APIKey = val
+	}
+	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_GEN_VIDEO_POLL_INTERVAL_SEC"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CapCutMate.GenVideoPollIntervalSec = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPCUT_MATE_GEN_VIDEO_MAX_POLLS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CapCutMate.GenVideoMaxPolls = n
+		}
 	}
 	if val, ok := lookupEnvPrefer("APP_WEB_ROOT_DIR", "WEB_ROOT_DIR"); ok {
 		cfg.Web.RootDir = val

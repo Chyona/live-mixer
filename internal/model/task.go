@@ -42,7 +42,7 @@ type Task struct {
 	LiveName string `gorm:"column:live_name;size:64;not null;default:'';comment:源视频名称快照" json:"live_name"`
 	// DraftURL 剪映草稿地址：草稿生成与一键成片 Worker 成功后回写。
 	DraftURL string `gorm:"column:draft_url;size:1024;comment:剪映草稿URL" json:"draft_url"`
-	// VideoURL 成片/导出视频地址，可由客户端通过更新接口写入。
+	// VideoURL 成片视频地址：草稿成功后调用 capcut-mate gen_video 完成时回写。
 	VideoURL string `gorm:"column:video_url;size:1024;comment:视频地址URL" json:"video_url"`
 	// ClipsTarURL 切片 tar 包下载地址：draft / ai_slice_draft 将 clip_XXX.mp4 打包为 {task.id}.tar 上传后回写。
 	ClipsTarURL string `gorm:"column:clips_tar_url;size:1024;comment:切片tar包下载地址" json:"clips_tar_url"`

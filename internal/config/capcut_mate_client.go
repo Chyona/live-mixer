@@ -1,8 +1,20 @@
 package config
 
-import "live-mixer/internal/pkg/capcutmate"
+import (
+	"time"
+
+	"live-mixer/internal/pkg/capcutmate"
+)
 
 // CapCutMateClientConfig 将应用配置转为 capcut-mate 客户端配置。
 func (c CapCutMateConfig) CapCutMateClientConfig() capcutmate.Config {
-	return capcutmate.Config{BaseURL: c.BaseURL}
+	cfg := capcutmate.Config{
+		BaseURL:  c.BaseURL,
+		APIKey:   c.APIKey,
+		MaxPolls: c.GenVideoMaxPolls,
+	}
+	if c.GenVideoPollIntervalSec > 0 {
+		cfg.PollInterval = time.Duration(c.GenVideoPollIntervalSec) * time.Second
+	}
+	return cfg
 }

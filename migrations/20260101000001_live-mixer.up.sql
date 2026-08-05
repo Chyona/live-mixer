@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS task (
     height                 INTEGER     NOT NULL DEFAULT 0,
     live_url               VARCHAR(1024) NOT NULL DEFAULT '',
     live_name              VARCHAR(64)  NOT NULL DEFAULT '',
-    -- 草稿/成片结果 URL：草稿生成与一键成片完成后写入 draft_url；video_url 可由客户端回写
+    -- 草稿/成片结果 URL：草稿成功后写入 draft_url；随后 gen_video 成功写入 video_url（视频失败仍保留 draft_url）
     draft_url              VARCHAR(1024),
     video_url              VARCHAR(1024),
     -- 草稿类任务将 clip_XXX.mp4 打成 {task.id}.tar 后上传对象存储的下载地址；ai_slice 不写入
@@ -239,8 +239,8 @@ COMMENT ON COLUMN task.width IS '画布宽度（像素），创建时按 video_p
 COMMENT ON COLUMN task.height IS '画布高度（像素），创建时按 video_project 自动快照；草稿类可为请求覆盖后的解析结果；0 表示未设置';
 COMMENT ON COLUMN task.live_url IS '直播链接，创建时按 video_project.live_id 从 live_material 自动快照；无外键';
 COMMENT ON COLUMN task.live_name IS '源视频名称，创建时按 video_project.live_id 从 live_material.name 自动快照；无外键';
-COMMENT ON COLUMN task.draft_url IS '剪映草稿 URL（草稿生成/一键成片完成后写入）';
-COMMENT ON COLUMN task.video_url IS '视频地址 URL';
+COMMENT ON COLUMN task.draft_url IS '剪映草稿 URL（草稿生成/一键成片草稿阶段完成后写入）';
+COMMENT ON COLUMN task.video_url IS '成片视频 URL（草稿成功后 gen_video 完成时写入）';
 COMMENT ON COLUMN task.clips_tar_url IS '切片 tar 包下载地址；draft / ai_slice_draft 将 clip_XXX.mp4 打包为 {task.id}.tar 上传后回写；ai_slice 为空';
 COMMENT ON COLUMN task.created_by IS '任务创建人（账号 ID）';
 COMMENT ON COLUMN task.created_at IS '创建时间';

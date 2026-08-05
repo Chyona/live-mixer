@@ -8,6 +8,7 @@ import (
 
 	"live-mixer/internal/draft"
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/capcutmate"
 	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
@@ -18,7 +19,17 @@ const (
 	draftDefaultConcurrency = 3
 	draftPollInterval       = 3 * time.Second
 	draftStaleTimeout       = 60 * time.Minute
+
+	// 草稿组装占用本地进度 0–85；视频生成占用 85–100。
+	draftPhaseLocalProgress = int16(85)
+	videoPhaseLocalStart    = int16(85)
+	videoPhaseLocalSpan     = int16(14) // 85→99；最终 MarkCompleted 到 100
 )
+
+// VideoExporter 草稿成功后导出成片视频的能力（通常由 capcut-mate gen_video 实现）。
+type VideoExporter interface {
+	GenerateVideoAndWait(ctx context.Context, draftURL, recordDir string, onProgress capcutmate.VideoProgressCallback) (string, error)
+}
 
 // DraftWorker 剪映草稿任务适配器：DB 抢占/进度/完成，组装委托给 draft.Generator。
 type DraftWorker interface {
@@ -33,6 +44,7 @@ type draftWorker struct {
 	liveMaterialRepo repository.LiveMaterialRepository
 	videoProjectRepo repository.VideoProjectRepository
 	generator        draft.Generator
+	videoExporter    VideoExporter
 	web              webroot.Config
 	logger           *zap.Logger
 	concurrency      int
@@ -49,8 +61,10 @@ type DraftWorkerDeps struct {
 	LiveMaterialRepo repository.LiveMaterialRepository
 	VideoProjectRepo repository.VideoProjectRepository
 	Generator        draft.Generator
-	Web              webroot.Config
-	Logger           *zap.Logger
+	// VideoExporter 草稿成功后生成成片；为 nil 时跳过视频生成（仍写 draft_url 并完成任务）。
+	VideoExporter VideoExporter
+	Web           webroot.Config
+	Logger        *zap.Logger
 	// Concurrency 单实例并行 Worker 数；<=0 时使用内置默认值（3）。
 	Concurrency int
 	// StaleTimeout processing 孤儿回收阈值；<=0 时使用内置默认值（60 分钟）。
@@ -76,6 +90,7 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 		liveMaterialRepo: deps.LiveMaterialRepo,
 		videoProjectRepo: deps.VideoProjectRepo,
 		generator:        deps.Generator,
+		videoExporter:    deps.VideoExporter,
 		web:              deps.Web,
 		logger:           logger,
 		concurrency:      concurrency,
@@ -185,6 +200,7 @@ func (w *draftWorker) Process(ctx context.Context, task *model.Task) error {
 }
 
 // ProcessWithOptions 从任务加载上下文，调用 draft.Generator，并回写任务状态。
+// 草稿成功后（MarkComplete=true）继续调用 gen_video；视频失败仍保留 draft_url 并标记完成（部分成功）。
 func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")
@@ -247,13 +263,19 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		CanvasH:    height,
 		StagingDir: w.web.StagingDir(task.ID),
 		RecordDir:  w.web.CapCutMateRecordDir(task.ID),
-		Progress:   func(local int16) { setProgress(local) },
+		// 将 Generator 本地进度压缩到草稿阶段上限，为视频生成预留空间。
+		Progress: func(local int16) {
+			if local > draftPhaseLocalProgress {
+				local = draftPhaseLocalProgress
+			}
+			setProgress(local)
+		},
 	})
 	if err != nil {
 		return w.fail(ctx, task.ID, lastProgress, err)
 	}
 
-	progress = setProgress(90)
+	progress = setProgress(draftPhaseLocalProgress)
 	if err := w.taskRepo.UpdateDraftURL(ctx, task.ID, result.DraftURL); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("回写 task.draft_url 失败: %w", err))
 	}
@@ -270,9 +292,19 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		extRaw = fmt.Sprintf(`{"live_id":%d,"video_project_id":%d}`, liveID, project.ID)
 	}
 
+	var videoWarn string
+	var videoURL string
+	if opts.MarkComplete {
+		videoURL, videoWarn = w.exportVideo(ctx, task.ID, result.DraftURL, setProgress)
+	}
+
 	if opts.MarkComplete {
 		if err := w.taskRepo.MarkCompleted(ctx, task.ID, mapPhaseProgress(opts, 100), extRaw); err != nil {
 			return fmt.Errorf("标记任务完成失败: %w", err)
+		}
+		// 视频失败视为部分成功：状态 completed + draft_url 已写入，error_message 记录视频原因。
+		if videoWarn != "" {
+			_ = w.taskRepo.UpdateErrorMessage(ctx, task.ID, videoWarn)
 		}
 	} else {
 		_ = w.taskRepo.UpdateExt(ctx, task.ID, extRaw)
@@ -282,10 +314,65 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.String("draft_url", result.DraftURL),
+		zap.String("video_url", videoURL),
 		zap.String("clips_tar_url", result.ClipsTarURL),
 		zap.Bool("mark_complete", opts.MarkComplete),
+		zap.String("video_warn", videoWarn),
 	)
 	return nil
+}
+
+// exportVideo 在草稿成功后生成成片；失败时返回警告文案（不导致任务失败）。
+func (w *draftWorker) exportVideo(
+	ctx context.Context,
+	taskID, draftURL string,
+	setProgress func(int16) int16,
+) (videoURL string, warn string) {
+	if w.videoExporter == nil {
+		w.logger.Info("未配置视频导出器，跳过 gen_video", zap.String("task_id", taskID))
+		return "", ""
+	}
+
+	recordDir := w.web.CapCutMateRecordDir(taskID)
+	setProgress(videoPhaseLocalStart)
+	videoURL, err := w.videoExporter.GenerateVideoAndWait(ctx, draftURL, recordDir, func(remoteProgress int, status string) {
+		local := videoPhaseLocalStart + int16(int(videoPhaseLocalSpan)*clampProgress(remoteProgress)/100)
+		setProgress(local)
+		w.logger.Info("视频生成进度",
+			zap.String("task_id", taskID),
+			zap.String("status", status),
+			zap.Int("remote_progress", remoteProgress),
+			zap.Int16("local_progress", local),
+		)
+	})
+	if err != nil {
+		w.logger.Warn("视频生成失败，任务按部分成功完成",
+			zap.String("task_id", taskID),
+			zap.String("draft_url", draftURL),
+			zap.Error(err),
+		)
+		return "", fmt.Sprintf("草稿已生成，视频生成失败: %v", err)
+	}
+	if err := w.taskRepo.UpdateVideoURL(ctx, taskID, videoURL); err != nil {
+		w.logger.Warn("回写 task.video_url 失败，任务按部分成功完成",
+			zap.String("task_id", taskID),
+			zap.String("video_url", videoURL),
+			zap.Error(err),
+		)
+		return "", fmt.Sprintf("草稿已生成，回写 video_url 失败: %v", err)
+	}
+	setProgress(videoPhaseLocalStart + videoPhaseLocalSpan)
+	return videoURL, ""
+}
+
+func clampProgress(p int) int {
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
 }
 
 func (w *draftWorker) fail(ctx context.Context, taskID string, progress int16, err error) error {

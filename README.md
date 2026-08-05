@@ -16,7 +16,7 @@
 | 语音识别（ASR） | 后台异步转写，生成分句结果、AI 分段摘要与段落结构，可下载字幕 |
 | 剪辑项目 | 关联直播素材与系统提示词，维护人工粗选区间（`clips0`）与 AI/精修选段（`clips1`） |
 | AI 切片 | 按项目提示词与粗选区间，调用大模型从 ASR 中筛选句段，回写 `clips1` |
-| 剪映草稿 | 按 `clips1` 精确裁剪素材，调用 capcut-mate 生成可下载的剪映草稿 |
+| 剪映草稿 | 按 `clips1` 精确裁剪素材，调用 capcut-mate 生成剪映草稿，成功后继续 gen_video 导出成片 |
 | 一键成片 | 串联「AI 切片 → 剪映草稿」，适合批量快速出片 |
 | AI + 人工协同 | 可先 AI 出选段，再在项目中人工调整 `clips1`，最后单独跑草稿任务 |
 
@@ -185,12 +185,13 @@ go mod download
 cp internal/config/config.yaml.example internal/config/config.yaml
 ```
 
-按本机环境编辑 `internal/config/config.yaml`：数据库、JWT、对象存储、ASR、LLM、`capcut_mate.base_url`、`web.root_dir` 等。也可用环境变量覆盖，例如：
+按本机环境编辑 `internal/config/config.yaml`：数据库、JWT、对象存储、ASR、LLM、`capcut_mate.base_url` / `capcut_mate.api_key`、`web.root_dir` 等。也可用环境变量覆盖，例如：
 
 ```bash
 # Windows PowerShell
 $env:APP_DATABASE_PASSWORD="your_password"
 $env:APP_LLM_API_KEY="sk-xxx"
+$env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 ```
 
 ### 2. 准备数据库

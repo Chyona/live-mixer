@@ -224,7 +224,7 @@ func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 
 // CreateDraftTask 创建剪映草稿任务
 // @Summary      创建剪映草稿任务
-// @Description  异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url
+// @Description  异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）生成剪映草稿并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -260,7 +260,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 
 // CreateAISliceDraftTask 创建一键成片任务
 // @Summary      创建一键成片任务
-// @Description  异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url
+// @Description  异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json

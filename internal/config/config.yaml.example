@@ -65,8 +65,12 @@ llm:
   flash_model: "qwen3.7-flash"
 
 # 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖
+# 视频生成密钥可用 APP_CAPCUT_MATE_API_KEY 或 CAPCUT_MATE_API_KEY 覆盖
 capcut_mate:
   base_url: "http://192.168.3.219:81"
+  api_key: ""
+  gen_video_poll_interval_sec: 5   # 视频生成状态轮询间隔（秒）
+  gen_video_max_polls: 360         # 最大轮询次数（默认约 30 分钟）
 
 # WEB 本地暂存根目录：切片落盘到 root_dir/staging/{task_id}；对外 URL 由对象存储上传提供
 # 可用 APP_WEB_ROOT_DIR 或 WEB_ROOT_DIR 覆盖

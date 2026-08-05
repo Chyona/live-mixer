@@ -93,11 +93,11 @@ services:
     environment:
       - PROXY_PASS_URL_1=http://capcut-mate:30000/openapi/capcut-mate/
       - PROXY_LOCATION_1=/openapi/capcut-mate/
-      - PROXY_PASS_URL_2=http://192.168.3.219:30000/openapi/capcut-mate/v1/gen_video
+      - PROXY_PASS_URL_2=https://capcut-mate.jcaigc.cn/openapi/capcut-mate/v1/gen_video
       - PROXY_LOCATION_2=/openapi/capcut-mate/v1/gen_video
-      - PROXY_PASS_URL_3=http://192.168.3.219:30000/openapi/capcut-mate/v1/gen_video_status
+      - PROXY_PASS_URL_3=https://capcut-mate.jcaigc.cn/openapi/capcut-mate/v1/gen_video_status
       - PROXY_LOCATION_3=/openapi/capcut-mate/v1/gen_video_status
-      - PROXY_PASS_URL_4=http://192.168.3.219:30000/openapi/capcut-mate/v1/gen_video_active_count
+      - PROXY_PASS_URL_4=https://capcut-mate.jcaigc.cn/openapi/capcut-mate/v1/gen_video_active_count
       - PROXY_LOCATION_4=/openapi/capcut-mate/v1/gen_video_active_count
       - PROXY_PASS_URL_5=http://live-mixer:30000/openapi/live-mixer/
       - PROXY_LOCATION_5=/openapi/live-mixer/

@@ -49,8 +49,12 @@ type TaskRepository interface {
 	UpdateExt(ctx context.Context, id string, ext string) error
 	// UpdateDraftURL 回写剪映草稿 URL（草稿生成/一键成片成功后调用）。
 	UpdateDraftURL(ctx context.Context, id string, draftURL string) error
+	// UpdateVideoURL 回写成片视频 URL（草稿成功后 gen_video 完成时调用）。
+	UpdateVideoURL(ctx context.Context, id string, videoURL string) error
 	// UpdateClipsTarURL 回写切片 tar 包下载地址（草稿类任务打包上传后调用）。
 	UpdateClipsTarURL(ctx context.Context, id string, clipsTarURL string) error
+	// UpdateErrorMessage 写入错误/警告信息（例如草稿成功但视频生成失败的部分成功场景）。
+	UpdateErrorMessage(ctx context.Context, id string, errorMsg string) error
 	// UpdatePrompts 回写本次任务实际使用的系统/用户提示词。
 	UpdatePrompts(ctx context.Context, id string, sysPrompt, usrPrompt string) error
 	// UpdateVideoProjectID 更新关联的剪辑项目 ID。
@@ -263,6 +267,17 @@ func (r *taskRepository) UpdateDraftURL(ctx context.Context, id string, draftURL
 		}).Error
 }
 
+// UpdateVideoURL 将成片视频地址写入 task.video_url。
+func (r *taskRepository) UpdateVideoURL(ctx context.Context, id string, videoURL string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"video_url":  videoURL,
+			"updated_at": time.Now(),
+		}).Error
+}
+
 // UpdateClipsTarURL 将切片 tar 包下载地址写入 task.clips_tar_url。
 func (r *taskRepository) UpdateClipsTarURL(ctx context.Context, id string, clipsTarURL string) error {
 	return r.db.WithContext(ctx).
@@ -270,6 +285,17 @@ func (r *taskRepository) UpdateClipsTarURL(ctx context.Context, id string, clips
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"clips_tar_url": clipsTarURL,
+			"updated_at":    time.Now(),
+		}).Error
+}
+
+// UpdateErrorMessage 写入错误/警告信息，不改变任务状态。
+func (r *taskRepository) UpdateErrorMessage(ctx context.Context, id string, errorMsg string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"error_message": errorMsg,
 			"updated_at":    time.Now(),
 		}).Error
 }

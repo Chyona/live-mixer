@@ -524,6 +524,51 @@ func TestTaskRepository_UpdateDraftURL(t *testing.T) {
 	}
 }
 
+// TestTaskRepository_UpdateVideoURL 验证成片视频 URL 回写。
+func TestTaskRepository_UpdateVideoURL(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+
+	task := &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusProcessing, CreatedBy: 1}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.UpdateVideoURL(ctx, task.ID, "http://example.com/out.mp4"); err != nil {
+		t.Fatalf("UpdateVideoURL: %v", err)
+	}
+	got, err := repo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.VideoURL != "http://example.com/out.mp4" {
+		t.Errorf("VideoURL = %q", got.VideoURL)
+	}
+}
+
+// TestTaskRepository_UpdateErrorMessage 验证错误信息可独立回写。
+func TestTaskRepository_UpdateErrorMessage(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+
+	task := &model.Task{Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.UpdateErrorMessage(ctx, task.ID, "视频生成失败"); err != nil {
+		t.Fatalf("UpdateErrorMessage: %v", err)
+	}
+	got, err := repo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ErrorMessage != "视频生成失败" {
+		t.Errorf("ErrorMessage = %q", got.ErrorMessage)
+	}
+	if got.Status != model.TaskStatusCompleted {
+		t.Errorf("Status = %q, want completed", got.Status)
+	}
+}
+
 // TestTaskRepository_UpdateClipsTarURL 验证切片 tar 包 URL 回写。
 func TestTaskRepository_UpdateClipsTarURL(t *testing.T) {
 	repo := NewTaskRepository(setupTaskTestDB(t))

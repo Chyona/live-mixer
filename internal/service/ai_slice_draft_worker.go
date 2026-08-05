@@ -21,11 +21,11 @@ const (
 	aiSliceDraftStaleTimeout = 90 * time.Minute
 )
 
-// AISliceDraftWorker 一键成片编排器：先 AI 切片（写 clips1），再生成剪映草稿。
+// AISliceDraftWorker 一键成片编排器：先 AI 切片（写 clips1），再生成剪映草稿并导出视频。
 type AISliceDraftWorker interface {
 	// Enqueue 唤醒调度循环尝试领取任务（非阻塞）。
 	Enqueue()
-	// Process 执行已抢占的一键成片任务：AI 切片 → 草稿。
+	// Process 执行已抢占的一键成片任务：AI 切片 → 草稿 → 视频。
 	Process(ctx context.Context, task *model.Task) error
 	// Start 启动后台 Worker 循环。
 	Start(ctx context.Context)
@@ -217,7 +217,7 @@ func (w *aiSliceDraftWorker) Process(ctx context.Context, task *model.Task) erro
 		return w.fail(ctx, task.ID, 50, fmt.Errorf("AI 切片结果为空，无法生成草稿"))
 	}
 
-	// 阶段二：生成剪映草稿并标记任务完成。
+	// 阶段二：生成剪映草稿（成功后继续 gen_video）并标记任务完成。
 	if err := w.draft.ProcessWithOptions(ctx, task, PhaseOptions{
 		MarkComplete: true,
 		ProgressBase: 50,

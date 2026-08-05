@@ -432,3 +432,124 @@ func TestDraftWorker_RequeueStaleProcessing(t *testing.T) {
 		t.Fatalf("Status = %q, want pending", got.Status)
 	}
 }
+
+type mockVideoExporter struct {
+	videoURL string
+	err      error
+	calls    int
+}
+
+func (m *mockVideoExporter) GenerateVideoAndWait(ctx context.Context, draftURL, recordDir string, onProgress capcutmate.VideoProgressCallback) (string, error) {
+	m.calls++
+	if onProgress != nil {
+		onProgress(50, capcutmate.GenVideoStatusProcessing)
+		onProgress(100, capcutmate.GenVideoStatusCompleted)
+	}
+	if m.err != nil {
+		return "", m.err
+	}
+	return m.videoURL, nil
+}
+
+func seedDraftTask(t *testing.T, ctx context.Context, taskRepo repository.TaskRepository, liveRepo repository.LiveMaterialRepository, projectRepo repository.VideoProjectRepository) *model.Task {
+	t.Helper()
+	material := &model.LiveMaterial{
+		Name: "直播", LiveURL: "https://example.com/live.mp4", CreatedBy: 1,
+		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100,
+	}
+	if err := liveRepo.Create(ctx, material); err != nil {
+		t.Fatalf("create material: %v", err)
+	}
+	project := &model.VideoProject{
+		Name: "项目", LiveID: material.ID, CreatedBy: 1,
+		Clips1: []model.ClipWithText{{Text: "你好", StartTime: 0, EndTime: 1000}},
+	}
+	if err := projectRepo.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task := &model.Task{
+		Type: model.TaskTypeDraft, Status: model.TaskStatusPending, CreatedBy: 1,
+		VideoProjectID: model.NewUintPtr(project.ID),
+		Width: 1080, Height: 1920, LiveURL: material.LiveURL,
+		Ext: mustMarshalDraftExt(t, material.ID, project.ID),
+	}
+	if err := taskRepo.Create(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	claimed, err := taskRepo.ClaimPendingByType(ctx, model.TaskTypeDraft)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %#v", err, claimed)
+	}
+	return claimed
+}
+
+func TestDraftWorker_Process_VideoExportSuccess(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	claimed := seedDraftTask(t, ctx, taskRepo, liveRepo, projectRepo)
+
+	exporter := &mockVideoExporter{videoURL: "https://example.com/out.mp4"}
+	worker := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		Generator:     newTestDraftGenerator(&mockCapCutAPI{}),
+		VideoExporter: exporter,
+		Web:           webroot.Config{RootDir: t.TempDir()},
+		Logger:        zap.NewNop(),
+	})
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if exporter.calls != 1 {
+		t.Errorf("exporter.calls = %d", exporter.calls)
+	}
+	got, _ := taskRepo.GetByID(ctx, claimed.ID)
+	if got.Status != model.TaskStatusCompleted || got.Progress != 100 {
+		t.Errorf("task = %s/%d", got.Status, got.Progress)
+	}
+	if got.DraftURL != "http://example.com/draft" {
+		t.Errorf("draft_url = %s", got.DraftURL)
+	}
+	if got.VideoURL != "https://example.com/out.mp4" {
+		t.Errorf("video_url = %s", got.VideoURL)
+	}
+	if got.ErrorMessage != "" {
+		t.Errorf("error_message = %q, want empty", got.ErrorMessage)
+	}
+}
+
+func TestDraftWorker_Process_VideoExportFailKeepsDraft(t *testing.T) {
+	db := setupDraftWorkerTestDB(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+	claimed := seedDraftTask(t, ctx, taskRepo, liveRepo, projectRepo)
+
+	exporter := &mockVideoExporter{err: errors.New("gen_video down")}
+	worker := NewDraftWorker(DraftWorkerDeps{
+		TaskRepo: taskRepo, LiveMaterialRepo: liveRepo, VideoProjectRepo: projectRepo,
+		Generator:     newTestDraftGenerator(&mockCapCutAPI{}),
+		VideoExporter: exporter,
+		Web:           webroot.Config{RootDir: t.TempDir()},
+		Logger:        zap.NewNop(),
+	})
+	if err := worker.Process(ctx, claimed); err != nil {
+		t.Fatalf("Process() error = %v, want nil (partial success)", err)
+	}
+	got, _ := taskRepo.GetByID(ctx, claimed.ID)
+	if got.Status != model.TaskStatusCompleted {
+		t.Errorf("Status = %q, want completed", got.Status)
+	}
+	if got.DraftURL != "http://example.com/draft" {
+		t.Errorf("draft_url = %s", got.DraftURL)
+	}
+	if got.VideoURL != "" {
+		t.Errorf("video_url = %q, want empty", got.VideoURL)
+	}
+	if !strings.Contains(got.ErrorMessage, "视频生成失败") {
+		t.Errorf("error_message = %q", got.ErrorMessage)
+	}
+}

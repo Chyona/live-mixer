@@ -19,19 +19,31 @@ const (
 	DefaultBaseURL = "http://192.168.3.219:81"
 	// DefaultTimeout 单次 HTTP 请求超时。
 	DefaultTimeout = 120 * time.Second
+	// DefaultGenVideoPollInterval 视频生成状态轮询间隔。
+	DefaultGenVideoPollInterval = 5 * time.Second
+	// DefaultGenVideoMaxPolls 视频生成最大轮询次数（默认约 30 分钟）。
+	DefaultGenVideoMaxPolls = 360
 )
 
 // Config capcut-mate 客户端配置。
 type Config struct {
-	BaseURL    string
+	BaseURL string
+	// APIKey 视频生成（gen_video）所需密钥；create_draft 等草稿接口可不填。
+	APIKey     string
 	HTTPClient *http.Client
 	Timeout    time.Duration
+	// PollInterval / MaxPolls 控制 GenerateVideoAndWait 轮询行为。
+	PollInterval time.Duration
+	MaxPolls     int
 }
 
 // Client 调用 capcut-mate REST API 的客户端。
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL      string
+	apiKey       string
+	http         *http.Client
+	pollInterval time.Duration
+	maxPolls     int
 }
 
 // NewClient 创建 capcut-mate 客户端；未设置的字段使用默认值。
@@ -50,7 +62,21 @@ func NewClient(cfg Config) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: timeout}
 	}
-	return &Client{baseURL: base, http: httpClient}
+	pollInterval := cfg.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = DefaultGenVideoPollInterval
+	}
+	maxPolls := cfg.MaxPolls
+	if maxPolls <= 0 {
+		maxPolls = DefaultGenVideoMaxPolls
+	}
+	return &Client{
+		baseURL:      base,
+		apiKey:       strings.TrimSpace(cfg.APIKey),
+		http:         httpClient,
+		pollInterval: pollInterval,
+		maxPolls:     maxPolls,
+	}
 }
 
 // apiCallRecord 落盘到 staging/{task_id}/capcut_mate 的请求/响应记录结构。
