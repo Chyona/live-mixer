@@ -5,10 +5,7 @@
 > **AI 辅助直播切片工具** · 语音识别 · 智能选段 · 剪映草稿 · 一键成片  
 > 仓库技术名：`live-mixer` · 帮助直播运营与剪辑团队大幅提升切片效率
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](./docker)
-[![License](https://img.shields.io/badge/License-See%20LICENSE-lightgrey)](./LICENSE)
+技术栈：Go 1.25+ · PostgreSQL 14+ · Docker Compose · 详见仓库 LICENSE
 
 ---
 

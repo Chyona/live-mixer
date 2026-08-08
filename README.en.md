@@ -5,10 +5,7 @@
 > **AI-assisted live stream clipping** · Speech-to-text · Smart clip selection · CapCut drafts · One-click export  
 > Technical repo name: `live-mixer` · Help creators and ops teams cut highlights much faster
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](./docker)
-[![License](https://img.shields.io/badge/License-See%20LICENSE-lightgrey)](./LICENSE)
+Stack: Go 1.25+ · PostgreSQL 14+ · Docker Compose · see LICENSE in this repo
 
 ---
 
