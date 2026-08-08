@@ -9,6 +9,14 @@ Stack: Go 1.25+ · PostgreSQL 14+ · Docker Compose · see LICENSE in this repo
 
 ---
 
+## Try It Online
+
+> **Live demo: [https://gogoshine.com](https://gogoshine.com)**
+>
+> No local deployment needed — open your browser to experience the full Live Clip Workbench: material ingest, ASR, AI clipping, CapCut drafts, and one-click export.
+
+---
+
 ## Why Live Clip Workbench?
 
 An end-to-end pipeline for **live replay / recorded streams**: ingest media, run ASR, let AI pick highlight segments, then generate CapCut drafts and optional final videos. Use fully automatic **one-click export**, or **AI draft + human refine** when quality matters most.
