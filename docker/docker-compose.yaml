@@ -6,6 +6,7 @@ services:
     image: gogoshine/live-mixer:latest
     platform: linux/amd64
     restart: unless-stopped
+    #entrypoint: ["/bin/sh", "-c", "sleep 10000"]
     mem_limit: 12G
     memswap_limit: 12G
     cpus: '6'
