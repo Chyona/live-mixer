@@ -1047,6 +1047,77 @@ func TestGenerateASRParagraphsWindow_LocalFallbackOnOverlap(t *testing.T) {
 	}
 }
 
+func TestGenerateASRParagraphsWindow_LLMTransportFallsBackLocally(t *testing.T) {
+	win := utteranceWindow{
+		Utterances: []asr.Utterance{
+			{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲"},
+			{Speaker: "1", StartTime: 120, EndTime: 200, Text: "乙"},
+			{Speaker: "2", StartTime: 300, EndTime: 400, Text: "丙"},
+		},
+	}
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	}
+	ranges, _, err := generateASRParagraphsWindow(context.Background(), llmClient, win, nil)
+	if err != nil {
+		t.Fatalf("error = %v, want local fallback without error", err)
+	}
+	want := buildParagraphRangesLocally(win.Utterances)
+	if len(ranges) != len(want) {
+		t.Fatalf("ranges = %+v, want %+v", ranges, want)
+	}
+	for i := range want {
+		if ranges[i] != want[i] {
+			t.Fatalf("ranges[%d] = %+v, want %+v", i, ranges[i], want[i])
+		}
+	}
+}
+
+func TestGenerateASRParagraphs_LLMTransportFallsBackLocally(t *testing.T) {
+	uts := []asr.Utterance{
+		{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲"},
+		{Speaker: "1", StartTime: 120, EndTime: 200, Text: "乙"},
+		{Speaker: "2", StartTime: 300, EndTime: 400, Text: "丙"},
+	}
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			return "", fmt.Errorf("请求 LLM 失败: connection reset")
+		},
+	}
+	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, 1000, nil, nil)
+	if err != nil {
+		t.Fatalf("generateASRParagraphs() error = %v", err)
+	}
+	if len(paras) != 2 {
+		t.Fatalf("paragraphs = %+v, want 2 (speaker-adjacent merge)", paras)
+	}
+	if paras[0].Text != "甲乙" || paras[1].Text != "丙" {
+		t.Fatalf("texts = %q / %q", paras[0].Text, paras[1].Text)
+	}
+	if err := validateASRParagraphTimeline(paras); err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+}
+
+func TestRunASRParagraphs_LLMTransportStillSucceeds(t *testing.T) {
+	const dur = int64(10 * 60 * 1000)
+	liveASR := string(sampleLiveASRJSON(dur, "你好世界"))
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	}
+	paras, err := RunASRParagraphs(context.Background(), llmClient, liveASR, dur, nil)
+	if err != nil {
+		t.Fatalf("RunASRParagraphs() error = %v", err)
+	}
+	if len(paras) == 0 || paras[0].Text != "你好世界" {
+		t.Fatalf("paragraphs = %+v", paras)
+	}
+}
+
 func TestLiveMaterialASRWorker_Process_BadLLMJSONSucceedsWithFallback(t *testing.T) {
 	repo := &workerMockRepo{
 		materials: map[uint]*model.LiveMaterial{

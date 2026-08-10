@@ -377,7 +377,7 @@ func generateASRSummariesWindow(
 
 func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder, logger *zap.Logger) ([]model.ASRParagraph, error) {
 	logger = asrPostLogger(logger).With(zap.String("phase", "paragraphs"))
-	// Map：按时长 + rune 预算切窗；各窗并行调 LLM（失败则窗内本地重建）。
+	// Map：按时长 + rune 预算切窗；各窗并行调 LLM（调用失败或结构不可用则窗内本地相邻合并）。
 	windows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrLLMWindowMaxRunes)
 	type winOut struct {
 		ranges []asrParagraphRange
@@ -461,13 +461,25 @@ func generateASRParagraphsWindow(
 	}
 	dbg := asrLLMWindowDebug{Offset: win.Offset, UserPrompt: userPrompt}
 
+	fallbackLocal := func(reason error) ([]asrParagraphRange, asrLLMWindowDebug, error) {
+		logger.Warn("ASR paragraphs 窗不可用，已本地相邻合并重建",
+			zap.Int("window_offset", win.Offset),
+			zap.Error(reason),
+			zap.String("raw_preview", truncateRunes(dbg.RawResponse, 256)),
+		)
+		local := buildParagraphRangesLocally(win.Utterances)
+		dbg.Ranges = local
+		return local, dbg, nil
+	}
+
 	content, err := asrChatStructured(ctx, llmClient, messages, logger)
 	dbg.RawResponse = content
 	if err != nil {
-		return nil, dbg, err
+		// LLM 传输/超时等失败：最差也回退为相邻句段合并，不中断整次 paragraphs。
+		return fallbackLocal(err)
 	}
 
-	// 模型已有输出：不再内容重试；结构不可用时本地按说话人重建。
+	// 模型已有输出：不再内容重试；结构不可用时本地按说话人相邻合并重建。
 	local, parseErr := parseASRParagraphRanges(content)
 	var stitchErr error
 	if parseErr == nil {
@@ -480,14 +492,7 @@ func generateASRParagraphsWindow(
 	if fallbackErr == nil {
 		fallbackErr = stitchErr
 	}
-	logger.Warn("ASR paragraphs 窗结果不可用，已本地重建",
-		zap.Int("window_offset", win.Offset),
-		zap.Error(fallbackErr),
-		zap.String("raw_preview", truncateRunes(content, 256)),
-	)
-	local = buildParagraphRangesLocally(win.Utterances)
-	dbg.Ranges = local
-	return local, dbg, nil
+	return fallbackLocal(fallbackErr)
 }
 
 // buildParagraphRangesLocally 按说话人切换，并贪心打包使拼接文本 ≤ asrParagraphMaxRunes。
