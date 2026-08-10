@@ -675,14 +675,28 @@ func TestNormalizeASRParagraphTimeline(t *testing.T) {
 		{StartTime: 150, EndTime: 300, Text: "b"}, // overlap
 	}
 	normalizeASRParagraphTimeline(paras, 1000)
-	if paras[0].StartTime != 0 {
-		t.Fatalf("first start = %d, want 0", paras[0].StartTime)
+	if paras[0].StartTime != 40 {
+		t.Fatalf("first start = %d, want 40 (保留 ASR 真实起点，不强制归零)", paras[0].StartTime)
 	}
 	if paras[1].StartTime < paras[0].EndTime {
 		t.Fatalf("overlap remains: %+v", paras)
 	}
-	if paras[1].EndTime != 1000 {
-		t.Fatalf("last end = %d, want 1000", paras[1].EndTime)
+	if paras[1].EndTime != 300 {
+		t.Fatalf("last end = %d, want 300 (不强制拉满 duration)", paras[1].EndTime)
+	}
+}
+
+func TestNormalizeASRParagraphTimeline_PreservesLeadingSilence(t *testing.T) {
+	paras := []model.ASRParagraph{
+		{StartTime: 2_218_590, EndTime: 2_224_350, Text: "属 AI 股票顾问"},
+		{StartTime: 2_241_080, EndTime: 2_246_090, Text: "知道哪个关吗？"},
+	}
+	normalizeASRParagraphTimeline(paras, 18_231_192)
+	if paras[0].StartTime != 2_218_590 {
+		t.Fatalf("first start = %d, want 2218590", paras[0].StartTime)
+	}
+	if paras[1].EndTime != 2_246_090 {
+		t.Fatalf("last end = %d, want 2246090", paras[1].EndTime)
 	}
 }
 
@@ -840,8 +854,8 @@ func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
 	if joined.String() != text {
 		t.Fatal("joined text mismatch")
 	}
-	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != 1000 {
-		t.Fatalf("timeline = %d-%d", paras[0].StartTime, paras[len(paras)-1].EndTime)
+	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != 500 {
+		t.Fatalf("timeline = %d-%d, want 0-500 (utterance end, not duration)", paras[0].StartTime, paras[len(paras)-1].EndTime)
 	}
 }
 

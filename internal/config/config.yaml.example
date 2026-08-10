@@ -61,7 +61,7 @@ asr:
 llm:
   api_key: ""
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  model: "qwen3.7-plus"
+  model: "qwen3.7-max"
   flash_model: "qwen3.7-flash"
 
 # 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖

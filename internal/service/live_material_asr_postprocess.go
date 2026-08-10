@@ -1168,7 +1168,7 @@ func hardSplitRunes(s string, maxRunes int) []string {
 	return out
 }
 
-// normalizeASRParagraphTimeline 保证段时间不重叠，首尾对齐完整直播时长；相邻静音空隙允许保留。
+// normalizeASRParagraphTimeline 保证段时间不重叠；保留 ASR 真实起止（开场/收尾静音不并入首末段），相邻静音空隙允许保留。
 func normalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
 	if len(paragraphs) == 0 {
 		return
@@ -1179,8 +1179,15 @@ func normalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs i
 		}
 		return paragraphs[i].StartTime < paragraphs[j].StartTime
 	})
-	paragraphs[0].StartTime = 0
 	for i := range paragraphs {
+		if durationMs > 0 {
+			if paragraphs[i].StartTime < 0 {
+				paragraphs[i].StartTime = 0
+			}
+			if paragraphs[i].EndTime > durationMs {
+				paragraphs[i].EndTime = durationMs
+			}
+		}
 		if paragraphs[i].EndTime < paragraphs[i].StartTime {
 			paragraphs[i].EndTime = paragraphs[i].StartTime
 		}
@@ -1192,13 +1199,6 @@ func normalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs i
 		}
 		if paragraphs[i].EndTime < paragraphs[i].StartTime {
 			paragraphs[i].EndTime = paragraphs[i].StartTime
-		}
-	}
-	if durationMs > 0 {
-		last := &paragraphs[len(paragraphs)-1]
-		last.EndTime = durationMs
-		if last.EndTime < last.StartTime {
-			last.EndTime = last.StartTime
 		}
 	}
 }
