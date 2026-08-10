@@ -445,6 +445,36 @@ func TestRunASRPostprocess_EmptySummariesOK(t *testing.T) {
 	}
 }
 
+func TestRunASRParagraphs_OnlyParagraphs(t *testing.T) {
+	const dur = int64(10 * 60 * 1000)
+	var summaryCalls atomic.Int32
+	liveASR := string(sampleLiveASRJSON(dur, "你好世界"))
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			for _, msg := range messages {
+				if msg.Role == "system" && strings.Contains(msg.Content, "主题提炼") {
+					summaryCalls.Add(1)
+					return `{"items":[]}`, nil
+				}
+			}
+			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+		},
+	}
+	paras, err := RunASRParagraphs(context.Background(), llmClient, liveASR, dur, nil)
+	if err != nil {
+		t.Fatalf("RunASRParagraphs() error = %v", err)
+	}
+	if summaryCalls.Load() != 0 {
+		t.Fatalf("summary LLM calls = %d, want 0", summaryCalls.Load())
+	}
+	if len(paras) == 0 || paras[0].Text != "你好世界" {
+		t.Fatalf("paragraphs = %+v", paras)
+	}
+	if err := validateASRParagraphTimeline(paras); err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+}
+
 func TestRunASRPostprocess_KeepsInRangeSummary(t *testing.T) {
 	const dur = int64(10 * 60 * 1000) // 10 分钟
 	liveASR := string(sampleLiveASRJSON(dur, "你好世界"))

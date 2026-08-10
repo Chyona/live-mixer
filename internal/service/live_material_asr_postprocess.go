@@ -100,6 +100,37 @@ func RunASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	return out.Summaries, out.Paragraphs, nil
 }
 
+// RunASRParagraphs 仅根据 live_asr 生成 asr_paragraphs（跳过 asr_summaries 与上游 ASR 识别）。
+// logger 可为 nil。
+func RunASRParagraphs(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64, logger *zap.Logger) ([]model.ASRParagraph, error) {
+	logger = asrPostLogger(logger)
+	if llmClient == nil {
+		return nil, fmt.Errorf("LLM 客户端未配置")
+	}
+	utterances := asr.FormatUtterancesForAPI(liveASR)
+	if len(utterances) == 0 {
+		return nil, fmt.Errorf("ASR 分句为空，无法生成段落")
+	}
+	if durationMs <= 0 {
+		durationMs = utterances[len(utterances)-1].EndTime
+	}
+	started := time.Now()
+	logger.Info("开始 ASR paragraphs 生成",
+		zap.Int("utterance_count", len(utterances)),
+		zap.Int64("duration_ms", durationMs),
+		zap.Int("paragraph_windows", len(splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrLLMWindowMaxRunes))),
+	)
+	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances, durationMs, nil, logger)
+	if err != nil {
+		return nil, fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
+	}
+	logger.Info("ASR paragraphs 生成完成",
+		zap.Int("paragraph_count", len(paragraphs)),
+		zap.Duration("elapsed", time.Since(started)),
+	)
+	return paragraphs, nil
+}
+
 // runASRPostprocess 调用 LLM 生成 summaries 与 paragraphs；任一步失败返回 error。
 // summaries 与 paragraphs 两路并行；rec 非空时将 LLM 中间过程写入 003/004 调试文件。
 func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64, rec *asrDebugRecorder, logger *zap.Logger) (asrPostprocessResult, error) {

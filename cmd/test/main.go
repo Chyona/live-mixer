@@ -1,5 +1,6 @@
-// ASR 分段测试工具：读取 asr_raw.json（duration_ms + live_asr），调用仓库内 ASR 后处理，
-// 以纯文本输出完整提示词、asr_summaries 与 asr_paragraphs。
+// ASR paragraphs 专项测试工具：读取 live_asr JSON（默认 asr_raw.json），
+// 跳过 ASR 识别与 asr_summaries，仅跑 worker 同款 asr_paragraphs 计算；
+// 将 live_material.asr_paragraphs 的完整字段值写入 JSON 文件。
 package main
 
 import (
@@ -26,8 +27,9 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "外部配置文件路径（可选；否则用内嵌 config + 环境变量）")
-	asrPath := flag.String("asr", "", "ASR 输入 JSON 路径（默认仓库根目录 asr_raw.json）")
-	outPath := flag.String("out", "", "结果文本输出路径（默认 stdout）")
+	asrPath := flag.String("asr", "", "live_asr JSON 路径（默认仓库根目录 asr_raw.json）")
+	outPath := flag.String("out", "asr_paragraphs.json", "asr_paragraphs 完整 JSON 输出路径（默认 asr_paragraphs.json）")
+	reportPath := flag.String("report", "", "可选：额外写入含 LLM 提示词的文本报告路径")
 	envFile := flag.String("env", "", "可选 .env 路径（默认尝试 docker/.env），用于注入 APP_LLM_*")
 	flag.Parse()
 
@@ -63,10 +65,10 @@ func main() {
 	}
 
 	utterances := asr.FormatUtterancesForAPI(liveASR)
-	asrModel := cfg.LLM.FlashModelOrDefault()
+	modelName := cfg.LLM.FlashModelOrDefault()
 	fmt.Fprintf(os.Stderr, "ASR 文件: %s\n", path)
-	fmt.Fprintf(os.Stderr, "时长: %dms  句段数: %d  模型: %s (flash)\n", durationMs, len(utterances), asrModel)
-	fmt.Fprintln(os.Stderr, "开始调用 ASR 后处理（summaries + paragraphs，深度思考）...")
+	fmt.Fprintf(os.Stderr, "时长: %dms  句段数: %d  模型: %s (flash)\n", durationMs, len(utterances), modelName)
+	fmt.Fprintln(os.Stderr, "开始计算 asr_paragraphs（跳过 ASR 识别与 asr_summaries）...")
 
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -80,27 +82,84 @@ func main() {
 	defer cancel()
 
 	started := time.Now()
-	summaries, paragraphs, err := service.RunASRPostprocess(ctx, capture, liveASR, durationMs, logger)
+	paragraphs, err := service.RunASRParagraphs(ctx, capture, liveASR, durationMs, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ASR 后处理失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "asr_paragraphs 计算失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "完成: summaries=%d paragraphs=%d llm_calls=%d 耗时=%s\n",
-		len(summaries), len(paragraphs), len(capture.Calls()), time.Since(started).Round(time.Millisecond))
+	elapsed := time.Since(started).Round(time.Millisecond)
+	fmt.Fprintf(os.Stderr, "完成: paragraphs=%d llm_calls=%d 耗时=%s\n",
+		len(paragraphs), len(capture.Calls()), elapsed)
 
-	text := formatTextReport(path, asrModel, durationMs, len(utterances), capture.Calls(), summaries, paragraphs)
-	if *outPath == "" {
-		if _, err := os.Stdout.WriteString(text); err != nil {
-			fmt.Fprintf(os.Stderr, "写入 stdout 失败: %v\n", err)
+	if paragraphs == nil {
+		paragraphs = []model.ASRParagraph{}
+	}
+	if issues := checkParagraphTimeline(paragraphs); len(issues) > 0 {
+		fmt.Fprintf(os.Stderr, "时间线校验失败 (%d):\n", len(issues))
+		for _, issue := range issues {
+			fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+		}
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "时间线校验通过（无重叠、start<end、words 无非法时间）")
+
+	jsonBytes, err := marshalASRParagraphsField(paragraphs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "序列化 asr_paragraphs 失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	out := strings.TrimSpace(*outPath)
+	if out == "" {
+		out = "asr_paragraphs.json"
+	}
+	if err := os.WriteFile(out, jsonBytes, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "写入 JSON 失败: %s: %v\n", out, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "已写入 live_material.asr_paragraphs 完整值: %s (%d bytes, %d 段)\n",
+		out, len(jsonBytes), len(paragraphs))
+
+	if report := strings.TrimSpace(*reportPath); report != "" {
+		text := formatParagraphReport(path, modelName, durationMs, len(utterances), elapsed, capture.Calls(), paragraphs)
+		if err := os.WriteFile(report, []byte(text), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "写入报告失败: %s: %v\n", report, err)
 			os.Exit(1)
 		}
-		return
+		fmt.Fprintf(os.Stderr, "已写入调试报告: %s\n", report)
 	}
-	if err := os.WriteFile(*outPath, []byte(text), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "写入结果文件失败: %s: %v\n", *outPath, err)
-		os.Exit(1)
+}
+
+// asrParagraphDTO 与 live_material.asr_paragraphs 元素一致；words 始终输出（含空数组）。
+type asrParagraphDTO struct {
+	Speaker   string           `json:"speaker"`
+	Text      string           `json:"text"`
+	StartTime int64            `json:"start_time"`
+	EndTime   int64            `json:"end_time"`
+	Words     []model.ClipWord `json:"words"`
+}
+
+// marshalASRParagraphsField 序列化为入库字段 live_material.asr_paragraphs 的完整 JSON 数组。
+func marshalASRParagraphsField(paragraphs []model.ASRParagraph) ([]byte, error) {
+	out := make([]asrParagraphDTO, 0, len(paragraphs))
+	for _, p := range paragraphs {
+		words := p.Words
+		if words == nil {
+			words = []model.ClipWord{}
+		}
+		out = append(out, asrParagraphDTO{
+			Speaker:   p.Speaker,
+			Text:      p.Text,
+			StartTime: p.StartTime,
+			EndTime:   p.EndTime,
+			Words:     words,
+		})
 	}
-	fmt.Fprintf(os.Stderr, "结果已写入: %s\n", *outPath)
+	payload, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(payload, '\n'), nil
 }
 
 type llmCall struct {
@@ -121,7 +180,6 @@ func (c *captureLLM) Chat(ctx context.Context, messages []llm.ChatMessage) (stri
 }
 
 func (c *captureLLM) ChatStructured(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-	// 测试工具开启深度思考；仍走 ChatStructured 接口以复用现有后处理逻辑。
 	resp, err := c.inner.ChatThinking(ctx, messages)
 	copied := make([]llm.ChatMessage, len(messages))
 	copy(copied, messages)
@@ -143,12 +201,12 @@ func (c *captureLLM) Calls() []llmCall {
 	return out
 }
 
-func formatTextReport(
-	asrPath, model string,
+func formatParagraphReport(
+	asrPath, modelName string,
 	durationMs int64,
 	utteranceCount int,
+	elapsed time.Duration,
 	calls []llmCall,
-	summaries []model.ASRSummarySegment,
 	paragraphs []model.ASRParagraph,
 ) string {
 	var b strings.Builder
@@ -156,29 +214,30 @@ func formatTextReport(
 	sub := strings.Repeat("-", 72)
 
 	fmt.Fprintf(&b, "%s\n", sep)
-	b.WriteString("ASR 后处理测试报告\n")
+	b.WriteString("asr_paragraphs 专项测试报告\n")
 	fmt.Fprintf(&b, "%s\n", sep)
 	fmt.Fprintf(&b, "ASR 文件: %s\n", asrPath)
-	fmt.Fprintf(&b, "模型: %s\n", model)
+	fmt.Fprintf(&b, "模型: %s\n", modelName)
 	fmt.Fprintf(&b, "时长(ms): %d\n", durationMs)
 	fmt.Fprintf(&b, "句段数: %d\n", utteranceCount)
+	fmt.Fprintf(&b, "段落数: %d\n", len(paragraphs))
 	fmt.Fprintf(&b, "LLM 调用次数: %d\n", len(calls))
-	fmt.Fprintf(&b, "生成时间: %s\n\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "耗时: %s\n", elapsed)
+	fmt.Fprintf(&b, "生成时间: %s\n", time.Now().Format(time.RFC3339))
+	b.WriteString("校验: 通过（无重叠 / start<end / words 时间合法）\n\n")
 
 	b.WriteString(sep + "\n")
-	b.WriteString("一、完整提示词（每次 LLM 调用）\n")
+	b.WriteString("一、LLM 提示词与响应（asr_paragraphs）\n")
 	b.WriteString(sep + "\n\n")
 	if len(calls) == 0 {
 		b.WriteString("（无 LLM 调用记录）\n\n")
 	}
 	for i, call := range calls {
-		kind := detectPromptKind(call.Messages)
 		fmt.Fprintf(&b, "%s\n", sub)
-		fmt.Fprintf(&b, "【调用 #%d】类型: %s\n", i+1, kind)
+		fmt.Fprintf(&b, "【调用 #%d】\n", i+1)
 		fmt.Fprintf(&b, "%s\n", sub)
 		for _, msg := range call.Messages {
-			role := strings.ToUpper(msg.Role)
-			fmt.Fprintf(&b, "\n----- %s -----\n", role)
+			fmt.Fprintf(&b, "\n----- %s -----\n", strings.ToUpper(msg.Role))
 			b.WriteString(msg.Content)
 			if !strings.HasSuffix(msg.Content, "\n") {
 				b.WriteByte('\n')
@@ -200,26 +259,14 @@ func formatTextReport(
 	}
 
 	b.WriteString(sep + "\n")
-	b.WriteString("二、asr_summaries\n")
-	b.WriteString(sep + "\n\n")
-	if len(summaries) == 0 {
-		b.WriteString("（空）\n\n")
-	}
-	for i, s := range summaries {
-		fmt.Fprintf(&b, "[%d] title=%s\n", i+1, s.Title)
-		fmt.Fprintf(&b, "    start_time=%d  end_time=%d  duration_ms=%d\n\n",
-			s.StartTime, s.EndTime, s.EndTime-s.StartTime)
-	}
-
-	b.WriteString(sep + "\n")
-	b.WriteString("三、asr_paragraphs\n")
+	b.WriteString("二、asr_paragraphs 摘要（完整值见 JSON 文件）\n")
 	b.WriteString(sep + "\n\n")
 	if len(paragraphs) == 0 {
 		b.WriteString("（空）\n\n")
 	}
 	for i, p := range paragraphs {
-		fmt.Fprintf(&b, "[%d] speaker=%s  start_time=%d  end_time=%d  duration_ms=%d\n",
-			i+1, p.Speaker, p.StartTime, p.EndTime, p.EndTime-p.StartTime)
+		fmt.Fprintf(&b, "[%d] speaker=%s  start_time=%d  end_time=%d  duration_ms=%d  words=%d\n",
+			i+1, p.Speaker, p.StartTime, p.EndTime, p.EndTime-p.StartTime, len(p.Words))
 		b.WriteString(p.Text)
 		if !strings.HasSuffix(p.Text, "\n") {
 			b.WriteByte('\n')
@@ -230,8 +277,32 @@ func formatTextReport(
 	return b.String()
 }
 
-// parseASRInput 支持新格式 asr_raw.json：{"duration_ms":N,"live_asr":{...}}；
-// 也兼容旧格式（直接豆包 ASR 根对象，含 audio_info / result.utterances）。
+// checkParagraphTimeline 复核段落时间线硬约束（与 service 校验一致，供 CLI 二次确认）。
+func checkParagraphTimeline(paragraphs []model.ASRParagraph) []string {
+	var issues []string
+	for i, p := range paragraphs {
+		if p.StartTime >= p.EndTime {
+			issues = append(issues, fmt.Sprintf("[%d] start_time(%d) >= end_time(%d)", i+1, p.StartTime, p.EndTime))
+		}
+		for j, w := range p.Words {
+			if w.StartTime < 0 || w.EndTime < 0 {
+				issues = append(issues, fmt.Sprintf("[%d].words[%d] 非法时间 start=%d end=%d text=%q",
+					i+1, j, w.StartTime, w.EndTime, w.Text))
+			} else if w.EndTime < w.StartTime {
+				issues = append(issues, fmt.Sprintf("[%d].words[%d] 时间颠倒 start=%d end=%d",
+					i+1, j, w.StartTime, w.EndTime))
+			}
+		}
+		if i > 0 && p.StartTime < paragraphs[i-1].EndTime {
+			issues = append(issues, fmt.Sprintf("[%d] 与上一段重叠: start=%d < prev.end=%d",
+				i+1, p.StartTime, paragraphs[i-1].EndTime))
+		}
+	}
+	return issues
+}
+
+// parseASRInput 支持包装格式 {"duration_ms":N,"live_asr":{...}}，
+// 以及旧格式（直接豆包 ASR 根对象，含 result.utterances）。
 func parseASRInput(raw []byte) (liveASR string, durationMs int64, err error) {
 	if !json.Valid(raw) {
 		return "", 0, fmt.Errorf("不是合法 JSON")
@@ -253,28 +324,12 @@ func parseASRInput(raw []byte) (liveASR string, durationMs int64, err error) {
 		return liveASR, durationMs, nil
 	}
 
-	// 旧格式：整份即为 live_asr。
 	liveASR = string(raw)
 	durationMs = asr.ParseDurationMs(raw)
 	if len(asr.FormatUtterancesForAPI(liveASR)) == 0 {
 		return "", 0, fmt.Errorf("未识别到 asr_raw 包装格式，且根对象无有效句段")
 	}
 	return liveASR, durationMs, nil
-}
-
-func detectPromptKind(messages []llm.ChatMessage) string {
-	for _, msg := range messages {
-		if msg.Role != "system" {
-			continue
-		}
-		if strings.Contains(msg.Content, "主题提炼") {
-			return "asr_summaries"
-		}
-		if strings.Contains(msg.Content, "段落划分") {
-			return "asr_paragraphs"
-		}
-	}
-	return "unknown"
 }
 
 func findRepoRoot() string {
