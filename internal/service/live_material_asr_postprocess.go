@@ -405,7 +405,10 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 		}
 	}
 	paragraphs, splitCount := enforceASRParagraphMaxRunes(paragraphs)
-	normalizeASRParagraphTimeline(paragraphs, durationMs)
+	finalizeASRParagraphTimeline(paragraphs, durationMs)
+	if err := validateASRParagraphTimeline(paragraphs); err != nil {
+		return nil, err
+	}
 	logger.Info("ASR paragraphs 生成完成",
 		zap.Int("paragraph_count", len(paragraphs)),
 		zap.Int("split_by_max_runes", splitCount),
@@ -932,12 +935,17 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 				})
 			}
 		}
-		text := textBuilder.String()
+		fbStart, fbEnd := utteranceTimeBounds(utterances[r.StartIndex])
+		if r.EndIndex != r.StartIndex {
+			_, fbEnd = utteranceTimeBounds(utterances[r.EndIndex])
+		}
+		words = repairASRWordTimes(words, fbStart, fbEnd)
+		start, end := paragraphTimesFromWords(words, fbStart, fbEnd)
 		paragraphs = append(paragraphs, model.ASRParagraph{
 			Speaker:   speaker,
-			Text:      text,
-			StartTime: utterances[r.StartIndex].StartTime,
-			EndTime:   utterances[r.EndIndex].EndTime,
+			Text:      textBuilder.String(),
+			StartTime: start,
+			EndTime:   end,
 			Words:     words,
 		})
 	}
@@ -948,13 +956,7 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 		}
 	}
 
-	sort.SliceStable(paragraphs, func(i, j int) bool {
-		if paragraphs[i].StartTime == paragraphs[j].StartTime {
-			return paragraphs[i].EndTime < paragraphs[j].EndTime
-		}
-		return paragraphs[i].StartTime < paragraphs[j].StartTime
-	})
-
+	// 保持句段覆盖顺序（与 live_asr 文本顺序一致），不做时间排序以免打乱正文。
 	var full strings.Builder
 	for _, u := range utterances {
 		full.WriteString(u.Text)
@@ -1010,21 +1012,19 @@ func splitASRParagraphBySentences(p model.ASRParagraph, maxRunes int) []model.AS
 		}
 		var taken []model.ClipWord
 		taken, restWords = takeWordsForText(restWords, chunk)
+		chunkRunes := utf8.RuneCountInString(chunk)
+		fbStart := interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset, totalRunes)
+		fbEnd := interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset+chunkRunes, totalRunes)
 		if len(taken) > 0 {
-			seg.Words = taken
-			seg.StartTime = taken[0].StartTime
-			seg.EndTime = taken[len(taken)-1].EndTime
-		} else if totalRunes > 0 {
-			chunkRunes := utf8.RuneCountInString(chunk)
-			seg.StartTime = interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset, totalRunes)
-			seg.EndTime = interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset+chunkRunes, totalRunes)
+			seg.Words = repairASRWordTimes(taken, fbStart, fbEnd)
+			seg.StartTime, seg.EndTime = paragraphTimesFromWords(seg.Words, fbStart, fbEnd)
 		} else {
-			seg.StartTime = p.StartTime
-			seg.EndTime = p.EndTime
+			seg.StartTime = fbStart
+			seg.EndTime = fbEnd
 		}
-		runeOffset += utf8.RuneCountInString(chunk)
-		if seg.EndTime < seg.StartTime {
-			seg.EndTime = seg.StartTime
+		runeOffset += chunkRunes
+		if seg.EndTime <= seg.StartTime {
+			seg.EndTime = seg.StartTime + 1
 		}
 		out = append(out, seg)
 	}
@@ -1168,39 +1168,200 @@ func hardSplitRunes(s string, maxRunes int) []string {
 	return out
 }
 
-// normalizeASRParagraphTimeline 保证段时间不重叠；保留 ASR 真实起止（开场/收尾静音不并入首末段），相邻静音空隙允许保留。
-func normalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
+// asrTimeValid 判断 live_asr 时间戳是否可用（豆包空格等非法值为 -1）。
+func asrTimeValid(t int64) bool {
+	return t >= 0
+}
+
+// utteranceTimeBounds 取句段起止；句段时间非法时回退到字级有效时间。
+func utteranceTimeBounds(u asr.Utterance) (start, end int64) {
+	start, end = u.StartTime, u.EndTime
+	if asrTimeValid(start) && asrTimeValid(end) && end >= start {
+		return start, end
+	}
+	words := make([]model.ClipWord, 0, len(u.Words))
+	for _, w := range u.Words {
+		words = append(words, model.ClipWord{Text: w.Text, StartTime: w.StartTime, EndTime: w.EndTime})
+	}
+	return paragraphTimesFromWords(words, start, end)
+}
+
+// paragraphTimesFromWords 按词序取首个有效 start、末个有效 end；否则用 fallback。
+func paragraphTimesFromWords(words []model.ClipWord, fallbackStart, fallbackEnd int64) (start, end int64) {
+	start, end = fallbackStart, fallbackEnd
+	for _, w := range words {
+		if asrTimeValid(w.StartTime) {
+			start = w.StartTime
+			break
+		}
+	}
+	for i := len(words) - 1; i >= 0; i-- {
+		if asrTimeValid(words[i].EndTime) {
+			end = words[i].EndTime
+			break
+		}
+	}
+	if !asrTimeValid(start) {
+		start = 0
+	}
+	if !asrTimeValid(end) {
+		end = start
+	}
+	if end < start {
+		start, end = end, start
+	}
+	return start, end
+}
+
+// repairASRWordTimes 将 live_asr 中 -1/颠倒的字级时间，用左右相邻有效时间修补（仍锚定 ASR 原文时间轴）。
+func repairASRWordTimes(words []model.ClipWord, fallbackStart, fallbackEnd int64) []model.ClipWord {
+	if len(words) == 0 {
+		return nil
+	}
+	out := append([]model.ClipWord(nil), words...)
+
+	leftAnchor := make([]int64, len(out))
+	last := fallbackStart
+	if !asrTimeValid(last) {
+		last = 0
+	}
+	for i := range out {
+		leftAnchor[i] = last
+		if asrTimeValid(out[i].EndTime) {
+			last = out[i].EndTime
+		} else if asrTimeValid(out[i].StartTime) {
+			last = out[i].StartTime
+		}
+	}
+
+	rightAnchor := make([]int64, len(out))
+	next := fallbackEnd
+	if !asrTimeValid(next) {
+		next = last
+	}
+	for i := len(out) - 1; i >= 0; i-- {
+		rightAnchor[i] = next
+		if asrTimeValid(out[i].StartTime) {
+			next = out[i].StartTime
+		} else if asrTimeValid(out[i].EndTime) {
+			next = out[i].EndTime
+		}
+	}
+
+	for i := range out {
+		w := &out[i]
+		startOK := asrTimeValid(w.StartTime)
+		endOK := asrTimeValid(w.EndTime)
+		if startOK && endOK && w.EndTime >= w.StartTime {
+			continue
+		}
+		left := leftAnchor[i]
+		right := rightAnchor[i]
+		if !startOK && !endOK {
+			w.StartTime = left
+			if right > left {
+				w.EndTime = right
+			} else {
+				w.EndTime = left
+			}
+			continue
+		}
+		if !startOK {
+			w.StartTime = left
+			if endOK && w.EndTime < w.StartTime {
+				w.StartTime = w.EndTime
+			}
+			continue
+		}
+		if !endOK {
+			w.EndTime = right
+			if w.EndTime < w.StartTime {
+				w.EndTime = w.StartTime
+			}
+			continue
+		}
+		// start/end 均有效但颠倒
+		w.StartTime, w.EndTime = w.EndTime, w.StartTime
+	}
+	return out
+}
+
+// finalizeASRParagraphTimeline 以 live_asr 时间为准修复字级时间，并保证：
+// 1) 每段 start_time < end_time；2) 按正文顺序相邻段不重叠（允许首尾相接）。
+func finalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
 	if len(paragraphs) == 0 {
 		return
 	}
-	sort.SliceStable(paragraphs, func(i, j int) bool {
-		if paragraphs[i].StartTime == paragraphs[j].StartTime {
-			return paragraphs[i].EndTime < paragraphs[j].EndTime
-		}
-		return paragraphs[i].StartTime < paragraphs[j].StartTime
-	})
 	for i := range paragraphs {
+		p := &paragraphs[i]
+		p.Words = repairASRWordTimes(p.Words, p.StartTime, p.EndTime)
+		start, end := paragraphTimesFromWords(p.Words, p.StartTime, p.EndTime)
+		p.StartTime, p.EndTime = start, end
 		if durationMs > 0 {
-			if paragraphs[i].StartTime < 0 {
-				paragraphs[i].StartTime = 0
+			if p.StartTime < 0 {
+				p.StartTime = 0
 			}
-			if paragraphs[i].EndTime > durationMs {
-				paragraphs[i].EndTime = durationMs
+			if p.EndTime > durationMs {
+				p.EndTime = durationMs
 			}
 		}
-		if paragraphs[i].EndTime < paragraphs[i].StartTime {
-			paragraphs[i].EndTime = paragraphs[i].StartTime
+		if p.EndTime <= p.StartTime {
+			p.EndTime = p.StartTime + 1
+		}
+	}
+
+	for i := 1; i < len(paragraphs); i++ {
+		prev := &paragraphs[i-1]
+		cur := &paragraphs[i]
+		if cur.StartTime < prev.EndTime {
+			cur.StartTime = prev.EndTime
+		}
+		if cur.EndTime <= cur.StartTime {
+			cur.EndTime = cur.StartTime + 1
+		}
+		if durationMs > 0 && cur.EndTime > durationMs {
+			cur.EndTime = durationMs
+			if cur.EndTime <= cur.StartTime {
+				// 贴尾挤压：保证 start < end，必要时回缩 start（不侵入上一段）。
+				cur.EndTime = durationMs
+				cur.StartTime = durationMs - 1
+				if cur.StartTime < prev.EndTime {
+					cur.StartTime = prev.EndTime
+					cur.EndTime = cur.StartTime + 1
+				}
+			}
+		}
+	}
+}
+
+// normalizeASRParagraphTimeline 保留旧名供测试调用，行为同 finalizeASRParagraphTimeline。
+func normalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
+	finalizeASRParagraphTimeline(paragraphs, durationMs)
+}
+
+// validateASRParagraphTimeline 校验段落时间线硬约束。
+func validateASRParagraphTimeline(paragraphs []model.ASRParagraph) error {
+	for i, p := range paragraphs {
+		if p.StartTime >= p.EndTime {
+			return fmt.Errorf("asr_paragraphs[%d] 时间非法: start_time=%d >= end_time=%d", i, p.StartTime, p.EndTime)
+		}
+		for j, w := range p.Words {
+			if !asrTimeValid(w.StartTime) || !asrTimeValid(w.EndTime) {
+				return fmt.Errorf("asr_paragraphs[%d].words[%d] 含非法时间: start=%d end=%d", i, j, w.StartTime, w.EndTime)
+			}
+			if w.EndTime < w.StartTime {
+				return fmt.Errorf("asr_paragraphs[%d].words[%d] 时间颠倒: start=%d end=%d", i, j, w.StartTime, w.EndTime)
+			}
 		}
 		if i == 0 {
 			continue
 		}
-		if paragraphs[i].StartTime < paragraphs[i-1].EndTime {
-			paragraphs[i].StartTime = paragraphs[i-1].EndTime
-		}
-		if paragraphs[i].EndTime < paragraphs[i].StartTime {
-			paragraphs[i].EndTime = paragraphs[i].StartTime
+		if p.StartTime < paragraphs[i-1].EndTime {
+			return fmt.Errorf("asr_paragraphs[%d] 与上一段时间重叠: [%d,%d) vs prev end=%d",
+				i, p.StartTime, p.EndTime, paragraphs[i-1].EndTime)
 		}
 	}
+	return nil
 }
 
 func truncateRunes(s string, max int) string {
