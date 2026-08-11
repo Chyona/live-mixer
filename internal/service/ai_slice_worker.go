@@ -213,7 +213,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 // ProcessWithOptions 执行 AI 切片阶段：
 // 1. 读取 video_project.clips0 与 live_material.live_asr，筛选待分析句段；
 // 2. 组装内置用户提示词并回写 task.usr_prompt（系统提示词已在创建时写入 task.sys_prompt）；
-// 3. 调用 LLM 解析索引，写入 video_project.clips1（不覆盖 clips0）。
+// 3. 调用 LLM 解析索引，合并相邻切片后写入 video_project.clips1（不覆盖 clips0）。
 // opts.MarkComplete=false 时仅更新进度/ext，供一键成片继续执行草稿阶段。
 func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
@@ -341,7 +341,7 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 
 	progress = setProgress(85)
 
-	// 仅回写 clips1，保留用户预先配置的 clips0 分析窗口。
+	// 仅回写合并后的 clips1，保留用户预先配置的 clips0 分析窗口。
 	project.Clips1 = clips1
 	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("更新剪辑项目切片失败: %w", err))

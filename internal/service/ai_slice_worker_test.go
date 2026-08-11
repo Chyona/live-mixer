@@ -190,11 +190,15 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	if len(updated.Clips0) != 1 || updated.Clips0[0].StartTime != 4500 {
 		t.Errorf("clips0 mutated: %#v", updated.Clips0)
 	}
-	if len(updated.Clips1) != 2 {
-		t.Fatalf("clips1 len = %d, want 2", len(updated.Clips1))
+	if len(updated.Clips1) != 1 {
+		t.Fatalf("clips1 len = %d, want 1 (adjacent merged), got %#v", len(updated.Clips1), updated.Clips1)
 	}
-	if updated.Clips1[0].Text != "今天上新很好看" || updated.Clips1[1].Text != "面料垂感特别好" {
-		t.Errorf("clips1 = %#v", updated.Clips1)
+	merged := updated.Clips1[0]
+	if merged.Text != "今天上新很好看面料垂感特别好" || merged.StartTime != 5000 || merged.EndTime != 8000 {
+		t.Errorf("clips1[0] = %#v", merged)
+	}
+	if len(merged.Words) != 3 {
+		t.Errorf("merged words len = %d, want 3", len(merged.Words))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 )
@@ -64,7 +65,7 @@ func filterUtterancesByClips0(utterances []asr.Utterance, clips0 []model.ClipRan
 }
 
 // buildClips1FromIndices 根据 LLM 返回的句段下标，从筛选后的 ASR 列表组装 clips1。
-// 下标越界或为负数时跳过，不中断整体流程。
+// 下标越界或为负数时跳过；组装后按时间相邻规则合并（间隙 ≤ ClipMergeGapMS），再写入 clips1。
 func buildClips1FromIndices(segments []asr.Utterance, indices []int) []model.ClipWithText {
 	if len(segments) == 0 || len(indices) == 0 {
 		return []model.ClipWithText{}
@@ -75,6 +76,51 @@ func buildClips1FromIndices(segments []asr.Utterance, indices []int) []model.Cli
 			continue
 		}
 		out = append(out, utteranceToClipWithText(segments[idx]))
+	}
+	return mergeAdjacentClips1(out, prepare.ClipMergeGapMS)
+}
+
+// mergeAdjacentClips1 按列表顺序合并相邻 clips1：规则与草稿侧 MergeAdjacentClipRanges 一致。
+// 当 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS（含重叠）时合并；
+// 合并后 text / words 按顺序拼接，时间取 [cur.Start, max(cur.End, next.End)]。
+func mergeAdjacentClips1(clips []model.ClipWithText, maxGapMS int64) []model.ClipWithText {
+	if len(clips) == 0 {
+		return []model.ClipWithText{}
+	}
+	if len(clips) == 1 {
+		return []model.ClipWithText{cloneClipWithText(clips[0])}
+	}
+
+	out := make([]model.ClipWithText, 0, len(clips))
+	cur := cloneClipWithText(clips[0])
+	for i := 1; i < len(clips); i++ {
+		next := clips[i]
+		gap := next.StartTime - cur.EndTime
+		if next.StartTime >= cur.StartTime && gap <= maxGapMS {
+			cur.Text += next.Text
+			if next.EndTime > cur.EndTime {
+				cur.EndTime = next.EndTime
+			}
+			if len(next.Words) > 0 {
+				cur.Words = append(cur.Words, append([]model.ClipWord(nil), next.Words...)...)
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = cloneClipWithText(next)
+	}
+	out = append(out, cur)
+	return out
+}
+
+func cloneClipWithText(c model.ClipWithText) model.ClipWithText {
+	out := model.ClipWithText{
+		Text:      c.Text,
+		StartTime: c.StartTime,
+		EndTime:   c.EndTime,
+	}
+	if len(c.Words) > 0 {
+		out.Words = append([]model.ClipWord(nil), c.Words...)
 	}
 	return out
 }

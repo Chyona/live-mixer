@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 
@@ -161,6 +162,56 @@ func TestBuildClips1FromIndices(t *testing.T) {
 	}
 	if clips[1].Text != "结束" {
 		t.Errorf("clips[1].Text = %q", clips[1].Text)
+	}
+}
+
+func TestBuildClips1FromIndices_MergeAdjacent(t *testing.T) {
+	segments := []asr.Utterance{
+		{
+			StartTime: 0, EndTime: 1000, Text: "第一段",
+			Words: []asr.Word{{StartTime: 0, EndTime: 1000, Text: "第一段"}},
+		},
+		{
+			StartTime: 1400, EndTime: 2000, Text: "第二段",
+			Words: []asr.Word{{StartTime: 1400, EndTime: 2000, Text: "第二段"}},
+		},
+		{StartTime: 3000, EndTime: 4000, Text: "远隔段"},
+	}
+	// gap=400ms ≤ 500 → 前两段合并；第三段保留。
+	clips := buildClips1FromIndices(segments, []int{0, 1, 2})
+	if len(clips) != 2 {
+		t.Fatalf("len = %d, want 2, clips=%#v", len(clips), clips)
+	}
+	if clips[0].Text != "第一段第二段" || clips[0].StartTime != 0 || clips[0].EndTime != 2000 {
+		t.Errorf("merged = %#v", clips[0])
+	}
+	if len(clips[0].Words) != 2 {
+		t.Errorf("merged words len = %d, want 2", len(clips[0].Words))
+	}
+	if clips[1].Text != "远隔段" {
+		t.Errorf("clips[1] = %#v", clips[1])
+	}
+}
+
+func TestMergeAdjacentClips1_GapExactly500(t *testing.T) {
+	in := []model.ClipWithText{
+		{Text: "a", StartTime: 0, EndTime: 1000},
+		{Text: "b", StartTime: 1500, EndTime: 2000},
+	}
+	got := mergeAdjacentClips1(in, prepare.ClipMergeGapMS)
+	if len(got) != 1 || got[0].Text != "ab" || got[0].StartTime != 0 || got[0].EndTime != 2000 {
+		t.Fatalf("got = %#v", got)
+	}
+}
+
+func TestMergeAdjacentClips1_Gap501KeepsTwo(t *testing.T) {
+	in := []model.ClipWithText{
+		{Text: "a", StartTime: 0, EndTime: 1000},
+		{Text: "b", StartTime: 1501, EndTime: 2000},
+	}
+	got := mergeAdjacentClips1(in, prepare.ClipMergeGapMS)
+	if len(got) != 2 {
+		t.Fatalf("got = %#v, want 2", got)
 	}
 }
 
