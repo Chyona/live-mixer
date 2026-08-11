@@ -3,73 +3,48 @@ package asr
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
+// SubtitleParagraph 字幕分段（与 live_material.asr_paragraphs 一一对应）。
+type SubtitleParagraph struct {
+	Speaker   string
+	Text      string
+	StartTime int64
+}
+
 // BuildSubtitleTXT 生成 ASR 字幕 TXT。
-// 关键词：titles 空格拼接；文字记录：连续相同说话人合并，显示为「说话人${speaker} MM:SS」。
-func BuildSubtitleTXT(titles []string, utterances []Utterance) string {
+// 格式：关键词行 + 空行 +「文字记录」+ 各段落「说话人{speaker} {MM:SS|H:MM:SS}」与文本块（分段顺序与内容与 asr_paragraphs 一致）。
+func BuildSubtitleTXT(titles []string, paragraphs []SubtitleParagraph) string {
 	var b strings.Builder
 	b.WriteString("关键词\n")
-	cleaned := make([]string, 0, len(titles))
+	keywords := make([]string, 0, len(titles))
 	for _, t := range titles {
 		t = strings.TrimSpace(t)
-		if t != "" {
-			cleaned = append(cleaned, t)
+		if t == "" {
+			continue
 		}
+		keywords = append(keywords, t)
 	}
-	if len(cleaned) > 0 {
-		b.WriteString(strings.Join(cleaned, " "))
-	}
-	b.WriteString("\n\n")
+	b.WriteString(strings.Join(keywords, " "))
+	b.WriteString("\n\n文字记录\n")
 
-	b.WriteString("文字记录\n")
-	blocks := mergeUtterancesBySpeaker(utterances)
-	for i, block := range blocks {
-		if i > 0 {
+	first := true
+	for _, p := range paragraphs {
+		if !first {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "说话人%s %s\n%s\n", block.Speaker, formatASRClock(block.StartTime), block.Text)
+		first = false
+		fmt.Fprintf(&b, "说话人%s %s\n%s\n", p.Speaker, formatASRClock(p.StartTime), p.Text)
 	}
 	return b.String()
 }
 
-type subtitleBlock struct {
-	Speaker   string
-	StartTime int64
-	Text      string
-}
-
-// mergeUtterancesBySpeaker 合并连续相同说话人的分句；文本直接拼接，时间取首句 start_time。
-func mergeUtterancesBySpeaker(utterances []Utterance) []subtitleBlock {
-	out := make([]subtitleBlock, 0)
-	for _, u := range utterances {
-		text := strings.TrimSpace(u.Text)
-		if text == "" {
-			continue
-		}
-		speaker := strings.TrimSpace(u.Speaker)
-		n := len(out)
-		if n > 0 && out[n-1].Speaker == speaker {
-			out[n-1].Text += text
-			continue
-		}
-		out = append(out, subtitleBlock{
-			Speaker:   speaker,
-			StartTime: u.StartTime,
-			Text:      text,
-		})
-	}
-	return out
-}
-
-// formatASRClock 将毫秒转为可读时钟：不足 1 小时为 MM:SS，否则 H:MM:SS。
+// formatASRClock 将毫秒格式化为 MM:SS；满 1 小时为 H:MM:SS（小时不补零）。
 func formatASRClock(ms int64) string {
 	if ms < 0 {
 		ms = 0
 	}
-	d := time.Duration(ms) * time.Millisecond
-	totalSec := int64(d.Seconds())
+	totalSec := ms / 1000
 	h := totalSec / 3600
 	m := (totalSec % 3600) / 60
 	s := totalSec % 60

@@ -575,22 +575,21 @@ func TestLiveMaterialService_Delete_NotFound(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_DownloadASRSubtitle_Success 验证导出已完成的 ASR 字幕 TXT。
+// TestLiveMaterialService_DownloadASRSubtitle_Success 验证导出已完成的 ASR 字幕 TXT（分段与 asr_paragraphs 一致）。
 func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
-	rawASR := `{"result":{"utterances":[
-		{"additions":{"speaker":"1"},"start_time":2000,"end_time":3000,"text":"你好"},
-		{"additions":{"speaker":"1"},"start_time":3500,"end_time":4000,"text":"世界"},
-		{"additions":{"speaker":"2"},"start_time":5000,"end_time":6000,"text":"嗨"}
-	]}}`
 	repo := &mockLiveMaterialRepo{
 		materials: map[uint]*model.LiveMaterial{
 			5: {
 				ID:        5,
 				ASRStatus: model.ASRStatusCompleted,
-				LiveASR:   rawASR,
 				ASRSummaries: []model.ASRSummarySegment{
 					{Title: "财富"},
 					{Title: "直播"},
+				},
+				ASRParagraphs: []model.ASRParagraph{
+					{Speaker: "1", StartTime: 2000, EndTime: 4000, Text: "你好世界"},
+					{Speaker: "1", StartTime: 4500, EndTime: 4800, Text: "同说话人下一段"},
+					{Speaker: "2", StartTime: 5000, EndTime: 6000, Text: "嗨"},
 				},
 			},
 		},
@@ -601,7 +600,7 @@ func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DownloadASRSubtitle() error = %v", err)
 	}
-	want := "关键词\n财富 直播\n\n文字记录\n说话人1 00:02\n你好世界\n\n说话人2 00:05\n嗨\n"
+	want := "关键词\n财富 直播\n\n文字记录\n说话人1 00:02\n你好世界\n\n说话人1 00:04\n同说话人下一段\n\n说话人2 00:05\n嗨\n"
 	if string(content) != want {
 		t.Errorf("content =\n%q\nwant\n%q", content, want)
 	}
@@ -624,11 +623,15 @@ func TestLiveMaterialService_DownloadASRSubtitle_NotReady(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_DownloadASRSubtitle_Empty 验证空字幕拒绝导出。
+// TestLiveMaterialService_DownloadASRSubtitle_Empty 验证空 asr_paragraphs 拒绝导出。
 func TestLiveMaterialService_DownloadASRSubtitle_Empty(t *testing.T) {
 	repo := &mockLiveMaterialRepo{
 		materials: map[uint]*model.LiveMaterial{
-			1: {ID: 1, ASRStatus: model.ASRStatusCompleted, LiveASR: "{}"},
+			1: {
+				ID:            1,
+				ASRStatus:     model.ASRStatusCompleted,
+				ASRParagraphs: nil,
+			},
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)

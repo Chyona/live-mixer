@@ -347,8 +347,7 @@ func (s *liveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) 
 		return nil, "", ErrASRSubtitleNotReady
 	}
 
-	utterances := asr.FormatUtterancesForAPI(material.LiveASR)
-	if len(utterances) == 0 {
+	if len(material.ASRParagraphs) == 0 {
 		return nil, "", ErrASRSubtitleEmpty
 	}
 
@@ -357,7 +356,16 @@ func (s *liveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) 
 		titles = append(titles, seg.Title)
 	}
 
-	content := asr.BuildSubtitleTXT(titles, utterances)
+	paragraphs := make([]asr.SubtitleParagraph, 0, len(material.ASRParagraphs))
+	for _, p := range material.ASRParagraphs {
+		paragraphs = append(paragraphs, asr.SubtitleParagraph{
+			Speaker:   p.Speaker,
+			Text:      p.Text,
+			StartTime: p.StartTime,
+		})
+	}
+
+	content := asr.BuildSubtitleTXT(titles, paragraphs)
 	fileName := fmt.Sprintf("asr_subtitle_%d.txt", material.ID)
 	return []byte(content), fileName, nil
 }

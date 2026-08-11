@@ -409,7 +409,7 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 
 // DownloadASRSubtitle 下载直播素材 ASR 字幕（TXT 文件）
 // @Summary      下载 ASR 字幕
-// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录取自 live_asr，连续相同说话人合并，显示为「说话人${speaker}」；仅 asr_status=completed 且有分句时可下载
+// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；仅 asr_status=completed 且 asr_paragraphs 非空时可下载
 // @Tags         直播素材
 // @Produce      text/plain
 // @Param        id   path  int  true  "素材 ID"
