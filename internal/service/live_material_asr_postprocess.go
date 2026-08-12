@@ -437,6 +437,9 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 	}
 	paragraphs, splitCount := enforceASRParagraphMaxRunes(paragraphs)
 	finalizeASRParagraphTimeline(paragraphs, durationMs)
+	if err := validateASRParagraphWords(paragraphs); err != nil {
+		return nil, err
+	}
 	if err := validateASRParagraphTimeline(paragraphs); err != nil {
 		return nil, err
 	}
@@ -975,11 +978,18 @@ func stitchASRParagraphs(utterances []asr.Utterance, ranges []asrParagraphRange)
 		if r.EndIndex != r.StartIndex {
 			_, fbEnd = utteranceTimeBounds(utterances[r.EndIndex])
 		}
+		text := textBuilder.String()
+		// 豆包 words 通常不含句读标点；插入占位词使 join(words)==text，并保留原文时间轴。
+		words = syncWordsToText(words, text, fbStart, fbEnd)
 		words = repairASRWordTimes(words, fbStart, fbEnd)
-		start, end := paragraphTimesFromWords(words, fbStart, fbEnd)
+		// 段时间优先用句段起止（可信），字级时间仅作细粒度与非法句段时间回退。
+		start, end := fbStart, fbEnd
+		if !asrTimeValid(start) || !asrTimeValid(end) || end < start {
+			start, end = paragraphTimesFromWords(words, fbStart, fbEnd)
+		}
 		paragraphs = append(paragraphs, model.ASRParagraph{
 			Speaker:   speaker,
-			Text:      textBuilder.String(),
+			Text:      text,
 			StartTime: start,
 			EndTime:   end,
 			Words:     words,
@@ -1017,6 +1027,9 @@ func enforceASRParagraphMaxRunes(paragraphs []model.ASRParagraph) ([]model.ASRPa
 	splitCount := 0
 	for _, p := range paragraphs {
 		if utf8.RuneCountInString(p.Text) <= asrParagraphMaxRunes {
+			// 兜底再同步一次，确保入库前 join(words)==text。
+			p.Words = syncWordsToText(contentWordsOnly(p.Words), p.Text, p.StartTime, p.EndTime)
+			p.Words = repairASRWordTimes(p.Words, p.StartTime, p.EndTime)
 			out = append(out, p)
 			continue
 		}
@@ -1026,7 +1039,23 @@ func enforceASRParagraphMaxRunes(paragraphs []model.ASRParagraph) ([]model.ASRPa
 	return out, splitCount
 }
 
+// contentWordsOnly 去掉纯句读占位词，供重新 sync 时避免重复插入。
+func contentWordsOnly(words []model.ClipWord) []model.ClipWord {
+	if len(words) == 0 {
+		return nil
+	}
+	out := make([]model.ClipWord, 0, len(words))
+	for _, w := range words {
+		if stripASRAlignPunct(w.Text) == "" {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
 // splitASRParagraphBySentences 按句末标点切开后贪心打包；单句仍超限则按 rune 硬切。
+// words 按「去句读后的正文」与 chunk 对齐，再 sync 回标点，保证 join(words)==text。
 func splitASRParagraphBySentences(p model.ASRParagraph, maxRunes int) []model.ASRParagraph {
 	if maxRunes <= 0 || utf8.RuneCountInString(p.Text) <= maxRunes {
 		return []model.ASRParagraph{p}
@@ -1041,28 +1070,40 @@ func splitASRParagraphBySentences(p model.ASRParagraph, maxRunes int) []model.AS
 	restWords := p.Words
 	runeOffset := 0
 	totalRunes := utf8.RuneCountInString(p.Text)
-	for _, chunk := range chunks {
-		seg := model.ASRParagraph{
-			Speaker: p.Speaker,
-			Text:    chunk,
-		}
-		var taken []model.ClipWord
-		taken, restWords = takeWordsForText(restWords, chunk)
+	for ci, chunk := range chunks {
 		chunkRunes := utf8.RuneCountInString(chunk)
 		fbStart := interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset, totalRunes)
 		fbEnd := interpolateParagraphTime(p.StartTime, p.EndTime, runeOffset+chunkRunes, totalRunes)
-		if len(taken) > 0 {
-			seg.Words = repairASRWordTimes(taken, fbStart, fbEnd)
-			seg.StartTime, seg.EndTime = paragraphTimesFromWords(seg.Words, fbStart, fbEnd)
-		} else {
-			seg.StartTime = fbStart
-			seg.EndTime = fbEnd
+		if ci == len(chunks)-1 {
+			fbEnd = p.EndTime
 		}
+		if ci == 0 {
+			fbStart = p.StartTime
+		}
+
+		var taken []model.ClipWord
+		taken, restWords = takeWordsForText(restWords, chunk)
+		words := syncWordsToText(taken, chunk, fbStart, fbEnd)
+		words = repairASRWordTimes(words, fbStart, fbEnd)
+		start, end := paragraphTimesFromWords(words, fbStart, fbEnd)
+		// 首尾段锚定原段落时间，避免比例插值丢终点。
+		if ci == 0 {
+			start = p.StartTime
+		}
+		if ci == len(chunks)-1 {
+			end = p.EndTime
+		}
+		if end <= start {
+			end = start + 1
+		}
+		out = append(out, model.ASRParagraph{
+			Speaker:   p.Speaker,
+			Text:      chunk,
+			StartTime: start,
+			EndTime:   end,
+			Words:     words,
+		})
 		runeOffset += chunkRunes
-		if seg.EndTime <= seg.StartTime {
-			seg.EndTime = seg.StartTime + 1
-		}
-		out = append(out, seg)
 	}
 	return out
 }
@@ -1081,7 +1122,65 @@ func interpolateParagraphTime(start, end int64, runePos, totalRunes int) int64 {
 	return start + span*int64(runePos)/int64(totalRunes)
 }
 
-// takeWordsForText 从 words 头部消费与 text 对齐的字级切片。
+// isASRAlignPunct 判断是否为「正文有、words 常无」的句读标点（小数点除外）。
+func isASRAlignPunct(r rune) bool {
+	switch r {
+	case '，', '。', '！', '？', '、', '；', '：', '…',
+		',', '!', '?', ';', ':':
+		return true
+	case '.':
+		return true // 对齐阶段先当标点；小数点由调用方结合上下文保留
+	default:
+		return false
+	}
+}
+
+// isASRAlignPunctInText 在 text 位置 i 是否应按对齐噪声跳过（保留小数点）。
+func isASRAlignPunctInText(runes []rune, i int) bool {
+	if i < 0 || i >= len(runes) {
+		return false
+	}
+	r := runes[i]
+	if r == '.' || r == '．' {
+		if i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1]) {
+			return false
+		}
+		return true
+	}
+	return isASRAlignPunct(r) && r != '.'
+}
+
+// stripASRAlignPunct 去掉句读标点（保留空格与小数点），用于 text/words 内容对齐。
+func stripASRAlignPunct(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i, r := range runes {
+		if isASRAlignPunctInText(runes, i) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func hasPrefixRunes(haystack, prefix []rune) bool {
+	if len(prefix) > len(haystack) {
+		return false
+	}
+	for i, r := range prefix {
+		if haystack[i] != r {
+			return false
+		}
+	}
+	return true
+}
+
+// takeWordsForText 从 words 头部消费与 text「去句读后正文」对齐的字级切片。
+// 纯句读占位词会被丢弃（由后续 syncWordsToText 按 chunk 重新插入），避免跨段污染。
 func takeWordsForText(words []model.ClipWord, text string) (taken []model.ClipWord, rest []model.ClipWord) {
 	if text == "" {
 		return nil, words
@@ -1089,28 +1188,157 @@ func takeWordsForText(words []model.ClipWord, text string) (taken []model.ClipWo
 	if len(words) == 0 {
 		return nil, nil
 	}
-	var b strings.Builder
+	need := []rune(stripASRAlignPunct(text))
+	if len(need) == 0 {
+		return nil, dropLeadingAlignPunctWords(words)
+	}
+	taken = make([]model.ClipWord, 0, len(words))
+	ni := 0
 	for i, w := range words {
-		b.WriteString(w.Text)
-		got := b.String()
-		if got == text {
-			return words[:i+1], words[i+1:]
-		}
-		if strings.HasPrefix(text, got) {
+		wr := []rune(stripASRAlignPunct(w.Text))
+		if len(wr) == 0 {
 			continue
 		}
-		// 无法精确前缀匹配时，按累计 rune 数近似切分。
-		break
-	}
-	need := utf8.RuneCountInString(text)
-	got := 0
-	for i, w := range words {
-		got += utf8.RuneCountInString(w.Text)
-		if got >= need {
-			return words[:i+1], words[i+1:]
+		if ni+len(wr) > len(need) {
+			return taken, dropLeadingAlignPunctWords(words[i:])
+		}
+		for j, r := range wr {
+			if need[ni+j] != r {
+				return taken, dropLeadingAlignPunctWords(words[i:])
+			}
+		}
+		taken = append(taken, w)
+		ni += len(wr)
+		if ni == len(need) {
+			return taken, dropLeadingAlignPunctWords(words[i+1:])
 		}
 	}
-	return words, nil
+	return taken, nil
+}
+
+func dropLeadingAlignPunctWords(words []model.ClipWord) []model.ClipWord {
+	i := 0
+	for i < len(words) && stripASRAlignPunct(words[i].Text) == "" {
+		i++
+	}
+	if i == 0 {
+		return words
+	}
+	return words[i:]
+}
+
+// syncWordsToText 插入 text 中有而 words 中缺的句读标点占位词，使 join(words)==text。
+// 双方去句读后的正文必须同序一致；否则按时间轴比例为 text 逐字重建（保不变式）。
+func syncWordsToText(words []model.ClipWord, text string, fbStart, fbEnd int64) []model.ClipWord {
+	if text == "" {
+		return nil
+	}
+	textRunes := []rune(text)
+	if stripASRAlignPunct(text) != stripASRAlignPunct(joinedClipWordText(words)) {
+		return rebuildWordsFromText(text, fbStart, fbEnd)
+	}
+	out := make([]model.ClipWord, 0, len(words)+16)
+	i := 0
+	for _, w := range words {
+		wr := []rune(w.Text)
+		if len(wr) == 0 {
+			continue
+		}
+		for i < len(textRunes) && !hasPrefixRunes(textRunes[i:], wr) {
+			if !isASRAlignPunctInText(textRunes, i) {
+				return rebuildWordsFromText(text, fbStart, fbEnd)
+			}
+			left := fbStart
+			if len(out) > 0 && asrTimeValid(out[len(out)-1].EndTime) {
+				left = out[len(out)-1].EndTime
+			} else if asrTimeValid(w.StartTime) {
+				left = w.StartTime
+			}
+			right := left
+			if asrTimeValid(w.StartTime) {
+				right = w.StartTime
+			}
+			if right < left {
+				right = left
+			}
+			out = append(out, model.ClipWord{Text: string(textRunes[i]), StartTime: left, EndTime: right})
+			i++
+		}
+		if i >= len(textRunes) || !hasPrefixRunes(textRunes[i:], wr) {
+			return rebuildWordsFromText(text, fbStart, fbEnd)
+		}
+		out = append(out, w)
+		i += len(wr)
+	}
+	for i < len(textRunes) {
+		if !isASRAlignPunctInText(textRunes, i) && !unicode.IsSpace(textRunes[i]) {
+			return rebuildWordsFromText(text, fbStart, fbEnd)
+		}
+		left := fbEnd
+		if len(out) > 0 && asrTimeValid(out[len(out)-1].EndTime) {
+			left = out[len(out)-1].EndTime
+		} else if asrTimeValid(fbStart) {
+			left = fbStart
+		}
+		if !asrTimeValid(left) {
+			left = 0
+		}
+		out = append(out, model.ClipWord{Text: string(textRunes[i]), StartTime: left, EndTime: left})
+		i++
+	}
+	if joinedClipWordText(out) != text {
+		return rebuildWordsFromText(text, fbStart, fbEnd)
+	}
+	return out
+}
+
+func joinedClipWordText(words []model.ClipWord) string {
+	var b strings.Builder
+	for _, w := range words {
+		b.WriteString(w.Text)
+	}
+	return b.String()
+}
+
+// rebuildWordsFromText 无可靠 words 时按段落时间轴为 text 逐 rune 建词（保证 join==text）。
+func rebuildWordsFromText(text string, fbStart, fbEnd int64) []model.ClipWord {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+	start, end := fbStart, fbEnd
+	if !asrTimeValid(start) {
+		start = 0
+	}
+	if !asrTimeValid(end) || end < start {
+		end = start
+	}
+	span := end - start
+	out := make([]model.ClipWord, len(runes))
+	for i, r := range runes {
+		st := start + span*int64(i)/int64(len(runes))
+		en := start + span*int64(i+1)/int64(len(runes))
+		if en < st {
+			en = st
+		}
+		out[i] = model.ClipWord{Text: string(r), StartTime: st, EndTime: en}
+	}
+	return out
+}
+
+// validateASRParagraphWords 校验每段 join(words)==text，且有正文时 words 非空。
+func validateASRParagraphWords(paragraphs []model.ASRParagraph) error {
+	for i, p := range paragraphs {
+		got := joinedClipWordText(p.Words)
+		if got != p.Text {
+			return fmt.Errorf("asr_paragraphs[%d] words 与 text 不一致: text_runes=%d words_runes=%d",
+				i, utf8.RuneCountInString(p.Text), utf8.RuneCountInString(got))
+		}
+		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && len(p.Words) == 0 {
+			return fmt.Errorf("asr_paragraphs[%d] 有正文但 words 为空", i)
+		}
+	}
+	return nil
 }
 
 func splitTextBySentenceEnds(s string) []string {
@@ -1322,17 +1550,20 @@ func repairASRWordTimes(words []model.ClipWord, fallbackStart, fallbackEnd int64
 	return out
 }
 
-// finalizeASRParagraphTimeline 以 live_asr 时间为准修复字级时间，并保证：
+// finalizeASRParagraphTimeline 修复字级非法时间，并保证：
 // 1) 每段 start_time < end_time；2) 按正文顺序相邻段不重叠（允许首尾相接）。
+// 段级起止若已合法（通常来自 utterance 边界）则保留，不用 words 回写缩短。
 func finalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
 	if len(paragraphs) == 0 {
 		return
 	}
 	for i := range paragraphs {
 		p := &paragraphs[i]
-		p.Words = repairASRWordTimes(p.Words, p.StartTime, p.EndTime)
-		start, end := paragraphTimesFromWords(p.Words, p.StartTime, p.EndTime)
-		p.StartTime, p.EndTime = start, end
+		fbStart, fbEnd := p.StartTime, p.EndTime
+		p.Words = repairASRWordTimes(p.Words, fbStart, fbEnd)
+		if !asrTimeValid(p.StartTime) || !asrTimeValid(p.EndTime) || p.EndTime <= p.StartTime {
+			p.StartTime, p.EndTime = paragraphTimesFromWords(p.Words, fbStart, fbEnd)
+		}
 		if durationMs > 0 {
 			if p.StartTime < 0 {
 				p.StartTime = 0
