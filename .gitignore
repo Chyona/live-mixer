@@ -22,3 +22,11 @@ envinit
 /docs/默认提示词.txt
 /docker/html
 /.qoder
+/live_asr01.json
+/live_asr02.json
+/live_asr03.json
+/live_asr04.json
+/live_asr05.json
+/asr_raw.json
+/001_asr_raw.json
+/002_asr_raw.json

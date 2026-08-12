@@ -26,14 +26,35 @@ func TestGenerateASRParagraphs_FromASRRawJSONFiles(t *testing.T) {
 		file string
 	}{
 		{name: "asr_raw", file: "asr_raw.json"},
-		{name: "001_asr_raw", file: "001_asr_raw.json"},
-		{name: "002_asr_raw", file: "002_asr_raw.json"},
+		{name: "live_asr01", file: "live_asr01.json"},
+		{name: "live_asr02", file: "live_asr02.json"},
+		{name: "live_asr03", file: "live_asr03.json"},
+		{name: "live_asr04", file: "live_asr04.json"},
+		{name: "live_asr05", file: "live_asr05.json"},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			liveASR, durationMs := loadRepoLiveASRFixture(t, tc.file)
 			assertASRParagraphsFromLiveASR(t, tc.file, liveASR, durationMs)
+		})
+	}
+}
+
+// TestGenerateASRParagraphs_FromLiveASR0NFiles 专门覆盖 live_asr01~05 作为 live_asr 输入。
+func TestGenerateASRParagraphs_FromLiveASR0NFiles(t *testing.T) {
+	cases := []string{
+		"live_asr01.json",
+		"live_asr02.json",
+		"live_asr03.json",
+		"live_asr04.json",
+		"live_asr05.json",
+	}
+	for _, file := range cases {
+		file := file
+		t.Run(file, func(t *testing.T) {
+			liveASR, durationMs := loadRepoLiveASRFixture(t, file)
+			assertASRParagraphsFromLiveASR(t, file, liveASR, durationMs)
 		})
 	}
 }
@@ -244,8 +265,8 @@ func TestSplitASRParagraphBySentences_PreservesWordIdentity(t *testing.T) {
 
 // loadRepoLiveASRFixture 读取仓库根目录 ASR 样例。
 // 支持两种格式：
-//  1. 直接 live_asr（含 result.utterances），如 asr_raw.json；
-//  2. 调试包装 {"duration_ms":...,"live_asr":{...}}，如 001/002_asr_raw.json。
+//  1. 直接 live_asr（含 result.utterances），如 asr_raw.json / live_asr0N.json；
+//  2. 调试包装 {"duration_ms":...,"live_asr":{...}}。
 func loadRepoLiveASRFixture(t *testing.T, name string) (liveASR string, durationMs int64) {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
