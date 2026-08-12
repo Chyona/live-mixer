@@ -348,8 +348,8 @@ func TestGenerateASRSummaries_MultiWindowReduce(t *testing.T) {
 
 func TestGenerateASRParagraphs_MultiWindowOffsetStitch(t *testing.T) {
 	uts := []asr.Utterance{
-		{Speaker: "1", StartTime: 0, EndTime: 1000, Text: "甲"},
-		{Speaker: "1", StartTime: asrParagraphWindowMs + 1, EndTime: asrParagraphWindowMs + 2000, Text: "乙"},
+		{Speaker: "1", StartTime: 0, EndTime: 1000, Text: "甲", Words: asrWordsFromContentText("甲", 0, 1000)},
+		{Speaker: "1", StartTime: asrParagraphWindowMs + 1, EndTime: asrParagraphWindowMs + 2000, Text: "乙", Words: asrWordsFromContentText("乙", asrParagraphWindowMs+1, asrParagraphWindowMs+2000)},
 	}
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
@@ -380,6 +380,46 @@ func TestGenerateASRParagraphs_MultiWindowOffsetStitch(t *testing.T) {
 	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != dur {
 		t.Fatalf("timeline = %d-%d, want 0-%d", paras[0].StartTime, paras[len(paras)-1].EndTime, dur)
 	}
+}
+
+// asrWordsFromContentText 按去句读正文逐字构造源 ASR words（不含标点）。
+func asrWordsFromContentText(text string, start, end int64) []asr.Word {
+	runes := []rune(stripASRAlignPunct(text))
+	if len(runes) == 0 {
+		return nil
+	}
+	span := end - start
+	if span < int64(len(runes)) {
+		span = int64(len(runes))
+	}
+	step := span / int64(len(runes))
+	if step < 1 {
+		step = 1
+	}
+	out := make([]asr.Word, 0, len(runes))
+	t0 := start
+	for i, r := range runes {
+		t1 := t0 + step
+		if i == len(runes)-1 {
+			t1 = end
+			if t1 < t0 {
+				t1 = t0 + step
+			}
+		}
+		out = append(out, asr.Word{Text: string(r), StartTime: t0, EndTime: t1})
+		t0 = t1
+	}
+	return out
+}
+
+// clipWordsFromContentText 同 asrWordsFromContentText，输出 ClipWord。
+func clipWordsFromContentText(text string, start, end int64) []model.ClipWord {
+	ws := asrWordsFromContentText(text, start, end)
+	out := make([]model.ClipWord, len(ws))
+	for i, w := range ws {
+		out[i] = model.ClipWord{Text: w.Text, StartTime: w.StartTime, EndTime: w.EndTime}
+	}
+	return out
 }
 
 // sampleLiveASRMultiUtteranceJSON 构造含多句段的豆包 ASR JSON，供后处理测试。
@@ -595,8 +635,10 @@ func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 	if n := calls.Load(); n != 2 {
 		t.Fatalf("calls = %d, want 2 (no content repair)", n)
 	}
-	if n := logs.FilterMessageSnippet("窗结果不可用").Len(); n < 2 {
-		t.Fatalf("fallback warn logs = %d, want >= 2", n)
+	summaryWarns := logs.FilterMessageSnippet("ASR summaries 窗结果不可用").Len()
+	paraWarns := logs.FilterMessageSnippet("ASR paragraphs 窗不可用").Len()
+	if summaryWarns < 1 || paraWarns < 1 {
+		t.Fatalf("fallback warn logs: summary=%d paragraphs=%d, want both >= 1", summaryWarns, paraWarns)
 	}
 }
 
@@ -868,6 +910,7 @@ func TestEnforceASRParagraphMaxRunes_SplitByPeriod(t *testing.T) {
 		Text:      text,
 		StartTime: 0,
 		EndTime:   1000,
+		Words:     clipWordsFromContentText(text, 0, 1000),
 	}})
 	if splitCount != 1 {
 		t.Fatalf("splitCount = %d, want 1", splitCount)
@@ -894,6 +937,7 @@ func TestEnforceASRParagraphMaxRunes_HardSplitNoPeriod(t *testing.T) {
 		Text:      text,
 		StartTime: 0,
 		EndTime:   900,
+		Words:     clipWordsFromContentText(text, 0, 900),
 	}})
 	if splitCount != 1 {
 		t.Fatalf("splitCount = %d, want 1", splitCount)
@@ -986,7 +1030,7 @@ func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
 	s2 := strings.Repeat("场", 110) + "。"
 	text := s1 + s2
 	uts := []asr.Utterance{
-		{Speaker: "1", StartTime: 0, EndTime: 500, Text: text},
+		{Speaker: "1", StartTime: 0, EndTime: 500, Text: text, Words: asrWordsFromContentText(text, 0, 500)},
 	}
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
@@ -1077,9 +1121,9 @@ func TestGenerateASRParagraphsWindow_LLMTransportFallsBackLocally(t *testing.T) 
 
 func TestGenerateASRParagraphs_LLMTransportFallsBackLocally(t *testing.T) {
 	uts := []asr.Utterance{
-		{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲"},
-		{Speaker: "1", StartTime: 120, EndTime: 200, Text: "乙"},
-		{Speaker: "2", StartTime: 300, EndTime: 400, Text: "丙"},
+		{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲", Words: asrWordsFromContentText("甲", 0, 100)},
+		{Speaker: "1", StartTime: 120, EndTime: 200, Text: "乙", Words: asrWordsFromContentText("乙", 120, 200)},
+		{Speaker: "2", StartTime: 300, EndTime: 400, Text: "丙", Words: asrWordsFromContentText("丙", 300, 400)},
 	}
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {

@@ -440,6 +440,9 @@ func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utteran
 	if err := validateASRParagraphWordIdentity(utterances, paragraphs); err != nil {
 		return nil, err
 	}
+	if err := validateASRParagraphContentAlign(paragraphs); err != nil {
+		return nil, err
+	}
 	if err := validateASRParagraphTimeline(paragraphs); err != nil {
 		return nil, err
 	}
@@ -1041,7 +1044,7 @@ func enforceASRParagraphMaxRunes(paragraphs []model.ASRParagraph) ([]model.ASRPa
 }
 
 // splitASRParagraphBySentences 按句末标点切开后贪心打包；单句仍超限则按 rune 硬切。
-// words 按「去句读后的正文」分区源词流；允许 join(words)!=text；失败则回退整段。
+// words 按「去句读后的正文」分区源词流；每段必须满足 strip(text)==strip(join(words))；失败则回退整段。
 func splitASRParagraphBySentences(p model.ASRParagraph, maxRunes int) []model.ASRParagraph {
 	if maxRunes <= 0 || utf8.RuneCountInString(p.Text) <= maxRunes {
 		return []model.ASRParagraph{p}
@@ -1068,17 +1071,22 @@ func splitASRParagraphBySentences(p model.ASRParagraph, maxRunes int) []model.AS
 			fbEnd = p.EndTime
 		}
 
-		var taken []model.ClipWord
-		taken, restWords = takeWordsForText(restWords, chunk)
+		taken, nextRest := takeWordsForText(restWords, chunk)
 		if ci == len(chunks)-1 {
-			// 末段吃尽剩余源词，保证总数守恒。
-			taken = append(taken, restWords...)
-			restWords = nil
+			// 末段：仅允许吞掉「去句读后为空」的残留词（罕见）；若仍有正文词则切分失败。
+			for _, w := range nextRest {
+				if stripASRAlignPunct(w.Text) != "" {
+					return []model.ASRParagraph{p}
+				}
+				taken = append(taken, w)
+			}
+			nextRest = nil
 		}
-		// 有正文却一个词都没分到，且后面还有词：对齐失败。
-		if strings.TrimSpace(stripASRAlignPunct(chunk)) != "" && len(taken) == 0 && len(restWords) > 0 {
+		if !asrParagraphContentAligned(chunk, taken) {
 			return []model.ASRParagraph{p}
 		}
+		restWords = nextRest
+
 		start, end := fbStart, fbEnd
 		if !asrTimeValid(start) || !asrTimeValid(end) || end <= start {
 			start, end = paragraphTimesFromWords(taken, fbStart, fbEnd)
@@ -1261,7 +1269,7 @@ func flattenParagraphWords(paragraphs []model.ASRParagraph) []model.ClipWord {
 }
 
 // validateASRParagraphWordIdentity 校验 asr_paragraphs.words 与 live_asr utterances.words
-// 总数相等且按序一一对应（text/start_time/end_time）；允许 join(words)!=text。
+// 总数相等且按序一一对应（text/start_time/end_time）。
 func validateASRParagraphWordIdentity(utterances []asr.Utterance, paragraphs []model.ASRParagraph) error {
 	want := flattenUtteranceWords(utterances)
 	got := flattenParagraphWords(paragraphs)
@@ -1273,6 +1281,26 @@ func validateASRParagraphWordIdentity(utterances []asr.Utterance, paragraphs []m
 			return fmt.Errorf("asr_paragraphs.words[%d] 与 live_asr 不一致: got={%q,%d,%d} want={%q,%d,%d}",
 				i, got[i].Text, got[i].StartTime, got[i].EndTime,
 				want[i].Text, want[i].StartTime, want[i].EndTime)
+		}
+	}
+	return nil
+}
+
+// asrParagraphContentAligned 判断去句读后 text 与 join(words) 正文一致。
+// 两侧使用同一套 strip，以兼容词内偶发标点（如 "5:5"）。
+func asrParagraphContentAligned(text string, words []model.ClipWord) bool {
+	return stripASRAlignPunct(text) == stripASRAlignPunct(joinedClipWordText(words))
+}
+
+// validateASRParagraphContentAlign 校验每段 strip(text)==strip(join(words))。
+func validateASRParagraphContentAlign(paragraphs []model.ASRParagraph) error {
+	for i, p := range paragraphs {
+		if !asrParagraphContentAligned(p.Text, p.Words) {
+			return fmt.Errorf("asr_paragraphs[%d] 去标点正文与 words 不一致: text_stripped=%q words_stripped=%q",
+				i,
+				truncateRunes(stripASRAlignPunct(p.Text), 64),
+				truncateRunes(stripASRAlignPunct(joinedClipWordText(p.Words)), 64),
+			)
 		}
 	}
 	return nil

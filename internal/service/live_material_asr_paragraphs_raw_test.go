@@ -18,8 +18,8 @@ import (
 // TestGenerateASRParagraphs_FromASRRawJSONFiles 分别以仓库根目录下多个 ASR 样例为 live_asr，
 // 走与 worker 相同的 paragraphs 管线（LLM 不可用时窗内本地合并），严格校验：
 // 1) words 与 live_asr 总数相等且按序 1:1（text/start/end）；
-// 2) 全文 text 拼接一致；3) 段级时间线合法；4) 单段 ≤200 字；
-// 5) 允许 join(words)!=text（text 含句读、words 通常不含）。
+// 2) 每段 strip(text)==strip(join(words))；
+// 3) 全文 text 拼接一致；4) 段级时间线合法；5) 单段 ≤200 字。
 func TestGenerateASRParagraphs_FromASRRawJSONFiles(t *testing.T) {
 	cases := []struct {
 		name string
@@ -91,6 +91,15 @@ func assertASRParagraphsFromLiveASR(t *testing.T, fixtureName, liveASR string, d
 		if utf8.RuneCountInString(p.Text) > asrParagraphMaxRunes {
 			t.Fatalf("%s paras[%d] runes=%d > %d", fixtureName, i, utf8.RuneCountInString(p.Text), asrParagraphMaxRunes)
 		}
+		if !asrParagraphContentAligned(p.Text, p.Words) {
+			t.Fatalf("%s paras[%d] strip(text)!=strip(join(words))\ntext=%q\nwords=%q\nstripped_text=%q\nstripped_words=%q",
+				fixtureName, i,
+				truncateRunes(p.Text, 80),
+				truncateRunes(joinedClipWordText(p.Words), 80),
+				truncateRunes(stripASRAlignPunct(p.Text), 80),
+				truncateRunes(stripASRAlignPunct(joinedClipWordText(p.Words)), 80),
+			)
+		}
 		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && p.EndTime <= p.StartTime {
 			t.Fatalf("%s paras[%d] 时间非法: [%d,%d] text=%q", fixtureName, i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
 		}
@@ -104,6 +113,9 @@ func assertASRParagraphsFromLiveASR(t *testing.T, fixtureName, liveASR string, d
 	}
 	if err := validateASRParagraphWordIdentity(utterances, paras); err != nil {
 		t.Fatalf("%s validateASRParagraphWordIdentity: %v", fixtureName, err)
+	}
+	if err := validateASRParagraphContentAlign(paras); err != nil {
+		t.Fatalf("%s validateASRParagraphContentAlign: %v", fixtureName, err)
 	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
 		t.Fatalf("%s validateASRParagraphTimeline: %v", fixtureName, err)
@@ -169,8 +181,15 @@ func TestStitchASRParagraphs_PreservesSourceWordsWithPunctText(t *testing.T) {
 	if err := validateASRParagraphWordIdentity(utterances, paras); err != nil {
 		t.Fatalf("identity: %v", err)
 	}
+	if err := validateASRParagraphContentAlign(paras); err != nil {
+		t.Fatalf("content: %v", err)
+	}
 	if joinedClipWordText(paras[0].Words) == paras[0].Text {
 		t.Fatal("expected join(words)!=text when text has punctuation")
+	}
+	if stripASRAlignPunct(paras[0].Text) != joinedClipWordText(paras[0].Words) {
+		t.Fatalf("stripped text != join(words): %q vs %q",
+			stripASRAlignPunct(paras[0].Text), joinedClipWordText(paras[0].Words))
 	}
 	if paras[0].StartTime != 100 || paras[0].EndTime != 200 {
 		t.Fatalf("timeline=[%d,%d], want utterance bounds", paras[0].StartTime, paras[0].EndTime)
@@ -204,6 +223,9 @@ func TestSplitASRParagraphBySentences_PreservesWordIdentity(t *testing.T) {
 		if flat[i] != words[i] {
 			t.Fatalf("words[%d] changed: got=%+v want=%+v", i, flat[i], words[i])
 		}
+	}
+	if err := validateASRParagraphContentAlign(got); err != nil {
+		t.Fatalf("content: %v", err)
 	}
 	if err := validateASRParagraphTimeline(got); err != nil {
 		t.Fatalf("timeline: %v", err)
