@@ -820,6 +820,32 @@ func TestNormalizeASRParagraphTimeline_DerivesSegmentBoundsKeepsWordTimes(t *tes
 	}
 }
 
+func TestFinalizeASRParagraphTimeline_UndersizedDurationCoversLastWord(t *testing.T) {
+	// 复现错误结果.json：duration 偏短时不得把段 end 压到末字之前。
+	paras := []model.ASRParagraph{
+		{
+			Speaker:   "1",
+			Text:      "把生命浪费在美好的事物上",
+			StartTime: 91850,
+			EndTime:   136460,
+			Words: []model.ClipWord{
+				{Text: "物", StartTime: 136100, EndTime: 136180},
+				{Text: "上", StartTime: 136220, EndTime: 136460},
+			},
+		},
+	}
+	finalizeASRParagraphTimeline(paras, 135430)
+	if paras[0].Words[1].EndTime != 136460 {
+		t.Fatalf("words mutated: %+v", paras[0].Words[1])
+	}
+	if paras[0].EndTime < 136460 {
+		t.Fatalf("end_time=%d < last word end 136460", paras[0].EndTime)
+	}
+	if err := validateASRParagraphTimeline(paras); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
 func TestNormalizeASRParagraphTimeline_NoOverlapWhenPrevZeroEnd(t *testing.T) {
 	paras := []model.ASRParagraph{
 		{StartTime: 0, EndTime: 0, Text: "a"},

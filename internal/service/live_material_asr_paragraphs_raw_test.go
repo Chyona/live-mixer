@@ -127,6 +127,9 @@ func assertASRParagraphsFromLiveASR(t *testing.T, fixtureName, liveASR string, d
 		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && p.EndTime-p.StartTime <= 1 {
 			t.Fatalf("%s paras[%d] 疑似幽灵时间线 [%d,%d] text=%q", fixtureName, i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
 		}
+		if _, we, ok := paragraphWordTimeSpan(p.Words); ok && p.EndTime < we {
+			t.Fatalf("%s paras[%d] end_time=%d < 末字 end_time=%d", fixtureName, i, p.EndTime, we)
+		}
 		fullPara.WriteString(p.Text)
 	}
 	if fullPara.String() != fullUT.String() {
@@ -261,6 +264,157 @@ func TestSplitASRParagraphBySentences_PreservesWordIdentity(t *testing.T) {
 	if joined.String() != text {
 		t.Fatal("joined text mismatch")
 	}
+}
+
+// TestReproduceASRParagraphEndClampedByDuration_LiveASR03 用 live_asr03.json 验证：
+// 段 end_time < 末字 end_time 来自 finalize 按 duration_ms 截断，而非 stitch/words 损坏。
+func TestReproduceASRParagraphEndClampedByDuration_LiveASR03(t *testing.T) {
+	liveASR, _ := loadRepoLiveASRFixture(t, "live_asr03.json")
+	utterances := asr.FormatUtterancesForAPI(liveASR)
+	if len(utterances) == 0 {
+		t.Fatal("live_asr03 无 utterances")
+	}
+
+	naturalDur := asr.ParseDurationMs(json.RawMessage(liveASR))
+	if naturalDur <= 0 {
+		t.Fatalf("ParseDurationMs=%d, want audio_info.duration", naturalDur)
+	}
+
+	const (
+		wantLastWordEnd int64 = 136460
+		clampDur        int64 = 135430 // 错误结果.json 中的异常段 end_time
+		marker                = "把生命浪费在美好的事物上"
+	)
+
+	// 源数据：目标句段末字与 utterance.end 均为 136460，且自然 duration 远大于该值。
+	var srcUT *asr.Utterance
+	for i := range utterances {
+		u := &utterances[i]
+		if strings.Contains(u.Text, marker) && u.EndTime == wantLastWordEnd {
+			srcUT = u
+			break
+		}
+	}
+	if srcUT == nil {
+		t.Fatalf("未找到 end_time=%d 且含 %q 的句段", wantLastWordEnd, marker)
+	}
+	if len(srcUT.Words) == 0 || srcUT.Words[len(srcUT.Words)-1].EndTime != wantLastWordEnd {
+		t.Fatalf("源末字 end_time=%v, want %d", srcUT.Words, wantLastWordEnd)
+	}
+	if naturalDur <= wantLastWordEnd {
+		t.Fatalf("natural duration %d <= last word %d，无法区分「自然时长」与「人为截断」", naturalDur, wantLastWordEnd)
+	}
+	t.Logf("source ok: utterance=[%d,%d] last_word_end=%d audio_info.duration=%d",
+		srcUT.StartTime, srcUT.EndTime, wantLastWordEnd, naturalDur)
+
+	llmClient := &workerMockLLM{
+		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
+			return "not-json", nil // 本地合并，排除 LLM 边界干扰
+		},
+	}
+
+	// 目标：任意包含末字「上」@136460 的段落（合并后该字不一定是段内最后一词）。
+	findTarget := func(t *testing.T, paras []model.ASRParagraph) (para *model.ASRParagraph, wordEnd int64) {
+		t.Helper()
+		for i := range paras {
+			p := &paras[i]
+			for _, w := range p.Words {
+				if w.Text == "上" && w.EndTime == wantLastWordEnd {
+					last := p.Words[len(p.Words)-1]
+					t.Logf("hit para[%d] [%d,%d] last=%q@%d target_word_end=%d marker=%v tail=%q",
+						i, p.StartTime, p.EndTime, last.Text, last.EndTime, wantLastWordEnd,
+						strings.Contains(p.Text, marker), truncateRunes(p.Text, 48))
+					return p, wantLastWordEnd
+				}
+			}
+		}
+		return nil, 0
+	}
+
+	countEndBeforeContainedWord := func(paras []model.ASRParagraph) int {
+		n := 0
+		for _, para := range paras {
+			var maxWordEnd int64 = -1
+			for _, w := range para.Words {
+				if asrTimeValid(w.EndTime) && w.EndTime > maxWordEnd {
+					maxWordEnd = w.EndTime
+				}
+			}
+			if maxWordEnd >= 0 && para.EndTime < maxWordEnd {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("natural_duration_no_clamp", func(t *testing.T) {
+		paras, err := generateASRParagraphs(context.Background(), llmClient, utterances, naturalDur, nil, nil)
+		if err != nil {
+			t.Fatalf("generateASRParagraphs: %v", err)
+		}
+		p, wordEnd := findTarget(t, paras)
+		if p == nil {
+			t.Fatal("未找到含「上」@136460 的段落")
+		}
+		t.Logf("natural: para=[%d,%d] target_word_end=%d", p.StartTime, p.EndTime, wordEnd)
+		if p.EndTime < wordEnd {
+			t.Fatalf("自然 duration 下段 end_time=%d < 目标字 end=%d（不应截断）", p.EndTime, wordEnd)
+		}
+		if n := countEndBeforeContainedWord(paras); n != 0 {
+			t.Fatalf("自然 duration 下仍有 %d 段 end_time < 段内最大字 end_time", n)
+		}
+	})
+
+	t.Run("undersized_duration_still_covers_words", func(t *testing.T) {
+		paras, err := generateASRParagraphs(context.Background(), llmClient, utterances, naturalDur, nil, nil)
+		if err != nil {
+			t.Fatalf("generateASRParagraphs(natural): %v", err)
+		}
+		p, wordEnd := findTarget(t, paras)
+		if p == nil {
+			t.Fatal("未找到含「上」@136460 的段落")
+		}
+		beforeEnd := p.EndTime
+		if beforeEnd < wordEnd {
+			t.Fatalf("截断前已异常: para.end=%d < word.end=%d", beforeEnd, wordEnd)
+		}
+		if beforeEnd <= clampDur {
+			t.Fatalf("截断前段 end=%d，无法演示偏短 duration=%d", beforeEnd, clampDur)
+		}
+
+		finalizeASRParagraphTimeline(paras, clampDur)
+		p, wordEnd = findTarget(t, paras)
+		if p == nil {
+			t.Fatal("finalize 后丢失目标段落")
+		}
+		kept := false
+		for _, w := range p.Words {
+			if w.Text == "上" && w.EndTime == wantLastWordEnd {
+				kept = true
+				break
+			}
+		}
+		if !kept {
+			t.Fatal("截断后字级时间被改写")
+		}
+		var maxWordEnd int64 = -1
+		for _, w := range p.Words {
+			if asrTimeValid(w.EndTime) && w.EndTime > maxWordEnd {
+				maxWordEnd = w.EndTime
+			}
+		}
+		t.Logf("after undersized duration finalize: before_end=%d after_end=%d max_word_end=%d clamp=%d",
+			beforeEnd, p.EndTime, maxWordEnd, clampDur)
+		if p.EndTime < wordEnd {
+			t.Fatalf("修复失败: para.end(%d) < target word.end(%d)", p.EndTime, wordEnd)
+		}
+		if p.EndTime < maxWordEnd {
+			t.Fatalf("修复失败: para.end(%d) < 段内最大字 end(%d)", p.EndTime, maxWordEnd)
+		}
+		if n := countEndBeforeContainedWord(paras); n != 0 {
+			t.Fatalf("偏短 duration 后仍有 %d 段 end_time < 段内字 end_time", n)
+		}
+	})
 }
 
 // loadRepoLiveASRFixture 读取仓库根目录 ASR 样例。

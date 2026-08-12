@@ -1515,27 +1515,82 @@ func repairASRWordTimes(words []model.ClipWord, fallbackStart, fallbackEnd int64
 	return out
 }
 
+// paragraphWordTimeSpan 取段内首个有效字 start、末个有效字 end；无有效时间则 ok=false。
+func paragraphWordTimeSpan(words []model.ClipWord) (start, end int64, ok bool) {
+	start, end = -1, -1
+	for _, w := range words {
+		if asrTimeValid(w.StartTime) {
+			start = w.StartTime
+			break
+		}
+	}
+	for i := len(words) - 1; i >= 0; i-- {
+		if asrTimeValid(words[i].EndTime) {
+			end = words[i].EndTime
+			break
+		}
+	}
+	if !asrTimeValid(start) || !asrTimeValid(end) {
+		return 0, 0, false
+	}
+	if end < start {
+		start, end = end, start
+	}
+	return start, end, true
+}
+
+// ensureASRParagraphCoversWords 段级 end_time 必须覆盖段内有效末字时间（不改 words）。
+// 避免 duration 截断后出现 paragraph.end_time < words[last].end_time。
+func ensureASRParagraphCoversWords(p *model.ASRParagraph) {
+	_, we, ok := paragraphWordTimeSpan(p.Words)
+	if !ok {
+		return
+	}
+	if p.EndTime < we {
+		p.EndTime = we
+	}
+	if p.EndTime <= p.StartTime {
+		p.EndTime = p.StartTime + 1
+		if p.EndTime < we {
+			p.EndTime = we
+		}
+	}
+}
+
 // finalizeASRParagraphTimeline 保证段级时间线：
-// 1) 每段 start_time < end_time；2) 按正文顺序相邻段不重叠（允许首尾相接）。
-// 不改写 words 时间（与 live_asr 1:1 对应）；段级起止已合法则保留。
+// 1) 每段 start_time < end_time；2) 按正文顺序相邻段不重叠（允许首尾相接）；
+// 3) 段 end_time 不低于段内有效末字 end_time（duration 截断不得破坏字级覆盖）。
+// 不改写 words 时间（与 live_asr 1:1 对应）。
 func finalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs int64) {
 	if len(paragraphs) == 0 {
 		return
 	}
+	// duration 取「申报时长」与 ASR 内容最大结束时间的较大值，避免 audio_info 偏短误截断。
+	effectiveDur := durationMs
+	for i := range paragraphs {
+		if _, we, ok := paragraphWordTimeSpan(paragraphs[i].Words); ok && we > effectiveDur {
+			effectiveDur = we
+		}
+		if paragraphs[i].EndTime > effectiveDur {
+			effectiveDur = paragraphs[i].EndTime
+		}
+	}
+
 	for i := range paragraphs {
 		p := &paragraphs[i]
 		fbStart, fbEnd := p.StartTime, p.EndTime
 		if !asrTimeValid(p.StartTime) || !asrTimeValid(p.EndTime) || p.EndTime <= p.StartTime {
 			p.StartTime, p.EndTime = paragraphTimesFromWords(p.Words, fbStart, fbEnd)
 		}
-		if durationMs > 0 {
+		if effectiveDur > 0 {
 			if p.StartTime < 0 {
 				p.StartTime = 0
 			}
-			if p.EndTime > durationMs {
-				p.EndTime = durationMs
+			if p.EndTime > effectiveDur {
+				p.EndTime = effectiveDur
 			}
 		}
+		ensureASRParagraphCoversWords(p)
 		if p.EndTime <= p.StartTime {
 			p.EndTime = p.StartTime + 1
 		}
@@ -1550,17 +1605,22 @@ func finalizeASRParagraphTimeline(paragraphs []model.ASRParagraph, durationMs in
 		if cur.EndTime <= cur.StartTime {
 			cur.EndTime = cur.StartTime + 1
 		}
-		if durationMs > 0 && cur.EndTime > durationMs {
-			cur.EndTime = durationMs
+		if effectiveDur > 0 && cur.EndTime > effectiveDur {
+			cur.EndTime = effectiveDur
 			if cur.EndTime <= cur.StartTime {
 				// 贴尾挤压：保证 start < end，必要时回缩 start（不侵入上一段）。
-				cur.EndTime = durationMs
-				cur.StartTime = durationMs - 1
+				cur.EndTime = effectiveDur
+				cur.StartTime = effectiveDur - 1
 				if cur.StartTime < prev.EndTime {
 					cur.StartTime = prev.EndTime
 					cur.EndTime = cur.StartTime + 1
 				}
 			}
+		}
+		// 消重叠 / duration 截断之后仍须覆盖本段 words。
+		ensureASRParagraphCoversWords(cur)
+		if cur.EndTime <= cur.StartTime {
+			cur.EndTime = cur.StartTime + 1
 		}
 	}
 }
