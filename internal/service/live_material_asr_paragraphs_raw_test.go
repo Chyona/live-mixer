@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,18 +15,44 @@ import (
 	"live-mixer/internal/pkg/llm"
 )
 
-// TestGenerateASRParagraphs_FromASRRawJSON 以仓库根目录 asr_raw.json 作为 live_asr，
+// TestGenerateASRParagraphs_FromASRRawJSONFiles 分别以仓库根目录下多个 ASR 样例为 live_asr，
 // 走与 worker 相同的 paragraphs 管线（LLM 不可用时窗内本地合并），严格校验：
 // 1) 每段 join(words)==text；2) 全文拼接一致；3) 时间线合法；4) 单段 ≤200 字。
+func TestGenerateASRParagraphs_FromASRRawJSONFiles(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+	}{
+		{name: "asr_raw", file: "asr_raw.json"},
+		{name: "001_asr_raw", file: "001_asr_raw.json"},
+		{name: "002_asr_raw", file: "002_asr_raw.json"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			liveASR, durationMs := loadRepoLiveASRFixture(t, tc.file)
+			assertASRParagraphsFromLiveASR(t, tc.file, liveASR, durationMs)
+		})
+	}
+}
+
+// TestGenerateASRParagraphs_FromASRRawJSON 保留旧名，覆盖 asr_raw.json。
 func TestGenerateASRParagraphs_FromASRRawJSON(t *testing.T) {
-	liveASR := loadRepoASRRawJSON(t)
+	liveASR, durationMs := loadRepoLiveASRFixture(t, "asr_raw.json")
+	assertASRParagraphsFromLiveASR(t, "asr_raw.json", liveASR, durationMs)
+}
+
+func assertASRParagraphsFromLiveASR(t *testing.T, fixtureName, liveASR string, durationMs int64) {
+	t.Helper()
 	utterances := asr.FormatUtterancesForAPI(liveASR)
 	if len(utterances) == 0 {
-		t.Fatal("asr_raw.json 未解析出 utterances")
+		t.Fatalf("%s 未解析出 utterances", fixtureName)
 	}
-	durationMs := utterances[len(utterances)-1].EndTime
 	if durationMs <= 0 {
-		durationMs = 18_231_192
+		durationMs = utterances[len(utterances)-1].EndTime
+	}
+	if durationMs <= 0 {
+		t.Fatalf("%s duration_ms 无效", fixtureName)
 	}
 
 	// 不依赖真实 LLM：返回非法 JSON，触发窗内本地相邻合并（与生产兜底一致）。
@@ -37,10 +64,10 @@ func TestGenerateASRParagraphs_FromASRRawJSON(t *testing.T) {
 
 	paras, err := generateASRParagraphs(context.Background(), llmClient, utterances, durationMs, nil, nil)
 	if err != nil {
-		t.Fatalf("generateASRParagraphs: %v", err)
+		t.Fatalf("generateASRParagraphs(%s): %v", fixtureName, err)
 	}
 	if len(paras) == 0 {
-		t.Fatal("paragraphs 为空")
+		t.Fatalf("%s paragraphs 为空", fixtureName)
 	}
 
 	var fullUT strings.Builder
@@ -50,35 +77,36 @@ func TestGenerateASRParagraphs_FromASRRawJSON(t *testing.T) {
 	var fullPara strings.Builder
 	for i, p := range paras {
 		if utf8.RuneCountInString(p.Text) > asrParagraphMaxRunes {
-			t.Fatalf("paras[%d] runes=%d > %d", i, utf8.RuneCountInString(p.Text), asrParagraphMaxRunes)
+			t.Fatalf("%s paras[%d] runes=%d > %d", fixtureName, i, utf8.RuneCountInString(p.Text), asrParagraphMaxRunes)
 		}
 		got := joinedClipWordText(p.Words)
 		if got != p.Text {
-			t.Fatalf("paras[%d] join(words)!=text\ntext=%q\nwords=%q", i, truncateRunes(p.Text, 80), truncateRunes(got, 80))
+			t.Fatalf("%s paras[%d] join(words)!=text\ntext=%q\nwords=%q",
+				fixtureName, i, truncateRunes(p.Text, 80), truncateRunes(got, 80))
 		}
 		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && len(p.Words) == 0 {
-			t.Fatalf("paras[%d] 有正文但 words 为空: %q", i, truncateRunes(p.Text, 40))
+			t.Fatalf("%s paras[%d] 有正文但 words 为空: %q", fixtureName, i, truncateRunes(p.Text, 40))
 		}
 		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && p.EndTime <= p.StartTime {
-			t.Fatalf("paras[%d] 时间非法: [%d,%d] text=%q", i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
+			t.Fatalf("%s paras[%d] 时间非法: [%d,%d] text=%q", fixtureName, i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
 		}
 		// 有正文的段不应被挤压成 1ms 幽灵段（finalize 在 words 错位时的典型产物）。
 		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && p.EndTime-p.StartTime <= 1 {
-			t.Fatalf("paras[%d] 疑似幽灵时间线 [%d,%d] text=%q", i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
+			t.Fatalf("%s paras[%d] 疑似幽灵时间线 [%d,%d] text=%q", fixtureName, i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
 		}
 		fullPara.WriteString(p.Text)
 	}
 	if fullPara.String() != fullUT.String() {
-		t.Fatalf("段落拼接与 live_asr 全文不一致: para_len=%d ut_len=%d", fullPara.Len(), fullUT.Len())
+		t.Fatalf("%s 段落拼接与 live_asr 全文不一致: para_len=%d ut_len=%d", fixtureName, fullPara.Len(), fullUT.Len())
 	}
 	if err := validateASRParagraphWords(paras); err != nil {
-		t.Fatalf("validateASRParagraphWords: %v", err)
+		t.Fatalf("%s validateASRParagraphWords: %v", fixtureName, err)
 	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
-		t.Fatalf("validateASRParagraphTimeline: %v", err)
+		t.Fatalf("%s validateASRParagraphTimeline: %v", fixtureName, err)
 	}
 
-	t.Logf("asr_raw.json: utterances=%d paragraphs=%d duration_ms=%d", len(utterances), len(paras), durationMs)
+	t.Logf("%s: utterances=%d paragraphs=%d duration_ms=%d", fixtureName, len(utterances), len(paras), durationMs)
 }
 
 func TestTakeWordsForText_ASRPunctInTextOnly(t *testing.T) {
@@ -205,21 +233,39 @@ func TestSplitASRParagraphBySentences_RealASRStyleNoWordSteal(t *testing.T) {
 	}
 }
 
-func loadRepoASRRawJSON(t *testing.T) string {
+// loadRepoLiveASRFixture 读取仓库根目录 ASR 样例。
+// 支持两种格式：
+//  1. 直接 live_asr（含 result.utterances），如 asr_raw.json；
+//  2. 调试包装 {"duration_ms":...,"live_asr":{...}}，如 001/002_asr_raw.json。
+func loadRepoLiveASRFixture(t *testing.T, name string) (liveASR string, durationMs int64) {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	// internal/service -> repo root
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	path := filepath.Join(root, "asr_raw.json")
+	path := filepath.Join(root, name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("读取 %s 失败: %v（请在仓库根目录保留 asr_raw.json）", path, err)
+		t.Fatalf("读取 %s 失败: %v", path, err)
 	}
 	if len(raw) == 0 {
-		t.Fatal("asr_raw.json 为空")
+		t.Fatalf("%s 为空", name)
 	}
-	return string(raw)
+
+	var wrapped struct {
+		DurationMs int64           `json:"duration_ms"`
+		LiveASR    json.RawMessage `json:"live_asr"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.LiveASR) > 0 && wrapped.LiveASR[0] == '{' {
+		return string(wrapped.LiveASR), wrapped.DurationMs
+	}
+	return string(raw), 0
+}
+
+// loadRepoASRRawJSON 保留兼容：返回 asr_raw.json 原始 live_asr 文本。
+func loadRepoASRRawJSON(t *testing.T) string {
+	t.Helper()
+	liveASR, _ := loadRepoLiveASRFixture(t, "asr_raw.json")
+	return liveASR
 }
