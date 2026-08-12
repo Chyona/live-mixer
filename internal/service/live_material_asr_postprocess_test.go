@@ -739,7 +739,7 @@ func TestNormalizeASRParagraphTimeline_PreservesLeadingSilence(t *testing.T) {
 	}
 }
 
-func TestNormalizeASRParagraphTimeline_RepairsInvalidWordTimesAndZeroSpan(t *testing.T) {
+func TestNormalizeASRParagraphTimeline_DerivesSegmentBoundsKeepsWordTimes(t *testing.T) {
 	paras := []model.ASRParagraph{
 		{
 			StartTime: -1,
@@ -768,17 +768,10 @@ func TestNormalizeASRParagraphTimeline_RepairsInvalidWordTimesAndZeroSpan(t *tes
 	if paras[1].StartTime < paras[0].EndTime {
 		t.Fatalf("overlap: %+v", paras)
 	}
-	for i, p := range paras {
-		for j, w := range p.Words {
-			if w.StartTime < 0 || w.EndTime < 0 {
-				t.Fatalf("paras[%d].words[%d] still invalid: %+v", i, j, w)
-			}
-		}
-	}
-	// 空格应落在左右有效词之间
+	// 词级时间与源一致：空格保持 -1，不做 repair。
 	space := paras[0].Words[1]
-	if space.StartTime < 120 || space.EndTime > 140 {
-		t.Fatalf("space word repaired out of neighbor range: %+v", space)
+	if space.StartTime != -1 || space.EndTime != -1 {
+		t.Fatalf("space word should keep source -1: %+v", space)
 	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
 		t.Fatalf("validate: %v", err)
@@ -802,7 +795,7 @@ func TestNormalizeASRParagraphTimeline_NoOverlapWhenPrevZeroEnd(t *testing.T) {
 	}
 }
 
-func TestStitchASRParagraphs_RepairsSpaceWordTimes(t *testing.T) {
+func TestStitchASRParagraphs_PreservesSpaceWordTimes(t *testing.T) {
 	utterances := []asr.Utterance{
 		{
 			Speaker: "1", StartTime: 100, EndTime: 200, Text: "属 AI",
@@ -818,11 +811,17 @@ func TestStitchASRParagraphs_RepairsSpaceWordTimes(t *testing.T) {
 		t.Fatalf("stitch: %v", err)
 	}
 	finalizeASRParagraphTimeline(paras, 1000)
+	if err := validateASRParagraphWordIdentity(utterances, paras); err != nil {
+		t.Fatalf("identity: %v", err)
+	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 	if paras[0].StartTime != 100 || paras[0].EndTime != 200 {
 		t.Fatalf("timeline = [%d,%d], want [100,200]", paras[0].StartTime, paras[0].EndTime)
+	}
+	if paras[0].Words[1].StartTime != -1 || paras[0].Words[1].EndTime != -1 {
+		t.Fatalf("space word mutated: %+v", paras[0].Words[1])
 	}
 }
 
@@ -918,9 +917,10 @@ func TestSplitASRParagraphBySentences_WordsAlign(t *testing.T) {
 	s1 := strings.Repeat("A", 100) + "。"
 	s2 := strings.Repeat("B", 100) + "。"
 	text := s1 + s2
-	words := make([]model.ClipWord, 0, len([]rune(text)))
+	// 模拟源 ASR：words 不含句读，仅内容字符。
+	var words []model.ClipWord
 	t0 := int64(0)
-	for _, r := range []rune(text) {
+	for _, r := range []rune(stripASRAlignPunct(text)) {
 		words = append(words, model.ClipWord{
 			Text:      string(r),
 			StartTime: t0,
@@ -928,6 +928,7 @@ func TestSplitASRParagraphBySentences_WordsAlign(t *testing.T) {
 		})
 		t0 += 10
 	}
+	orig := append([]model.ClipWord(nil), words...)
 	p := model.ASRParagraph{
 		Speaker:   "1",
 		Text:      text,
@@ -940,20 +941,19 @@ func TestSplitASRParagraphBySentences_WordsAlign(t *testing.T) {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
 	finalizeASRParagraphTimeline(got, t0+100)
+	flat := flattenParagraphWords(got)
+	if len(flat) != len(orig) {
+		t.Fatalf("word count %d != %d", len(flat), len(orig))
+	}
+	for i := range orig {
+		if flat[i] != orig[i] {
+			t.Fatalf("words[%d] mutated: got=%+v want=%+v", i, flat[i], orig[i])
+		}
+	}
 	var wordText strings.Builder
 	for i, seg := range got {
 		if utf8.RuneCountInString(seg.Text) > asrParagraphMaxRunes {
 			t.Fatalf("seg[%d] too long", i)
-		}
-		var b strings.Builder
-		for _, w := range seg.Words {
-			b.WriteString(w.Text)
-			if w.StartTime < 0 || w.EndTime < 0 || w.EndTime < w.StartTime {
-				t.Fatalf("seg[%d] word invalid: %+v", i, w)
-			}
-		}
-		if b.String() != seg.Text {
-			t.Fatalf("seg[%d] words text = %q, want %q", i, b.String(), seg.Text)
 		}
 		wordText.WriteString(seg.Text)
 		if i > 0 && seg.StartTime < got[i-1].EndTime {
