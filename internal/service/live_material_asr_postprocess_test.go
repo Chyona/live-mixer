@@ -378,7 +378,7 @@ func TestGenerateASRParagraphs_MultiWindowOffsetStitch(t *testing.T) {
 		t.Fatalf("joined text = %q, want 甲乙", joined)
 	}
 	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != dur {
-		t.Fatalf("timeline = %d-%d, want 0-%d", paras[0].StartTime, paras[len(paras)-1].EndTime, dur)
+		t.Fatalf("timeline = %d-%d, want words bounds 0-%d", paras[0].StartTime, paras[len(paras)-1].EndTime, dur)
 	}
 }
 
@@ -742,22 +742,23 @@ func TestBuildParagraphRangesLocally_BySpeaker(t *testing.T) {
 }
 
 func TestNormalizeASRParagraphTimeline(t *testing.T) {
+	// 无 words 时不再为消重叠改写时间；有 words 时以字级首尾为准。
 	paras := []model.ASRParagraph{
-		{StartTime: 40, EndTime: 200, Text: "a"},
-		{StartTime: 150, EndTime: 300, Text: "b"}, // overlap
+		{
+			StartTime: 40, EndTime: 200, Text: "a",
+			Words: []model.ClipWord{{Text: "a", StartTime: 40, EndTime: 200}},
+		},
+		{
+			StartTime: 150, EndTime: 300, Text: "b",
+			Words: []model.ClipWord{{Text: "b", StartTime: 150, EndTime: 300}},
+		},
 	}
 	normalizeASRParagraphTimeline(paras, 1000)
-	if paras[0].StartTime != 40 {
-		t.Fatalf("first start = %d, want 40 (保留 ASR 真实起点，不强制归零)", paras[0].StartTime)
+	if paras[0].StartTime != 40 || paras[0].EndTime != 200 {
+		t.Fatalf("para0=%d-%d, want words bounds 40-200", paras[0].StartTime, paras[0].EndTime)
 	}
-	if paras[1].StartTime < paras[0].EndTime {
-		t.Fatalf("overlap remains: %+v", paras)
-	}
-	if paras[1].StartTime != 200 {
-		t.Fatalf("second start = %d, want 200", paras[1].StartTime)
-	}
-	if paras[1].EndTime != 300 {
-		t.Fatalf("last end = %d, want 300 (不强制拉满 duration)", paras[1].EndTime)
+	if paras[1].StartTime != 150 || paras[1].EndTime != 300 {
+		t.Fatalf("para1=%d-%d, want words bounds 150-300（允许与上一段时间重叠）", paras[1].StartTime, paras[1].EndTime)
 	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
 		t.Fatalf("validate: %v", err)
@@ -805,10 +806,10 @@ func TestNormalizeASRParagraphTimeline_DerivesSegmentBoundsKeepsWordTimes(t *tes
 	}
 	finalizeASRParagraphTimeline(paras, 10_000)
 	if paras[0].StartTime != 100 || paras[0].EndTime != 180 {
-		t.Fatalf("para0 timeline = [%d,%d], want [100,180]", paras[0].StartTime, paras[0].EndTime)
+		t.Fatalf("para0 timeline = [%d,%d], want words[0].start=100 words[last].end=180", paras[0].StartTime, paras[0].EndTime)
 	}
-	if paras[1].StartTime < paras[0].EndTime {
-		t.Fatalf("overlap: %+v", paras)
+	if paras[1].StartTime != 200 || paras[1].EndTime != 250 {
+		t.Fatalf("para1 timeline = [%d,%d], want 200-250", paras[1].StartTime, paras[1].EndTime)
 	}
 	// 词级时间与源一致：空格保持 -1，不做 repair。
 	space := paras[0].Words[1]
@@ -838,8 +839,11 @@ func TestFinalizeASRParagraphTimeline_UndersizedDurationCoversLastWord(t *testin
 	if paras[0].Words[1].EndTime != 136460 {
 		t.Fatalf("words mutated: %+v", paras[0].Words[1])
 	}
-	if paras[0].EndTime < 136460 {
-		t.Fatalf("end_time=%d < last word end 136460", paras[0].EndTime)
+	if paras[0].StartTime != paras[0].Words[0].StartTime {
+		t.Fatalf("start_time=%d != words[0].start=%d", paras[0].StartTime, paras[0].Words[0].StartTime)
+	}
+	if paras[0].EndTime != 136460 {
+		t.Fatalf("end_time=%d, want words[last].end=136460", paras[0].EndTime)
 	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
 		t.Fatalf("validate: %v", err)
@@ -847,6 +851,7 @@ func TestFinalizeASRParagraphTimeline_UndersizedDurationCoversLastWord(t *testin
 }
 
 func TestNormalizeASRParagraphTimeline_NoOverlapWhenPrevZeroEnd(t *testing.T) {
+	// 无 words：仅修复零长度区间；不再为消重叠改写后段 start。
 	paras := []model.ASRParagraph{
 		{StartTime: 0, EndTime: 0, Text: "a"},
 		{StartTime: 0, EndTime: 7_065_780, Text: "b"},
@@ -854,9 +859,6 @@ func TestNormalizeASRParagraphTimeline_NoOverlapWhenPrevZeroEnd(t *testing.T) {
 	finalizeASRParagraphTimeline(paras, 18_000_000)
 	if paras[0].StartTime >= paras[0].EndTime {
 		t.Fatalf("para0 still zero-span: %+v", paras[0])
-	}
-	if paras[1].StartTime < paras[0].EndTime {
-		t.Fatalf("para1 still overlaps from 0: %+v", paras)
 	}
 	if err := validateASRParagraphTimeline(paras); err != nil {
 		t.Fatalf("validate: %v", err)
@@ -1091,7 +1093,7 @@ func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
 		t.Fatal("joined text mismatch")
 	}
 	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != 500 {
-		t.Fatalf("timeline = %d-%d, want 0-500 (utterance end, not duration)", paras[0].StartTime, paras[len(paras)-1].EndTime)
+		t.Fatalf("timeline = %d-%d, want words bounds 0-500", paras[0].StartTime, paras[len(paras)-1].EndTime)
 	}
 }
 

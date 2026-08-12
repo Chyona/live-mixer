@@ -124,11 +124,14 @@ func assertASRParagraphsFromLiveASR(t *testing.T, fixtureName, liveASR string, d
 		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && p.EndTime <= p.StartTime {
 			t.Fatalf("%s paras[%d] 时间非法: [%d,%d] text=%q", fixtureName, i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
 		}
-		if strings.TrimSpace(stripASRAlignPunct(p.Text)) != "" && p.EndTime-p.StartTime <= 1 {
-			t.Fatalf("%s paras[%d] 疑似幽灵时间线 [%d,%d] text=%q", fixtureName, i, p.StartTime, p.EndTime, truncateRunes(p.Text, 40))
-		}
-		if _, we, ok := paragraphWordTimeSpan(p.Words); ok && p.EndTime < we {
-			t.Fatalf("%s paras[%d] end_time=%d < 末字 end_time=%d", fixtureName, i, p.EndTime, we)
+		if len(p.Words) > 0 {
+			w0, wLast := p.Words[0], p.Words[len(p.Words)-1]
+			if asrTimeValid(w0.StartTime) && p.StartTime != w0.StartTime {
+				t.Fatalf("%s paras[%d] start_time=%d != words[0].start_time=%d", fixtureName, i, p.StartTime, w0.StartTime)
+			}
+			if asrTimeValid(wLast.EndTime) && p.EndTime != wLast.EndTime {
+				t.Fatalf("%s paras[%d] end_time=%d != words[last].end_time=%d", fixtureName, i, p.EndTime, wLast.EndTime)
+			}
 		}
 		fullPara.WriteString(p.Text)
 	}
@@ -216,7 +219,7 @@ func TestStitchASRParagraphs_PreservesSourceWordsWithPunctText(t *testing.T) {
 			stripASRAlignPunct(paras[0].Text), joinedClipWordText(paras[0].Words))
 	}
 	if paras[0].StartTime != 100 || paras[0].EndTime != 200 {
-		t.Fatalf("timeline=[%d,%d], want utterance bounds", paras[0].StartTime, paras[0].EndTime)
+		t.Fatalf("timeline=[%d,%d], want words[0].start / words[last].end", paras[0].StartTime, paras[0].EndTime)
 	}
 }
 
@@ -405,11 +408,11 @@ func TestReproduceASRParagraphEndClampedByDuration_LiveASR03(t *testing.T) {
 		}
 		t.Logf("after undersized duration finalize: before_end=%d after_end=%d max_word_end=%d clamp=%d",
 			beforeEnd, p.EndTime, maxWordEnd, clampDur)
-		if p.EndTime < wordEnd {
-			t.Fatalf("修复失败: para.end(%d) < target word.end(%d)", p.EndTime, wordEnd)
+		if p.StartTime != p.Words[0].StartTime {
+			t.Fatalf("start_time=%d != words[0].start_time=%d", p.StartTime, p.Words[0].StartTime)
 		}
-		if p.EndTime < maxWordEnd {
-			t.Fatalf("修复失败: para.end(%d) < 段内最大字 end(%d)", p.EndTime, maxWordEnd)
+		if asrTimeValid(p.Words[len(p.Words)-1].EndTime) && p.EndTime != p.Words[len(p.Words)-1].EndTime {
+			t.Fatalf("end_time=%d != words[last].end_time=%d", p.EndTime, p.Words[len(p.Words)-1].EndTime)
 		}
 		if n := countEndBeforeContainedWord(paras); n != 0 {
 			t.Fatalf("偏短 duration 后仍有 %d 段 end_time < 段内字 end_time", n)
