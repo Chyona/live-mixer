@@ -82,6 +82,8 @@ type VideoProjectService interface {
 	Delete(ctx context.Context, id uint) error
 	// List 分页查询剪辑项目列表（含关联直播素材名称 live_name）。
 	List(ctx context.Context, page, pageSize int, opts VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error)
+	// ListByLiveMaterial 分页查询指定直播素材关联的剪辑项目；素材不存在时返回 ErrLiveMaterialNotFound。
+	ListByLiveMaterial(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error)
 	// Get 根据 ID 获取剪辑项目详情。
 	Get(ctx context.Context, id uint) (*model.VideoProject, error)
 }
@@ -292,6 +294,20 @@ func (s *videoProjectService) List(ctx context.Context, page, pageSize int, opts
 	}
 	offset := (page - 1) * pageSize
 	return s.videoProjectRepo.List(ctx, filter, offset, pageSize)
+}
+
+func (s *videoProjectService) ListByLiveMaterial(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error) {
+	if liveID == 0 {
+		return nil, 0, errors.New("直播素材 ID 不能为空")
+	}
+	if _, err := s.liveMaterialRepo.GetByID(ctx, liveID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, ErrLiveMaterialNotFound
+		}
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	return s.videoProjectRepo.List(ctx, repository.VideoProjectListFilter{LiveID: &liveID}, offset, pageSize)
 }
 
 func (s *videoProjectService) Get(ctx context.Context, id uint) (*model.VideoProject, error) {

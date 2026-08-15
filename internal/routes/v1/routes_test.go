@@ -338,3 +338,20 @@ func TestRegisterRoutes_ASRSubtitleProtected(t *testing.T) {
 		t.Errorf("GET /v1/live-materials/1/asr/subtitle without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
+
+// TestRegisterRoutes_LiveMaterialVideoProjectsProtected 验证素材关联项目列表接口需要 JWT 鉴权。
+func TestRegisterRoutes_LiveMaterialVideoProjectsProtected(t *testing.T) {
+	secret := "route-test-secret"
+	videoHandler := v1handler.NewVideoProjectHandler(nil, nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, nil, nil, videoHandler, nil, nil, secret)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/live-materials/1/video-projects", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /v1/live-materials/1/video-projects without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}

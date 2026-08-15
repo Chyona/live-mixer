@@ -233,6 +233,56 @@ func (h *VideoProjectHandler) ListVideoProjects(c *gin.Context) {
 	})
 }
 
+// ListVideoProjectsByLiveMaterialRequest 素材关联剪辑项目列表查询参数。
+type ListVideoProjectsByLiveMaterialRequest struct {
+	Page     int `form:"page" binding:"omitempty,min=1"`
+	PageSize int `form:"page_size" binding:"omitempty,min=1,max=100"`
+}
+
+// ListVideoProjectsByLiveMaterial 查询素材关联的剪辑项目列表
+// @Summary      素材关联的剪辑项目列表
+// @Description  分页查询指定直播素材关联的剪辑项目；列表项同时返回 live_id、live_name 与 task_count；素材不存在时 404
+// @Tags         直播素材
+// @Produce      json
+// @Param        id         path   int  true   "素材 ID"
+// @Param        page       query  int  false  "页码"
+// @Param        page_size  query  int  false  "每页数量，默认 10"
+// @Success      200        {object}  response.Body
+// @Failure      400        {object}  response.Body
+// @Failure      401        {object}  response.Body
+// @Failure      404        {object}  response.Body
+// @Security     BearerAuth
+// @Router       /v1/live-materials/{id}/video-projects [get]
+func (h *VideoProjectHandler) ListVideoProjectsByLiveMaterial(c *gin.Context) {
+	liveID, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的素材 ID")
+		return
+	}
+	var req ListVideoProjectsByLiveMaterialRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	page, pageSize := utils.DefaultPage(req.Page, req.PageSize)
+
+	projects, total, err := h.videoProjectService.ListByLiveMaterial(c.Request.Context(), liveID, page, pageSize)
+	if err != nil {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, response.PageData{
+		List:     h.toVideoProjectResponseList(c.Request.Context(), projects),
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
 // @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目

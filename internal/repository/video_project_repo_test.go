@@ -259,6 +259,48 @@ func TestVideoProjectRepository_List_TaskCount(t *testing.T) {
 	}
 }
 
+// TestVideoProjectRepository_List_FilterByLiveID 验证按 live_id 精确筛选关联项目。
+func TestVideoProjectRepository_List_FilterByLiveID(t *testing.T) {
+	db := setupVideoProjectTestDB(t)
+	repo := NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	m1 := seedLiveMaterialForProject(t, db)
+	m2 := &model.LiveMaterial{
+		Name: "其它素材", LiveURL: "https://example.com/other.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusPending, CreatedBy: 1,
+	}
+	if err := db.Create(m2).Error; err != nil {
+		t.Fatalf("create material: %v", err)
+	}
+
+	p1 := &model.VideoProject{
+		Name: "素材1项目", LiveID: m1.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
+	}
+	p2 := &model.VideoProject{
+		Name: "素材2项目", LiveID: m2.ID, Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+		EnableCaptions: model.EnableCaptionsOn, CreatedBy: 1,
+	}
+	for _, p := range []*model.VideoProject{p1, p2} {
+		if err := repo.Create(ctx, p); err != nil {
+			t.Fatalf("Create project: %v", err)
+		}
+	}
+
+	liveID := m1.ID
+	projects, total, err := repo.List(ctx, VideoProjectListFilter{LiveID: &liveID}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(projects) != 1 {
+		t.Fatalf("total=%d len=%d, want 1", total, len(projects))
+	}
+	if projects[0].Name != "素材1项目" || projects[0].LiveID != m1.ID {
+		t.Fatalf("got = %+v", projects[0])
+	}
+}
+
 // TestVideoProjectRepository_Delete 验证物理删除。
 func TestVideoProjectRepository_Delete(t *testing.T) {
 	db := setupVideoProjectTestDB(t)

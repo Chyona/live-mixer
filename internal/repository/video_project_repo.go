@@ -15,6 +15,7 @@ type VideoProjectListFilter struct {
 	StartAt  *time.Time // 开始日期（含），按 created_at 筛选
 	EndAt    *time.Time // 结束日期次日零点（不含），按 created_at 筛选
 	Keywords KeywordGroups // 关键词表达式：组内 AND、组间 OR；匹配 name/remark/live_name
+	LiveID   *uint         // 按关联直播素材 ID 精确筛选
 }
 
 // VideoProjectRepository 剪辑项目数据访问接口。
@@ -104,6 +105,9 @@ func applyVideoProjectListFilter(query *gorm.DB, filter VideoProjectListFilter) 
 	}
 	if filter.EndAt != nil {
 		query = query.Where(table+".created_at < ?", *filter.EndAt)
+	}
+	if filter.LiveID != nil {
+		query = query.Where(table+".live_id = ?", *filter.LiveID)
 	}
 	query = applyKeywordGroups(
 		query,

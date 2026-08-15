@@ -15,11 +15,12 @@ import (
 
 // mockVideoProjectService 用于 handler 单元测试。
 type mockVideoProjectService struct {
-	createFn func(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error)
-	updateFn func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error)
-	deleteFn func(ctx context.Context, id uint) error
-	listFn   func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error)
-	getFn    func(ctx context.Context, id uint) (*model.VideoProject, error)
+	createFn             func(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error)
+	updateFn             func(ctx context.Context, id uint, input service.VideoProjectUpdateInput) (*model.VideoProject, error)
+	deleteFn             func(ctx context.Context, id uint) error
+	listFn               func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error)
+	listByLiveMaterialFn func(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error)
+	getFn                func(ctx context.Context, id uint) (*model.VideoProject, error)
 }
 
 func (m *mockVideoProjectService) Create(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error) {
@@ -46,6 +47,13 @@ func (m *mockVideoProjectService) Delete(ctx context.Context, id uint) error {
 func (m *mockVideoProjectService) List(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, page, pageSize, opts)
+	}
+	return nil, 0, nil
+}
+
+func (m *mockVideoProjectService) ListByLiveMaterial(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error) {
+	if m.listByLiveMaterialFn != nil {
+		return m.listByLiveMaterialFn(ctx, liveID, page, pageSize)
 	}
 	return nil, 0, nil
 }
@@ -183,6 +191,94 @@ func TestVideoProjectHandler_List_WithFilters(t *testing.T) {
 	}
 	if resp.Data.List[0].TaskCount != 3 {
 		t.Fatalf("task_count = %d, want 3", resp.Data.List[0].TaskCount)
+	}
+}
+
+// TestVideoProjectHandler_ListByLiveMaterial_Success 验证按素材 ID 查询关联项目并分页。
+func TestVideoProjectHandler_ListByLiveMaterial_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{
+		listByLiveMaterialFn: func(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error) {
+			if liveID != 7 || page != 2 || pageSize != 5 {
+				t.Errorf("liveID/page/pageSize = %d/%d/%d, want 7/2/5", liveID, page, pageSize)
+			}
+			return []model.VideoProjectListItem{{
+				ID: 11, Name: "素材关联项目", LiveID: 7, LiveName: "春季发布会",
+				Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{},
+				TaskCount: 2,
+			}}, 12, nil
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.ListVideoProjectsByLiveMaterial, http.MethodGet, "/live-materials/:id/video-projects")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/7/video-projects?page=2&page_size=5", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			List []struct {
+				ID       uint   `json:"id"`
+				Name     string `json:"name"`
+				LiveID   uint   `json:"live_id"`
+				LiveName string `json:"live_name"`
+			} `json:"list"`
+			Total    int64 `json:"total"`
+			Page     int   `json:"page"`
+			PageSize int   `json:"page_size"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Data.Total != 12 || resp.Data.Page != 2 || resp.Data.PageSize != 5 {
+		t.Fatalf("page data = %+v", resp.Data)
+	}
+	if len(resp.Data.List) != 1 || resp.Data.List[0].ID != 11 || resp.Data.List[0].LiveID != 7 {
+		t.Fatalf("list = %+v", resp.Data.List)
+	}
+}
+
+// TestVideoProjectHandler_ListByLiveMaterial_NotFound 验证素材不存在时返回 404。
+func TestVideoProjectHandler_ListByLiveMaterial_NotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{
+		listByLiveMaterialFn: func(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error) {
+			return nil, 0, service.ErrLiveMaterialNotFound
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.ListVideoProjectsByLiveMaterial, http.MethodGet, "/live-materials/:id/video-projects")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/99/video-projects", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", w.Code, w.Body.String())
+	}
+}
+
+// TestVideoProjectHandler_ListByLiveMaterial_InvalidID 验证非法素材 ID 返回 400。
+func TestVideoProjectHandler_ListByLiveMaterial_InvalidID(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{}, nil)
+	r := newAuthedRouter(secret, handler.ListVideoProjectsByLiveMaterial, http.MethodGet, "/live-materials/:id/video-projects")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	req := httptest.NewRequest(http.MethodGet, "/live-materials/abc/video-projects", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
 

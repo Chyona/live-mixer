@@ -447,6 +447,57 @@ func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
 	}
 }
 
+// TestVideoProjectService_ListByLiveMaterial 验证按素材 ID 查询并计算分页 offset。
+func TestVideoProjectService_ListByLiveMaterial(t *testing.T) {
+	var gotFilter repository.VideoProjectListFilter
+	var gotOffset, gotLimit int
+	projectRepo := &mockVideoProjectRepo{
+		listFn: func(ctx context.Context, filter repository.VideoProjectListFilter, offset, limit int) ([]model.VideoProjectListItem, int64, error) {
+			gotFilter = filter
+			gotOffset, gotLimit = offset, limit
+			return []model.VideoProjectListItem{{ID: 3, Name: "关联项目", LiveID: 8}}, 1, nil
+		},
+	}
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{8: {ID: 8, Name: "素材"}},
+	}
+	svc := NewVideoProjectService(projectRepo, liveRepo)
+
+	items, total, err := svc.ListByLiveMaterial(context.Background(), 8, 2, 10)
+	if err != nil {
+		t.Fatalf("ListByLiveMaterial() error = %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "关联项目" {
+		t.Fatalf("items/total = %+v/%d", items, total)
+	}
+	if gotFilter.LiveID == nil || *gotFilter.LiveID != 8 {
+		t.Errorf("filter.LiveID = %v, want 8", gotFilter.LiveID)
+	}
+	if gotOffset != 10 || gotLimit != 10 {
+		t.Errorf("offset/limit = %d/%d, want 10/10", gotOffset, gotLimit)
+	}
+}
+
+// TestVideoProjectService_ListByLiveMaterial_NotFound 验证素材不存在时返回错误。
+func TestVideoProjectService_ListByLiveMaterial_NotFound(t *testing.T) {
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{},
+	})
+	_, _, err := svc.ListByLiveMaterial(context.Background(), 99, 1, 10)
+	if err != ErrLiveMaterialNotFound {
+		t.Errorf("ListByLiveMaterial() error = %v, want %v", err, ErrLiveMaterialNotFound)
+	}
+}
+
+// TestVideoProjectService_ListByLiveMaterial_EmptyLiveID 验证 liveID 为 0 时拒绝查询。
+func TestVideoProjectService_ListByLiveMaterial_EmptyLiveID(t *testing.T) {
+	svc := NewVideoProjectService(&mockVideoProjectRepo{}, &mockLiveMaterialRepoForProject{})
+	_, _, err := svc.ListByLiveMaterial(context.Background(), 0, 1, 10)
+	if err == nil {
+		t.Fatal("ListByLiveMaterial() error = nil, want 直播素材 ID 不能为空")
+	}
+}
+
 // TestVideoProjectService_List_PassesFilter 验证列表筛选参数传递。
 func TestVideoProjectService_List_PassesFilter(t *testing.T) {
 	var gotFilter repository.VideoProjectListFilter
