@@ -731,6 +731,70 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/live-materials/{id}/video-projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "分页查询指定直播素材关联的剪辑项目；列表项同时返回 live_id、live_name 与 task_count；素材不存在时 404",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "直播素材"
+                ],
+                "summary": "素材关联的剪辑项目列表",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "素材 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，默认 10",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/llm-system-prompts": {
             "get": {
                 "security": [
@@ -1146,7 +1210,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
+                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1197,7 +1261,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）生成剪映草稿并回写 task.draft_url；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url",
+                "description": "异步：根据 video_project.id 读取 live_material.live_url 与 video_project.clips1，ffmpeg 精确裁剪后调用 capcut-mate create_draft（画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）生成剪映草稿并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url",
                 "consumes": [
                     "application/json"
                 ],

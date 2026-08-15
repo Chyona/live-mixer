@@ -137,6 +137,7 @@ JWT required except login. Full docs: Swagger at `http://localhost:30000/swagger
 |--------|------|-------------|
 | POST | `/openapi/live-mixer/v1/auth/login` | Login and obtain token |
 | CRUD | `/openapi/live-mixer/v1/live-materials` | Live materials |
+| GET | `/openapi/live-mixer/v1/live-materials/:id/video-projects` | Projects linked to a live material |
 | CRUD | `/openapi/live-mixer/v1/video-projects` | Editing projects |
 | CRUD | `/openapi/live-mixer/v1/llm-system-prompts` | System prompts |
 | POST | `/openapi/live-mixer/v1/tasks/ai-slice` | AI clipping job |

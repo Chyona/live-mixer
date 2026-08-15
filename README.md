@@ -137,6 +137,7 @@ curl http://localhost:81/openapi/live-mixer/v1/auth/login
 |------|------|------|
 | POST | `/openapi/live-mixer/v1/auth/login` | 登录获取 Token |
 | CRUD | `/openapi/live-mixer/v1/live-materials` | 直播素材 |
+| GET | `/openapi/live-mixer/v1/live-materials/:id/video-projects` | 素材关联的剪辑项目 |
 | CRUD | `/openapi/live-mixer/v1/video-projects` | 剪辑项目 |
 | CRUD | `/openapi/live-mixer/v1/llm-system-prompts` | 系统提示词 |
 | POST | `/openapi/live-mixer/v1/tasks/ai-slice` | AI 切片任务 |
