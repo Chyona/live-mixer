@@ -75,12 +75,21 @@ func (m *mockCapCutAPI) AddCaptions(ctx context.Context, req capcutmate.AddCapti
 }
 
 type mockVideoCutter struct {
-	err   error
-	calls []string
+	err       error
+	calls     []string
+	fastCalls []string
 }
 
 func (m *mockVideoCutter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
 	m.calls = append(m.calls, outputPath)
+	if m.err != nil {
+		return m.err
+	}
+	return os.WriteFile(outputPath, []byte("fake-mp4"), 0o644)
+}
+
+func (m *mockVideoCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	m.fastCalls = append(m.fastCalls, outputPath)
 	if m.err != nil {
 		return m.err
 	}

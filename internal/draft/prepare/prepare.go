@@ -14,17 +14,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// ClipMergeGapMS 相邻片段间隔 ≤ 该值（毫秒）时合并后再 ffmpeg 裁剪。
-const ClipMergeGapMS = 500
+const (
+	// ClipMergeGapMS 相邻片段间隔 ≤ 该值（毫秒）时合并后再 ffmpeg 裁剪。
+	ClipMergeGapMS = 500
+	// FastKeyframeCutMinDurationMS 成片总时长超过该值时改用关键帧快速裁剪（毫秒）。
+	// 10 分钟以内仍走精确重编码。
+	FastKeyframeCutMinDurationMS int64 = 10 * 60 * 1000
+)
 
 // FileDownloader 下载远程文件到本地的抽象。
 type FileDownloader interface {
 	Download(url, dest string) (string, error)
 }
 
-// VideoSegmentCutter 视频精确裁剪抽象。
+// VideoSegmentCutter 视频裁剪抽象：精确重编码或关键帧快速拷贝。
 type VideoSegmentCutter interface {
 	CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error
+	CutVideoSegmentFast(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error
 }
 
 // Pipeline 素材准备流水线。
@@ -89,19 +95,39 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {
 	clips := s.Clips
+	totalMS := TotalClipDurationMS(clips)
+	useFast := UseFastKeyframeCut(clips)
+	p.Logger.Info("选择草稿切片裁剪方式",
+		zap.String("job_id", s.JobID),
+		zap.Int("clips", len(clips)),
+		zap.Int64("total_duration_ms", totalMS),
+		zap.Int64("fast_cut_threshold_ms", FastKeyframeCutMinDurationMS),
+		zap.Bool("fast_keyframe", useFast),
+	)
 	paths := make([]string, 0, len(clips))
 	for i, clip := range clips {
 		outPath := filepath.Join(s.StagingDir, fmt.Sprintf("clip_%03d.mp4", i))
 		startSec := float64(clip.StartTime) / 1000.0
 		endSec := float64(clip.EndTime) / 1000.0
+		mode := "precise"
+		if useFast {
+			mode = "keyframe_copy"
+		}
 		p.Logger.Info("开始 ffmpeg 裁剪切片",
 			zap.String("job_id", s.JobID),
 			zap.Int("index", i),
 			zap.Int64("start_ms", clip.StartTime),
 			zap.Int64("end_ms", clip.EndTime),
+			zap.String("mode", mode),
 			zap.String("output", outPath),
 		)
-		if err := p.Cutter.CutVideoSegment(ctx, s.SourcePath, outPath, startSec, endSec); err != nil {
+		var err error
+		if useFast {
+			err = p.Cutter.CutVideoSegmentFast(ctx, s.SourcePath, outPath, startSec, endSec)
+		} else {
+			err = p.Cutter.CutVideoSegment(ctx, s.SourcePath, outPath, startSec, endSec)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("裁剪第 %d 段失败: %w", i, err)
 		}
 		paths = append(paths, outPath)
@@ -113,6 +139,22 @@ func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, 
 		}
 	}
 	return paths, nil
+}
+
+// TotalClipDurationMS 返回成片总时长（各片段时长之和，毫秒）。
+func TotalClipDurationMS(clips []model.ClipRange) int64 {
+	var total int64
+	for _, clip := range clips {
+		if clip.EndTime > clip.StartTime {
+			total += clip.EndTime - clip.StartTime
+		}
+	}
+	return total
+}
+
+// UseFastKeyframeCut 成片总时长超过 10 分钟时使用关键帧快速裁剪。
+func UseFastKeyframeCut(clips []model.ClipRange) bool {
+	return TotalClipDurationMS(clips) > FastKeyframeCutMinDurationMS
 }
 
 // ResolveClipRanges 优先从 video_project.clips1 提取时间段；为空则回退 clips0。

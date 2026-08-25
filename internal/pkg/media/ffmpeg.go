@@ -132,13 +132,25 @@ func (c *FFmpegConverter) resolvedMP3Bitrate() string {
 	return DefaultASRMP3Bitrate
 }
 
-// CutVideoSegment 按起止秒裁剪视频片段（重编码）。
+// CutVideoSegment 按起止秒裁剪视频片段（重编码，帧级精确）。
 // 参考命令：
 //
 //	ffmpeg -y -threads 6 -ss 10 -i input.mp4 -t 20 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
 //
 // startSec / endSec 单位为秒；endSec 须大于 startSec。
 func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	return c.runCutVideo(ctx, inputPath, outputPath, startSec, endSec, false)
+}
+
+// CutVideoSegmentFast 按起止秒快速裁剪（-c copy，对齐到关键帧，不重编码）。
+// 参考命令：
+//
+//	ffmpeg -y -threads 6 -ss 10 -i input.mp4 -t 20 -map 0:v:0 -map 0:a:0? -c copy -avoid_negative_ts make_zero -movflags +faststart output.mp4
+func (c *FFmpegConverter) CutVideoSegmentFast(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	return c.runCutVideo(ctx, inputPath, outputPath, startSec, endSec, true)
+}
+
+func (c *FFmpegConverter) runCutVideo(ctx context.Context, inputPath, outputPath string, startSec, endSec float64, fast bool) error {
 	if endSec <= startSec {
 		return fmt.Errorf("裁剪时间无效: start=%.3f end=%.3f", startSec, endSec)
 	}
@@ -147,16 +159,24 @@ func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, output
 		binary = DefaultFFmpegBinary
 	}
 
-	args := buildCutVideoArgs(inputPath, outputPath, startSec, endSec)
+	var args []string
+	if fast {
+		args = buildCutVideoFastArgs(inputPath, outputPath, startSec, endSec)
+	} else {
+		args = buildCutVideoArgs(inputPath, outputPath, startSec, endSec)
+	}
 	cmd := exec.CommandContext(ctx, binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if fast {
+			return fmt.Errorf("ffmpeg 快速裁剪视频失败: %w, output: %s", err, strings.TrimSpace(string(output)))
+		}
 		return fmt.Errorf("ffmpeg 裁剪视频失败: %w, output: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
 
-// buildCutVideoArgs 构建裁剪参数列表，便于单元测试校验。
+// buildCutVideoArgs 构建精确裁剪参数列表，便于单元测试校验。
 // -ss 放在 -i 之前做输入侧快速定位；-t 使用时长（end-start），避免输入 seek 后时间戳归零导致 -to 语义偏移；
 // -map 0:a:0? 表示音频轨可选。
 func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
@@ -172,6 +192,24 @@ func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) [
 		"-crf", "18",
 		"-c:a", "aac",
 		"-b:a", "192k",
+		"-movflags", "+faststart",
+		outputPath,
+	}
+}
+
+// buildCutVideoFastArgs 构建关键帧快速裁剪参数：流拷贝、不重编码。
+// -ss 在 -i 之前按关键帧定位；-c copy 直接拷贝音视频包。
+func buildCutVideoFastArgs(inputPath, outputPath string, startSec, endSec float64) []string {
+	return []string{
+		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
+		"-ss", formatFFmpegSeconds(startSec),
+		"-i", inputPath,
+		"-t", formatFFmpegSeconds(endSec - startSec),
+		"-map", "0:v:0",
+		"-map", "0:a:0?",
+		"-c", "copy",
+		"-avoid_negative_ts", "make_zero",
 		"-movflags", "+faststart",
 		outputPath,
 	}

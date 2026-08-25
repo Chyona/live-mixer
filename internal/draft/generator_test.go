@@ -69,12 +69,21 @@ func (m *mockCapCutAPI) AddCaptions(ctx context.Context, req capcutmate.AddCapti
 }
 
 type mockVideoCutter struct {
-	err   error
-	calls []string
+	err       error
+	calls     []string
+	fastCalls []string
 }
 
 func (m *mockVideoCutter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
 	m.calls = append(m.calls, outputPath)
+	if m.err != nil {
+		return m.err
+	}
+	return os.WriteFile(outputPath, []byte("fake-mp4"), 0o644)
+}
+
+func (m *mockVideoCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	m.fastCalls = append(m.fastCalls, outputPath)
 	if m.err != nil {
 		return m.err
 	}
@@ -286,6 +295,35 @@ func TestGenerator_Build_UsesExplicitClips(t *testing.T) {
 	}
 	if len(cutter.calls) != 1 {
 		t.Fatalf("cut calls = %d, want 1 from explicit clips", len(cutter.calls))
+	}
+	if len(cutter.fastCalls) != 0 {
+		t.Fatalf("fast cut calls = %d, want 0 within 10min", len(cutter.fastCalls))
+	}
+}
+
+func TestGenerator_Build_UsesFastCutWhenOver10Min(t *testing.T) {
+	stagingRoot := t.TempDir()
+	cutter := &mockVideoCutter{}
+	gen := NewGenerator(GeneratorDeps{
+		CapCut: &mockCapCutAPI{}, Cutter: cutter, Downloader: &mockDownloader{},
+		Uploader: &mockObjectUploader{}, Logger: zap.NewNop(),
+	})
+	_, err := gen.Build(context.Background(), Request{
+		JobID:    "j",
+		Material: &model.LiveMaterial{LiveURL: "https://example.com/a.mp4"},
+		Clips:    []model.ClipRange{{StartTime: 0, EndTime: prepare.FastKeyframeCutMinDurationMS + 1}},
+		CanvasW:  1080, CanvasH: 1920,
+		StagingDir: filepath.Join(stagingRoot, "s"),
+		RecordDir:  filepath.Join(stagingRoot, "r"),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(cutter.fastCalls) != 1 {
+		t.Fatalf("fast cut calls = %d, want 1 over 10min", len(cutter.fastCalls))
+	}
+	if len(cutter.calls) != 0 {
+		t.Fatalf("precise cut calls = %d, want 0 over 10min", len(cutter.calls))
 	}
 }
 
