@@ -5,7 +5,7 @@ import (
 	"strconv"
 
 	"live-mixer/internal/service"
-	"live-mixer/pkg/response"
+	"live-mixer/internal/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 

@@ -3,7 +3,7 @@ package config
 import (
 	"strings"
 
-	"live-mixer/pkg/utils/urlrewrite"
+	"live-mixer/internal/pkg/utils/urlrewrite"
 )
 
 // HostMapping 下载时按完整 Host 精确替换。

@@ -10,7 +10,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
-	"live-mixer/pkg/utils/urlrewrite"
+	"live-mixer/internal/pkg/utils/urlrewrite"
 )
 
 func TestLoggingResumableDownloader_Success(t *testing.T) {

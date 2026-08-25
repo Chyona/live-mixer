@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"live-mixer/internal/model"
-	"live-mixer/pkg/utils"
+	"live-mixer/internal/pkg/utils"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"

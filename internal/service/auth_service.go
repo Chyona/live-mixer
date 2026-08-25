@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"live-mixer/internal/repository"
-	jwtpkg "live-mixer/pkg/jwt"
-	"live-mixer/pkg/utils"
+	jwtpkg "live-mixer/internal/pkg/jwt"
+	"live-mixer/internal/pkg/utils"
 	"gorm.io/gorm"
 )
 

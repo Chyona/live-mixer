@@ -12,7 +12,7 @@ import (
 	v1handler "live-mixer/internal/handler/v1"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/service"
-	jwtpkg "live-mixer/pkg/jwt"
+	jwtpkg "live-mixer/internal/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 )

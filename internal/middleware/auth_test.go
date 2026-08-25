@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	jwtpkg "live-mixer/pkg/jwt"
+	jwtpkg "live-mixer/internal/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 )

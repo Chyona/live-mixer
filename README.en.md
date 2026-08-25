@@ -162,11 +162,11 @@ live-mixer/
 ├── cmd/webserver/     # HTTP API + workers
 ├── cmd/envinit/       # schema / seed / reset password
 ├── internal/          # handler · service · repository · draft · scheduler …
-│   └── config/        # local config.yaml (gitignored); example committed
+│   ├── config/        # local config.yaml (gitignored); example committed
+│   └── pkg/           # jwt · response · utils and ASR/LLM/storage internals
 ├── docker/            # Dockerfile, compose, .env.example
 ├── docs/              # generated Swagger
-├── migrations/        # reference SQL
-└── pkg/               # small shared utilities
+└── migrations/        # reference SQL
 ```
 
 ### Common commands

@@ -162,11 +162,11 @@ live-mixer/
 ├── cmd/webserver/     # HTTP API + Worker 入口
 ├── cmd/envinit/       # 建表 / 种子数据 / 重置密码
 ├── internal/          # handler · service · repository · draft · scheduler …
-│   └── config/        # 本地用 config.yaml（gitignore）；仓库提供 example
+│   ├── config/        # 本地用 config.yaml（gitignore）；仓库提供 example
+│   └── pkg/           # jwt · response · utils 及 ASR/LLM/存储等内部包
 ├── docker/            # Dockerfile、compose、.env.example
 ├── docs/              # Swagger 生成物
-├── migrations/        # SQL 参考脚本
-└── pkg/               # 可复用小工具
+└── migrations/        # SQL 参考脚本
 ```
 
 ### 常用命令

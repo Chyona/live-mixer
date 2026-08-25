@@ -10,7 +10,7 @@ import (
 
 	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/storage"
-	"live-mixer/pkg/utils"
+	"live-mixer/internal/pkg/utils"
 
 	"go.uber.org/zap"
 )
@@ -39,7 +39,7 @@ type ObjectUploader interface {
 	UploadFile(ctx context.Context, localPath, objectKey string) (string, error)
 }
 
-// utilsFileDownloader 使用 pkg/utils 的默认下载实现（无日志）。
+// utilsFileDownloader 使用 internal/pkg/utils 的默认下载实现（无日志）。
 type utilsFileDownloader struct{}
 
 func (utilsFileDownloader) Download(url, dest string) (string, error) {

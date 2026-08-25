@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"go.uber.org/zap"
-	"live-mixer/pkg/utils"
-	"live-mixer/pkg/utils/urlrewrite"
+	"live-mixer/internal/pkg/utils"
+	"live-mixer/internal/pkg/utils/urlrewrite"
 )
 
 // loggingResumableDownloader 带断点续传、重试与日志输出的默认下载实现。

@@ -13,8 +13,8 @@ import (
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/repository"
 	"live-mixer/internal/service"
-	"live-mixer/pkg/response"
-	"live-mixer/pkg/utils"
+	"live-mixer/internal/pkg/response"
+	"live-mixer/internal/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )

@@ -7,7 +7,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/repository"
-	"live-mixer/pkg/utils"
+	"live-mixer/internal/pkg/utils"
 	"gorm.io/gorm"
 )
 

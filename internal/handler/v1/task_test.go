@@ -9,7 +9,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/service"
-	jwtpkg "live-mixer/pkg/jwt"
+	jwtpkg "live-mixer/internal/pkg/jwt"
 )
 
 // mockTaskService 用于任务 handler 单元测试。

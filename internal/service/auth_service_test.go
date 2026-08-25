@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"live-mixer/internal/model"
-	"live-mixer/pkg/utils"
+	"live-mixer/internal/pkg/utils"
 
 	"gorm.io/gorm"
 )

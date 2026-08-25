@@ -3,8 +3,8 @@ package middleware
 import (
 	"strings"
 
-	jwtpkg "live-mixer/pkg/jwt"
-	"live-mixer/pkg/response"
+	jwtpkg "live-mixer/internal/pkg/jwt"
+	"live-mixer/internal/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

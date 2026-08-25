@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"live-mixer/internal/model"
-	"live-mixer/pkg/utils"
+	"live-mixer/internal/pkg/utils"
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"

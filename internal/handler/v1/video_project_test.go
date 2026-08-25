@@ -10,7 +10,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/service"
-	jwtpkg "live-mixer/pkg/jwt"
+	jwtpkg "live-mixer/internal/pkg/jwt"
 )
 
 // mockVideoProjectService 用于 handler 单元测试。

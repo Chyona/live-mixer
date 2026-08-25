@@ -12,7 +12,7 @@ import (
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
 	"live-mixer/internal/service"
-	jwtpkg "live-mixer/pkg/jwt"
+	jwtpkg "live-mixer/internal/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 )
