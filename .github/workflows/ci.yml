@@ -38,8 +38,8 @@ jobs:
     - name: 构建并推送 Docker 镜像
       uses: docker/build-push-action@v5
       with:
-        context: .
-        file: ./docker/Dockerfile
+        context: ./backend
+        file: ./backend/docker/Dockerfile
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}

@@ -1,0 +1,10 @@
+# Docker 构建上下文为 backend/（见 .github/workflows/ci.yml）
+bin
+*.md
+*.exe
+.env
+docker/.env
+docker/html
+logs/
+**/*_test.go
+internal/config/config.yaml

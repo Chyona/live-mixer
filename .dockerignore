@@ -1,8 +1,14 @@
+# 仓库根目录构建时排除前端与无关文件。
+# 正式镜像构建上下文为 backend/，以 backend/.dockerignore 为准。
 .git
 .github
+frontend
 bin
 *.md
 .env
-docker/.env
+backend/docker/.env
+backend/docker/html
 logs/
 **/*_test.go
+**/*.exe
+backend/internal/config/config.yaml
