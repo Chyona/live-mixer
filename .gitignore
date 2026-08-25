@@ -49,3 +49,4 @@ frontend/build/
 frontend/.temp/
 frontend/.vite/
 # frontend/mock/_Live_URL.ts
+/backend/*.exe
