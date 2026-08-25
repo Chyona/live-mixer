@@ -886,6 +886,37 @@ export function extendSegmentEdge(
   );
 }
 
+/**
+ * 将新选片段 A 插入已选列表：找到使 |X.end - A.start| 最小的已选片段 X，把 A 插在 X 后面。
+ * 空列表时 A 作为第一项。平局时优先 end ≤ A.start 的 X（更像前一段）。
+ */
+export function insertCopySegmentAfterNearestEnd(
+  segments: SelectedCopySegment[],
+  incoming: SelectedCopySegment
+): SelectedCopySegment[] {
+  if (!segments.length) return [incoming];
+
+  let bestIndex = 0;
+  let bestScore = Math.abs(segments[0]!.end - incoming.start);
+  let bestIsPredecessor = segments[0]!.end <= incoming.start;
+
+  for (let i = 1; i < segments.length; i++) {
+    const item = segments[i]!;
+    const score = Math.abs(item.end - incoming.start);
+    const isPredecessor = item.end <= incoming.start;
+    const better =
+      score < bestScore || (score === bestScore && isPredecessor && !bestIsPredecessor);
+    if (!better) continue;
+    bestScore = score;
+    bestIndex = i;
+    bestIsPredecessor = isPredecessor;
+  }
+
+  const next = segments.slice();
+  next.splice(bestIndex + 1, 0, incoming);
+  return next;
+}
+
 export function getTotalSelectedDuration(segments: SelectedCopySegment[]) {
   return segments.reduce((sum, item) => sum + (item.end - item.start), 0);
 }

@@ -51,6 +51,7 @@ import {
   asrParagraphsToTranscriptParagraphs,
   asrSummariesToAiSegments,
   buildCopySegmentFromAiSegment,
+  insertCopySegmentAfterNearestEnd,
   normalizeTranscriptParagraphs,
   sanitizeDownloadFilename,
   scrollElementIntoViewPreferUpper,
@@ -324,7 +325,7 @@ const ManualVideoSlicePage = () => {
   const handleSelectSegment = useCallback((segment: SelectedCopySegment | null) => {
     if (!segment) return;
 
-    setSelectedSegments((prev) => [...prev, segment]);
+    setSelectedSegments((prev) => insertCopySegmentAfterNearestEnd(prev, segment));
     setActiveSegmentId(segment.id);
     // 选片只加入预览，不打断当前播放进度
     toast.notify.success('已添加到文案预览');

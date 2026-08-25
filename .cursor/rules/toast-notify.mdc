@@ -1,0 +1,39 @@
+---
+description: 用户提示默认使用 toast.notify（右上角通知）
+alwaysApply: true
+---
+
+# Toast 提示规范
+
+除非用户明确要求使用其他形式，本项目中的用户可见提示**默认使用** `~/utils/toast` 的 **`toast.notify`**，而不是 `toast.success` / `toast.error` / `toast.warning` / `toast.info`（顶部 message 轻提示）。
+
+## 用法
+
+```typescript
+import { toast } from '~/utils/toast';
+
+// ✅ 默认：右上角通知（带倒计时进度条）
+toast.notify.success('操作成功');
+toast.notify.error('操作失败');
+toast.notify.warning('该时间段与已选区域重叠，请重新选择');
+toast.notify.info('功能开发中');
+
+// 可选标题 + 描述
+toast.notify.warning('无法保存', '选中总时长已超过限制');
+
+// 自定义选项
+toast.notify.open({
+  type: 'warning',
+  title: '提示',
+  description: '详细说明',
+});
+```
+
+## 例外
+
+仅在以下情况使用 `toast.success` / `toast.error` 等 message 形式：
+
+- 用户明确要求顶部轻提示或 `toast.message` 风格
+- 修改 `showAppError` 等已有基础设施时需保持兼容（可逐步迁移）
+
+新增或修改业务提示时，优先 `toast.notify.{success|error|warning|info}`。
