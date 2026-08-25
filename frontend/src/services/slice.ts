@@ -1,5 +1,6 @@
 import type { BaseResponse } from './types';
 import { request } from './http';
+import type { SliceProjectClip, SliceProjectSource } from './sliceProject';
 
 export type SliceAuditStatus = 'approved' | 'rejected' | 'pending';
 
@@ -56,17 +57,24 @@ export interface ClipRange {
 }
 
 export interface SubmitClipParams {
-  video_project_id: string | number;
+  live_id?: number;
+  prompt_id?: number;
+  clips0?: SliceProjectClip[];
+  project_source?: SliceProjectSource;
+  /** 兼容旧调用 / 人工切片成片：已有项目 */
+  video_project_id?: string | number;
   /** 是否生成字幕（可选） */
   enable_captions?: boolean;
 }
 
 export interface ClipSubmitResult {
+  list?: Array<{ id: string; type?: string; status?: string }>;
+  total?: number;
   task_id?: string;
   taskId?: string;
 }
 
-/** 提交一键成片任务（依赖已保存的剪辑项目） */
+/** 提交一键成片任务：时间轴选片由后端创建项目；人工切片仍传 video_project_id */
 export async function submitClip(
   params: SubmitClipParams
 ): Promise<BaseResponse<ClipSubmitResult>> {

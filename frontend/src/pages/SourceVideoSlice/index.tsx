@@ -18,8 +18,6 @@ import { submitAiSliceSelection } from '~/services/aiSlice';
 import { type AiPrompt } from '~/services/aiPrompt';
 import {
   fetchSliceProjectDetail,
-  toSliceProjectClips,
-  saveSliceProject,
   updateSliceProject,
   type SliceProjectClip,
 } from '~/services/sliceProject';
@@ -38,9 +36,6 @@ import SelectedSegmentsPanel from './SelectedSegmentsPanel';
 import SourceVideoSlicePageSkeleton from './SourceVideoSlicePageSkeleton';
 import TimelineLoadingSkeleton from './TimelineLoadingSkeleton';
 import PromptPickerPanel from './PromptPickerPanel';
-
-const MAX_TOTAL_DURATION = 2 * 60 * 60;
-const MIN_TOTAL_DURATION = 5 * 60;
 
 function clips0ToTimeRanges(clips: SliceProjectClip[] | undefined): TimeRange[] {
   if (!clips?.length) return [];
@@ -303,21 +298,11 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
-      const duration = preview.end - preview.start;
-      const currentTotal = selectedRanges.reduce(
-        (sum, range) => sum + (range.end - range.start),
-        0
-      );
-      if (currentTotal + duration > MAX_TOTAL_DURATION) {
-        toast.notify.warning(`选中总时长不能超过 ${MAX_TOTAL_DURATION / 3600} 小时`);
-        return;
-      }
-
-        const nextRange: TimeRange = {
-          id: `range-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          start: preview.start,
-          end: preview.end,
-        };
+      const nextRange: TimeRange = {
+        id: `range-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        start: preview.start,
+        end: preview.end,
+      };
       setSelectedRanges((prev) => [...prev, nextRange]);
       setActiveRangeId(nextRange.id);
       handleTimeChange(preview.start);
@@ -366,45 +351,18 @@ const SourceVideoSlicePage = () => {
       return;
     }
 
-    if (totalSelectedDuration < MIN_TOTAL_DURATION) {
-      toast.notify.warning(`已选时长需不少于 ${MIN_TOTAL_DURATION / 60} 分钟`);
-      return;
-    }
-
     if (!selectedPrompt) {
       toast.notify.warning('请先选择一个 AI 提示词');
       return;
     }
 
-    const projectName = `一键成片_${formatToDateTime(Date.now(), 'YYYY-MM-DD_HH:mm:ss')}`;
-    const projectPayload = {
-      live_id: video.id,
-      name: projectName,
-      prompt_id: selectedPrompt.id,
-      project_source: 'timeline' as const,
-      clips0: selectedRangesToClips0(selectedRanges),
-      clips1: [] as ReturnType<typeof toSliceProjectClips>,
-    };
-
     setSubmitting(true);
     try {
-      const { code, message, data } = projectId
-        ? await updateSliceProject(projectId, projectPayload)
-        : await saveSliceProject(projectPayload);
-
-      if (code !== 0) {
-        toast.notify.error(message || '保存项目失败');
-        return;
-      }
-
-      const savedProjectId = data?.id || projectId;
-      if (!savedProjectId) {
-        toast.notify.error('保存成功但未返回项目 ID');
-        return;
-      }
-
       const response = await submitClip({
-        video_project_id: savedProjectId,
+        live_id: video.id,
+        prompt_id: selectedPrompt.id,
+        project_source: 'timeline',
+        clips0: selectedRangesToClips0(selectedRanges),
       });
 
       if (response.code !== 0) {
@@ -412,7 +370,11 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
-      toast.notify.success('创建成功', '可前往任务管理查看');
+      const created = response.data?.total ?? response.data?.list?.length ?? 1;
+      toast.notify.success(
+        created > 1 ? `已创建 ${created} 个项目与任务` : '创建成功',
+        '可前往任务管理查看'
+      );
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -422,7 +384,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [projectId, projectTaskReadOnly, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+  }, [projectTaskReadOnly, selectedPrompt, selectedRanges, video]);
 
   const handleAiSelect = useCallback(async () => {
     if (projectTaskReadOnly) {
@@ -436,46 +398,19 @@ const SourceVideoSlicePage = () => {
       return;
     }
 
-    if (totalSelectedDuration < MIN_TOTAL_DURATION) {
-      toast.notify.warning(`已选时长需不少于 ${MIN_TOTAL_DURATION / 60} 分钟`);
-      return;
-    }
-
     if (!selectedPrompt) {
       toast.notify.warning('请先选择一个 AI 提示词');
       return;
     }
 
-    const projectName = `AI选片_${formatToDateTime(Date.now(), 'YYYY-MM-DD_HH:mm:ss')}`;
-    const projectPayload = {
-      live_id: video.id,
-      name: projectName,
-      prompt_id: selectedPrompt.id,
-      // AI 选片结果在人工切片页编辑
-      project_source: 'manual' as const,
-      clips0: selectedRangesToClips0(selectedRanges),
-      clips1: [] as ReturnType<typeof toSliceProjectClips>,
-    };
-
     setAiSelecting(true);
     try {
-      const { code, message, data } = projectId
-        ? await updateSliceProject(projectId, projectPayload)
-        : await saveSliceProject(projectPayload);
-
-      if (code !== 0) {
-        toast.notify.error(message || '保存项目失败');
-        return;
-      }
-
-      const savedProjectId = data?.id || projectId;
-      if (!savedProjectId) {
-        toast.notify.error('保存成功但未返回项目 ID');
-        return;
-      }
-
       const response = await submitAiSliceSelection({
-        video_project_id: savedProjectId,
+        live_id: video.id,
+        prompt_id: selectedPrompt.id,
+        // AI 选片结果在人工切片页编辑
+        project_source: 'manual',
+        clips0: selectedRangesToClips0(selectedRanges),
       });
 
       if (response.code !== 0) {
@@ -483,7 +418,11 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
-      toast.notify.success('创建成功', '可前往任务管理查看');
+      const created = response.data?.total ?? response.data?.list?.length ?? 1;
+      toast.notify.success(
+        created > 1 ? `已创建 ${created} 个项目与任务` : '创建成功',
+        '可前往任务管理查看'
+      );
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -493,7 +432,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setAiSelecting(false);
     }
-  }, [projectId, projectTaskReadOnly, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+  }, [projectTaskReadOnly, selectedPrompt, selectedRanges, video]);
 
   const breadcrumbItems = useMemo(
     () =>
@@ -594,8 +533,6 @@ const SourceVideoSlicePage = () => {
                 videoDuration={videoDuration}
                 selectedRanges={selectedRanges}
                 totalSelectedDuration={totalSelectedDuration}
-                minTotalDuration={MIN_TOTAL_DURATION}
-                maxTotalDuration={MAX_TOTAL_DURATION}
                 submitting={submitting}
                 aiSelecting={aiSelecting}
                 zoomLevel={timelineZoomLevel}
@@ -614,7 +551,6 @@ const SourceVideoSlicePage = () => {
                 currentTime={currentTime}
                 selectedRanges={selectedRanges}
                 previewRanges={aiPreviewRanges}
-                maxTotalDuration={MAX_TOTAL_DURATION}
                 zoomLevel={timelineZoomLevel}
                 onZoomLevelChange={setTimelineZoomLevel}
                 activeRangeId={activeRangeId}

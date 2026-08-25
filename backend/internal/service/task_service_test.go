@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +18,9 @@ import (
 
 type mockTaskRepo struct {
 	repository.TaskRepository
-	createFn func(ctx context.Context, task *model.Task) error
-	created  *model.Task
+	createFn    func(ctx context.Context, task *model.Task) error
+	created     *model.Task
+	createdList []*model.Task
 }
 
 func (m *mockTaskRepo) Create(ctx context.Context, task *model.Task) error {
@@ -26,7 +28,11 @@ func (m *mockTaskRepo) Create(ctx context.Context, task *model.Task) error {
 		return m.createFn(ctx, task)
 	}
 	m.created = task
-	task.ID = "00000000-0000-0000-0000-000000000042"
+	if task.ID == "" {
+		task.ID = fmt.Sprintf("00000000-0000-0000-0000-%012d", 42+len(m.createdList))
+	}
+	clone := *task
+	m.createdList = append(m.createdList, &clone)
 	return nil
 }
 
@@ -62,7 +68,7 @@ func (m *mockLiveRepoForTask) ClaimPendingASR(ctx context.Context) (*model.LiveM
 func (m *mockLiveRepoForTask) RequeueStaleProcessingASR(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return 0, nil
 }
-func (m *mockLiveRepoForTask) UpdateASRProcessing(ctx context.Context, id uint) error  { return nil }
+func (m *mockLiveRepoForTask) UpdateASRProcessing(ctx context.Context, id uint) error { return nil }
 func (m *mockLiveRepoForTask) UpdateASRProgress(ctx context.Context, id uint, asrVersion int64, progress int16) error {
 	return nil
 }
@@ -130,10 +136,22 @@ func (stubVideoProjectRepo) List(ctx context.Context, filter repository.VideoPro
 
 type mockVideoProjectRepoForDraft struct {
 	project *model.VideoProject
+	created []*model.VideoProject
+	nextID  uint
 	err     error
 }
 
 func (m *mockVideoProjectRepoForDraft) Create(ctx context.Context, project *model.VideoProject) error {
+	if m.nextID == 0 {
+		m.nextID = 100
+	}
+	m.nextID++
+	project.ID = m.nextID
+	clone := *project
+	if project.Clips0 != nil {
+		clone.Clips0 = append([]model.ClipRange(nil), project.Clips0...)
+	}
+	m.created = append(m.created, &clone)
 	return nil
 }
 func (m *mockVideoProjectRepoForDraft) GetByID(ctx context.Context, id uint) (*model.VideoProject, error) {
@@ -197,8 +215,11 @@ func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAISlice() error = %v", err)
 	}
-	if got.ID != "00000000-0000-0000-0000-000000000042" || got.Status != model.TaskStatusPending || got.Progress != 0 {
-		t.Errorf("task = %#v", got)
+	if len(got) != 1 {
+		t.Fatalf("CreateAISlice() len = %d, want 1", len(got))
+	}
+	if got[0].ID != "00000000-0000-0000-0000-000000000042" || got[0].Status != model.TaskStatusPending || got[0].Progress != 0 {
+		t.Errorf("task = %#v", got[0])
 	}
 	if worker.enqueued != 1 {
 		t.Errorf("enqueued = %d, want 1", worker.enqueued)
@@ -385,8 +406,11 @@ func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAISliceDraft() error = %v", err)
 	}
-	if got.Type != model.TaskTypeAISliceDraft || got.Status != model.TaskStatusPending {
-		t.Errorf("task = %#v", got)
+	if len(got) != 1 {
+		t.Fatalf("CreateAISliceDraft() len = %d, want 1", len(got))
+	}
+	if got[0].Type != model.TaskTypeAISliceDraft || got[0].Status != model.TaskStatusPending {
+		t.Errorf("task = %#v", got[0])
 	}
 	if worker.enqueued != 1 {
 		t.Errorf("enqueued = %d, want 1", worker.enqueued)
@@ -431,6 +455,157 @@ func TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize(t *testing.T) {
 	if tasks.created == nil || tasks.created.Width != 1920 || tasks.created.Height != 1080 {
 		t.Errorf("Width/Height = %d/%d, want 1920/1080 from project", tasks.created.Width, tasks.created.Height)
 	}
+}
+
+func TestTaskService_CreateAISlice_FromLiveID_CreatesOneProject(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID: 3, Name: "长直播", LiveURL: "https://live.example/long.mp4",
+		ASRStatus: model.ASRStatusCompleted, Width: 1920, Height: 1080,
+		LiveASR: buildLiveASRJSON(10, 60*1000),
+	}}
+	projects := &mockVideoProjectRepoForDraft{}
+	tasks := &mockTaskRepo{}
+	worker := &mockAISliceWorkerEnqueue{}
+	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}}
+	svc := NewTaskService(tasks, live, projects, prompts, worker, nil, nil)
+
+	got, err := svc.CreateAISlice(context.Background(), 7, CreateAISliceInput{
+		LiveID:        3,
+		PromptID:      1,
+		ProjectSource: "manual",
+		Clips0:        []model.ClipRange{{StartTime: 0, EndTime: 10 * 60 * 1000}},
+	})
+	if err != nil {
+		t.Fatalf("CreateAISlice() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(got))
+	}
+	if len(projects.created) != 1 {
+		t.Fatalf("projects = %d, want 1", len(projects.created))
+	}
+	if !strings.HasPrefix(projects.created[0].Name, "AI选片_") {
+		t.Errorf("project name = %q", projects.created[0].Name)
+	}
+	if projects.created[0].ProjectSource != "manual" {
+		t.Errorf("project_source = %q", projects.created[0].ProjectSource)
+	}
+	if clipRangesDurationMS(projects.created[0].Clips0) != 10*60*1000 {
+		t.Errorf("clips0 duration = %d", clipRangesDurationMS(projects.created[0].Clips0))
+	}
+	if worker.enqueued != 1 {
+		t.Errorf("enqueued = %d, want 1", worker.enqueued)
+	}
+}
+
+func TestTaskService_CreateAISlice_FromLiveID_SplitsOver30Min(t *testing.T) {
+	const hourMS int64 = 60 * 60 * 1000
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID: 3, Name: "长直播", LiveURL: "https://live.example/long.mp4",
+		ASRStatus: model.ASRStatusCompleted, Width: 1920, Height: 1080,
+		LiveASR: buildLiveASRJSON(60, 60*1000),
+		ASRParagraphs: []model.ASRParagraph{
+			{StartTime: 0, EndTime: 25 * 60 * 1000},
+			{StartTime: 25 * 60 * 1000, EndTime: 50 * 60 * 1000},
+			{StartTime: 50 * 60 * 1000, EndTime: hourMS},
+		},
+	}}
+	projects := &mockVideoProjectRepoForDraft{}
+	tasks := &mockTaskRepo{}
+	worker := &mockAISliceWorkerEnqueue{}
+	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}}
+	svc := NewTaskService(tasks, live, projects, prompts, worker, nil, nil)
+
+	got, err := svc.CreateAISlice(context.Background(), 7, CreateAISliceInput{
+		LiveID: 3,
+		Clips0: []model.ClipRange{
+			{StartTime: 10 * 60 * 1000, EndTime: 40 * 60 * 1000},
+			{StartTime: 0, EndTime: 20 * 60 * 1000},
+			{StartTime: 35 * 60 * 1000, EndTime: hourMS},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateAISlice() error = %v", err)
+	}
+	if len(got) < 2 {
+		t.Fatalf("tasks = %d, want >= 2", len(got))
+	}
+	if len(projects.created) != len(got) {
+		t.Fatalf("projects = %d tasks = %d", len(projects.created), len(got))
+	}
+	var sum int64
+	for i, p := range projects.created {
+		d := clipRangesDurationMS(p.Clips0)
+		sum += d
+		if d > aiSliceProjectMaxDurationMS {
+			t.Errorf("project[%d] duration %d exceeds 30min", i, d)
+		}
+		if d < aiSliceProjectMinDurationMS {
+			t.Errorf("project[%d] duration %d below 5min", i, d)
+		}
+		if !strings.HasPrefix(p.Name, "AI选片_") {
+			t.Errorf("project[%d] name = %q", i, p.Name)
+		}
+		if model.UintValue(got[i].VideoProjectID) != p.ID {
+			t.Errorf("task[%d] video_project_id = %v, want %d", i, got[i].VideoProjectID, p.ID)
+		}
+	}
+	if sum != hourMS {
+		t.Fatalf("sum clips0 duration = %d, want %d (dropped selection)", sum, hourMS)
+	}
+	if worker.enqueued != 1 {
+		t.Errorf("enqueued = %d, want 1", worker.enqueued)
+	}
+}
+
+func TestTaskService_CreateAISliceDraft_FromLiveID(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID: 4, Name: "成片源", LiveURL: "https://live.example/c.mp4",
+		ASRStatus: model.ASRStatusCompleted, Width: 1080, Height: 1920,
+		LiveASR: buildLiveASRJSON(8, 60*1000),
+	}}
+	projects := &mockVideoProjectRepoForDraft{}
+	tasks := &mockTaskRepo{}
+	worker := &mockAISliceDraftWorkerEnqueue{}
+	prompts := &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}}
+	svc := NewTaskService(tasks, live, projects, prompts, nil, nil, worker)
+
+	got, err := svc.CreateAISliceDraft(context.Background(), 2, CreateAISliceDraftInput{
+		LiveID:        4,
+		PromptID:      1,
+		ProjectSource: "timeline",
+		Clips0:        []model.ClipRange{{StartTime: 0, EndTime: 8 * 60 * 1000}},
+	})
+	if err != nil {
+		t.Fatalf("CreateAISliceDraft() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Type != model.TaskTypeAISliceDraft {
+		t.Fatalf("task = %#v", got)
+	}
+	if len(projects.created) != 1 || !strings.HasPrefix(projects.created[0].Name, "一键成片_") {
+		t.Fatalf("project = %#v", projects.created)
+	}
+	if projects.created[0].ProjectSource != "timeline" {
+		t.Errorf("project_source = %q", projects.created[0].ProjectSource)
+	}
+	if worker.enqueued != 1 {
+		t.Errorf("enqueued = %d", worker.enqueued)
+	}
+}
+
+func buildLiveASRJSON(count int, stepMS int64) string {
+	var b strings.Builder
+	b.WriteString(`{"result":{"utterances":[`)
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		start := int64(i) * stepMS
+		end := start + stepMS
+		fmt.Fprintf(&b, `{"additions":{"speaker":"1"},"start_time":%d,"end_time":%d,"text":"x","words":[]}`, start, end)
+	}
+	b.WriteString(`]}}`)
+	return b.String()
 }
 
 func TestTaskService_CreateAISliceDraft_PromptNotFound(t *testing.T) {

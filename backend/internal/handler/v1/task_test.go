@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"live-mixer/internal/model"
-	"live-mixer/internal/service"
 	jwtpkg "live-mixer/internal/pkg/jwt"
+	"live-mixer/internal/service"
 )
 
 // mockTaskService 用于任务 handler 单元测试。
@@ -19,13 +19,13 @@ type mockTaskService struct {
 	listRunningFn func(ctx context.Context, videoProjectID uint, taskType string, activeOnly bool) ([]model.TaskListItem, int64, error)
 }
 
-func (m *mockTaskService) CreateAISlice(ctx context.Context, createdBy uint, input service.CreateAISliceInput) (*model.Task, error) {
+func (m *mockTaskService) CreateAISlice(ctx context.Context, createdBy uint, input service.CreateAISliceInput) ([]*model.Task, error) {
 	return nil, nil
 }
 func (m *mockTaskService) CreateDraft(ctx context.Context, createdBy uint, input service.CreateDraftInput) (*model.Task, error) {
 	return nil, nil
 }
-func (m *mockTaskService) CreateAISliceDraft(ctx context.Context, createdBy uint, input service.CreateAISliceDraftInput) (*model.Task, error) {
+func (m *mockTaskService) CreateAISliceDraft(ctx context.Context, createdBy uint, input service.CreateAISliceDraftInput) ([]*model.Task, error) {
 	return nil, nil
 }
 func (m *mockTaskService) Get(ctx context.Context, id string) (*model.Task, error) {
@@ -60,7 +60,7 @@ func TestTaskHandler_Get_ReturnsDraftURL(t *testing.T) {
 				ID: wantID, Type: model.TaskTypeDraft, Status: model.TaskStatusCompleted, CreatedBy: 1,
 				DraftURL: "http://example.com/draft", VideoURL: "https://video.example.com/a.mp4",
 				ClipsTarURL: "https://oss.example/temp/draft/" + wantID + "/" + wantID + ".tar",
-				LiveURL: "https://example.com/live.mp4", LiveName: "春季发布会", Width: 1080, Height: 1920,
+				LiveURL:     "https://example.com/live.mp4", LiveName: "春季发布会", Width: 1080, Height: 1920,
 			}, nil
 		},
 	}, accountsStub(&model.Account{ID: 1, Username: "admin", Nickname: "AdminNick"}))
@@ -204,10 +204,10 @@ func TestTaskHandler_ListRunningTasksByProject(t *testing.T) {
 	var resp struct {
 		Data struct {
 			List []struct {
-				ID       string `json:"id"`
-				Status   string `json:"status"`
-				Progress int16  `json:"progress"`
-				LiveURL  string `json:"live_url"`
+				ID        string `json:"id"`
+				Status    string `json:"status"`
+				Progress  int16  `json:"progress"`
+				LiveURL   string `json:"live_url"`
 				CreatedBy string `json:"created_by"`
 			} `json:"list"`
 			Total int64 `json:"total"`

@@ -11,6 +11,7 @@ import (
 	"live-mixer/internal/draft"
 	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
@@ -29,14 +30,20 @@ var ErrTaskInvalidType = errors.New("任务类型无效")
 type TaskListOptions struct {
 	Type      string
 	Status    string
-	StartDate string   // YYYY-MM-DD，按 created_at 筛选
-	EndDate   string   // YYYY-MM-DD，按 created_at 筛选
+	StartDate string // YYYY-MM-DD，按 created_at 筛选
+	EndDate   string // YYYY-MM-DD，按 created_at 筛选
 	Keywords  string // 关键词表达式："," 为与，"|" 为或；模糊匹配 task.video_project_name
 }
 
-// CreateAISliceInput AI 切片任务创建入参（仅需 video_project_id；直播 ASR 由 Worker 从关联 live_material 读取）。
+// CreateAISliceInput AI 切片任务创建入参。
+// 新路径：live_id + clips0，由后端创建项目并发布任务（超 30 分钟会拆成多个项目/任务）。
+// 兼容路径：仅传 video_project_id，使用已有项目。
 type CreateAISliceInput struct {
 	VideoProjectID uint
+	LiveID         uint
+	PromptID       uint
+	Clips0         []model.ClipRange
+	ProjectSource  string
 }
 
 // CreateDraftInput 剪映草稿任务创建入参（仅需 video_project_id；切片与直播 URL 由 Worker 读取）。
@@ -49,6 +56,10 @@ type CreateDraftInput struct {
 // CreateAISliceDraftInput 一键成片任务创建入参（先 AI 切片再生成草稿；等价于 ai-slice + draft）。
 type CreateAISliceDraftInput struct {
 	VideoProjectID uint
+	LiveID         uint
+	PromptID       uint
+	Clips0         []model.ClipRange
+	ProjectSource  string
 	CanvasWidth    int
 	CanvasHeight   int
 }
@@ -70,9 +81,9 @@ const runningTasksListLimit = 100
 
 // TaskService 异步任务业务接口。
 type TaskService interface {
-	CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) (*model.Task, error)
+	CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) ([]*model.Task, error)
 	CreateDraft(ctx context.Context, createdBy uint, input CreateDraftInput) (*model.Task, error)
-	CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error)
+	CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) ([]*model.Task, error)
 	Get(ctx context.Context, id string) (*model.Task, error)
 	List(ctx context.Context, page, pageSize int, opts TaskListOptions) ([]model.TaskListItem, int64, error)
 	// ListRunningByVideoProject 查询指定项目下未结束的任务（pending + processing；activeOnly 时仅 processing）。
@@ -111,82 +122,29 @@ func NewTaskService(
 	}
 }
 
-func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) (*model.Task, error) {
-	// /ai-slice 仅接受 video_project_id：关联直播与 ASR 由 Worker 从库中读取。
-	if input.VideoProjectID == 0 {
-		return nil, errors.New("video_project_id 不能为空")
-	}
-
-	project, err := s.videoProjectRepo.GetByID(ctx, input.VideoProjectID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrVideoProjectNotFound
+func (s *taskService) CreateAISlice(ctx context.Context, createdBy uint, input CreateAISliceInput) ([]*model.Task, error) {
+	if input.LiveID != 0 {
+		source := strings.TrimSpace(input.ProjectSource)
+		if source == "" {
+			source = "manual"
 		}
-		return nil, err
+		return s.createAISliceJobs(ctx, createdBy, createAISliceJobsInput{
+			LiveID:        input.LiveID,
+			PromptID:      input.PromptID,
+			Clips0:        input.Clips0,
+			ProjectSource: source,
+			NamePrefix:    aiSliceProjectNamePrefix,
+			TaskType:      model.TaskTypeAISlice,
+		})
 	}
-	if project.LiveID == 0 {
-		return nil, errors.New("video_project 未关联直播素材")
-	}
-	// clips0 为待分析时间窗口；为空则无法从 live_asr 筛选句段。
-	if len(project.Clips0) == 0 {
-		return nil, errors.New("video_project.clips0 不能为空，请先设置待分析时间段")
-	}
-	if err := prepare.ValidateClipRanges(project.Clips0); err != nil {
-		return nil, err
-	}
-	// 校验 ASR 完成的同时取出素材，用于写入 task.live_url / live_name 快照。
-	material, err := s.requireASRCompletedMaterial(ctx, project.LiveID)
+	task, err := s.createAISliceFromExistingProject(ctx, createdBy, input.VideoProjectID, model.TaskTypeAISlice, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-
-	// 系统提示词必须来自 llm_system_prompt（按 video_project.prompt_id 查询）；查不到则任务直接失败。
-	promptID := project.PromptID
-	if promptID == 0 {
-		promptID = model.DefaultVideoProjectPromptID
-	}
-	sysPrompt, err := s.resolveSysPrompt(ctx, promptID)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(sysPrompt) == "" {
-		return nil, errors.New("系统提示词内容为空")
-	}
-
-	ext, err := marshalTaskExt(TaskExt{
-		LiveID:         project.LiveID,
-		VideoProjectID: project.ID,
-		SysPromptID:    promptID,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	task := &model.Task{
-		Type:             model.TaskTypeAISlice,
-		Status:           model.TaskStatusPending,
-		Progress:         0,
-		Version:          0,
-		SysPrompt:        sysPrompt,
-		// usr_prompt 由 Worker 根据 clips0 + live_asr 组装内置模板后回写。
-		VideoProjectID:   model.NewUintPtr(project.ID),
-		VideoProjectName: project.Name,
-		// 按 video_project 自动快照画布尺寸与源视频链接/名称（无外键）。
-		Width:     project.Width,
-		Height:    project.Height,
-		LiveURL:   material.LiveURL,
-		LiveName:  material.Name,
-		CreatedBy: createdBy,
-		Ext:       ext,
-	}
-	if err := s.taskRepo.Create(ctx, task); err != nil {
-		return nil, err
-	}
-	// 唤醒 AI 切片 Worker；多实例下由 DB 乐观锁抢占领取，进度/状态写入数据库供轮询。
 	if s.aiSliceWorker != nil {
 		s.aiSliceWorker.Enqueue()
 	}
-	return task, nil
+	return []*model.Task{task}, nil
 }
 
 func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input CreateDraftInput) (*model.Task, error) {
@@ -256,13 +214,164 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 	return task, nil
 }
 
-func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) (*model.Task, error) {
-	// 一键成片 = AI 切片 + 草稿：创建校验与 ai-slice 对齐，画布参数与 draft 对齐。
-	if input.VideoProjectID == 0 {
-		return nil, errors.New("video_project_id 不能为空")
+func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, input CreateAISliceDraftInput) ([]*model.Task, error) {
+	if input.LiveID != 0 {
+		source := strings.TrimSpace(input.ProjectSource)
+		if source == "" {
+			source = "timeline"
+		}
+		return s.createAISliceJobs(ctx, createdBy, createAISliceJobsInput{
+			LiveID:        input.LiveID,
+			PromptID:      input.PromptID,
+			Clips0:        input.Clips0,
+			ProjectSource: source,
+			NamePrefix:    aiSliceDraftProjectNamePrefix,
+			TaskType:      model.TaskTypeAISliceDraft,
+			CanvasWidth:   input.CanvasWidth,
+			CanvasHeight:  input.CanvasHeight,
+		})
+	}
+	task, err := s.createAISliceFromExistingProject(ctx, createdBy, input.VideoProjectID, model.TaskTypeAISliceDraft, input.CanvasWidth, input.CanvasHeight)
+	if err != nil {
+		return nil, err
+	}
+	if s.aiSliceDraftWorker != nil {
+		s.aiSliceDraftWorker.Enqueue()
+	}
+	return []*model.Task{task}, nil
+}
+
+type createAISliceJobsInput struct {
+	LiveID        uint
+	PromptID      uint
+	Clips0        []model.ClipRange
+	ProjectSource string
+	NamePrefix    string
+	TaskType      string
+	CanvasWidth   int
+	CanvasHeight  int
+}
+
+func (s *taskService) createAISliceJobs(ctx context.Context, createdBy uint, in createAISliceJobsInput) ([]*model.Task, error) {
+	if in.LiveID == 0 {
+		return nil, errors.New("live_id 不能为空")
+	}
+	if len(in.Clips0) == 0 {
+		return nil, errors.New("clips0 不能为空，请先设置待分析时间段")
+	}
+	if err := prepare.ValidateClipRanges(in.Clips0); err != nil {
+		return nil, err
 	}
 
-	project, err := s.videoProjectRepo.GetByID(ctx, input.VideoProjectID)
+	material, err := s.requireASRCompletedMaterial(ctx, in.LiveID)
+	if err != nil {
+		return nil, err
+	}
+
+	promptID := in.PromptID
+	if promptID == 0 {
+		promptID = model.DefaultVideoProjectPromptID
+	}
+	sysPrompt, err := s.resolveSysPrompt(ctx, promptID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(sysPrompt) == "" {
+		return nil, errors.New("系统提示词内容为空")
+	}
+
+	merged := sortAndMergeOverlappingClipRanges(in.Clips0)
+	if len(merged) == 0 {
+		return nil, errors.New("clips0 不能为空，请先设置待分析时间段")
+	}
+	utterances := asr.FormatUtterancesForAPI(material.LiveASR)
+	groups := splitClips0IntoProjects(merged, utterances, material.ASRParagraphs)
+	if len(groups) == 0 {
+		return nil, errors.New("clips0 不能为空，请先设置待分析时间段")
+	}
+
+	width, height, err := resolveProjectCanvasSize(0, 0, material.Width, material.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	names := autoSliceProjectNames(in.NamePrefix, len(groups), time.Now())
+	tasks := make([]*model.Task, 0, len(groups))
+	for i, clips := range groups {
+		clips0, err := normalizeAndValidateClips0(clips)
+		if err != nil {
+			return nil, err
+		}
+		project := &model.VideoProject{
+			Name:           names[i],
+			LiveID:         in.LiveID,
+			PromptID:       promptID,
+			Clips0:         clips0,
+			Clips1:         []model.ClipWithText{},
+			Width:          width,
+			Height:         height,
+			ProjectSource:  in.ProjectSource,
+			EnableCaptions: model.EnableCaptionsOn,
+			CreatedBy:      createdBy,
+		}
+		if err := s.videoProjectRepo.Create(ctx, project); err != nil {
+			return nil, mapVideoProjectUniqueError(err)
+		}
+
+		taskWidth, taskHeight := width, height
+		if in.TaskType == model.TaskTypeAISliceDraft {
+			taskWidth, taskHeight = draft.ResolveCanvasSize(in.CanvasWidth, in.CanvasHeight, project)
+		}
+
+		ext, err := marshalTaskExt(TaskExt{
+			LiveID:         project.LiveID,
+			VideoProjectID: project.ID,
+			SysPromptID:    promptID,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		task := &model.Task{
+			Type:             in.TaskType,
+			Status:           model.TaskStatusPending,
+			Progress:         0,
+			Version:          0,
+			SysPrompt:        sysPrompt,
+			VideoProjectID:   model.NewUintPtr(project.ID),
+			VideoProjectName: project.Name,
+			Width:            taskWidth,
+			Height:           taskHeight,
+			LiveURL:          material.LiveURL,
+			LiveName:         material.Name,
+			CreatedBy:        createdBy,
+			Ext:              ext,
+		}
+		if err := s.taskRepo.Create(ctx, task); err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+
+	switch in.TaskType {
+	case model.TaskTypeAISlice:
+		if s.aiSliceWorker != nil {
+			s.aiSliceWorker.Enqueue()
+		}
+	case model.TaskTypeAISliceDraft:
+		if s.aiSliceDraftWorker != nil {
+			s.aiSliceDraftWorker.Enqueue()
+		}
+	}
+	return tasks, nil
+}
+
+func (s *taskService) createAISliceFromExistingProject(ctx context.Context, createdBy uint, videoProjectID uint, taskType string, canvasWidth, canvasHeight int) (*model.Task, error) {
+	if videoProjectID == 0 {
+		return nil, errors.New("live_id 或 video_project_id 不能为空")
+	}
+
+	project, err := s.videoProjectRepo.GetByID(ctx, videoProjectID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrVideoProjectNotFound
@@ -295,8 +404,10 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 		return nil, errors.New("系统提示词内容为空")
 	}
 
-	// 一键成片同样落库解析后的画布尺寸与源视频链接/名称快照。
-	width, height := draft.ResolveCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
+	width, height := project.Width, project.Height
+	if taskType == model.TaskTypeAISliceDraft {
+		width, height = draft.ResolveCanvasSize(canvasWidth, canvasHeight, project)
+	}
 
 	ext, err := marshalTaskExt(TaskExt{
 		LiveID:         project.LiveID,
@@ -308,7 +419,7 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 	}
 
 	task := &model.Task{
-		Type:             model.TaskTypeAISliceDraft,
+		Type:             taskType,
 		Status:           model.TaskStatusPending,
 		Progress:         0,
 		Version:          0,
@@ -324,9 +435,6 @@ func (s *taskService) CreateAISliceDraft(ctx context.Context, createdBy uint, in
 	}
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return nil, err
-	}
-	if s.aiSliceDraftWorker != nil {
-		s.aiSliceDraftWorker.Enqueue()
 	}
 	return task, nil
 }

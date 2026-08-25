@@ -185,6 +185,11 @@ export function countSliceProjectsBySourceVideoId(sourceVideoId: string | number
   return listSliceProjects().filter((item) => item.sourceVideoId === id).length;
 }
 
+export function insertSliceProjectRecord(record: SliceProjectRecord) {
+  sliceProjectMap.set(record.id, record);
+  return record;
+}
+
 export function deleteSliceProjectRecord(projectIdOrSourceVideoId: string) {
   const project = getSliceProject(projectIdOrSourceVideoId);
   if (!project) return false;

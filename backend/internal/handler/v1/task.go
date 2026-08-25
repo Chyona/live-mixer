@@ -8,10 +8,10 @@ import (
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
-	"live-mixer/internal/repository"
-	"live-mixer/internal/service"
 	"live-mixer/internal/pkg/response"
 	"live-mixer/internal/pkg/utils"
+	"live-mixer/internal/repository"
+	"live-mixer/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -32,9 +32,14 @@ func NewTaskHandler(taskService service.TaskService, accountRepo repository.Acco
 	}
 }
 
-// CreateAISliceTaskRequest AI 切片任务请求体（仅需 video_project_id）。
+// CreateAISliceTaskRequest AI 切片任务请求体。
+// 新路径：live_id + clips0（由后端创建项目）；兼容路径：video_project_id。
 type CreateAISliceTaskRequest struct {
-	VideoProjectID uint `json:"video_project_id" binding:"required"`
+	VideoProjectID uint              `json:"video_project_id"`
+	LiveID         uint              `json:"live_id"`
+	PromptID       uint              `json:"prompt_id"`
+	Clips0         []model.ClipRange `json:"clips0"`
+	ProjectSource  string            `json:"project_source"`
 }
 
 // CreateDraftTaskRequest 剪映草稿任务请求体（仅需 video_project_id）。
@@ -46,20 +51,24 @@ type CreateDraftTaskRequest struct {
 
 // CreateAISliceDraftTaskRequest 一键成片任务请求体（先 AI 切片再生成草稿）。
 type CreateAISliceDraftTaskRequest struct {
-	VideoProjectID uint `json:"video_project_id" binding:"required"`
-	CanvasWidth    int  `json:"canvas_width"`
-	CanvasHeight   int  `json:"canvas_height"`
+	VideoProjectID uint              `json:"video_project_id"`
+	LiveID         uint              `json:"live_id"`
+	PromptID       uint              `json:"prompt_id"`
+	Clips0         []model.ClipRange `json:"clips0"`
+	ProjectSource  string            `json:"project_source"`
+	CanvasWidth    int               `json:"canvas_width"`
+	CanvasHeight   int               `json:"canvas_height"`
 }
 
 // ListTasksRequest 任务列表查询参数。
 type ListTasksRequest struct {
-	Type      string   `form:"type"`
-	Status    string   `form:"status"`
-	StartDate string   `form:"start_date"` // 开始日期 YYYY-MM-DD，按 created_at 筛选
-	EndDate   string   `form:"end_date"`   // 结束日期 YYYY-MM-DD，按 created_at 筛选
-	Keywords  string   `form:"keywords"`   // 可选；"," 与、"|" 或；模糊匹配 task.video_project_name
-	Page      int      `form:"page" binding:"omitempty,min=1"`
-	PageSize  int      `form:"page_size" binding:"omitempty,min=1,max=100"`
+	Type      string `form:"type"`
+	Status    string `form:"status"`
+	StartDate string `form:"start_date"` // 开始日期 YYYY-MM-DD，按 created_at 筛选
+	EndDate   string `form:"end_date"`   // 结束日期 YYYY-MM-DD，按 created_at 筛选
+	Keywords  string `form:"keywords"`   // 可选；"," 与、"|" 或；模糊匹配 task.video_project_name
+	Page      int    `form:"page" binding:"omitempty,min=1"`
+	PageSize  int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 }
 
 // ListRunningTasksByProjectRequest 项目运行中任务查询参数。
@@ -91,6 +100,23 @@ func toTaskCreateResponse(task *model.Task) TaskCreateResponse {
 		Progress:  task.Progress,
 		CreatedAt: task.CreatedAt,
 	}
+}
+
+// TaskBatchCreateData 批量创建任务的响应（一个项目对应一个任务）。
+type TaskBatchCreateData struct {
+	List  []TaskCreateResponse `json:"list"`
+	Total int                  `json:"total"`
+}
+
+func toTaskBatchCreateData(tasks []*model.Task) TaskBatchCreateData {
+	list := make([]TaskCreateResponse, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		list = append(list, toTaskCreateResponse(task))
+	}
+	return TaskBatchCreateData{List: list, Total: len(list)}
 }
 
 // TaskResponse 任务详情/列表 API 响应。
@@ -190,7 +216,7 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.Task
 
 // CreateAISliceTask 创建 AI 切片任务
 // @Summary      创建 AI 切片任务
-// @Description  异步：按 video_project.prompt_id 加载系统提示词，用 clips0 时间段从 live_asr 筛选句段组装用户提示词，LLM 返回句段索引后回写 video_project.clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress
+// @Description  异步：推荐传 live_id + clips0，由后端排序合并选区、按 30 分钟拆成多个剪辑项目并各发一个任务；也可传 video_project_id 使用已有项目。立即返回 {list,total}，请轮询 GET /v1/tasks/:id
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -214,12 +240,16 @@ func (h *TaskHandler) CreateAISliceTask(c *gin.Context) {
 
 	task, err := h.taskService.CreateAISlice(c.Request.Context(), user.ID, service.CreateAISliceInput{
 		VideoProjectID: req.VideoProjectID,
+		LiveID:         req.LiveID,
+		PromptID:       req.PromptID,
+		Clips0:         req.Clips0,
+		ProjectSource:  req.ProjectSource,
 	})
 	if err != nil {
 		writeTaskCreateError(c, err)
 		return
 	}
-	response.Success(c, toTaskCreateResponse(task))
+	response.Success(c, toTaskBatchCreateData(task))
 }
 
 // CreateDraftTask 创建剪映草稿任务
@@ -260,7 +290,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 
 // CreateAISliceDraftTask 创建一键成片任务
 // @Summary      创建一键成片任务
-// @Description  异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url
+// @Description  异步：推荐传 live_id + clips0，由后端创建项目（超 30 分钟拆成多个）并各发一个一键成片任务；也可传 video_project_id。立即返回 {list,total}
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -284,6 +314,10 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 
 	task, err := h.taskService.CreateAISliceDraft(c.Request.Context(), user.ID, service.CreateAISliceDraftInput{
 		VideoProjectID: req.VideoProjectID,
+		LiveID:         req.LiveID,
+		PromptID:       req.PromptID,
+		Clips0:         req.Clips0,
+		ProjectSource:  req.ProjectSource,
 		CanvasWidth:    req.CanvasWidth,
 		CanvasHeight:   req.CanvasHeight,
 	})
@@ -291,7 +325,7 @@ func (h *TaskHandler) CreateAISliceDraftTask(c *gin.Context) {
 		writeTaskCreateError(c, err)
 		return
 	}
-	response.Success(c, toTaskCreateResponse(task))
+	response.Success(c, toTaskBatchCreateData(task))
 }
 
 // ListTasks 任务列表
@@ -433,10 +467,13 @@ func parseTaskIDParam(c *gin.Context) (string, error) {
 func writeTaskCreateError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrLiveMaterialNotFound),
+		errors.Is(err, service.ErrLiveMaterialNotFoundForProject),
 		errors.Is(err, service.ErrVideoProjectNotFound),
 		errors.Is(err, service.ErrLLMSystemPromptNotFound):
 		response.NotFound(c, err.Error())
 	case errors.Is(err, service.ErrTaskASRNotReady):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrVideoProjectNameExists):
 		response.BadRequest(c, err.Error())
 	default:
 		response.BadRequest(c, err.Error())

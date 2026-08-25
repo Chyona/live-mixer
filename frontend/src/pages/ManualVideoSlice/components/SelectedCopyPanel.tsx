@@ -79,7 +79,7 @@ interface SelectedCopyPanelProps {
   currentTime?: number;
   activeSegmentId: string | null;
   speakerIds: string[];
-  maxTotalDuration: number;
+  maxTotalDuration?: number;
   videoDuration: number;
   submitting: boolean;
   enableCaptions: boolean;
@@ -149,7 +149,8 @@ const SelectedCopyPanel = ({
   const suppressItemClickRef = useRef(false);
   const textSelectionRef = useRef<{ segmentId: string; start: number; end: number } | null>(null);
   const totalDuration = getTotalSelectedDuration(segments);
-  const isOverLimit = totalDuration > maxTotalDuration;
+  const isOverLimit =
+    Boolean(maxTotalDuration) && totalDuration > (maxTotalDuration ?? 0);
   const canDragSort = !readOnly && segments.length > 1;
   const hasSegments = segments.length > 0;
   const showAiResizeHandle = aiListOverflow || aiPanelHeight != null;
@@ -379,7 +380,9 @@ const SelectedCopyPanel = ({
               .join(' ')}
           >
             已选 {segments.length} 段 · 总时长 {formatVideoDuration(Math.round(totalDuration))}
-            {isOverLimit ? ` · 超出 ${maxTotalDuration / 60} 分钟限制` : ''}
+            {isOverLimit && maxTotalDuration
+              ? ` · 超出 ${maxTotalDuration / 60} 分钟限制`
+              : ''}
           </span>
         </div>
 
