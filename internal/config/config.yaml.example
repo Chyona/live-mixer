@@ -1,8 +1,8 @@
 # 应用默认配置（本地 go run 直接使用，不含生产密钥）
 # 优先级：环境变量 APP_* > 外部配置文件（-config）> 本文件
 server:
-  host: "0.0.0.0"
-  port: 30000
+  host: "0.0.0.0"   # 内置监听地址，不接受环境变量覆盖
+  port: 30000       # 内置监听端口，不接受环境变量覆盖
   mode: "debug" # debug | release | test
 
 database:

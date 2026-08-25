@@ -91,6 +91,7 @@ type WebConfig struct {
 }
 
 // ServerConfig HTTP 服务相关配置。
+// Host / Port 为内置值（0.0.0.0:30000），不接受 yaml / 环境变量覆盖；Mode 仍可配置。
 type ServerConfig struct {
 	Host string `mapstructure:"host"`
 	Port int    `mapstructure:"port"`
@@ -230,10 +231,17 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	normalizeServerConfig(&cfg.Server)
 	normalizeWorkerConfig(&cfg.Worker)
 	normalizeWebConfig(&cfg.Web)
 	return &cfg, nil
 }
+
+// DefaultServerHost HTTP 内置监听地址（容器/本机所有网卡）。
+const DefaultServerHost = "0.0.0.0"
+
+// DefaultServerPort HTTP 内置监听端口，与 Docker 镜像 EXPOSE / compose ports 一致。
+const DefaultServerPort = 30000
 
 // DefaultAISliceConcurrency AI 切片 Worker 默认并发数。
 const DefaultAISliceConcurrency = 6
@@ -267,6 +275,12 @@ const DefaultASRStagingMaxDirs = 20
 
 // DefaultStagingCleanupIntervalMin staging 清理任务默认执行间隔（分钟）。
 const DefaultStagingCleanupIntervalMin = 60
+
+// normalizeServerConfig 将监听地址与端口固定为内置值，忽略 yaml / APP_SERVER_HOST / APP_SERVER_PORT。
+func normalizeServerConfig(s *ServerConfig) {
+	s.Host = DefaultServerHost
+	s.Port = DefaultServerPort
+}
 
 // normalizeWorkerConfig 将未配置或非法的 Worker 并发/超时回落到内置默认值。
 func normalizeWorkerConfig(w *WorkerConfig) {
@@ -388,14 +402,6 @@ func (w WebConfig) StagingCleanupInterval() time.Duration {
 
 // applyEnvOverrides 用已设置的环境变量 APP_* 覆盖配置（仅当环境变量存在时生效）。
 func applyEnvOverrides(cfg *Config) {
-	if val, ok := os.LookupEnv("APP_SERVER_HOST"); ok {
-		cfg.Server.Host = val
-	}
-	if val, ok := os.LookupEnv("APP_SERVER_PORT"); ok {
-		if port, err := strconv.Atoi(val); err == nil {
-			cfg.Server.Port = port
-		}
-	}
 	if val, ok := os.LookupEnv("APP_SERVER_MODE"); ok {
 		cfg.Server.Mode = val
 	}

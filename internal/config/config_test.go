@@ -6,6 +6,26 @@ import (
 	"time"
 )
 
+func TestLoad_ServerHostPortAreBuiltIn(t *testing.T) {
+	t.Setenv("APP_SERVER_HOST", "127.0.0.1")
+	t.Setenv("APP_SERVER_PORT", "8080")
+	t.Setenv("APP_SERVER_MODE", "release")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.Host != DefaultServerHost {
+		t.Errorf("Server.Host = %q, want built-in %q", cfg.Server.Host, DefaultServerHost)
+	}
+	if cfg.Server.Port != DefaultServerPort {
+		t.Errorf("Server.Port = %d, want built-in %d", cfg.Server.Port, DefaultServerPort)
+	}
+	if cfg.Server.Mode != "release" {
+		t.Errorf("Server.Mode = %q, want release (still overridable)", cfg.Server.Mode)
+	}
+}
+
 func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	cfg, err := Load("")
 	if err != nil {
