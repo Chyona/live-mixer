@@ -30,3 +30,22 @@ envinit
 /asr_raw.json
 /001_asr_raw.json
 /002_asr_raw.json
+
+# 前端（由 frontend/.gitignore 合入）
+frontend/node_modules/
+frontend/dist*
+frontend/public/sitemap.xml
+frontend/sitemap.xml
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/coverage/
+frontend/npm-debug.log*
+frontend/yarn-error.log*
+frontend/**/*bak
+frontend/.history/
+frontend/.eslintcache
+frontend/build/
+frontend/.temp/
+frontend/.vite/
+# frontend/mock/_Live_URL.ts
