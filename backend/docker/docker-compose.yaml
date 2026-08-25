@@ -1,0 +1,109 @@
+name: live-mixer
+
+services:
+  live-mixer:
+    container_name: live-mixer
+    image: gogoshine/live-mixer:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    #entrypoint: ["/bin/sh", "-c", "sleep 10000"]
+    mem_limit: 12G
+    memswap_limit: 12G
+    cpus: '6'
+    ports:
+      - "30000:30000"
+    volumes:
+      - ./logs:/app/logs
+      - ./html:/app/html
+    env_file:
+      - .env
+    environment:
+      # 非敏感配置：直接在此声明；敏感项（数据库账号/密码、JWT 密钥、对象存储密钥）由 .env 注入
+
+      # ── HTTP 服务 ──────────────────────────────────────────────────────────
+      # Gin 运行模式：release（生产）| debug（开发，日志更详细）| test
+      # 监听地址/端口内置为 0.0.0.0:30000，与上方 ports 映射一致，不提供用户配置
+      APP_SERVER_MODE: release
+
+      # ── 日志 ──────────────────────────────────────────────────────────────
+      # 日志级别：debug | info | warn | error
+      APP_LOGGER_LEVEL: info
+      # 日志格式：json（便于采集）| console（便于本地阅读）
+      APP_LOGGER_FORMAT: json
+      # 日志文件路径（相对容器工作目录；已通过 volumes 挂载到宿主机 ./logs）
+      APP_LOGGER_FILENAME: logs/live-mixer.log
+      # 单个日志文件最大体积（MB），超出后自动轮转
+      APP_LOGGER_MAX_SIZE: 10
+      # 最多保留的历史日志文件数量
+      APP_LOGGER_MAX_BACKUPS: 10
+
+      # ── 数据库（连接池 / SSL / 时区）──────────────────────────────────────
+      # 主机、端口、用户名、密码、库名见 .env（APP_DATABASE_HOST 等敏感项）
+      # PostgreSQL SSL 模式：disable | require | verify-full 等
+      APP_DATABASE_SSLMODE: disable
+      # 数据库会话时区，与业务时间字段展示一致
+      APP_DATABASE_TIMEZONE: Asia/Shanghai
+      # 连接池空闲连接上限
+      APP_DATABASE_MAX_IDLE_CONNS: 10
+      # 连接池最大打开连接数（并发上限参考值）
+      APP_DATABASE_MAX_OPEN_CONNS: 100
+
+      # ── JWT 鉴权 ──────────────────────────────────────────────────────────
+      # Access Token 过期时间（秒）；7200 = 2 小时；签名密钥 APP_JWT_SECRET 见 .env
+      APP_JWT_EXPIRES_IN: 7200
+
+      # 容器系统时区，与日志、业务时间字段保持一致
+      TZ: Asia/Shanghai
+    networks:
+      - live-mixer-network
+
+  capcut-mate:
+    image: gogoshine/capcut-mate-pro:latest
+    container_name: live-capcut-mate
+    platform: linux/amd64
+    restart: unless-stopped  # 除非手动停止，否则总是重启容器
+    ports:
+      - "31001:30000"
+    volumes:
+      - ./html/output:/app/output  # 挂载配置文件目录
+      - ./logs:/app/logs  # 挂载配置文件目录
+      #- /etc/localtime:/etc/localtime:ro
+      #- /etc/timezone:/etc/timezone:ro
+    environment:
+      # 草稿下载URL
+      - DRAFT_URL=http://192.168.3.219/openapi/capcut-mate/v1/get_draft
+      # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
+      - DOWNLOAD_URL=http://192.168.3.219
+      # 草稿提示URL
+      - TIP_URL=https://docs.jcaigc.cn
+      # 文件下载大小限制（字节），默认1GB（1073741824）
+      - DOWNLOAD_FILE_SIZE_LIMIT=1073741824
+    networks:
+      - live-mixer-network    
+
+  nginx: # nginx服务器
+    image: gogoshine/nginx:latest
+    container_name: live-nginx
+    platform: linux/amd64
+    restart: unless-stopped  # 除非手动停止，否则总是重启容器
+    ports:
+      - "81:80"
+    environment:
+      - PROXY_PASS_URL_1=http://capcut-mate:30000/openapi/capcut-mate/
+      - PROXY_LOCATION_1=/openapi/capcut-mate/
+      - PROXY_PASS_URL_2=http://192.168.3.3:30000/openapi/capcut-mate/v1/gen_video
+      - PROXY_LOCATION_2=/openapi/capcut-mate/v1/gen_video
+      - PROXY_PASS_URL_3=http://192.168.3.3:30000/openapi/capcut-mate/v1/gen_video_status
+      - PROXY_LOCATION_3=/openapi/capcut-mate/v1/gen_video_status
+      - PROXY_PASS_URL_4=http://192.168.3.3:30000/openapi/capcut-mate/v1/gen_video_active_count
+      - PROXY_LOCATION_4=/openapi/capcut-mate/v1/gen_video_active_count
+      - PROXY_PASS_URL_5=http://live-mixer:30000/openapi/live-mixer/
+      - PROXY_LOCATION_5=/openapi/live-mixer/
+    volumes:
+      - ./html:/usr/share/nginx/html
+    networks:
+      - live-mixer-network    
+
+networks:
+  live-mixer-network:
+    driver: bridge

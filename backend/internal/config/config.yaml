@@ -1,0 +1,103 @@
+# 应用默认配置（本地 go run 直接使用，不含生产密钥）
+# 优先级：环境变量 APP_* > 外部配置文件（-config）> 本文件
+server:
+  host: "0.0.0.0"   # 内置监听地址，不接受环境变量覆盖
+  port: 30000       # 内置监听端口，不接受环境变量覆盖
+  mode: "debug" # debug | release | test
+
+database:
+  host: "127.0.0.1"
+  port: 5432
+  user: "live_mixer"
+  password: "password"   # 仅本地开发占位，生产环境由 docker/.env 注入
+  dbname: "live_mixer"
+  sslmode: "disable"
+  timezone: "Asia/Shanghai"
+  max_idle_conns: 10
+  max_open_conns: 100
+
+logger:
+  level: "info"              # debug | info | warn | error
+  format: "json"             # json | console
+  filename: "logs/live-mixer.log"  # 日志文件路径
+  max_size: 10               # 单个日志文件最大 10MB
+  max_backups: 10            # 最多保留 10 个历史日志文件
+
+jwt:
+  secret: "live-mixer-jwt-secret-change-in-production"
+  expires_in: 86400             # Token 过期时间（秒）
+
+# 对象存储（COS > OSS > TOS；密钥生产环境由 APP_STORAGE_* 环境变量注入）
+storage:
+  base_path: "video_editing"   # 对象键根目录；子目录约定见 storage 包（temp/ 临时文件、test/ 测试上传）
+  signed_url_expire_days: 30   # 上传后返回的签名链接有效期（天）；TOS 最长 7 天
+  cos:
+    secret_id: ""
+    secret_key: ""
+    bucket_name: ""
+    region: ""                 # 例如 ap-guangzhou
+  oss:
+    access_key_id: ""
+    access_key_secret: ""
+    bucket_name: ""
+    endpoint: ""               # 例如 oss-cn-hangzhou.aliyuncs.com
+  tos:
+    access_key_id: ""
+    access_key_secret: ""
+    bucket_name: ""
+    region: ""                 # 例如 cn-beijing
+    endpoint: ""               # 可选，例如 tos-cn-beijing.volces.com
+
+# 豆包语音识别（ASR）；生产环境可通过 APP_ASR_API_KEY 覆盖 api_key
+asr:
+  api_key: "616b6b96-0726-4fa1-ba1d-d9d1187914f7"
+  base_url: "https://openspeech.bytedance.com/api/v3/auc/bigmodel"
+  resource_id: "volc.seedasr.auc"
+  poll_interval_sec: 10        # 轮询间隔（秒）
+  max_polls: 360               # 最大轮询次数
+
+# OpenAI 兼容协议大模型；生产环境通过 APP_LLM_* 注入密钥
+# model：AI 切片等；flash_model：添加视频后 ASR 后处理（asr_summaries / asr_paragraphs）
+llm:
+  api_key: ""
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen3.7-max"
+  flash_model: "qwen3.7-flash"
+
+# 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖
+# 视频生成密钥可用 APP_CAPCUT_MATE_API_KEY 或 CAPCUT_MATE_API_KEY 覆盖
+# gen_video / gen_video_status 可共用独立根地址（未配置时走 base_url）
+# 环境变量：APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL / APP_CAPCUT_MATE_ENABLE_GEN_VIDEO
+capcut_mate:
+  base_url: "http://192.168.3.219:81"
+  # gen_video_base_url: "https://capcut-mate.jcaigc.cn"
+  enable_gen_video: true           # 关闭后跳过 gen_video，草稿完成后直接标记任务完成
+  api_key: ""
+  gen_video_poll_interval_sec: 5   # 视频生成状态轮询间隔（秒）
+  gen_video_max_polls: 360         # 最大轮询次数（默认约 30 分钟）
+
+# WEB 本地暂存根目录：切片落盘到 root_dir/staging/{task_id}；对外 URL 由对象存储上传提供
+# 可用 APP_WEB_ROOT_DIR 或 WEB_ROOT_DIR 覆盖
+# staging 清理：APP_WEB_STAGING_MAX_DIRS / APP_WEB_STAGING_CLEANUP_INTERVAL_MIN
+web:
+  root_dir: "docker/html"
+  staging_max_dirs: 80              # staging 最多保留任务子目录数（按 mtime 保留最新）
+  staging_cleanup_interval_min: 60  # 全局定时清理间隔（分钟）
+
+# 后台 Worker 调度；可用 APP_WORKER_*_CONCURRENCY / APP_WORKER_*_STALE_TIMEOUT_MIN 覆盖
+worker:
+  ai_slice_concurrency: 6      # 单实例同时执行的 AI 切片任务数
+  asr_concurrency: 6           # 单实例同时执行的直播素材 ASR 任务数
+  draft_concurrency: 3         # 单实例同时执行的剪映草稿任务数
+  ai_slice_draft_concurrency: 3 # 单实例同时执行的一键成片任务数
+  # processing 孤儿回收阈值（分钟）：心跳字段超时未更新则改回 pending
+  asr_stale_timeout_min: 60           # ASR：asr_updated_at
+  ai_slice_stale_timeout_min: 20      # AI 切片：updated_at
+  draft_stale_timeout_min: 60         # 草稿生成：updated_at
+  ai_slice_draft_stale_timeout_min: 90 # 一键成片：updated_at
+
+# 远程文件下载；仅影响服务端下载请求，不改数据库/API 中的原始 URL
+# 环境变量（覆盖 yaml 中同名字段）：
+#   APP_DOWNLOAD_HOST_MAPPINGS=host1.volces.com->host1.ivolces.com,host2.volces.com->host2.ivolces.com
+download:
+  host_mappings: []
