@@ -1,0 +1,308 @@
+/* 视频元素 */
+.video-elements {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.login-account-icon {
+  width: 240px;
+  height: 240px;
+}
+
+.password-login {
+  .ant-form-item-label > label {
+    color: #555;
+    font-weight: 500;
+  }
+
+  .password-login-submit {
+    margin-bottom: 0;
+    margin-top: 8px;
+  }
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 25px;
+}
+
+.login-logo {
+  width: 50px;
+  height: 50px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  box-shadow: 0 4px 10px rgba(78, 110, 242, 0.25);
+
+  .logo-text {
+    position: absolute;
+  }
+}
+
+.login-logo img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.login-brand-text {
+  font-size: 24px;
+  font-weight: 700;
+  color: #333;
+  margin: 0;
+  background: linear-gradient(45deg, #4e6ef2, #7187f8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.login-title {
+  text-align: center;
+  font-size: 22px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.login-subtitle {
+  text-align: center;
+  font-size: 16px;
+  color: #777;
+  margin-bottom: 25px;
+}
+
+.login-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.login-content-wrapper {
+  width: 90%;
+  margin: 12px auto 32px;
+}
+
+/* 特性标签区域 */
+.features {
+  display: flex;
+  justify-content: space-between;
+  margin: 20px 0 25px;
+  padding-inline: 16px;
+}
+
+.feature-tag {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 30%;
+  padding: 15px 5px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(5px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+  transition: all 0.4s ease;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  font-size: 22px;
+  color: #fff;
+  transition: all 0.4s ease;
+  position: relative;
+  background: linear-gradient(135deg, var(--secondary-light), var(--primary-color));
+  animation: featureIconFloat 3s ease-in-out infinite;
+}
+
+.feature-tag:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.feature-tag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+}
+
+.feature-tag.video::before {
+  background: linear-gradient(to right, #ff6b6b, #ff8e53);
+}
+
+.feature-tag.wechat::before {
+  background: linear-gradient(to right, #42e695, #3bb2b8);
+}
+
+.feature-tag.email::before {
+  background: linear-gradient(to right, #6e8efb, #a777e3);
+}
+
+/* accent 主题色 */
+.feature-tag.accent::before {
+  background: linear-gradient(to right, #356bfd, #5c89ff);
+}
+
+.feature-tag.video .feature-icon {
+  background: linear-gradient(135deg, #ff6b6b, #ff8e53);
+  box-shadow: 0 5px 15px rgba(255, 107, 107, 0.4);
+}
+
+.feature-tag.wechat .feature-icon {
+  background: linear-gradient(135deg, #42e695, #3bb2b8);
+  box-shadow: 0 5px 15px rgba(66, 230, 149, 0.4);
+}
+
+.feature-tag.email .feature-icon {
+  background: linear-gradient(135deg, #6e8efb, #a777e3);
+  box-shadow: 0 5px 15px rgba(110, 142, 251, 0.4);
+}
+
+.feature-tag.accent .feature-icon {
+  background: linear-gradient(135deg, #356bfd, #5c89ff);
+  box-shadow: 0 5px 16px rgba(53, 107, 253, 0.35);
+  color: #fff;
+}
+
+.feature-tag:hover .feature-icon {
+  transform: scale(1.15) rotate(5deg);
+}
+
+.feature-name {
+  color: #444;
+  text-align: center;
+  transition: color 0.3s;
+}
+
+.feature-tag:hover .feature-name {
+  color: #333;
+}
+
+/* 粒子元素 */
+.feature-tag .feature-particle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.feature-tag.video .feature-particle {
+  background: linear-gradient(135deg, #ff6b6b, #ff8e53);
+}
+
+.feature-tag.wechat .feature-particle {
+  background: linear-gradient(135deg, #42e695, #3bb2b8);
+}
+
+.feature-tag.email .feature-particle {
+  background: linear-gradient(135deg, #6e8efb, #a777e3);
+}
+
+.feature-tag.accent .feature-particle {
+  background: linear-gradient(135deg, #356bfd, #5c89ff);
+}
+
+.feature-pulse {
+  animation: featurePulse 3s ease-in-out infinite;
+}
+
+.feature-float {
+  animation: featureFloat 4s ease-in-out infinite;
+}
+
+.feature-rotate {
+  animation: featureRotate 8s linear infinite;
+}
+
+@keyframes featurePulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+/* 动画效果 */
+@keyframes featureFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes featurePulse {
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.1);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes featureRotate {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* 响应式样式 */
+@media (max-width: 480px) {
+  .login-tabs {
+    gap: 10px;
+  }
+
+  .features {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .feature-tag {
+    width: 100%;
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 12px 15px;
+  }
+
+  .feature-icon {
+    margin-bottom: 0;
+    margin-right: 15px;
+  }
+}

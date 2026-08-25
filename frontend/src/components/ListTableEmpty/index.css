@@ -1,0 +1,77 @@
+.list-table-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 320px;
+  padding: 32px 24px;
+  box-sizing: border-box;
+}
+
+.list-table-empty__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+  padding: 36px 28px 32px;
+  border: 1px dashed var(--border-color, #eef0f4);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fafbfc 0%, var(--surface-card) 100%);
+  text-align: center;
+}
+
+.list-table-empty__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  margin-bottom: 4px;
+  border-radius: 16px;
+}
+
+.list-table-empty__icon_neutral {
+  background: #f3f4f6;
+  color: var(--text-gray);
+}
+
+.list-table-empty__icon_primary {
+  background: rgba(var(--primary-color-rgb), 0.1);
+  color: var(--primary-color);
+}
+
+.list-table-empty__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.list-table-empty__desc {
+  margin: 0;
+  max-width: 320px;
+  color: var(--text-gray);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.list-table-empty__action {
+  margin-top: 12px;
+}
+
+.list-table-empty__action .ant-btn {
+  min-width: 144px;
+  height: 40px;
+  padding-inline: 22px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: var(--radius-md, 8px);
+}
+
+.list-table-empty__action .ant-btn .ant-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}

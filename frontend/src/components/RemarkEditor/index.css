@@ -1,0 +1,56 @@
+.remark-editor {
+  width: 100%;
+}
+
+.remark-editor__display {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 8px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.remark-editor__display:hover {
+  background: var(--hover-bg-color);
+  border-color: var(--border-color);
+}
+
+.remark-editor__display_empty .remark-editor__display-text {
+  color: var(--text-gray);
+}
+
+.remark-editor__display-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remark-editor__display-icon {
+  flex-shrink: 0;
+  color: var(--text-gray);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.remark-editor__display:hover .remark-editor__display-icon {
+  opacity: 1;
+}
+
+.remark-editor.ant-input {
+  padding: 2px 8px;
+}

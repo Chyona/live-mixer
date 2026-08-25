@@ -1,0 +1,74 @@
+.ant-card:not(.noanimation-card) .ant-card-head,
+.ant-modal:not(.noanimation-modal) .ant-modal-header {
+  position: relative;
+  background: var(--gradient-card-header);
+  overflow: hidden;
+  box-shadow: 0 0 20px rgba(var(--primary-color-rgb), 0.3);
+  backdrop-filter: blur(10px);
+  transition: all 0.4s ease;
+}
+
+.ant-card:not(.noanimation-card) .ant-card-head::before,
+.ant-card:not(.noanimation-card) .ant-card-head::after,
+.ant-modal:not(.noanimation-modal) .ant-modal-header::before,
+.ant-modal:not(.noanimation-modal) .ant-modal-header::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 100%;
+  z-index: -1;
+}
+
+.ant-card:not(.noanimation-card) .ant-card-head::before,
+.ant-modal:not(.noanimation-modal) .ant-modal-header::before {
+  background: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.3),
+    rgba(255, 255, 255, 0)
+  );
+  animation: borderPulse 3s infinite;
+}
+
+.ant-card:not(.noanimation-card) .ant-card-head::after,
+.ant-modal:not(.noanimation-modal) .ant-modal-header::after {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.3;
+}
+
+.ant-card:not(.noanimation-card) .ant-card-head .ant-card-head-wrapper::before,
+.ant-modal:not(.noanimation-modal) .ant-modal-header .ant-modal-title::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  color: #fff;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transform: skewX(-25deg);
+  animation: lightFlow 6s infinite;
+}
+
+.ant-card:not(.noanimation-card) .ant-card-head .ant-card-head-wrapper,
+.ant-modal:not(.noanimation-modal) .ant-modal-header .ant-modal-title,
+.ant-card:not(.noanimation-card) .ant-card-head .ant-card-head-wrapper .ant-card-head-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.ant-modal:not(.noanimation-modal) .ant-modal-close-x {
+  color: #fff;
+}
+
+@media (min-width: 768px) {
+  .ant-card .ant-card-head {
+    padding-block: 4px;
+  }
+}

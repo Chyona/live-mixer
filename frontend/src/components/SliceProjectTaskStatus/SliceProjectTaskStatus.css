@@ -1,0 +1,10 @@
+.slice-project-task-alert {
+  margin: 0 0 12px;
+  border-radius: 10px;
+}
+
+.slice-project-task-alert__link {
+  margin-left: 8px;
+  color: var(--primary-color);
+  font-weight: 500;
+}

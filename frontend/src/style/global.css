@@ -1,0 +1,142 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+body {
+  font-weight: var(--bs-body-font-weight);
+  color: var(--bs-body-color);
+  text-align: var(--bs-body-text-align);
+  background-color: var(--bs-body-bg);
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  height: 100%;
+  overflow: hidden;
+}
+
+body,
+.ant-layout,
+.ant-menu {
+  font-family: var(--bs-body-font-family);
+  font-size: var(--bs-body-font-size);
+}
+
+body .ant-layout-header,
+.ant-layout .ant-layout-header,
+.ant-menu .ant-layout-header {
+  line-height: var(--bs-body-line-height);
+}
+
+hr {
+  margin: 1rem 0;
+  color: inherit;
+  border: 0;
+  border-top: var(--bs-border-width) solid;
+  opacity: 0.25;
+}
+
+html,
+body,
+#root,
+.size-full {
+  width: 100%;
+}
+
+.size-full {
+  height: 100%;
+}
+
+html,
+body,
+#root {
+  min-width: var(--app-min-width);
+}
+
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+.hide {
+  display: none;
+}
+
+.h-full {
+  height: 100%;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.visibility {
+  visibility: hidden;
+}
+
+.ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.multiline-ellipsis {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.perspective {
+  perspective: 1000px;
+}
+
+.transform-3D-hover:hover {
+  transform: translateY(-8px) rotateX(8deg);
+}
+
+.button-icon {
+  transition: transform 0.3s;
+}
+
+.icon-color {
+  color: var(--primary-color);
+}
+
+.svg-inline--fa {
+  display: var(--fa-display, inline-block);
+  height: 1em;
+  overflow: visible;
+  vertical-align: -0.125em;
+}
+
+svg:not(:root).svg-inline--fa,
+svg:not(:host).svg-inline--fa {
+  overflow: visible;
+  box-sizing: content-box;
+}
+
+.section-icon {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, #3a1c71, var(--secondary-color));
+  color: white;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  font-size: 14px;
+  box-shadow: 0 4px 10px rgba(58, 28, 113, 0.15);
+}

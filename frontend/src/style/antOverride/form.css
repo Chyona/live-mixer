@@ -1,0 +1,32 @@
+.ant-form-item .ant-form-item-label > label {
+  font-size: 1em;
+}
+
+.ant-form-item .ant-input-sm {
+  font-size: 0.75em;
+}
+
+.ant-form-item .ant-input-lg {
+  font-size: 1em;
+}
+
+.ant-form-vertical
+  .ant-form-item:not(.ant-form-item-horizontal)
+  .ant-form-item-label
+  > label.ant-form-item-required:not(.ant-form-item-required-mark-optional)::before {
+  display: none;
+}
+
+.ant-form-vertical
+  .ant-form-item:not(.ant-form-item-horizontal)
+  .ant-form-item-label
+  > label.ant-form-item-required:not(.ant-form-item-required-mark-optional)::after {
+  visibility: visible;
+  display: inline-block;
+  margin-inline-end: 4px;
+  color: var(--color-danger);
+  font-size: 16px;
+  font-family: SimSun, sans-serif;
+  line-height: 1;
+  content: '*';
+}

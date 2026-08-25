@@ -1,0 +1,96 @@
+.zt-app {
+  min-width: var(--app-min-width);
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.zt-app--top-nav .zt-app-main:not(.zt-app-main_full):not(.zt-app-main_with-sider) {
+  padding-top: var(--bs-header-height);
+}
+
+.zt-app--left-nav .zt-app-body {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.zt-app--left-nav .zt-app-main_with-sider {
+  margin-left: var(--sidebar-width);
+  transition: margin-left 0.2s ease;
+}
+
+.zt-app--left-nav.zt-app--sider-collapsed .zt-app-main_with-sider {
+  margin-left: var(--sidebar-collapsed-width);
+}
+
+.zt-app-main {
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background-color: var(--content-bg);
+}
+
+/* main 直接子节点（页面根）统一最小高度，见 --app-min-height */
+.zt-app-main > * {
+  min-height: max(100%, var(--app-min-height));
+  box-sizing: border-box;
+}
+
+.zt-app-main:has(.list-page),
+.zt-app-main:has(.slice-page_manual),
+.zt-app-main:has(.slice-page_timeline) {
+  overflow: hidden;
+}
+
+/* 视口高度低于最小高度时，改由 main 滚动 */
+@media (max-height: 720px) {
+  .zt-app-main:has(.list-page),
+  .zt-app-main:has(.slice-page_manual),
+  .zt-app-main:has(.slice-page_timeline) {
+    overflow-y: auto;
+  }
+
+  .list-page,
+  .slice-page_manual,
+  .slice-page_timeline {
+    height: auto;
+    min-height: var(--app-min-height);
+    overflow: visible;
+  }
+
+  .slice-page_manual .slice-editor-layout,
+  .slice-page_manual .slice-editor-main {
+    overflow: visible;
+  }
+}
+
+@media (max-width: 1100px) {
+  .zt-app-main:has(.slice-page_manual) {
+    overflow-y: auto;
+  }
+}
+
+.zt-app--top-nav .zt-app-main:has(.list-page):not(.zt-app-main_full):not(.zt-app-main_with-sider) {
+  height: calc(100vh - var(--bs-header-height));
+  max-height: calc(100vh - var(--bs-header-height));
+}
+
+.zt-app-main_full {
+  height: 100vh;
+  max-height: 100vh;
+  padding-top: 0 !important;
+  overflow-y: auto;
+}
+
+.zt-app-main_with-sider {
+  height: 100vh;
+  max-height: 100vh;
+  padding-top: 0;
+  overflow-y: auto;
+}
+
+.zt-app-main_mobile {
+  padding-bottom: var(--bs-header-height);
+}

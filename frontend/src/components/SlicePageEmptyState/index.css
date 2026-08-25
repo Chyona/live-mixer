@@ -1,0 +1,124 @@
+.slice-page-empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  padding: 40px 24px;
+}
+
+.slice-page-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 420px;
+  padding: 36px 32px 32px;
+  border: 1px dashed var(--border-color, #eef0f4);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fafbfc 0%, var(--surface-card) 100%);
+  text-align: center;
+}
+
+.slice-page-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  border-radius: 18px;
+}
+
+.slice-page-empty-icon_warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.slice-page-empty-icon_info {
+  background: rgba(var(--primary-color-rgb), 0.1);
+  color: var(--primary-color);
+}
+
+.slice-page-empty-icon_neutral {
+  background: #f3f4f6;
+  color: var(--text-gray);
+}
+
+.slice-page-empty-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.slice-page-empty-desc {
+  margin: 10px 0 0;
+  color: var(--text-gray);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.slice-page-empty-reasons {
+  width: 100%;
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.02);
+  list-style: none;
+  text-align: left;
+}
+
+.slice-page-empty-reasons li {
+  position: relative;
+  padding-left: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.slice-page-empty-reasons li + li {
+  margin-top: 6px;
+}
+
+.slice-page-empty-reasons li::before {
+  content: '';
+  position: absolute;
+  top: 0.72em;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-gray);
+  opacity: 0.55;
+  transform: translateY(-50%);
+}
+
+.slice-page-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+@media (max-width: 768px) {
+  .slice-page-empty {
+    padding: 24px 16px;
+  }
+
+  .slice-page-empty-card {
+    padding: 28px 20px 24px;
+  }
+
+  .slice-page-empty-actions {
+    width: 100%;
+  }
+
+  .slice-page-empty-actions .ant-btn {
+    flex: 1;
+    min-width: 120px;
+  }
+}

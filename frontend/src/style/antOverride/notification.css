@@ -1,0 +1,49 @@
+/* toast.notify：自绘倒计时进度条，按类型配色（替代 antd 固定主色 progress） */
+
+.toast-notify.ant-notification-notice {
+  overflow: hidden;
+}
+
+.toast-notify--progress.ant-notification-notice::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  transform-origin: left center;
+  animation: toast-notify-progress var(--toast-duration, 3s) linear forwards;
+  background: linear-gradient(90deg, var(--primary-light), var(--primary-color));
+  pointer-events: none;
+}
+
+.toast-notify--progress.ant-notification-notice:hover::after {
+  animation-play-state: paused;
+}
+
+.toast-notify-success.toast-notify--progress.ant-notification-notice::after {
+  background: linear-gradient(90deg, var(--color-success), var(--color-success-dark));
+}
+
+.toast-notify-error.toast-notify--progress.ant-notification-notice::after {
+  background: linear-gradient(90deg, var(--color-danger), var(--color-danger-dark));
+}
+
+.toast-notify-warning.toast-notify--progress.ant-notification-notice::after {
+  background: linear-gradient(90deg, var(--color-warning), var(--color-warning-dark));
+}
+
+.toast-notify-info.toast-notify--progress.ant-notification-notice::after {
+  background: linear-gradient(90deg, var(--color-info), var(--color-info-dark));
+}
+
+@keyframes toast-notify-progress {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}

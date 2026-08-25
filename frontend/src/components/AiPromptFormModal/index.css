@@ -1,0 +1,97 @@
+.ai-prompt-form-modal .ant-modal-body {
+  overflow: hidden;
+  padding-bottom: 4px;
+}
+
+.ai-prompt-form-modal .ant-modal-footer {
+  padding-top: 18px;
+}
+
+.ai-prompt-form-modal_expanded {
+  top: 24px;
+  padding-bottom: 0;
+}
+
+.ai-prompt-form-modal_expanded .ant-modal-content {
+  max-height: calc(100vh - 48px);
+}
+
+.ai-prompt-form-modal__content-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.ai-prompt-form-modal__content-label-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-gray);
+}
+
+.ai-prompt-form-modal__expand-btn {
+  height: auto;
+  padding: 0;
+  font-size: 13px;
+}
+
+.ai-prompt-form-modal__meta-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px 16px;
+}
+
+.ai-prompt-form-modal__meta-row .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.ai-prompt-form-modal__content.ant-input {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  resize: none;
+}
+
+.ai-prompt-form-modal__content.ant-input,
+.ai-prompt-form-modal__content textarea {
+  width: 100% !important;
+  min-height: 280px !important;
+  height: 320px !important;
+  max-height: 420px !important;
+  padding-bottom: 28px;
+  overflow-y: auto !important;
+  box-sizing: border-box;
+  resize: none !important;
+}
+
+.ai-prompt-form-modal_expanded .ai-prompt-form-modal__content.ant-input,
+.ai-prompt-form-modal_expanded .ai-prompt-form-modal__content textarea {
+  min-height: 420px !important;
+  height: min(560px, calc(100vh - 360px)) !important;
+  max-height: min(560px, calc(100vh - 360px)) !important;
+}
+
+.ai-prompt-form-modal .ant-input-textarea,
+.ai-prompt-form-modal .ant-input-textarea-show-count {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.ai-prompt-form-modal .ant-input-textarea-show-count::after {
+  inset-inline-end: 12px;
+  bottom: 8px;
+}
+
+.ai-prompt-form-modal .ant-form-item:last-child {
+  margin-bottom: 8px;
+}
+
+@media (max-width: 768px) {
+  .ai-prompt-form-modal__meta-row {
+    grid-template-columns: 1fr;
+  }
+}

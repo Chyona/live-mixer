@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Default",
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "preserve",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "noUncheckedIndexedAccess": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "module": "ESNext",
+    "target": "ESNext",
+    "noEmit": true,
+    "isolatedModules": true,
+    "types": ["vite-plugin-svgr/client", "vite/client"],
+    "paths": {
+      "~/*": ["./src/*"]
+    }
+  },
+  "include": ["vite.config.mts", "src/**/*"],
+  "exclude": ["node_modules"]
+}

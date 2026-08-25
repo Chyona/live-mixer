@@ -1,0 +1,9 @@
+.slices-task-count.ant-btn {
+  padding-inline: 0;
+  height: auto;
+  font-weight: 600;
+}
+
+.slices-task-count.is-empty {
+  color: var(--text-gray);
+}

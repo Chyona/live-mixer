@@ -1,0 +1,246 @@
+@charset "UTF-8";
+
+:root {
+  /* 基础蓝色系 */
+  --primary-color: #356bfd;
+  --primary-light: #5c89ff;
+  --primary-dark: #1a50d9;
+  --primary-color-rgb: 53, 107, 253;
+  --primary-light-rgb: 92, 137, 255;
+  --primary-dark-rgb: 26, 80, 217;
+  --primary-color-bg: rgba(var(--primary-color-rgb), 0.08);
+  --primary-light-bg: rgba(var(--primary-light-rgb), 0.06);
+
+  /* 辅助蓝色系 */
+  --secondary-color: #3498db;
+  --secondary-light: #5dade2;
+  --secondary-dark: #1a6ba3;
+  --secondary-color-rgb: 52, 152, 219;
+  --secondary-light-rgb: 93, 173, 226;
+  --secondary-dark-rgb: 26, 107, 163;
+
+  /* 淡雅辅助蓝色系 */
+  --pastel-color: #7bc1e8;
+  --pastel-light: #a8d5f0;
+  --pastel-dark: #4a9ac9;
+  --pastel-color-rgb: 123, 193, 232;
+  --pastel-light-rgb: 168, 213, 240;
+  --pastel-dark-rgb: 74, 154, 201;
+
+  /* 深蓝色辅助色 */
+  --deep-color: #1c3b7a;
+  --deep-light: #2a4e9c;
+  --deep-dark: #0f2958;
+  --deep-color-rgb: 28, 59, 122;
+  --deep-light-rgb: 42, 78, 156;
+  --deep-dark-rgb: 15, 41, 88;
+
+  /* 橙色暖色辅助色 */
+  --warm-color: #ff9e6d;
+  --warm-light: #ffb895;
+  --warm-dark: #e67a3e;
+  --warm-color-rgb: 255, 158, 109;
+  --warm-light-rgb: 255, 184, 149;
+  --warm-dark-rgb: 230, 122, 62;
+
+  /* 紫色暖色系 */
+  --purple-color: #8e44ad;
+  --purple-light: #9b59b6;
+  --purple-dark: #6c3483;
+  --purple-color-rgb: 142, 68, 173;
+  --purple-light-rgb: 155, 89, 182;
+  --purple-dark-rgb: 108, 52, 131;
+
+  /* 功能色（与 Ant Design token 对齐） */
+  --color-info: #1677ff;
+  --color-info-dark: #2f54eb;
+  --color-info-bg: #eef3ff;
+  --color-success: #52c41a;
+  --color-success-dark: #389e0d;
+  --color-warning: #faad14;
+  --color-warning-dark: #d48806;
+  --color-danger: #ff4d4f;
+  --color-danger-dark: #cf1322;
+  --color-purple: #722ed1;
+  --color-purple-bg: #f6f0ff;
+  --color-orange: #fa8c16;
+  --color-highlight-bg: #ffe58f;
+
+  --info-color-rgb: 22, 119, 255;
+  --success-color-rgb: 82, 196, 26;
+  --warning-color-rgb: 250, 173, 20;
+  --danger-color-rgb: 255, 77, 79;
+  --purple-color-rgb: 114, 46, 209;
+
+  --color-info-bg-subtle: rgba(var(--info-color-rgb), 0.04);
+  --color-info-border-subtle: rgba(var(--info-color-rgb), 0.35);
+  --color-info-border-strong: rgba(var(--info-color-rgb), 0.45);
+  --color-info-bg-soft: rgba(var(--info-color-rgb), 0.18);
+
+  --color-primary-bg-subtle: rgba(var(--primary-color-rgb), 0.04);
+  --color-primary-bg-muted: rgba(var(--primary-color-rgb), 0.08);
+  --color-primary-bg-soft: rgba(var(--primary-color-rgb), 0.18);
+  --color-primary-border-subtle: rgba(var(--primary-color-rgb), 0.35);
+  --color-primary-border-strong: rgba(var(--primary-color-rgb), 0.45);
+
+  --color-danger-bg: rgba(var(--danger-color-rgb), 0.08);
+  --color-danger-bg-hover: rgba(var(--danger-color-rgb), 0.1);
+  --color-danger-border: rgba(var(--danger-color-rgb), 0.2);
+
+  --color-success-bg: rgba(var(--success-color-rgb), 0.08);
+
+  /* 兼容旧变量名 */
+  --success-color: var(--color-success);
+  --warning-color: var(--color-warning);
+  --danger-color: var(--color-danger);
+
+  /* 中性色 */
+  --light-color: #f5f6fa;
+  --content-bg: var(--light-color);
+  --surface-card: #fff;
+  --surface-card-muted: #f8faff;
+  --surface-item-bg: #f8f9fb;
+  --surface-item-border: #eef0f4;
+  --surface-item-active-bg: #f4f5f7;
+  --surface-item-reading-bg: rgba(var(--primary-color-rgb), 0.06);
+  --surface-item-reading-text-bg: rgba(var(--primary-color-rgb), 0.15);
+  --surface-item-highlight-bg: #eceef2;
+  --surface-item-active-border: rgba(var(--primary-color-rgb), 0.36);
+  --dark-color: #2c3e50;
+  --gray-color: #95a5a6;
+
+  /* 渐变方案 */
+  --gradient-primary: linear-gradient(135deg, var(--primary-light) 0%, var(--primary-color) 100%);
+  --gradient-secondary: linear-gradient(
+    135deg,
+    var(--secondary-light) 0%,
+    var(--primary-color) 100%
+  );
+  --gradient-dark: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+  --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  --gradient-danger: linear-gradient(135deg, var(--color-danger) 0%, var(--color-danger-dark) 100%);
+
+  --boxshow-warning: 0 4px 12px rgba(245, 158, 11, 0.3);
+  --boxshow-success: 0 4px 12px rgba(16, 185, 129, 0.3);
+  --boxshow-danger: 0 4px 12px rgba(var(--danger-color-rgb), 0.3);
+  --boxshow-dark: 0 4px 12px rgba(59, 130, 246, 0.3);
+
+  /* 淡色渐变背景 */
+  --gradient-light-1: linear-gradient(135deg, #f0f7ff, #e6f0ff);
+  --gradient-light-2: linear-gradient(135deg, #e1f0fa, #d5e9ff);
+  --gradient-light-3: linear-gradient(135deg, #c5e3f5, #a8d5f0);
+  --gradient-light-4: linear-gradient(135deg, rgba(167, 211, 240, 0.6), rgba(200, 230, 255, 0.8));
+
+  /* 深色渐变背景 */
+  --gradient-dark-1: linear-gradient(135deg, var(--deep-color), var(--deep-dark));
+  --gradient-dark-2: linear-gradient(135deg, var(--primary-dark), var(--deep-color));
+  --gradient-dark-3: linear-gradient(135deg, var(--secondary-dark), var(--deep-dark));
+  --gradient-dark-4: linear-gradient(135deg, var(--deep-light), var(--deep-color));
+
+  /* 混合渐变背景 */
+  --gradient-mix-1: linear-gradient(135deg, var(--primary-light), var(--pastel-color));
+  --gradient-mix-2: linear-gradient(135deg, var(--secondary-light), var(--pastel-light));
+  --gradient-mix-3: linear-gradient(135deg, var(--pastel-color), var(--warm-light));
+  --gradient-mix-4: linear-gradient(135deg, var(--deep-light), var(--warm-color));
+
+  /* 按钮渐变 */
+  --gradient-btn-primary: linear-gradient(
+    135deg,
+    var(--primary-dark) 0%,
+    var(--primary-color) 50%,
+    var(--secondary-light) 100%
+  );
+  --gradient-btn-hover: linear-gradient(
+    135deg,
+    var(--primary-dark) 0%,
+    var(--primary-color) 50%,
+    var(--secondary-color) 100%
+  );
+
+  /* 左menu头部渐变 */
+  --gradient-menu-header: linear-gradient(135deg, var(--primary-light), var(--primary-color));
+
+  /* 卡片头部渐变 */
+  --gradient-card-header: var(--gradient-primary);
+
+  /* 文字色 */
+  --text-primary: #2c3e50;
+  --text-secondary: #34495e;
+  --text-gray: #9c9c9c;
+  --text-light: #ecf0f1;
+
+  /* 阴影效果 */
+  --shadow-sm: 0 2px 8px rgba(var(--primary-color-rgb), 0.15);
+  --shadow-md: 0 4px 12px rgba(var(--primary-color-rgb), 0.2);
+  --shadow-lg: 0 8px 24px rgba(var(--primary-color-rgb), 0.25);
+  --surface-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.02), 0 4px 12px -2px rgba(0, 0, 0, 0.04);
+  --surface-divider: rgba(0, 0, 0, 0.04);
+
+  /* 滚动条（中性灰） */
+  --scrollbar-width: 8px;
+  --scrollbar-border-radius: 4px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #c8ced8;
+  --scrollbar-thumb-hover: #aeb6c2;
+  --scrollbar-thumb-active: #98a2b3;
+
+  /* 边框与圆角 */
+  --border-color: #e0e7ff;
+  --border-radius: 16px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* 过渡效果 */
+  --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+
+  --active-bg-color: rgba(var(--primary-color-rgb), 0.1);
+  --hover-bg-color: rgba(var(--primary-color-rgb), 0.05);
+
+  --sidebar-background: var(--surface-card);
+  --sidebar-border-color: var(--border-color);
+  --sidebar-shadow: 4px 0 16px -4px rgba(0, 0, 0, 0.02);
+  --sidebar-nav-text: var(--text-primary);
+  --sidebar-nav-text-secondary: var(--text-gray);
+  --sidebar-nav-hover-bg: var(--hover-bg-color);
+  --sidebar-nav-active-bg: var(--primary-color-bg);
+  --sidebar-nav-active-text: var(--primary-color);
+  --sidebar-nav-font-size: 14px;
+  --sidebar-avatar-bg: var(--primary-color-bg);
+  --sidebar-avatar-icon: var(--primary-color);
+  --sidebar-user-card-bg: var(--surface-card-muted);
+  --sidebar-width: 248px;
+  --sidebar-collapsed-width: 72px;
+  --content-padding: 16px;
+  --app-min-width: 1280px;
+  --app-min-height: 720px;
+
+  --bs-header-height: 54px;
+
+  --bs-body-font-weight: 400;
+  --bs-body-font-size: 14px;
+  --bs-body-font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --bs-body-line-height: 1.5;
+  --bs-body-color: #212529;
+  --bs-body-bg: #fff;
+  --bs-body-text-align: left;
+  --bs-border-width: 1px;
+  --bs-border-style: solid;
+  --bs-border-color: #dee2e6;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (max-width: 992px) {
+  :root {
+    --sidebar-width: 100%;
+    --content-padding: 8px;
+  }
+}

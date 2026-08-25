@@ -1,0 +1,16 @@
+.zt-header {
+  background: rgba(255, 255, 255, 0.95) !important;
+  box-shadow: 0 2px 15px rgba(126, 87, 194, 0.1);
+  backdrop-filter: blur(10px);
+  position: fixed;
+  z-index: 100;
+  width: 100%;
+
+  .brand-logo {
+    color: var(--primary-color);
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    font-size: 1.4rem;
+    margin: 0;
+  }
+}

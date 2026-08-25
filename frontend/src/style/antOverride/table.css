@@ -1,0 +1,9 @@
+.ant-table-wrapper .ant-table-pagination.ant-pagination {
+  margin: 16px;
+}
+
+.list-page__table-wrap .ant-table-wrapper .ant-table-pagination.ant-pagination {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+}

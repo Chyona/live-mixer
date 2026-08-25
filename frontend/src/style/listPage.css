@@ -1,0 +1,587 @@
+.list-page {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  padding: var(--content-padding);
+  overflow: hidden;
+}
+
+.list-page__header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.list-page__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.list-page__desc {
+  margin: 8px 0 0;
+  color: var(--text-gray);
+  font-size: 14px;
+}
+
+.list-page__content-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-card-shadow);
+  --list-page-card-padding: 16px;
+}
+
+.list-page__toolbar {
+  flex-shrink: 0;
+  padding: var(--list-page-card-padding);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: inset 0 -1px 0 var(--surface-divider);
+  margin-bottom: var(--list-page-card-padding);
+}
+
+.list-page__toolbar-search {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.list-page__toolbar-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.list-page__toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.list-page__toolbar-extra {
+  flex-shrink: 0;
+}
+
+.list-page__toolbar-extra .ant-btn {
+  min-width: 128px;
+  height: 40px;
+  padding-inline: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: var(--radius-md, 8px);
+}
+
+.list-page__toolbar-extra .ant-btn .ant-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.list-page__refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  color: var(--text-secondary);
+  padding-inline: 12px;
+}
+
+.list-page__refresh-btn:hover {
+  color: var(--primary-color);
+  background: var(--hover-bg-color);
+}
+
+.list-page__search-primary {
+  flex: 1 1 360px;
+  min-width: 280px;
+  max-width: 640px;
+}
+
+.list-page__search-primary.ant-input-affix-wrapper,
+.list-page__search-primary .ant-input-affix-wrapper {
+  height: 40px;
+  padding-inline: 14px;
+  font-size: 14px;
+  border-radius: var(--radius-md, 8px);
+}
+
+.list-page__search-primary .ant-input {
+  font-size: 14px;
+}
+
+.list-page__filter-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.list-page__filter-inline-label {
+  font-size: 14px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.list-page__filter-inline-label::after {
+  content: '：';
+}
+
+.list-page__filter-inline .ant-select {
+  min-width: 132px;
+}
+
+.list-page__advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  color: var(--text-secondary);
+  padding-inline: 12px;
+}
+
+.list-page__advanced-toggle:hover {
+  color: var(--primary-color);
+  background: var(--hover-bg-color);
+}
+
+.list-page__advanced-toggle_active,
+.list-page__advanced-toggle_active:hover {
+  color: var(--primary-color);
+  background: var(--primary-color-bg);
+}
+
+.list-page__advanced-chevron {
+  transition: transform 0.2s ease;
+}
+
+.list-page__advanced-chevron_open {
+  transform: rotate(180deg);
+}
+
+.list-page__toolbar-advanced {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 12px;
+  border-top: none;
+  box-shadow: inset 0 1px 0 var(--surface-divider);
+}
+
+.list-page__filter-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 280px;
+  min-width: 260px;
+  max-width: 420px;
+}
+
+.list-page__filter-label {
+  flex-shrink: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.list-page__filter-label::after {
+  content: '：';
+}
+
+.list-page__filter-field .ant-picker,
+.list-page__filter-field .ant-input,
+.list-page__filter-field .ant-select {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.list-page__date-picker {
+  min-width: 260px;
+}
+
+.list-page__search-input {
+  flex: 1 1 240px;
+  min-width: 220px;
+  max-width: 420px;
+}
+
+.list-page__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 var(--list-page-card-padding, 16px) var(--list-page-card-padding, 16px);
+}
+
+.list-page__table-wrap {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.list-page__table-wrap > .ant-table-wrapper {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.list-page__table-wrap .ant-spin-nested-loading,
+.list-page__table-wrap .ant-spin-container {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.list-page__table-wrap .ant-spin-container > .ant-table {
+  position: relative;
+  z-index: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.list-page__table {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.list-page__table-wrap .list-page__table {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.list-page__table-wrap .ant-table {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 0 !important;
+}
+
+.list-page__table-wrap .ant-table-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 0 !important;
+  overflow: hidden;
+  /* 固定列 sticky 不得画出表格区域盖住分页 */
+  clip-path: inset(0);
+}
+
+.list-page__table-wrap .ant-table-header,
+.list-page__table-wrap .ant-table-body {
+  border-radius: 0 !important;
+}
+
+.list-page__table-wrap .ant-table-body {
+  position: relative;
+  z-index: 0;
+  overflow: auto !important;
+}
+
+.list-page__table-wrap--scrollable .ant-table-body {
+  scrollbar-gutter: stable;
+}
+
+.list-page__table-wrap .ant-table-thead > tr > th:first-child,
+.list-page__table-wrap .ant-table-header .ant-table-thead > tr > th:first-child {
+  border-start-start-radius: 0 !important;
+  border-top-left-radius: 0 !important;
+}
+
+.list-page__table-wrap .ant-table-thead > tr > th:last-child,
+.list-page__table-wrap .ant-table-header .ant-table-thead > tr > th:last-child {
+  border-start-end-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}
+
+.list-page__table-wrap .ant-table-pagination {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 0 0;
+  border-top: none;
+  background: var(--surface-card);
+  box-shadow: inset 0 1px 0 var(--surface-divider);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  position: relative;
+  /* 高于固定操作列，避免被遮挡 */
+  z-index: 5;
+  isolation: isolate;
+}
+
+.list-page__table-wrap .ant-table-pagination .ant-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  row-gap: 8px;
+  column-gap: 8px;
+  margin: 0;
+  max-width: 100%;
+}
+
+.list-page__table-wrap--compact-pagination .ant-table-pagination .ant-pagination-options,
+.list-page__table-wrap--compact-pagination
+  .ant-table-pagination
+  .ant-pagination-options-size-changer {
+  display: none !important;
+}
+
+.list-page__table-wrap--compact-pagination .ant-table-pagination .ant-pagination {
+  justify-content: center;
+}
+
+.list-page__table-wrap--compact-pagination .ant-table-pagination .ant-pagination-total-text {
+  flex: 1 1 100%;
+  margin-inline-end: 0 !important;
+  text-align: center;
+}
+
+/* 未溢出时不启用 scroll.y，隐藏 Ant Table 预留的滚动条占位 */
+.list-page__table-wrap:not(.list-page__table-wrap--scrollable) .ant-table-cell-scrollbar {
+  display: none !important;
+}
+
+.list-page__table-wrap:not(.list-page__table-wrap--scrollable) .ant-table-body {
+  overflow-y: hidden !important;
+}
+
+.list-page__table .ant-table {
+  background: transparent;
+}
+
+.list-page__table .ant-table-thead > tr > th,
+.list-page__table .ant-table-header .ant-table-thead > tr > th {
+  background: var(--surface-card-muted);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.list-page__table_tasks .ant-table-thead > tr > th,
+.list-page__table_tasks .ant-table-header .ant-table-thead > tr > th {
+  background: rgba(var(--primary-color-rgb), 0.04);
+  color: var(--text-gray);
+}
+
+.list-page__table-wrap .ant-table-tbody > tr.ant-table-placeholder > td {
+  padding: 0;
+  border-bottom: none;
+  vertical-align: middle;
+}
+
+.list-page__table-wrap--scrollable
+  .ant-table-body
+  .ant-table-tbody
+  > tr.ant-table-placeholder
+  > td {
+  height: var(--list-table-body-height, 320px);
+}
+
+.list-page__table-wrap--empty .ant-spin-container > .ant-table,
+.list-page__table-wrap--empty .ant-table-container,
+.list-page__table-wrap--empty .ant-table-content,
+.list-page__table-wrap--empty .ant-table-content > table {
+  height: 100%;
+}
+
+.list-page__table-wrap--empty .ant-table-tbody > tr.ant-table-placeholder > td {
+  height: 100%;
+}
+
+.list-page__table-wrap--empty .list-table-empty {
+  min-height: 100%;
+}
+
+.list-page__table-wrap .ant-table-tbody > tr.ant-table-placeholder:hover > td {
+  background: transparent;
+}
+
+.list-page__cell-ellipsis {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-page__action-btn {
+  padding-inline: 0;
+  gap: 4px;
+}
+
+.list-page__action-btn .ant-btn-icon {
+  margin-inline-end: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.list-page__cell-link {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary-color);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.list-page__cell-link:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.list-page__cell-link:hover .list-page__cell-ellipsis {
+  text-decoration: underline;
+}
+
+.list-page__panel {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.list-page__panel.list-page__table-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.list-page__panel .page-loading {
+  flex: 1;
+  min-height: 0;
+}
+
+.disabled-action-wrap {
+  display: inline-flex;
+  cursor: not-allowed;
+}
+
+.page-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 路由 Suspense / 鉴权等整页加载：在可视区域内垂直居中 */
+.page-loading_viewport {
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0;
+}
+
+@media (max-width: 992px) {
+  .list-page__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .list-page__toolbar-main {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .list-page__toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .list-page__refresh-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .list-page__toolbar-extra {
+    width: 100%;
+  }
+
+  .list-page__toolbar-extra .ant-btn {
+    width: 100%;
+  }
+
+  .list-page__search-primary,
+  .list-page__filter-field {
+    width: 100%;
+    max-width: none;
+  }
+
+  .list-page__table-wrap .ant-table-pagination {
+    padding-top: 10px;
+  }
+
+  .list-page__table-wrap .ant-table-pagination .ant-pagination {
+    justify-content: center;
+    column-gap: 4px;
+  }
+
+  .list-page__table-wrap .ant-table-pagination .ant-pagination-total-text {
+    flex: 1 1 100%;
+    margin-inline-end: 0 !important;
+    text-align: center;
+  }
+
+  .list-page__table-wrap .ant-table-pagination .ant-pagination-options {
+    flex: 1 1 100%;
+    margin-inline-start: 0 !important;
+    text-align: center;
+  }
+
+  .list-page__table-wrap .ant-table-pagination .ant-pagination-options-size-changer {
+    margin-inline-start: 0 !important;
+  }
+}

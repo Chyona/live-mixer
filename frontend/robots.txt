@@ -1,0 +1,35 @@
+# ===== 允许以下 AI 与搜索引擎爬虫访问全站 =====
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: bingbot
+Allow: /
+
+# ===== 禁止其他未明确列出的爬虫（可选）=====
+User-agent: *
+Disallow: /search/
+Disallow: /*?s=
+
+# ===== 站点地图 =====
+Sitemap: https://jcaigc.cn/sitemap.xml

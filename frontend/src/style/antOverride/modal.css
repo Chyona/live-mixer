@@ -1,0 +1,114 @@
+.ant-modal .ant-modal-header {
+  margin-bottom: 0;
+}
+
+.ant-modal .ant-modal-content {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* CRUD / 后台弹窗：安静白底 header（加 className="noanimation-modal"） */
+.ant-modal.noanimation-modal .ant-modal-header {
+  margin: 0;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-card);
+}
+
+.ant-modal.noanimation-modal .ant-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ant-modal.noanimation-modal .ant-modal-close {
+  top: 12px;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.45));
+}
+
+.ant-modal.noanimation-modal .ant-modal-content {
+  padding: 0;
+  background: var(--surface-card);
+}
+
+.ant-modal.noanimation-modal .ant-modal-body {
+  padding: 16px 20px;
+}
+
+.ant-modal.noanimation-modal .ant-modal-footer {
+  margin-top: 0;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-card);
+}
+
+.ant-modal.noanimation-modal .ant-modal-footer .ant-btn {
+  min-width: 96px;
+  height: 40px;
+  padding-inline: 22px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: var(--radius-md, 8px);
+}
+
+.ant-modal.noanimation-modal .ant-modal-footer .ant-btn + .ant-btn {
+  margin-inline-start: 12px;
+}
+
+/* 渐变 header 弹窗：content 用 header 底色，避免圆角处露出白边 */
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-content {
+  padding: 0;
+  background: var(--gradient-card-header);
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-header {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-body,
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-footer {
+  background: var(--surface-card);
+}
+
+/* footer 默认 margin-top 会在 body 与 footer 之间露出 content 渐变底色 */
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-body + .ant-modal-footer {
+  margin-top: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm)
+  .ant-modal-content
+  > .ant-modal-body:last-child {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-footer {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.ant-modal .ant-modal-content .ant-modal-close {
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+
+.ant-modal .ant-modal-content .ant-modal-close:hover {
+  transform: rotate(90deg);
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-content .ant-modal-header {
+  padding: 20px 24px;
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-content .ant-modal-body {
+  padding: 16px 24px;
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm)
+  .ant-modal-content
+  .ant-modal-body:has(+ .ant-modal-footer) {
+  padding-bottom: 8px;
+}
+
+.ant-modal:not(.noanimation-modal):not(.ant-modal-confirm) .ant-modal-content .ant-modal-footer {
+  padding: 12px 24px 20px;
+}
