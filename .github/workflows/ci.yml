@@ -6,8 +6,8 @@ on:
       - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
 
 jobs:
-  build:
-    name: Build And Push Docker Image
+  build-backend:
+    name: Build And Push Backend Image
     runs-on: ubuntu-latest
 
     steps:
@@ -43,5 +43,46 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: type=gha,scope=backend
+        cache-to: type=gha,scope=backend,mode=max
+
+  build-frontend:
+    name: Build Frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+    - name: 准备代码
+      uses: actions/checkout@v4
+
+    - name: 安装 pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 11.10.0
+
+    - name: 安装 Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: frontend/pnpm-lock.yaml
+
+    - name: 安装依赖
+      run: pnpm install --frozen-lockfile
+
+    - name: 构建前端
+      run: pnpm build
+
+    - name: 打包 dist.tar.gz
+      run: tar -czf dist.tar.gz -C dist .
+
+    - name: 上传 Actions Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-dist-${{ github.ref_name }}
+        path: frontend/dist.tar.gz
+        if-no-files-found: error
