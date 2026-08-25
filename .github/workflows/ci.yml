@@ -6,8 +6,49 @@ on:
       - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
 
 jobs:
-  build-backend:
-    name: Build And Push Backend Image
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+    - name: 准备代码
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 检测 backend / frontend 是否有变更
+      id: filter
+      run: |
+        CURRENT="${GITHUB_REF_NAME}"
+        PREV="$(git tag -l 'v*' --sort=-v:refname | awk -v cur="$CURRENT" '$0 != cur { print; exit }')"
+
+        detect() {
+          local name="$1"
+          local path="$2"
+          if [ -z "$PREV" ]; then
+            echo "无上一版本 tag，将打包 ${name}"
+            echo "${name}=true" >> "$GITHUB_OUTPUT"
+            return
+          fi
+          echo "对比范围: $PREV -> $CURRENT (${path})"
+          if git diff --quiet "$PREV" "$CURRENT" -- "$path"; then
+            echo "${path} 无变更，跳过打包"
+            echo "${name}=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "${path} 有变更，需要打包"
+            echo "${name}=true" >> "$GITHUB_OUTPUT"
+          fi
+        }
+
+        detect frontend frontend/
+        detect backend backend/
+
+  backend:
+    name: Build And Push Docker Image
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -43,11 +84,11 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha,scope=backend
-        cache-to: type=gha,scope=backend,mode=max
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
-  build-frontend:
-    name: Build Frontend
+  frontend:
+    name: Build Frontend Dist
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -62,7 +103,7 @@ jobs:
     - name: 安装 pnpm
       uses: pnpm/action-setup@v4
       with:
-        version: 11.10.0
+        version: 10.12.4
 
     - name: 安装 Node.js
       uses: actions/setup-node@v4
@@ -73,6 +114,8 @@ jobs:
 
     - name: 安装依赖
       run: pnpm install --frozen-lockfile
+      env:
+        HUSKY: '0'
 
     - name: 构建前端
       run: pnpm build
