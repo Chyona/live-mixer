@@ -1,13 +1,19 @@
 # 隐私与环境相关
 docker/.env
 
-# 运行时产物
+# 运行时产物（仅忽略仓库根目录与 backend/ 下的编译二进制，勿匹配 cmd/webserver、cmd/envinit 源码目录）
 logs/
 temp/
 *.log
 bin/
-webserver
-envinit
+/webserver
+/webserver.exe
+/envinit
+/envinit.exe
+/backend/webserver
+/backend/webserver.exe
+/backend/envinit
+/backend/envinit.exe
 
 # IDE
 .idea/
@@ -15,9 +21,6 @@ envinit
 /internal/config/config.yaml
 /docs/swagger.yaml
 /docs/swagger.json
-/envinit.exe
-/webserver.exe
-/envinit.exe
 /live_asr.json
 /docs/默认提示词.txt
 /docker/html
