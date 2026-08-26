@@ -14,6 +14,16 @@ import { appConfig } from '~/utils/config';
 
 dayjs.locale('zh-cn');
 
+/** 开发环境屏蔽 antd 弃用 API 控制台警告（不影响功能，升级 antd 6 前再改对应 props） */
+if (import.meta.env.DEV) {
+  const nativeWarn = console.warn.bind(console);
+  console.warn = (...args: unknown[]) => {
+    const first = args[0];
+    if (typeof first === 'string' && first.includes('[antd:')) return;
+    nativeWarn(...args);
+  };
+}
+
 if (appConfig.enableGtm && appConfig.gtmId) {
   initGTM(appConfig.gtmId);
 }
