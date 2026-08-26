@@ -413,7 +413,6 @@ const SourceVideosPage = () => {
       {
         title: '源视频名称',
         dataIndex: 'name',
-        width: 240,
         key: 'name',
         ellipsis: true,
         render: (name: string, record) => (
