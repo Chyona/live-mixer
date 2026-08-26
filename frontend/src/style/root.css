@@ -244,3 +244,12 @@
     --content-padding: 8px;
   }
 }
+
+/** 列表/文案搜索关键词高亮（源视频列表、切片编辑器文案分段等共用） */
+.list-keyword-hit {
+  color: var(--color-danger, #ff4d4f);
+  background: rgba(255, 77, 79, 0.12);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
+}

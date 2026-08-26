@@ -2,6 +2,7 @@ import { Flex, Button, Result } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useAppSEO } from '~/hooks/useAppSEO';
 import { DEFAULT_APP_PATH } from '~/routes/const';
+import { appendDebugAsrKeyToPath } from '~/utils/asrParagraphsKey';
 
 const NotFoundPage = () => {
   const navigate = useNavigate();
@@ -21,7 +22,7 @@ const NotFoundPage = () => {
         title="404"
         subTitle="抱歉，你访问的页面不存在。"
         extra={
-          <Button type="primary" onClick={() => navigate(DEFAULT_APP_PATH)}>
+          <Button type="primary" onClick={() => navigate(appendDebugAsrKeyToPath(DEFAULT_APP_PATH))}>
             返回
           </Button>
         }

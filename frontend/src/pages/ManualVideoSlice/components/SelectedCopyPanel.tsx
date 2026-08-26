@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { Checkbox } from 'antd';
 import {
   LuArrowLeft,
-  LuCopy,
   LuGripVertical,
   LuMinus,
   LuPlay,
@@ -12,6 +11,7 @@ import {
   LuTextSelect,
   LuTrash2,
 } from 'react-icons/lu';
+import { CopyIcon } from '~/components/CopyIcon';
 import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from '../types';
 import {
   formatPadSeconds,
@@ -56,10 +56,16 @@ function measureAiBlockContentHeight(block: HTMLElement): number {
 
 const AI_BLOCK_MIN_HEIGHT = 72;
 const AI_BLOCK_MAX_HEIGHT_RATIO = 0.65;
+/** 拖拽靠近列表上下缘时触发自动滚动的区域高度（px） */
+const DRAG_AUTO_SCROLL_EDGE_PX = 48;
+/** 拖拽自动滚动最大速度（px / frame） */
+const DRAG_AUTO_SCROLL_MAX_SPEED_PX = 18;
 
 function getReorderToIndex(target: DropMarker, length: number) {
   if (target.placement === 'before') return target.index;
-  return Math.min(target.index + 1, length - 1);
+  // 最后一项之后：插入到数组末尾（toIndex === length）
+  if (target.index >= length - 1) return length;
+  return target.index + 1;
 }
 
 function wouldReorder(fromIndex: number, target: DropMarker, length: number) {
@@ -78,8 +84,8 @@ interface SelectedCopyPanelProps {
   aiSegments?: AiSegment[];
   currentTime?: number;
   activeSegmentId: string | null;
-  speakerIds: string[];
-  maxTotalDuration?: number;
+  speakers: string[];
+  maxTotalDuration: number;
   videoDuration: number;
   submitting: boolean;
   enableCaptions: boolean;
@@ -113,7 +119,7 @@ const SelectedCopyPanel = ({
   aiSegments = [],
   currentTime = 0,
   activeSegmentId,
-  speakerIds,
+  speakers,
   maxTotalDuration,
   videoDuration,
   submitting,
@@ -140,7 +146,6 @@ const SelectedCopyPanel = ({
   const [dropMarker, setDropMarker] = useState<DropMarker | null>(null);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
   const [aiPanelHeight, setAiPanelHeight] = useState<number | null>(null);
-  const [aiListOverflow, setAiListOverflow] = useState(false);
   const dragIndexRef = useRef<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const aiBlockRef = useRef<HTMLDivElement>(null);
@@ -148,12 +153,15 @@ const SelectedCopyPanel = ({
   const pointerDraggingRef = useRef(false);
   const suppressItemClickRef = useRef(false);
   const textSelectionRef = useRef<{ segmentId: string; start: number; end: number } | null>(null);
+  const dragPointerYRef = useRef(0);
+  const dragAutoScrollRafRef = useRef(0);
+  const segmentsLengthRef = useRef(segments.length);
+  segmentsLengthRef.current = segments.length;
   const totalDuration = getTotalSelectedDuration(segments);
-  const isOverLimit =
-    Boolean(maxTotalDuration) && totalDuration > (maxTotalDuration ?? 0);
+  const isOverLimit = totalDuration > maxTotalDuration;
   const canDragSort = !readOnly && segments.length > 1;
   const hasSegments = segments.length > 0;
-  const showAiResizeHandle = aiListOverflow || aiPanelHeight != null;
+  const showAiResizeHandle = aiSegments.length > 0;
   const activeAiSegmentId = useMemo(() => {
     if (!aiSegments.length) return null;
     return (
@@ -164,33 +172,24 @@ const SelectedCopyPanel = ({
 
   useEffect(() => {
     if (!aiSegments.length) {
-      setAiListOverflow(false);
       setAiPanelHeight(null);
-      return;
     }
+  }, [aiSegments]);
 
-    const block = aiBlockRef.current;
-    const list = block?.querySelector<HTMLElement>('.slice-editor-ai-block-list');
-    if (!block || !list) return;
-
-    const checkOverflow = () => {
-      setAiListOverflow(list.scrollHeight > list.clientHeight + 1);
+  useEffect(() => {
+    return () => {
+      if (dragAutoScrollRafRef.current) {
+        cancelAnimationFrame(dragAutoScrollRafRef.current);
+      }
     };
+  }, []);
 
-    checkOverflow();
-    const observer = new ResizeObserver(checkOverflow);
-    observer.observe(list);
-    observer.observe(block);
-    return () => observer.disconnect();
-  }, [aiSegments, aiPanelHeight]);
-
-  const resetDragState = () => {
-    pointerDraggingRef.current = false;
-    dragIndexRef.current = null;
-    setDragIndex(null);
-    setDropMarker(null);
-    setDragGhost(null);
-  };
+  const stopDragAutoScroll = useCallback(() => {
+    if (dragAutoScrollRafRef.current) {
+      cancelAnimationFrame(dragAutoScrollRafRef.current);
+      dragAutoScrollRafRef.current = 0;
+    }
+  }, []);
 
   const getDropTarget = useCallback((clientY: number): DropMarker | null => {
     const items = listRef.current?.querySelectorAll<HTMLElement>('.slice-editor-copy-item');
@@ -209,6 +208,70 @@ const SelectedCopyPanel = ({
 
     return { index: lastIndex, placement: 'after' };
   }, []);
+
+  const updateDropMarkerAtPointer = useCallback(
+    (clientY: number) => {
+      const target = getDropTarget(clientY);
+      if (!target) return;
+
+      setDropMarker(target);
+      const fromIndex = dragIndexRef.current;
+      if (fromIndex != null && wouldReorder(fromIndex, target, segmentsLengthRef.current)) {
+        suppressItemClickRef.current = true;
+      }
+    },
+    [getDropTarget]
+  );
+
+  const tickDragAutoScroll = useCallback(() => {
+    const container = listRef.current;
+    if (!container || !pointerDraggingRef.current) {
+      stopDragAutoScroll();
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const pointerY = dragPointerYRef.current;
+    let delta = 0;
+
+    if (pointerY < rect.top + DRAG_AUTO_SCROLL_EDGE_PX) {
+      const distance = Math.max(0, pointerY - rect.top);
+      const intensity = 1 - distance / DRAG_AUTO_SCROLL_EDGE_PX;
+      delta = -Math.max(4, DRAG_AUTO_SCROLL_MAX_SPEED_PX * intensity);
+    } else if (pointerY > rect.bottom - DRAG_AUTO_SCROLL_EDGE_PX) {
+      const distance = Math.max(0, rect.bottom - pointerY);
+      const intensity = 1 - distance / DRAG_AUTO_SCROLL_EDGE_PX;
+      delta = Math.max(4, DRAG_AUTO_SCROLL_MAX_SPEED_PX * intensity);
+    }
+
+    if (delta === 0) {
+      stopDragAutoScroll();
+      return;
+    }
+
+    const maxScrollTop = container.scrollHeight - container.clientHeight;
+    const nextScrollTop = Math.max(0, Math.min(container.scrollTop + delta, maxScrollTop));
+    if (nextScrollTop !== container.scrollTop) {
+      container.scrollTop = nextScrollTop;
+      updateDropMarkerAtPointer(pointerY);
+    }
+
+    dragAutoScrollRafRef.current = requestAnimationFrame(tickDragAutoScroll);
+  }, [stopDragAutoScroll, updateDropMarkerAtPointer]);
+
+  const syncDragAutoScroll = useCallback(() => {
+    stopDragAutoScroll();
+    dragAutoScrollRafRef.current = requestAnimationFrame(tickDragAutoScroll);
+  }, [stopDragAutoScroll, tickDragAutoScroll]);
+
+  const resetDragState = () => {
+    stopDragAutoScroll();
+    pointerDraggingRef.current = false;
+    dragIndexRef.current = null;
+    setDragIndex(null);
+    setDropMarker(null);
+    setDragGhost(null);
+  };
 
   const finishPointerDrag = useCallback(
     (clientY: number) => {
@@ -254,17 +317,14 @@ const SelectedCopyPanel = ({
   const handleDragHandlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (!pointerDraggingRef.current || dragIndexRef.current == null) return;
 
+    dragPointerYRef.current = event.clientY;
+
     setDragGhost((prev) =>
       prev ? { ...prev, x: event.clientX, y: event.clientY } : prev
     );
 
-    const target = getDropTarget(event.clientY);
-    if (!target) return;
-
-    setDropMarker(target);
-    if (wouldReorder(dragIndexRef.current, target, segments.length)) {
-      suppressItemClickRef.current = true;
-    }
+    updateDropMarkerAtPointer(event.clientY);
+    syncDragAutoScroll();
   };
 
   const handleDragHandlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -380,9 +440,7 @@ const SelectedCopyPanel = ({
               .join(' ')}
           >
             已选 {segments.length} 段 · 总时长 {formatVideoDuration(Math.round(totalDuration))}
-            {isOverLimit && maxTotalDuration
-              ? ` · 超出 ${maxTotalDuration / 60} 分钟限制`
-              : ''}
+            {isOverLimit ? ` · 超出 ${maxTotalDuration / 60} 分钟限制` : ''}
           </span>
         </div>
 
@@ -457,7 +515,7 @@ const SelectedCopyPanel = ({
           </div>
         ) : (
           segments.map((segment, index) => {
-            const color = getSpeakerColor(segment.speakerId, speakerIds);
+            const color = getSpeakerColor(segment.speaker, speakers);
             const isActive = activeSegmentId === segment.id;
             const frontPad = isActive ? getSegmentFrontPadSeconds(segment) : 0;
             const backPad = isActive ? getSegmentBackPadSeconds(segment) : 0;
@@ -526,16 +584,22 @@ const SelectedCopyPanel = ({
                   onMouseUp={(event) => {
                     event.stopPropagation();
                     const target = event.currentTarget;
-                    requestAnimationFrame(() => {
+                    const captureSelection = () => {
                       const offsets = getTextSelectionOffsets(target);
                       textSelectionRef.current = offsets
                         ? { segmentId: segment.id, ...offsets }
                         : null;
-                      if (offsets) {
-                        onActiveSegmentChange(segment.id);
-                        onSeek(segment.start);
-                      }
-                    });
+                      return offsets;
+                    };
+                    const offsets = captureSelection();
+                    if (!offsets) {
+                      requestAnimationFrame(() => {
+                        captureSelection();
+                      });
+                      return;
+                    }
+                    onActiveSegmentChange(segment.id);
+                    onSeek(segment.start);
                   }}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -669,7 +733,7 @@ const SelectedCopyPanel = ({
                           onCopySegment(segment.id);
                         }}
                       >
-                        <LuCopy size={14} />
+                        <CopyIcon />
                         复制
                       </button>
                       <button
@@ -720,36 +784,36 @@ const SelectedCopyPanel = ({
 
       {dragGhost && draggingSegment
         ? createPortal(
-            <div
-              className="slice-editor-copy-drag-ghost"
-              style={{
-                left: dragGhost.x - dragGhost.offsetX,
-                top: dragGhost.y - dragGhost.offsetY,
-                width: dragGhost.width,
-              }}
-              aria-hidden
-            >
-              <div className="slice-editor-copy-drag-ghost-head">
-                <LuGripVertical size={14} />
-                <span className="slice-editor-copy-index">片段 {dragGhost.index + 1}</span>
-                <span
-                  className="slice-editor-speaker"
-                  style={{ color: getSpeakerColor(draggingSegment.speakerId, speakerIds) }}
-                >
-                  {draggingSegment.speakerName}
-                </span>
-                <span className="slice-editor-copy-time">
-                  {formatSliceTime(draggingSegment.start)} - {formatSliceTime(draggingSegment.end)}
-                </span>
-              </div>
-              <p className="slice-editor-copy-drag-ghost-text">
-                {draggingSegment.text.length > 72
-                  ? `${draggingSegment.text.slice(0, 72)}…`
-                  : draggingSegment.text}
-              </p>
-            </div>,
-            document.body
-          )
+          <div
+            className="slice-editor-copy-drag-ghost"
+            style={{
+              left: dragGhost.x - dragGhost.offsetX,
+              top: dragGhost.y - dragGhost.offsetY,
+              width: dragGhost.width,
+            }}
+            aria-hidden
+          >
+            <div className="slice-editor-copy-drag-ghost-head">
+              <LuGripVertical size={14} />
+              <span className="slice-editor-copy-index">片段 {dragGhost.index + 1}</span>
+              <span
+                className="slice-editor-speaker"
+                style={{ color: getSpeakerColor(draggingSegment.speaker, speakers) }}
+              >
+                {draggingSegment.speakerName}
+              </span>
+              <span className="slice-editor-copy-time">
+                {formatSliceTime(draggingSegment.start)} - {formatSliceTime(draggingSegment.end)}
+              </span>
+            </div>
+            <p className="slice-editor-copy-drag-ghost-text">
+              {draggingSegment.text.length > 72
+                ? `${draggingSegment.text.slice(0, 72)}…`
+                : draggingSegment.text}
+            </p>
+          </div>,
+          document.body
+        )
         : null}
     </div>
   );

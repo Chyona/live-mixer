@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { appendDebugAsrKeyToPath } from '~/utils/asrParagraphsKey';
 import { Button, DatePicker, Select } from 'antd';
 import type { TablePaginationConfig } from 'antd/es/table';
 import { LuVideo } from 'react-icons/lu';
@@ -157,7 +158,7 @@ const TasksPage = () => {
                   '在源视频切片页提交「AI 选片」「生成草稿」或「一键成片」后，任务进度会显示在这里',
                 tone: 'primary',
                 action: (
-                  <Link to="/source-videos">
+                  <Link to={appendDebugAsrKeyToPath('/source-videos')}>
                     <Button type="primary" icon={<LuVideo size={16} />}>
                       前往源视频管理
                     </Button>

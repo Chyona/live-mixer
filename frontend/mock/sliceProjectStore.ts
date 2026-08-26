@@ -66,7 +66,7 @@ function seedSliceProjects() {
           ? [
               {
                 id: 'seed-segment-1',
-                speakerId: 'speaker-1',
+                speaker: 'speaker-1',
                 speakerName: '主播',
                 text: 'seed segment',
                 start: 0,
@@ -77,7 +77,7 @@ function seedSliceProjects() {
             ? [
                 {
                   id: 'seed-timeline-1',
-                  speakerId: 'speaker-1',
+                  speaker: 'speaker-1',
                   speakerName: '主播',
                   text: 'timeline segment',
                   start: 10,
@@ -181,19 +181,31 @@ export function listSliceProjects() {
 
 /** 统计某源视频关联的剪辑项目数 */
 export function countSliceProjectsBySourceVideoId(sourceVideoId: string | number) {
-  const id = String(sourceVideoId);
-  return listSliceProjects().filter((item) => item.sourceVideoId === id).length;
+  return listSliceProjectsBySourceVideoId(sourceVideoId).length;
 }
 
-export function insertSliceProjectRecord(record: SliceProjectRecord) {
-  sliceProjectMap.set(record.id, record);
-  return record;
+/** 列出某源视频关联的剪辑项目 */
+export function listSliceProjectsBySourceVideoId(sourceVideoId: string | number) {
+  const id = String(sourceVideoId);
+  return listSliceProjects().filter((item) => item.sourceVideoId === id);
 }
 
 export function deleteSliceProjectRecord(projectIdOrSourceVideoId: string) {
   const project = getSliceProject(projectIdOrSourceVideoId);
   if (!project) return false;
   return sliceProjectMap.delete(project.sourceVideoId);
+}
+
+/** 删除某源视频下的全部关联剪辑项目 */
+export function deleteSliceProjectsBySourceVideoId(sourceVideoId: string | number) {
+  const projects = listSliceProjectsBySourceVideoId(sourceVideoId);
+  let deleted = 0;
+  for (const project of projects) {
+    if (sliceProjectMap.delete(project.sourceVideoId)) {
+      deleted += 1;
+    }
+  }
+  return deleted;
 }
 
 export function toPublicSliceProject(project: SliceProjectRecord) {

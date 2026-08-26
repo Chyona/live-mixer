@@ -57,6 +57,34 @@ export function resolveVideoPlayUrl(url: string): string {
   return trimmed;
 }
 
+/**
+ * 跨域视频需 anonymous 才能 canvas 截图；同源或 blob 不必设置。
+ * 设置后存储端须返回 Access-Control-Allow-Origin，否则视频将无法播放。
+ */
+export function resolveVideoCrossOrigin(
+  playUrl: string,
+  locationOrigin: string = typeof window !== 'undefined' ? window.location.origin : ''
+): '' | 'anonymous' {
+  const trimmed = playUrl.trim();
+  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+    return '';
+  }
+
+  try {
+    const resolved = new URL(trimmed, locationOrigin || 'http://localhost');
+    if (!locationOrigin || resolved.origin === locationOrigin) {
+      return '';
+    }
+    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+      return 'anonymous';
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
+}
+
 export function getVideoErrorMessage(error: MediaError | null | undefined): string {
   if (!error) {
     return '视频加载失败，请检查播放地址是否有效';

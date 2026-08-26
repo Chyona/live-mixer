@@ -8,10 +8,19 @@ import type {
 } from './types';
 import { speakerColors } from '~/style/semanticColors';
 
+export {
+  findActiveSegment,
+  flattenTranscriptSegments,
+  getAdjacentSentenceSeekTime,
+  canSeekAdjacentSentence,
+  captureVideoScreenshot,
+  type FlatTranscriptSegment,
+} from '~/utils/videoPlayerTools';
+
 export const SPEAKER_COLORS = [...speakerColors];
 
-export function getSpeakerColor(speakerId: string, speakerIds: string[]) {
-  const index = speakerIds.indexOf(speakerId);
+export function getSpeakerColor(speaker: string, speakers: string[]) {
+  const index = speakers.indexOf(speaker);
   return SPEAKER_COLORS[index >= 0 ? index % SPEAKER_COLORS.length : 0];
 }
 
@@ -57,6 +66,104 @@ export function getParagraphRange(paragraph: TranscriptParagraph) {
  * 按字符区间切出对应 words。
  * 传入 sourceText 时按完整原文对齐（words 常不含标点）；否则退回「words 顺序拼接」假设。
  */
+function findWordCharIndex(sourceText: string, wordText: string, fromIndex: number): number {
+  if (!wordText) return -1;
+
+  let scanFrom = Math.max(0, fromIndex);
+  while (scanFrom < sourceText.length) {
+    if (sourceText.startsWith(wordText, scanFrom)) return scanFrom;
+
+    const found = sourceText.indexOf(wordText, scanFrom);
+    if (found >= 0) return found;
+
+    const nextChar = sourceText[scanFrom];
+    if (nextChar && /\s/.test(nextChar)) {
+      scanFrom += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return -1;
+}
+
+function collapseSpaces(text: string) {
+  return text.replace(/\s+/g, '');
+}
+
+/** 纯空白 token（ASR 占位，不参与时间计算） */
+export function isWhitespaceOnlyWordText(text: string): boolean {
+  return text.length > 0 && [...text].every((ch) => /\s/u.test(ch));
+}
+
+/** 字级时间是否有效（后台占位常用 -1） */
+export function hasValidWordTiming(start: number, end: number): boolean {
+  return Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= 0;
+}
+
+/** 参与选片/跟读/子句计时的字词（排除空白占位与无效时间） */
+export function isTimingTranscriptWord(word: TranscriptWord): boolean {
+  return hasValidWordTiming(word.start, word.end) && !isWhitespaceOnlyWordText(word.text);
+}
+
+/** 选区是否仅含标点（不含空格与可发音字符；标点无字级时间） */
+function isPunctuationOnlySelection(text: string): boolean {
+  if (!text) return false;
+  return [...text].every((ch) => /\p{P}/u.test(ch));
+}
+
+/** 选区是否含可发音字符（排除仅空格/标点，左侧拖选不应加入文案预览） */
+function hasSpeakableCopyText(text: string): boolean {
+  return [...text].some((ch) => !/\s/u.test(ch) && !/\p{P}/u.test(ch));
+}
+
+/** 部分删除后丢弃仅含标点的首尾片段（标点无 ASR 字级时间，不应单独成段） */
+function dropPunctuationOnlySplitPieces(beforeText: string, afterText: string) {
+  return {
+    before: isPunctuationOnlySelection(beforeText) ? '' : beforeText,
+    after: isPunctuationOnlySelection(afterText) ? '' : afterText,
+  };
+}
+
+/** 在段落原文中定位选段文案（兼容 ASR 文本与选段文本的空格差异） */
+function findAllSegmentTextStarts(paragraphText: string, segmentText: string): number[] {
+  if (!segmentText) return [];
+
+  const indices: number[] = [];
+  let searchFrom = 0;
+  while (searchFrom <= paragraphText.length) {
+    const textIndex = paragraphText.indexOf(segmentText, searchFrom);
+    if (textIndex < 0) break;
+    indices.push(textIndex);
+    searchFrom = textIndex + 1;
+  }
+  if (indices.length) return indices;
+
+  const normSegment = collapseSpaces(segmentText);
+  if (!normSegment) return [];
+
+  let normParagraph = '';
+  const normToOrig: number[] = [];
+  for (let i = 0; i < paragraphText.length; i += 1) {
+    const ch = paragraphText[i]!;
+    if (/\s/.test(ch)) continue;
+    normToOrig[normParagraph.length] = i;
+    normParagraph += ch;
+  }
+
+  searchFrom = 0;
+  while (searchFrom <= normParagraph.length) {
+    const normIndex = normParagraph.indexOf(normSegment, searchFrom);
+    if (normIndex < 0) break;
+    const origIndex = normToOrig[normIndex];
+    if (origIndex != null) indices.push(origIndex);
+    searchFrom = normIndex + 1;
+  }
+
+  return indices;
+}
+
 export function sliceWordsByCharRange(
   words: TranscriptWord[],
   charStart: number,
@@ -65,25 +172,14 @@ export function sliceWordsByCharRange(
 ): TranscriptWord[] {
   if (!words.length || charEnd <= charStart) return [];
 
-  const picked: TranscriptWord[] = [];
-
   if (sourceText) {
-    let textIndex = 0;
-    for (const word of words) {
-      const wordText = word.text;
-      if (!wordText) continue;
-      const found = sourceText.indexOf(wordText, textIndex);
-      if (found === -1) continue;
-      const wStart = found;
-      const wEnd = found + wordText.length;
-      textIndex = wEnd;
-      if (wEnd <= charStart || wStart >= charEnd) continue;
-      picked.push(word);
-    }
-    return picked;
+    return alignWordsToSourceText(sourceText, words)
+      .filter((item) => item.charStart < charEnd && item.charEnd > charStart)
+      .map((item) => item.word);
   }
 
   let cursor = 0;
+  const picked: TranscriptWord[] = [];
   for (const word of words) {
     const len = Math.max(word.text.length, 1);
     const wStart = cursor;
@@ -95,15 +191,112 @@ export function sliceWordsByCharRange(
   return picked;
 }
 
+/**
+ * 按时间顺序将 words 对齐到原文 char 区间。
+ * 相比 sliceWordsByCharRange，对齐失败时会继续尝试后续字词，避免长停顿处字符少导致截断。
+ */
+function collectAlignedWordsInCharRange(
+  words: TranscriptWord[],
+  sourceText: string,
+  charStart: number,
+  charEnd: number
+): TranscriptWord[] {
+  return alignWordsToSourceText(sourceText, words)
+    .filter((item) => item.charStart < charEnd && item.charEnd > charStart)
+    .map((item) => item.word);
+}
+
+function filterWordsByTimeRange(
+  words: TranscriptWord[],
+  timeStart: number,
+  timeEnd: number
+): TranscriptWord[] {
+  return words
+    .filter(
+      (word) =>
+        isTimingTranscriptWord(word) &&
+        word.end > timeStart - 0.05 &&
+        word.start < timeEnd + 0.05
+    )
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+/** 在保留文案前缀中，按字词文本匹配取最晚结束时间（解决长停顿导致字符比例失真） */
+function lastWordEndForKeptTextPrefix(
+  sourceText: string,
+  sourceOffset: number,
+  sourceCharEnd: number,
+  timeWords: TranscriptWord[]
+): number | null {
+  const keptSlice = sourceText.slice(sourceOffset, sourceCharEnd);
+  if (!keptSlice.trim() || !timeWords.length) return null;
+
+  let bestEnd: number | null = null;
+  let textIndex = 0;
+
+  for (const word of timeWords) {
+    if (!isTimingTranscriptWord(word)) continue;
+    const wordText = word.text ?? '';
+    if (!wordText) continue;
+
+    const found = findWordCharIndex(keptSlice, wordText, textIndex);
+    if (found === -1) continue;
+
+    if (found >= keptSlice.length) continue;
+    if (found + wordText.length > keptSlice.length) continue;
+
+    bestEnd = Math.max(bestEnd ?? word.start, word.end, word.start);
+    textIndex = Math.max(textIndex, found + wordText.length);
+  }
+
+  return bestEnd;
+}
+
+function enhanceBoundsForKeptPrefix(
+  bounds: { start: number; end: number },
+  segmentText: string,
+  charEnd: number,
+  timeWords: TranscriptWord[],
+  sourceText?: string,
+  sourceOffset = 0
+): { start: number; end: number } {
+  if (charEnd <= 0 || charEnd >= segmentText.length || !timeWords.length) {
+    return bounds;
+  }
+
+  const keptText = segmentText.slice(0, charEnd);
+  const alignSource = sourceText ?? segmentText;
+  const sourceCharEnd =
+    alignSource === segmentText
+      ? sourceOffset + keptText.length
+      : mapSegmentCharToParagraphChar(alignSource, segmentText, sourceOffset, charEnd);
+
+  const matchedEnd = lastWordEndForKeptTextPrefix(
+    alignSource,
+    sourceOffset,
+    sourceCharEnd,
+    timeWords
+  );
+
+  if (matchedEnd == null) return bounds;
+
+  return {
+    start: bounds.start,
+    end: Math.max(bounds.end, matchedEnd),
+  };
+}
+
 export type TranscriptTextToken = {
   text: string;
   start: number;
   end: number;
+  charStart: number;
+  charEnd: number;
 };
 
 /**
  * 将 words 对齐回完整句段文本：ASR words 常不含标点，选片高亮时若只渲染 words 会丢「，。」等。
- * 以 segment.text 为准，把 words 之间的空隙（标点）补成独立 token。
+ * 以 segment.text 为准，把 words 之间的空隙（标点）补成独立 token，并保证覆盖全文。
  */
 export function alignWordsToTranscriptText(
   text: string,
@@ -111,43 +304,49 @@ export function alignWordsToTranscriptText(
 ): TranscriptTextToken[] {
   if (!text) return [];
   if (!words.length) {
-    return [{ text, start: 0, end: 0 }];
+    return [{ text, start: 0, end: 0, charStart: 0, charEnd: text.length }];
   }
 
+  const aligned = alignWordsToSourceText(text, words);
   const tokens: TranscriptTextToken[] = [];
   let textIndex = 0;
+  let lastTimedEnd = aligned.find((item) => isTimingTranscriptWord(item.word))?.word.start ?? 0;
 
-  for (const word of words) {
-    const wordText = word.text;
-    if (!wordText) continue;
+  for (const item of aligned) {
+    const isTimed = isTimingTranscriptWord(item.word);
+    const wordStart = isTimed ? item.word.start : lastTimedEnd;
+    const wordEnd = isTimed ? item.word.end : lastTimedEnd;
 
-    let found = text.indexOf(wordText, textIndex);
-    if (found === -1 && text.startsWith(wordText, textIndex)) {
-      found = textIndex;
-    }
-    if (found === -1) {
-      // 无法对齐时仍输出该 word，避免整段丢失
-      tokens.push({ text: wordText, start: word.start, end: word.end });
-      continue;
-    }
-
-    if (found > textIndex) {
-      const gap = text.slice(textIndex, found);
-      // 空隙（多为标点）挂到当前字起点，便于选中态一并高亮
-      tokens.push({ text: gap, start: word.start, end: word.start });
+    if (item.charStart > textIndex) {
+      tokens.push({
+        text: text.slice(textIndex, item.charStart),
+        start: lastTimedEnd,
+        end: wordStart,
+        charStart: textIndex,
+        charEnd: item.charStart,
+      });
     }
 
-    tokens.push({ text: wordText, start: word.start, end: word.end });
-    textIndex = found + wordText.length;
+    tokens.push({
+      text: text.slice(item.charStart, item.charEnd),
+      start: wordStart,
+      end: wordEnd,
+      charStart: item.charStart,
+      charEnd: item.charEnd,
+    });
+    if (isTimed) lastTimedEnd = item.word.end;
+    textIndex = item.charEnd;
   }
 
   if (textIndex < text.length) {
-    const last = words[words.length - 1];
-    const tailTime = last ? Math.max(last.end, last.start) : 0;
+    const last = aligned[aligned.length - 1];
+    const tailTime = last ? Math.max(last.word.end, last.word.start) : 0;
     tokens.push({
       text: text.slice(textIndex),
       start: tailTime,
       end: tailTime,
+      charStart: textIndex,
+      charEnd: text.length,
     });
   }
 
@@ -159,11 +358,12 @@ function rangeFromWords(
   fallbackStart: number,
   fallbackEnd: number
 ): { start: number; end: number } {
-  if (!words.length) return { start: fallbackStart, end: fallbackEnd };
-  const first = words[0];
+  const timingWords = words.filter(isTimingTranscriptWord);
+  if (!timingWords.length) return { start: fallbackStart, end: fallbackEnd };
+  const first = timingWords[0];
   if (!first) return { start: fallbackStart, end: fallbackEnd };
   // 取全部 words 的最大 end，避免末尾零时长字（标点）导致区间偏短
-  const end = words.reduce(
+  const end = timingWords.reduce(
     (max, word) => Math.max(max, word.end, word.start),
     first.start
   );
@@ -173,7 +373,284 @@ function rangeFromWords(
   };
 }
 
+/** 字词在原文中的字符区间（含 ASR 空格 token） */
+export type AlignedWordSpan = {
+  word: TranscriptWord;
+  charStart: number;
+  charEnd: number;
+};
+
+/**
+ * 将 ASR words 按时间顺序对齐到原文，保留空格/标点 token，供选片与部分删除共用。
+ */
+export function alignWordsToSourceText(
+  sourceText: string,
+  words: TranscriptWord[]
+): AlignedWordSpan[] {
+  if (!sourceText || !words.length) return [];
+
+  const aligned: AlignedWordSpan[] = [];
+  let minTextIndex = 0;
+
+  for (const word of words) {
+    const wordText = word.text ?? '';
+    if (!wordText) continue;
+
+    let found = findWordCharIndex(sourceText, wordText, minTextIndex);
+    if (found === -1 && minTextIndex > 0) {
+      found = findWordCharIndex(
+        sourceText,
+        wordText,
+        Math.max(0, minTextIndex - wordText.length)
+      );
+    }
+    if (found === -1) continue;
+
+    aligned.push({
+      word,
+      charStart: found,
+      charEnd: found + wordText.length,
+    });
+    minTextIndex = Math.max(minTextIndex, found + wordText.length);
+  }
+
+  return aligned;
+}
+
+function interpolateWordTimeAtSpan(item: AlignedWordSpan, charOffset: number): number {
+  const span = Math.max(item.charEnd - item.charStart, 1);
+  const ratio = (charOffset - item.charStart) / span;
+  return item.word.start + (item.word.end - item.word.start) * ratio;
+}
+
+export type CharRangeTiming = {
+  start: number;
+  end: number;
+  words: TranscriptWord[];
+};
+
+/**
+ * 按字符选区解析字级时间：首字 start、末字 end；选区切过字词时在边界插值。
+ */
+export function resolveTimingForCharRange(options: {
+  sourceText: string;
+  words: TranscriptWord[];
+  charStart: number;
+  charEnd: number;
+  fallbackStart: number;
+  fallbackEnd: number;
+}): CharRangeTiming {
+  const { sourceText, words, charStart, charEnd, fallbackStart, fallbackEnd } = options;
+  const duration = fallbackEnd - fallbackStart;
+  const linearAt = (offset: number) =>
+    fallbackStart + (duration * offset) / Math.max(sourceText.length, 1);
+
+  if (charEnd <= charStart || !sourceText) {
+    return { start: fallbackStart, end: fallbackEnd, words: [] };
+  }
+
+  const aligned = alignWordsToSourceText(sourceText, words);
+  const overlapping = aligned.filter(
+    (item) => item.charStart < charEnd && item.charEnd > charStart
+  );
+
+  if (!overlapping.length) {
+    return {
+      start: linearAt(charStart),
+      end: linearAt(charEnd),
+      words: [],
+    };
+  }
+
+  let start: number | null = null;
+  let end: number | null = null;
+  const pickedWords: TranscriptWord[] = [];
+
+  for (const item of overlapping) {
+    if (!isTimingTranscriptWord(item.word)) continue;
+
+    pickedWords.push(item.word);
+
+    const wordStart =
+      item.charStart < charStart
+        ? interpolateWordTimeAtSpan(item, charStart)
+        : item.word.start;
+    const wordEnd =
+      item.charEnd > charEnd ? interpolateWordTimeAtSpan(item, charEnd) : item.word.end;
+
+    start = start == null ? wordStart : Math.min(start, wordStart);
+    end = end == null ? wordEnd : Math.max(end, wordEnd);
+  }
+
+  return {
+    start: start ?? linearAt(charStart),
+    end: end ?? linearAt(charEnd),
+    words: pickedWords,
+  };
+}
+
+/** 从段落字符区间生成文案预览片段（拖选 / 双击整段共用） */
+export function buildCopySegmentFromParagraphRange(
+  paragraph: TranscriptParagraph,
+  charStart: number,
+  charEnd: number
+): SelectedCopySegment | null {
+  const paragraphText = getParagraphText(paragraph);
+  const clampedStart = Math.max(0, Math.min(charStart, paragraphText.length));
+  const clampedEnd = Math.max(clampedStart, Math.min(charEnd, paragraphText.length));
+  const text = paragraphText.slice(clampedStart, clampedEnd);
+  if (!hasSpeakableCopyText(text)) return null;
+
+  const paragraphRange = getParagraphRange(paragraph);
+  const isFullParagraphSelection =
+    clampedStart === 0 && clampedEnd === paragraphText.length;
+
+  let start: number;
+  let end: number;
+
+  if (isFullParagraphSelection) {
+    start = paragraphRange.start;
+    end = paragraphRange.end;
+  } else {
+    const allWords = paragraph.segments.flatMap((segment) => segment.words ?? []);
+    const paragraphWords = allWords.filter(
+      (word) =>
+        word.end > paragraphRange.start - 0.05 && word.start < paragraphRange.end + 0.05
+    );
+    const timing = resolveTimingForCharRange({
+      sourceText: paragraphText,
+      words: paragraphWords.length ? paragraphWords : allWords,
+      charStart: clampedStart,
+      charEnd: clampedEnd,
+      fallbackStart: paragraphRange.start,
+      fallbackEnd: paragraphRange.end,
+    });
+
+    start = Math.max(
+      paragraphRange.start,
+      Math.min(timing.start, paragraphRange.end)
+    );
+    end = Math.max(start, Math.min(timing.end, paragraphRange.end));
+  }
+
+  if (end <= start) return null;
+
+  return {
+    id: `copy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    speaker: paragraph.speaker,
+    speakerName: paragraph.speakerName,
+    text,
+    start,
+    end,
+    sourceParagraphId: paragraph.id,
+    originStart: start,
+    originEnd: end,
+  };
+}
+
 const CLAUSE_SPLIT_RE = /(?<=[，。！？；])/g;
+const CAPTION_CLAUSE_SPLIT_RE = /(?<=[，。！？；!?])/g;
+
+/** 预览字幕：按标点拆句（保留标点） */
+export function splitCaptionClauses(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  const parts = trimmed.split(CAPTION_CLAUSE_SPLIT_RE).filter((part) => part.trim());
+  return parts.length ? parts : [trimmed];
+}
+
+export type PreviewCaptionClause = {
+  text: string;
+  start: number;
+  end: number;
+};
+
+/** 为预览字幕子句绑定字级/段级时间 */
+export function buildPreviewCaptionClauses(
+  text: string,
+  segmentStart: number,
+  segmentEnd: number,
+  words: TranscriptWord[] = []
+): PreviewCaptionClause[] {
+  const clauses = splitCaptionClauses(text);
+  if (!clauses.length) return [];
+
+  const duration = Math.max(segmentEnd - segmentStart, 0.001);
+  const linearAt = (offset: number) =>
+    segmentStart + (duration * offset) / Math.max(text.length, 1);
+
+  let charOffset = 0;
+  return clauses.map((clause) => {
+    const charStart = charOffset;
+    const charEnd = charOffset + clause.length;
+    charOffset = charEnd;
+
+    const timing = resolveTimingForCharRange({
+      sourceText: text,
+      words,
+      charStart,
+      charEnd,
+      fallbackStart: linearAt(charStart),
+      fallbackEnd: linearAt(charEnd),
+    });
+
+    const start = Math.max(segmentStart, Math.min(timing.start, segmentEnd));
+    const end = Math.max(start, Math.min(timing.end, segmentEnd));
+
+    return { text: clause, start, end };
+  });
+}
+
+function pickPreviewCaptionClause(
+  clauses: PreviewCaptionClause[],
+  currentTime: number
+): PreviewCaptionClause | null {
+  if (!clauses.length) return null;
+
+  const EPS = 0.05;
+  let active: PreviewCaptionClause | null = null;
+
+  for (const clause of clauses) {
+    if (currentTime >= clause.start - EPS && currentTime < clause.end + EPS) {
+      if (!active || clause.start > active.start) active = clause;
+    }
+  }
+  if (active) return active;
+
+  let lastStarted: PreviewCaptionClause | null = null;
+  for (const clause of clauses) {
+    if (clause.start <= currentTime + EPS) {
+      if (!lastStarted || clause.start > lastStarted.start) lastStarted = clause;
+    }
+  }
+
+  if (lastStarted) {
+    const next = clauses.find((clause) => clause.start > lastStarted!.start);
+    if (!next || currentTime < next.start - EPS) return lastStarted;
+  }
+
+  if (currentTime < clauses[0]!.start - EPS) return null;
+
+  return clauses[clauses.length - 1]!;
+}
+
+/**
+ * 连续预览字幕：按字级时间展示当前一句；无字级时回退段内比例估算。
+ */
+export function resolvePreviewCaptionLines(
+  text: string,
+  segmentStart: number,
+  segmentEnd: number,
+  currentTime: number,
+  words: TranscriptWord[] = []
+): string[] {
+  const clauses = buildPreviewCaptionClauses(text, segmentStart, segmentEnd, words);
+  if (!clauses.length) return [];
+
+  const picked = pickPreviewCaptionClause(clauses, currentTime);
+  return picked ? [picked.text] : [];
+}
 
 export function splitTextToSegments(
   text: string,
@@ -184,7 +661,15 @@ export function splitTextToSegments(
 ): TranscriptSegment[] {
   const parts = text.split(CLAUSE_SPLIT_RE).filter(Boolean);
   if (parts.length <= 1) {
-    return [{ id: idPrefix, start, end, text, words: words?.length ? words : undefined }];
+    return [
+      {
+        id: idPrefix,
+        start,
+        end: Math.max(end, start),
+        text,
+        words: words?.length ? words : undefined,
+      },
+    ];
   }
 
   const duration = end - start;
@@ -199,28 +684,22 @@ export function splitTextToSegments(
     const partWords = words?.length
       ? sliceWordsByCharRange(words, partCharStart, partCharEnd, text)
       : [];
-    const fromWords = rangeFromWords(partWords, -1, -1);
+    const ratio = part.length / text.length;
+    const proportionalStart = cursor;
+    const proportionalEnd = index === parts.length - 1 ? end : cursor + duration * ratio;
 
-    let segmentStart: number;
-    let segmentEnd: number;
-    if (partWords.length && fromWords.start >= 0) {
-      segmentStart = fromWords.start;
-      segmentEnd = fromWords.end;
-    } else {
-      // 无字级时间时退回按字数比例插值
-      const ratio = part.length / text.length;
-      segmentStart = cursor;
-      segmentEnd = index === parts.length - 1 ? end : cursor + duration * ratio;
-    }
-
-    if (index === parts.length - 1) {
-      segmentEnd = Math.max(segmentEnd, end);
-    }
+    const fromWords = rangeFromWords(partWords, proportionalStart, proportionalEnd);
+    const segmentStart = partWords.length ? fromWords.start : proportionalStart;
+    const segmentEnd = partWords.length
+      ? fromWords.end
+      : index === parts.length - 1
+        ? end
+        : proportionalEnd;
 
     const segment: TranscriptSegment = {
       id: `${idPrefix}-${index}`,
       start: segmentStart,
-      end: Math.max(segmentEnd, segmentStart),
+      end: Math.max(segmentStart, segmentEnd),
       text: part,
       words: partWords.length ? partWords : undefined,
     };
@@ -259,26 +738,30 @@ function msToSeconds(ms: number) {
 function formatSpeakerName(speaker: string) {
   const trimmed = speaker.trim();
   if (!trimmed) return '说话人';
-  if (/^\d+$/.test(trimmed)) return `说话人${trimmed}`;
+  if (/^\d+$/.test(trimmed)) return `说话人：${trimmed}`;
   return trimmed;
 }
 
 function asrParagraphToTranscript(item: LiveAsrSegment, index: number): TranscriptParagraph {
-  const speakerId = String(item.speaker ?? '').trim() || '0';
+  const speaker = String(item.speaker ?? '').trim() || '0';
   const words: TranscriptWord[] = (item.words ?? [])
     .map((word) => ({
       start: msToSeconds(Number(word.start_time)),
       end: msToSeconds(Number(word.end_time)),
       text: String(word.text ?? ''),
     }))
-    .filter((word) => word.text.length > 0 && Number.isFinite(word.start) && Number.isFinite(word.end));
+    .filter((word) => {
+      if (!word.text.length) return false;
+      if (isWhitespaceOnlyWordText(word.text)) return true;
+      return hasValidWordTiming(word.start, word.end);
+    });
 
   const text = item.text || words.map((word) => word.text).join('');
 
   return {
     id: `asr-p-${index}`,
-    speakerId,
-    speakerName: formatSpeakerName(speakerId),
+    speaker,
+    speakerName: formatSpeakerName(speaker),
     // 句级入参 + 字级 words；随后由 normalize 按标点拆分并继承字级时间
     segments: [
       {
@@ -317,53 +800,108 @@ export function asrSummariesToAiSegments(
   });
 }
 
+/** 文案分段段落是否与时间范围有重叠 */
+export function isParagraphOverlappingTimeRange(
+  paragraph: TranscriptParagraph,
+  timeStart: number,
+  timeEnd: number
+): boolean {
+  const paragraphRange = getParagraphRange(paragraph);
+  return paragraphRange.end > timeStart && paragraphRange.start < timeEnd;
+}
+
 /**
- * 按 AI 分段时间范围从文案分段抽取文案，生成可加入「文案预览」的片段。
- * 取与 [start, end] 有重叠的句段，合并为一段。
+ * 在文案分段段落中，按时间范围解析对应的字符选区（与手动拖选同一套 words 对齐）。
+ * 供部分裁剪场景使用；AI 分段添加请用整段匹配（见 buildCopySegmentsFromAiSegment）。
  */
+export function resolveParagraphCharRangeForTimeRange(
+  paragraph: TranscriptParagraph,
+  timeStart: number,
+  timeEnd: number
+): { charStart: number; charEnd: number } | null {
+  const paragraphText = getParagraphText(paragraph);
+  if (!paragraphText) return null;
+
+  const paragraphRange = getParagraphRange(paragraph);
+  const clipStart = Math.max(timeStart, paragraphRange.start);
+  const clipEnd = Math.min(timeEnd, paragraphRange.end);
+  if (clipEnd <= clipStart + 1e-6) return null;
+
+  const allWords = paragraph.segments.flatMap((segment) => segment.words ?? []);
+  if (!allWords.length) {
+    const duration = paragraphRange.end - paragraphRange.start;
+    if (duration <= 0) return { charStart: 0, charEnd: paragraphText.length };
+
+    const ratioStart = (clipStart - paragraphRange.start) / duration;
+    const ratioEnd = (clipEnd - paragraphRange.start) / duration;
+    const charStart = Math.max(
+      0,
+      Math.min(paragraphText.length, Math.floor(ratioStart * paragraphText.length))
+    );
+    const charEnd = Math.max(
+      charStart,
+      Math.min(paragraphText.length, Math.ceil(ratioEnd * paragraphText.length))
+    );
+    return charEnd > charStart ? { charStart, charEnd } : null;
+  }
+
+  const aligned = alignWordsToSourceText(paragraphText, allWords);
+  const overlapping = aligned.filter(
+    (item) =>
+      isTimingTranscriptWord(item.word) &&
+      item.word.end > clipStart - 0.05 &&
+      item.word.start < clipEnd + 0.05
+  );
+  if (!overlapping.length) return null;
+
+  const charStart = overlapping[0]!.charStart;
+  let charEnd = overlapping[overlapping.length - 1]!.charEnd;
+  while (charEnd < paragraphText.length) {
+    const ch = paragraphText[charEnd]!;
+    if (/\s/u.test(ch) || /\p{P}/u.test(ch)) {
+      charEnd += 1;
+      continue;
+    }
+    break;
+  }
+  return charEnd > charStart ? { charStart, charEnd } : null;
+}
+
+/**
+ * 按 AI 分段时间范围，在文案分段中逐段匹配并生成预览片段（每段对应一个 sourceParagraphId）。
+ * 与时间范围有重叠的文案分段整段加入，与左侧双击选整段一致，避免 words 对齐失败导致缺字。
+ */
+export function buildCopySegmentsFromAiSegment(
+  paragraphs: TranscriptParagraph[],
+  aiSegment: AiSegment
+): SelectedCopySegment[] {
+  const stamp = Date.now();
+
+  return paragraphs.flatMap((paragraph) => {
+    if (!isParagraphOverlappingTimeRange(paragraph, aiSegment.start, aiSegment.end)) {
+      return [];
+    }
+
+    const paragraphText = getParagraphText(paragraph);
+    const copySegment = buildCopySegmentFromParagraphRange(paragraph, 0, paragraphText.length);
+    if (!copySegment) return [];
+
+    return [
+      {
+        ...copySegment,
+        id: `copy-ai-${aiSegment.id}-${paragraph.id}-${stamp}`,
+      },
+    ];
+  });
+}
+
+/** @deprecated 使用 buildCopySegmentsFromAiSegment */
 export function buildCopySegmentFromAiSegment(
   paragraphs: TranscriptParagraph[],
   aiSegment: AiSegment
 ): SelectedCopySegment | null {
-  const overlapped: Array<{
-    text: string;
-    start: number;
-    end: number;
-    speakerId: string;
-    speakerName: string;
-  }> = [];
-
-  for (const paragraph of paragraphs) {
-    for (const segment of paragraph.segments) {
-      if (segment.end <= aiSegment.start || segment.start >= aiSegment.end) continue;
-      const text = segment.text.trim();
-      if (!text) continue;
-      overlapped.push({
-        text,
-        start: segment.start,
-        end: segment.end,
-        speakerId: paragraph.speakerId,
-        speakerName: paragraph.speakerName,
-      });
-    }
-  }
-
-  if (!overlapped.length) return null;
-
-  const start = Math.min(...overlapped.map((item) => item.start));
-  const end = Math.max(...overlapped.map((item) => item.end));
-  const first = overlapped[0]!;
-
-  return {
-    id: `copy-ai-${aiSegment.id}-${Date.now()}`,
-    speakerId: first.speakerId,
-    speakerName: first.speakerName,
-    text: overlapped.map((item) => item.text).join(''),
-    start,
-    end,
-    originStart: start,
-    originEnd: end,
-  };
+  const segments = buildCopySegmentsFromAiSegment(paragraphs, aiSegment);
+  return segments[0] ?? null;
 }
 
 /** 扁平化全部字级时间轴（按开始时间排序） */
@@ -374,77 +912,155 @@ export function flattenTranscriptWords(paragraphs: TranscriptParagraph[]): Trans
     .sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
-/** 文案分段中的原始文字时间轴：优先字级 words，否则用句段 */
-function flattenTranscriptSpokenRanges(
-  paragraphs: TranscriptParagraph[]
-): Array<{ start: number; end: number }> {
-  const words = flattenTranscriptWords(paragraphs);
-  if (words.length > 0) {
-    return words
-      .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > word.start)
-      .map((word) => ({ start: word.start, end: word.end }));
+/** 后方留白与下一句发声之间保留的音频安全间隔（秒，ASR 起点常晚于实际前音） */
+export const TRANSCRIPT_BACK_PAD_SAFETY_GAP_SEC = 0.25;
+
+/** 预览播放时在 end 前再提前截止，减轻解码 overshoot 带来的尾音 */
+export const SEGMENT_PLAYBACK_END_GUARD_SEC = 0.08;
+
+/** 收集各句/字的发声起点，用于判断后方留白上限（含无字级时间的邻句） */
+function collectTranscriptSpokenStarts(paragraphs: TranscriptParagraph[]): number[] {
+  const starts: number[] = [];
+
+  for (const paragraph of paragraphs) {
+    for (const segment of paragraph.segments) {
+      const words = segment.words ?? [];
+      if (words.length) {
+        for (const word of words) {
+          if (isTimingTranscriptWord(word)) starts.push(word.start);
+        }
+      } else if (Number.isFinite(segment.start)) {
+        starts.push(segment.start);
+      }
+    }
   }
 
-  return paragraphs
-    .flatMap((paragraph) => paragraph.segments)
-    .filter(
-      (segment) =>
-        Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start
-    )
-    .map((segment) => ({ start: segment.start, end: segment.end }))
-    .sort((a, b) => a.start - b.start || a.end - b.end);
+  return starts.sort((a, b) => a - b);
+}
+
+/** 收集各句/字的发声终点，用于判断前方留白下限 */
+function collectTranscriptSpokenEnds(paragraphs: TranscriptParagraph[]): number[] {
+  const ends: number[] = [];
+
+  for (const paragraph of paragraphs) {
+    for (const segment of paragraph.segments) {
+      const words = segment.words ?? [];
+      if (words.length) {
+        for (const word of words) {
+          if (!isTimingTranscriptWord(word)) continue;
+          if (Number.isFinite(word.end)) ends.push(word.end);
+          else if (Number.isFinite(word.start)) ends.push(word.start);
+        }
+      } else if (Number.isFinite(segment.end)) {
+        ends.push(segment.end);
+      }
+    }
+  }
+
+  return ends.sort((a, b) => a - b);
+}
+
+function resolveTranscriptSegmentsTimeBounds(segments: TranscriptSegment[]) {
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  if (!first || !last) return null;
+
+  const firstFromWords = rangeFromWords(first.words ?? [], first.start, first.start);
+  const lastFromWords = rangeFromWords(last.words ?? [], last.end, last.end);
+  const start = first.words?.length ? firstFromWords.start : first.start;
+  const end = last.words?.length ? lastFromWords.end : last.end;
+
+  return {
+    start,
+    end: Math.max(end, start),
+  };
+}
+
+/** 下一句最早发声时间：时间轴扫描 + 文案顺序（应对 ASR 句段 start 重叠） */
+function findMinNextSpokenStart(
+  paragraphs: TranscriptParagraph[],
+  originEnd: number
+): number | null {
+  const EPS = 1e-3;
+  let minNext = Number.POSITIVE_INFINITY;
+
+  for (const start of collectTranscriptSpokenStarts(paragraphs)) {
+    if (start > originEnd + EPS) {
+      minNext = Math.min(minNext, start);
+    }
+  }
+
+  const ordered = paragraphs.flatMap((paragraph) => paragraph.segments);
+  for (let i = 0; i < ordered.length; i += 1) {
+    const seg = ordered[i];
+    if (!seg) continue;
+    const bounds = resolveTranscriptSegmentsTimeBounds([seg]);
+    if (!bounds) continue;
+    if (originEnd + EPS < bounds.start || originEnd - EPS > bounds.end) continue;
+
+    for (let j = i + 1; j < ordered.length; j += 1) {
+      const next = ordered[j];
+      if (!next) continue;
+      if (next.words?.length) {
+        const fromWords = rangeFromWords(next.words, next.start, next.start);
+        minNext = Math.min(minNext, fromWords.start);
+        break;
+      }
+      if (next.start > originEnd + EPS) {
+        minNext = Math.min(minNext, next.start);
+        break;
+      }
+    }
+    break;
+  }
+
+  return minNext < Number.POSITIVE_INFINITY ? minNext : null;
+}
+
+function tightenOriginEndAgainstNextSpeech(
+  paragraphs: TranscriptParagraph[],
+  originEnd: number
+): number {
+  const minNext = findMinNextSpokenStart(paragraphs, originEnd);
+  if (minNext == null) return originEnd;
+  return Math.min(originEnd, minNext - TRANSCRIPT_BACK_PAD_SAFETY_GAP_SEC);
 }
 
 /**
  * 按文案分段原始数据，计算当前选段前后可扩留白的边界。
  * - lowerBound：前方最近一段原始文字的结束时间（无则 0）
- * - upperBound：后方最近一段原始文字的开始时间（无则视频时长）
+ * - upperBound：在 originEnd 与下一句之间保留安全间隔后，允许向后扩留白的上限
  */
 export function getTranscriptPadBounds(
   paragraphs: TranscriptParagraph[],
   originStart: number,
   originEnd: number,
-  videoDuration: number
+  _videoDuration: number
 ): { lowerBound: number; upperBound: number } {
   const EPS = 1e-3;
-  const ranges = flattenTranscriptSpokenRanges(paragraphs);
-  let lowerBound = 0;
-  let upperBound =
-    Number.isFinite(videoDuration) && videoDuration > 0 ? videoDuration : Number.POSITIVE_INFINITY;
+  const gap = TRANSCRIPT_BACK_PAD_SAFETY_GAP_SEC;
 
-  for (const range of ranges) {
-    // 完全落在选段原文之前 → 可作为前方文字终点
-    if (range.end <= originStart + EPS) {
-      lowerBound = Math.max(lowerBound, range.end);
-      continue;
-    }
-    // 完全落在选段原文之后 → 可作为后方文字起点
-    if (range.start >= originEnd - EPS) {
-      upperBound = Math.min(upperBound, range.start);
+  let lowerBound = 0;
+  for (const end of collectTranscriptSpokenEnds(paragraphs)) {
+    if (end < originStart - EPS) {
+      lowerBound = Math.max(lowerBound, end);
     }
   }
+  lowerBound = Math.min(lowerBound, originStart);
 
-  if (lowerBound > originStart) lowerBound = 0;
-  if (upperBound < originEnd) {
-    upperBound =
-      Number.isFinite(videoDuration) && videoDuration > 0 ? videoDuration : Number.POSITIVE_INFINITY;
+  const minNextStart = findMinNextSpokenStart(paragraphs, originEnd);
+  let upperBound = originEnd;
+  if (minNextStart != null) {
+    const interGap = minNextStart - originEnd;
+    upperBound = interGap > gap ? originEnd + (interGap - gap) : originEnd;
   }
 
   return { lowerBound, upperBound };
 }
 
-export function findActiveSegment(
-  paragraphs: TranscriptParagraph[],
-  currentTime: number
-): { paragraphId: string; segmentId: string } | null {
-  for (const paragraph of paragraphs) {
-    for (const segment of paragraph.segments) {
-      if (currentTime >= segment.start && currentTime < segment.end) {
-        return { paragraphId: paragraph.id, segmentId: segment.id };
-      }
-    }
-  }
-  return null;
+/** 连续预览/播放应截止的源视频时间（略早于 segment.end，避免尾音） */
+export function getSegmentPlaybackStopTime(segment: SelectedCopySegment): number {
+  return Math.max(segment.start + MIN_SEGMENT_DURATION, segment.end - SEGMENT_PLAYBACK_END_GUARD_SEC);
 }
 
 export type TranscriptHighlightMode = 'playback';
@@ -461,45 +1077,7 @@ export function paragraphSelectionToCopySegment(
 ): SelectedCopySegment | null {
   const offsets = getTextSelectionOffsets(container);
   if (!offsets) return null;
-
-  const paragraphText = getParagraphText(paragraph);
-  const text = paragraphText.slice(offsets.start, offsets.end);
-  if (!text.trim()) return null;
-
-  const paragraphRange = getParagraphRange(paragraph);
-  const duration = paragraphRange.end - paragraphRange.start;
-  if (duration <= 0) return null;
-
-  const allWords = paragraph.segments.flatMap((segment) => segment.words ?? []);
-  const selectedWords = sliceWordsByCharRange(
-    allWords,
-    offsets.start,
-    offsets.end,
-    paragraphText
-  );
-  const fromWords = rangeFromWords(selectedWords, -1, -1);
-
-  const start =
-    selectedWords.length && fromWords.start >= 0
-      ? fromWords.start
-      : paragraphRange.start + (duration * offsets.start) / paragraphText.length;
-  const end =
-    selectedWords.length && fromWords.end >= 0
-      ? fromWords.end
-      : paragraphRange.start + (duration * offsets.end) / paragraphText.length;
-
-  if (end <= start) return null;
-
-  return {
-    id: `copy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    speakerId: paragraph.speakerId,
-    speakerName: paragraph.speakerName,
-    text,
-    start,
-    end,
-    originStart: start,
-    originEnd: end,
-  };
+  return buildCopySegmentFromParagraphRange(paragraph, offsets.start, offsets.end);
 }
 
 export function buildTranscriptHighlight(options: {
@@ -555,35 +1133,720 @@ export function collectSegmentsFromSelection(
 
 export function segmentsToCopySegment(
   segments: TranscriptSegment[],
-  speakerId: string,
+  speaker: string,
   speakerName: string
 ): SelectedCopySegment | null {
   if (!segments.length) return null;
 
-  const first = segments[0];
-  const last = segments[segments.length - 1];
-  if (!first || !last) return null;
+  const text = segments.map((item) => item.text).join('');
+  if (!hasSpeakableCopyText(text)) return null;
+
+  const bounds = resolveTranscriptSegmentsTimeBounds(segments);
+  if (!bounds) return null;
+
+  const allWords = segments.flatMap((segment) => segment.words ?? []);
+  const timing = resolveTimingForCharRange({
+    sourceText: text,
+    words: allWords,
+    charStart: 0,
+    charEnd: text.length,
+    fallbackStart: bounds.start,
+    fallbackEnd: bounds.end,
+  });
+
+  if (timing.end <= timing.start) return null;
 
   return {
     id: `copy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    speakerId,
+    speaker,
     speakerName,
-    text: segments.map((item) => item.text).join(''),
-    start: first.start,
-    end: last.end,
-    originStart: first.start,
-    originEnd: last.end,
+    text,
+    start: timing.start,
+    end: timing.end,
+    originStart: timing.start,
+    originEnd: timing.end,
   };
 }
 
 export function paragraphToCopySegment(paragraph: TranscriptParagraph): SelectedCopySegment | null {
-  return segmentsToCopySegment(paragraph.segments, paragraph.speakerId, paragraph.speakerName);
+  const paragraphText = getParagraphText(paragraph);
+  return buildCopySegmentFromParagraphRange(paragraph, 0, paragraphText.length);
+}
+
+type SegmentParagraphAnchor = {
+  paragraphId: string;
+  paragraphText: string;
+  textIndex: number;
+  allWords: TranscriptWord[];
+};
+
+/** ASR word / 对齐 token 是否含可发音字符（排除纯空格与标点） */
+function isSpeakableWordText(text: string): boolean {
+  return [...text].some((ch) => !/\s/u.test(ch) && !/\p{P}/u.test(ch));
+}
+
+export type SelectedCopyHighlightRange = {
+  paragraphId: string;
+  charStart: number;
+  charEnd: number;
+  segmentId: string;
+};
+
+export type TextHighlightPart = {
+  text: string;
+  highlighted: boolean;
+};
+
+/** 合并重叠或相邻的字符区间，避免重复高亮同一段原文 */
+function mergeCharRanges(ranges: Array<{ start: number; end: number }>) {
+  if (!ranges.length) return [];
+
+  const sorted = [...ranges].sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: Array<{ start: number; end: number }> = [{ ...sorted[0]! }];
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i]!;
+    const last = merged[merged.length - 1]!;
+    if (current.start <= last.end) {
+      last.end = Math.max(last.end, current.end);
+    } else {
+      merged.push({ ...current });
+    }
+  }
+
+  return merged;
+}
+
+/** 按段落内字符区间切分 clause 文本，供已选片段高亮渲染 */
+export function splitTextByHighlightRanges(
+  text: string,
+  textOffset: number,
+  ranges: Array<{ charStart: number; charEnd: number }>
+): TextHighlightPart[] {
+  if (!text) return [];
+  if (!ranges.length) return [{ text, highlighted: false }];
+
+  const localRanges = mergeCharRanges(
+    ranges
+      .map((range) => ({
+        start: Math.max(0, range.charStart - textOffset),
+        end: Math.min(text.length, range.charEnd - textOffset),
+      }))
+      .filter((range) => range.end > range.start)
+  );
+
+  if (!localRanges.length) return [{ text, highlighted: false }];
+
+  const parts: TextHighlightPart[] = [];
+  let cursor = 0;
+
+  for (const range of localRanges) {
+    if (range.start > cursor) {
+      parts.push({ text: text.slice(cursor, range.start), highlighted: false });
+    }
+    parts.push({ text: text.slice(range.start, range.end), highlighted: true });
+    cursor = range.end;
+  }
+
+  if (cursor < text.length) {
+    parts.push({ text: text.slice(cursor), highlighted: false });
+  }
+
+  return parts;
+}
+
+function resolveHighlightFromAnchor(
+  anchor: SegmentParagraphAnchor,
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): SelectedCopyHighlightRange {
+  const segmentTextEnd = anchor.textIndex + segment.text.length;
+  const fallbackRange: SelectedCopyHighlightRange = {
+    paragraphId: anchor.paragraphId,
+    charStart: anchor.textIndex,
+    charEnd: segmentTextEnd,
+    segmentId: segment.id,
+  };
+
+  const segmentWords = resolveCopySegmentWords(segment, paragraphs);
+  const speakableSegmentWords = segmentWords.filter((word) => isSpeakableWordText(word.text));
+  if (!speakableSegmentWords.length) return fallbackRange;
+
+  const tokens = alignWordsToTranscriptText(anchor.paragraphText, anchor.allWords);
+  let tokenIdx = tokens.findIndex((token) => token.charEnd > anchor.textIndex);
+  if (tokenIdx < 0) tokenIdx = 0;
+
+  let wordIdx = 0;
+  let charEnd: number | null = null;
+  let matching = false;
+
+  for (let i = tokenIdx; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+
+    if (wordIdx >= speakableSegmentWords.length) {
+      if (matching && token.charStart < segmentTextEnd && !isSpeakableWordText(token.text)) {
+        charEnd = token.charEnd;
+        continue;
+      }
+      break;
+    }
+
+    const targetWord = speakableSegmentWords[wordIdx]!;
+
+    if (!isSpeakableWordText(token.text)) {
+      if (matching) charEnd = token.charEnd;
+      continue;
+    }
+
+    const tokenText = collapseSpaces(token.text);
+    const targetText = collapseSpaces(targetWord.text);
+    if (tokenText === targetText) {
+      charEnd = token.charEnd;
+      matching = true;
+      wordIdx += 1;
+    } else if (!matching) {
+      continue;
+    } else {
+      break;
+    }
+  }
+
+  if (!matching || wordIdx < speakableSegmentWords.length) {
+    return fallbackRange;
+  }
+
+  return {
+    paragraphId: anchor.paragraphId,
+    charStart: anchor.textIndex,
+    charEnd: Math.min(charEnd ?? segmentTextEnd, segmentTextEnd),
+    segmentId: segment.id,
+  };
+}
+
+/** 解析单个已选片段在文案分段中的字符高亮区间（words 匹配，标点随相邻字一并高亮） */
+export function resolveSelectedCopyHighlightCharRange(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): SelectedCopyHighlightRange | null {
+  const anchor = resolveSegmentParagraphAnchor(segment, paragraphs);
+  if (anchor) return resolveHighlightFromAnchor(anchor, segment, paragraphs);
+
+  if (!segment.sourceParagraphId) return null;
+
+  const paragraph = paragraphs.find((item) => item.id === segment.sourceParagraphId);
+  if (!paragraph) return null;
+
+  const paragraphText = getParagraphText(paragraph);
+  const allWords = paragraph.segments.flatMap((item) => item.words ?? []);
+  const textIndex = findBestSegmentTextIndex(
+    paragraphText,
+    segment.text,
+    getCopySegmentOriginStart(segment),
+    getCopySegmentOriginEnd(segment),
+    allWords
+  );
+
+  if (textIndex < 0) {
+    const plainIndex = paragraphText.indexOf(segment.text);
+    if (plainIndex < 0) return null;
+    return {
+      paragraphId: paragraph.id,
+      charStart: plainIndex,
+      charEnd: plainIndex + segment.text.length,
+      segmentId: segment.id,
+    };
+  }
+
+  return resolveHighlightFromAnchor(
+    {
+      paragraphId: paragraph.id,
+      paragraphText,
+      textIndex,
+      allWords,
+    },
+    segment,
+    paragraphs
+  );
+}
+
+export function buildSelectedCopyHighlightRanges(
+  segments: SelectedCopySegment[],
+  paragraphs: TranscriptParagraph[]
+): SelectedCopyHighlightRange[] {
+  return segments
+    .map((segment) => resolveSelectedCopyHighlightCharRange(segment, paragraphs))
+    .filter((range): range is SelectedCopyHighlightRange => range != null);
+}
+
+function getCopySegmentOriginStart(segment: SelectedCopySegment) {
+  return Number.isFinite(segment.originStart) ? Number(segment.originStart) : segment.start;
+}
+
+function getCopySegmentOriginEnd(segment: SelectedCopySegment) {
+  return Number.isFinite(segment.originEnd) ? Number(segment.originEnd) : segment.end;
+}
+
+/** 将选段内字符偏移映射到段落原文（兼容空格差异） */
+function mapSegmentCharToParagraphChar(
+  paragraphText: string,
+  segmentText: string,
+  textIndex: number,
+  segmentCharOffset: number
+): number {
+  if (segmentCharOffset <= 0) return textIndex;
+  if (segmentCharOffset >= segmentText.length) return textIndex + segmentText.length;
+
+  const paragraphSlice = paragraphText.slice(textIndex, textIndex + segmentText.length);
+  if (paragraphSlice === segmentText) return textIndex + segmentCharOffset;
+
+  const targetNormLen = collapseSpaces(segmentText.slice(0, segmentCharOffset)).length;
+  if (!targetNormLen) return textIndex;
+
+  let normCount = 0;
+  for (let i = textIndex; i < paragraphText.length; i += 1) {
+    if (/\s/.test(paragraphText[i]!)) continue;
+    normCount += 1;
+    if (normCount >= targetNormLen) return i + 1;
+  }
+
+  return textIndex + segmentCharOffset;
+}
+
+function resolveSegmentParagraphAnchor(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[],
+  options?: { ignoreSpeaker?: boolean }
+): SegmentParagraphAnchor | null {
+  const timeStart = getCopySegmentOriginStart(segment);
+  const timeEnd = getCopySegmentOriginEnd(segment);
+
+  const candidates = segment.sourceParagraphId
+    ? paragraphs.filter((paragraph) => paragraph.id === segment.sourceParagraphId)
+    : paragraphs;
+
+  for (const paragraph of candidates) {
+    if (!options?.ignoreSpeaker && paragraph.speaker !== segment.speaker) continue;
+
+    const paragraphText = getParagraphText(paragraph);
+    const allWords = paragraph.segments.flatMap((item) => item.words ?? []);
+    if (!allWords.length) continue;
+
+    const textIndex = findBestSegmentTextIndex(
+      paragraphText,
+      segment.text,
+      timeStart,
+      timeEnd,
+      allWords
+    );
+    if (textIndex >= 0) {
+      return { paragraphId: paragraph.id, paragraphText, textIndex, allWords };
+    }
+  }
+
+  return null;
+}
+
+/** 为已选片段解析对应文案分段 id（clips1 回显、高亮定位共用） */
+export function resolveSourceParagraphIdForCopySegment(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): string | null {
+  if (segment.sourceParagraphId) {
+    const existing = paragraphs.find((paragraph) => paragraph.id === segment.sourceParagraphId);
+    if (existing) return existing.id;
+  }
+
+  const anchor = resolveSegmentParagraphAnchor(segment, paragraphs, { ignoreSpeaker: true });
+  if (anchor) return anchor.paragraphId;
+
+  const timeStart = getCopySegmentOriginStart(segment);
+  const timeEnd = getCopySegmentOriginEnd(segment);
+  const trimmedText = segment.text.trim();
+
+  for (const paragraph of paragraphs) {
+    if (!isParagraphOverlappingTimeRange(paragraph, timeStart, timeEnd)) continue;
+    const paragraphText = getParagraphText(paragraph);
+    if (trimmedText && paragraphText.includes(trimmedText)) {
+      return paragraph.id;
+    }
+  }
+
+  return null;
+}
+
+/** 回显/加载时为片段补齐 sourceParagraphId 及说话人信息 */
+export function attachSourceParagraphIdToCopySegment(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): SelectedCopySegment {
+  const paragraphId = resolveSourceParagraphIdForCopySegment(segment, paragraphs);
+  if (!paragraphId) return segment;
+
+  const paragraph = paragraphs.find((item) => item.id === paragraphId);
+  if (!paragraph) return segment;
+
+  if (
+    segment.sourceParagraphId === paragraphId &&
+    segment.speaker === paragraph.speaker &&
+    segment.speakerName === paragraph.speakerName
+  ) {
+    return segment;
+  }
+
+  return {
+    ...segment,
+    sourceParagraphId: paragraphId,
+    speaker: paragraph.speaker,
+    speakerName: paragraph.speakerName,
+  };
+}
+
+function boundsFromParagraphCharRange(
+  anchor: SegmentParagraphAnchor,
+  segmentText: string,
+  segmentCharStart: number,
+  segmentCharEnd: number,
+  fallbackStart: number,
+  fallbackEnd: number
+): { start: number; end: number } {
+  const paragraphCharStart = mapSegmentCharToParagraphChar(
+    anchor.paragraphText,
+    segmentText,
+    anchor.textIndex,
+    segmentCharStart
+  );
+  const paragraphCharEnd = mapSegmentCharToParagraphChar(
+    anchor.paragraphText,
+    segmentText,
+    anchor.textIndex,
+    segmentCharEnd
+  );
+
+  const duration = fallbackEnd - fallbackStart;
+  const linearAt = (offset: number) =>
+    fallbackStart + (duration * offset) / Math.max(segmentText.length, 1);
+
+  const timeWords = filterWordsByTimeRange(anchor.allWords, fallbackStart, fallbackEnd);
+  const rangeWords = collectAlignedWordsInCharRange(
+    timeWords.length ? timeWords : anchor.allWords,
+    anchor.paragraphText,
+    paragraphCharStart,
+    paragraphCharEnd
+  );
+
+  let bounds = rangeFromWords(
+    rangeWords,
+    linearAt(segmentCharStart),
+    linearAt(segmentCharEnd)
+  );
+
+  bounds = enhanceBoundsForKeptPrefix(
+    bounds,
+    segmentText,
+    segmentCharEnd,
+    timeWords.length ? timeWords : anchor.allWords,
+    anchor.paragraphText,
+    anchor.textIndex
+  );
+
+  return bounds;
+}
+
+type PartialDeleteBoundsContext = {
+  segmentText: string;
+  sourceText: string;
+  words: TranscriptWord[];
+  fallbackStart: number;
+  fallbackEnd: number;
+  mapCharOffset: (offset: number) => number;
+};
+
+function resolvePartialDeleteBoundsContext(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[],
+  explicitWords: TranscriptWord[] = []
+): PartialDeleteBoundsContext {
+  const segmentText = segment.text;
+  const fallbackStart = getCopySegmentOriginStart(segment);
+  const fallbackEnd = getCopySegmentOriginEnd(segment);
+  const anchor = resolveSegmentParagraphAnchor(segment, paragraphs);
+
+  if (anchor) {
+    const timeWords = filterWordsByTimeRange(anchor.allWords, fallbackStart, fallbackEnd);
+    return {
+      segmentText,
+      sourceText: anchor.paragraphText,
+      words: timeWords.length ? timeWords : anchor.allWords,
+      fallbackStart,
+      fallbackEnd,
+      mapCharOffset: (offset) =>
+        mapSegmentCharToParagraphChar(
+          anchor.paragraphText,
+          segmentText,
+          anchor.textIndex,
+          offset
+        ),
+    };
+  }
+
+  const resolvedWords = resolveCopySegmentWords(segment, paragraphs);
+  const candidateWords = resolvedWords.length ? resolvedWords : explicitWords;
+  const timeWords = filterWordsByTimeRange(candidateWords, fallbackStart, fallbackEnd);
+
+  return {
+    segmentText,
+    sourceText: segmentText,
+    words: timeWords.length ? timeWords : candidateWords,
+    fallbackStart,
+    fallbackEnd,
+    mapCharOffset: (offset) => offset,
+  };
+}
+
+function linearTimeAtCharOffset(ctx: PartialDeleteBoundsContext, charOffset: number): number {
+  const duration = ctx.fallbackEnd - ctx.fallbackStart;
+  return (
+    ctx.fallbackStart +
+    (duration * charOffset) / Math.max(ctx.segmentText.length, 1)
+  );
+}
+
+type AlignedWordPosition = AlignedWordSpan;
+
+/** 在原文区间内按时间顺序对齐字词字符位置 */
+function alignWordsInSourceRange(
+  sourceText: string,
+  words: TranscriptWord[],
+  rangeStart: number,
+  rangeEnd: number
+): AlignedWordPosition[] {
+  if (!words.length || rangeEnd <= rangeStart || !sourceText) return [];
+
+  return alignWordsToSourceText(sourceText, words).filter(
+    (item) => item.charStart < rangeEnd && item.charEnd > rangeStart
+  );
+}
+
+function interpolateWordTimeAtChar(item: AlignedWordPosition, charOffset: number): number {
+  return interpolateWordTimeAtSpan(item, charOffset);
+}
+
+/** 删除边界之前：保留前缀的最晚发声结束时间 */
+function endTimeBeforeCharOffset(ctx: PartialDeleteBoundsContext, charOffset: number): number {
+  if (charOffset <= 0) return ctx.fallbackStart;
+  if (charOffset >= ctx.segmentText.length) return ctx.fallbackEnd;
+
+  const rangeStart = ctx.mapCharOffset(0);
+  const rangeEnd = ctx.mapCharOffset(ctx.segmentText.length);
+  const boundary = ctx.mapCharOffset(charOffset);
+  const aligned = alignWordsInSourceRange(ctx.sourceText, ctx.words, rangeStart, rangeEnd);
+
+  let bestEnd: number | null = null;
+  let bestCharEnd = -1;
+
+  for (const item of aligned) {
+    if (!isTimingTranscriptWord(item.word)) continue;
+    if (item.charEnd <= boundary && item.charEnd > bestCharEnd) {
+      bestCharEnd = item.charEnd;
+      bestEnd = Math.max(item.word.end, item.word.start);
+    }
+  }
+
+  for (const item of aligned) {
+    if (!isTimingTranscriptWord(item.word)) continue;
+    if (item.charStart < boundary && item.charEnd > boundary) {
+      const interpolated = interpolateWordTimeAtChar(item, boundary);
+      bestEnd = bestEnd == null ? interpolated : Math.max(bestEnd, interpolated);
+    }
+  }
+
+  if (bestEnd != null) return bestEnd;
+  return linearTimeAtCharOffset(ctx, charOffset);
+}
+
+/** 删除边界之后：保留后缀的最早发声开始时间 */
+function startTimeAfterCharOffset(ctx: PartialDeleteBoundsContext, charOffset: number): number {
+  if (charOffset <= 0) return ctx.fallbackStart;
+  if (charOffset >= ctx.segmentText.length) return ctx.fallbackEnd;
+
+  const rangeStart = ctx.mapCharOffset(0);
+  const rangeEnd = ctx.mapCharOffset(ctx.segmentText.length);
+  const boundary = ctx.mapCharOffset(charOffset);
+  const aligned = alignWordsInSourceRange(ctx.sourceText, ctx.words, rangeStart, rangeEnd);
+
+  for (const item of aligned) {
+    if (!isTimingTranscriptWord(item.word)) continue;
+    if (item.charStart >= boundary) {
+      return item.word.start;
+    }
+  }
+
+  for (const item of aligned) {
+    if (!isTimingTranscriptWord(item.word)) continue;
+    if (item.charStart < boundary && item.charEnd > boundary) {
+      return interpolateWordTimeAtChar(item, boundary);
+    }
+  }
+
+  return linearTimeAtCharOffset(ctx, charOffset);
+}
+
+/** 部分删除拆分片段的时间边界（与文案选片分离） */
+function boundsForPartialDeletePiece(
+  ctx: PartialDeleteBoundsContext,
+  charStart: number,
+  charEnd: number
+): { start: number; end: number } {
+  const atStart = charStart <= 0;
+  const atEnd = charEnd >= ctx.segmentText.length;
+
+  if (atStart && atEnd) {
+    return { start: ctx.fallbackStart, end: ctx.fallbackEnd };
+  }
+
+  if (atStart) {
+    return {
+      start: ctx.fallbackStart,
+      end: endTimeBeforeCharOffset(ctx, charEnd),
+    };
+  }
+
+  if (atEnd) {
+    return {
+      start: startTimeAfterCharOffset(ctx, charStart),
+      end: endTimeBeforeCharOffset(ctx, charEnd),
+    };
+  }
+
+  return {
+    start: startTimeAfterCharOffset(ctx, charStart),
+    end: endTimeBeforeCharOffset(ctx, charEnd),
+  };
+}
+
+/** 从 transcript 中解析 copy 片段对应的字级时间轴 */
+export function resolveCopySegmentWords(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): TranscriptWord[] {
+  const timeStart = getCopySegmentOriginStart(segment);
+  const timeEnd = getCopySegmentOriginEnd(segment);
+  const anchor = resolveSegmentParagraphAnchor(segment, paragraphs);
+
+  if (anchor) {
+    return sliceWordsByCharRange(
+      anchor.allWords,
+      anchor.textIndex,
+      anchor.textIndex + segment.text.length,
+      anchor.paragraphText
+    );
+  }
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.speaker !== segment.speaker) continue;
+
+    const paragraphText = getParagraphText(paragraph);
+    const allWords = paragraph.segments.flatMap((item) => item.words ?? []);
+    if (!allWords.length) continue;
+
+    const textIndex = findBestSegmentTextIndex(
+      paragraphText,
+      segment.text,
+      timeStart,
+      timeEnd,
+      allWords
+    );
+    if (textIndex >= 0) {
+      return sliceWordsByCharRange(allWords, textIndex, textIndex + segment.text.length, paragraphText);
+    }
+  }
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.speaker !== segment.speaker) continue;
+
+    const allWords = paragraph.segments.flatMap((item) => item.words ?? []);
+    const inRange = allWords
+      .filter(
+        (word) =>
+          isTimingTranscriptWord(word) &&
+          word.end > timeStart - 0.1 &&
+          word.start < timeEnd + 0.1
+      )
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+
+    if (!inRange.length) continue;
+
+    const aligned = sliceWordsByCharRange(inRange, 0, segment.text.length, segment.text);
+    if (aligned.length) return aligned;
+
+    return inRange;
+  }
+
+  return [];
+}
+
+function findBestSegmentTextIndex(
+  paragraphText: string,
+  segmentText: string,
+  segmentStart: number,
+  segmentEnd: number,
+  allWords: TranscriptWord[]
+): number {
+  if (!segmentText) return -1;
+
+  let bestIndex = -1;
+  let bestOverlap = -1;
+
+  for (const textIndex of findAllSegmentTextStarts(paragraphText, segmentText)) {
+    const candidateWords = sliceWordsByCharRange(
+      allWords,
+      textIndex,
+      textIndex + segmentText.length,
+      paragraphText
+    );
+    const range = rangeFromWords(candidateWords, segmentStart, segmentEnd);
+    const overlapStart = Math.max(range.start, segmentStart);
+    const overlapEnd = Math.min(range.end, segmentEnd);
+    const overlap = overlapEnd - overlapStart;
+
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap;
+      bestIndex = textIndex;
+    }
+  }
+
+  return bestIndex;
+}
+
+function buildSplitCopySegment(
+  segment: SelectedCopySegment,
+  text: string,
+  charStart: number,
+  charEnd: number,
+  words: TranscriptWord[],
+  paragraphs: TranscriptParagraph[],
+  overrides: Partial<SelectedCopySegment>
+): SelectedCopySegment {
+  const ctx = resolvePartialDeleteBoundsContext(segment, paragraphs, words);
+  const bounds = boundsForPartialDeletePiece(ctx, charStart, charEnd);
+
+  return {
+    ...segment,
+    ...overrides,
+    text,
+    start: bounds.start,
+    end: bounds.end,
+    originStart: bounds.start,
+    originEnd: bounds.end,
+  };
 }
 
 export function deleteSelectedRangeFromSegment(
   segment: SelectedCopySegment,
   selectionStart: number,
-  selectionEnd: number
+  selectionEnd: number,
+  _words: TranscriptWord[] = [],
+  paragraphs: TranscriptParagraph[] = []
 ): SelectedCopySegment[] | 'delete-all' | null {
   const text = segment.text;
 
@@ -595,64 +1858,44 @@ export function deleteSelectedRangeFromSegment(
     return 'delete-all';
   }
 
-  const duration = segment.end - segment.start;
-  if (duration <= 0.5) return null;
-
-  const timeAt = (offset: number) => segment.start + (duration * offset) / text.length;
-  const deleteStartTime = timeAt(selectionStart);
-  const deleteEndTime = timeAt(selectionEnd);
-
   const beforeText = text.slice(0, selectionStart);
   const afterText = text.slice(selectionEnd);
+  const selectedText = text.slice(selectionStart, selectionEnd);
 
-  if (beforeText && afterText) {
-    if (deleteStartTime - segment.start < 0.5 || segment.end - deleteEndTime < 0.5) {
-      return null;
-    }
+  // 仅删标点：不拆分、不重算字级时间（标点本身无 ASR 时间轴）
+  if (isPunctuationOnlySelection(selectedText)) {
+    const newText = beforeText + afterText;
+    if (!newText.trim() || isPunctuationOnlySelection(newText)) return 'delete-all';
+    return [{ ...segment, text: newText }];
+  }
 
+  const { before: keptBefore, after: keptAfter } = dropPunctuationOnlySplitPieces(
+    beforeText,
+    afterText
+  );
+
+  if (!keptBefore && !keptAfter) return 'delete-all';
+
+  if (keptBefore && keptAfter) {
     return [
-      {
-        ...segment,
+      buildSplitCopySegment(segment, keptBefore, 0, selectionStart, _words, paragraphs, {
         id: `${segment.id}-a-${Date.now()}`,
-        text: beforeText,
-        end: deleteStartTime,
-        originStart: segment.start,
-        originEnd: deleteStartTime,
-      },
-      {
-        ...segment,
+      }),
+      buildSplitCopySegment(segment, keptAfter, selectionEnd, text.length, _words, paragraphs, {
         id: `${segment.id}-b-${Date.now()}`,
-        text: afterText,
-        start: deleteEndTime,
-        originStart: deleteEndTime,
-        originEnd: segment.end,
-      },
+      }),
     ];
   }
 
-  if (beforeText) {
-    if (deleteStartTime - segment.start < 0.5) return null;
+  if (keptBefore) {
     return [
-      {
-        ...segment,
-        text: beforeText,
-        end: deleteStartTime,
-        originStart: segment.originStart ?? segment.start,
-        originEnd: deleteStartTime,
-      },
+      buildSplitCopySegment(segment, keptBefore, 0, selectionStart, _words, paragraphs, {}),
     ];
   }
 
-  if (afterText) {
-    if (segment.end - deleteEndTime < 0.5) return null;
+  if (keptAfter) {
     return [
-      {
-        ...segment,
-        text: afterText,
-        start: deleteEndTime,
-        originStart: deleteEndTime,
-        originEnd: segment.originEnd ?? segment.end,
-      },
+      buildSplitCopySegment(segment, keptAfter, selectionEnd, text.length, _words, paragraphs, {}),
     ];
   }
 
@@ -867,6 +2110,56 @@ export function adjustSegmentEdge(
   return { segments: next, applied: Math.max(0, actualApplied) };
 }
 
+/** 将播放区间收束到文案留白边界内，避免历史数据或 ASR 误差带入下一句前音 */
+export function clampCopySegmentPlaybackBounds(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[],
+  videoDuration: number
+): SelectedCopySegment {
+  const originStart = getSegmentOriginStart(segment);
+  const originEnd = getSegmentOriginEnd(segment);
+  const originEndForPad = tightenOriginEndAgainstNextSpeech(paragraphs, originEnd);
+  const { lowerBound, upperBound } = getTranscriptPadBounds(
+    paragraphs,
+    originStart,
+    originEndForPad,
+    videoDuration
+  );
+
+  const EPS = 1e-3;
+  let start = segment.start;
+  let end = segment.end;
+
+  if (start < lowerBound - EPS) start = lowerBound;
+  if (start > originStart + EPS) start = originStart;
+  if (end > upperBound + EPS) end = upperBound;
+  if (end < originEnd - EPS) end = originEnd;
+
+  if (Math.abs(start - segment.start) < EPS && Math.abs(end - segment.end) < EPS) {
+    return segment;
+  }
+
+  return {
+    ...segment,
+    originStart,
+    originEnd,
+    start,
+    end,
+  };
+}
+
+export function sanitizeSelectedCopySegments(
+  segments: SelectedCopySegment[],
+  paragraphs: TranscriptParagraph[],
+  videoDuration: number
+): SelectedCopySegment[] {
+  if (!segments.length) return segments;
+  return segments.map((segment) => {
+    const clamped = clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration);
+    return attachSourceParagraphIdToCopySegment(clamped, paragraphs);
+  });
+}
+
 /** @deprecated 使用 adjustSegmentEdge(..., +deltaSec) */
 export function extendSegmentEdge(
   segments: SelectedCopySegment[],
@@ -886,76 +2179,8 @@ export function extendSegmentEdge(
   );
 }
 
-/**
- * 将新选片段 A 插入已选列表：找到使 |X.end - A.start| 最小的已选片段 X，把 A 插在 X 后面。
- * 空列表时 A 作为第一项。平局时优先 end ≤ A.start 的 X（更像前一段）。
- */
-export function insertCopySegmentAfterNearestEnd(
-  segments: SelectedCopySegment[],
-  incoming: SelectedCopySegment
-): SelectedCopySegment[] {
-  if (!segments.length) return [incoming];
-
-  let bestIndex = 0;
-  let bestScore = Math.abs(segments[0]!.end - incoming.start);
-  let bestIsPredecessor = segments[0]!.end <= incoming.start;
-
-  for (let i = 1; i < segments.length; i++) {
-    const item = segments[i]!;
-    const score = Math.abs(item.end - incoming.start);
-    const isPredecessor = item.end <= incoming.start;
-    const better =
-      score < bestScore || (score === bestScore && isPredecessor && !bestIsPredecessor);
-    if (!better) continue;
-    bestScore = score;
-    bestIndex = i;
-    bestIsPredecessor = isPredecessor;
-  }
-
-  const next = segments.slice();
-  next.splice(bestIndex + 1, 0, incoming);
-  return next;
-}
-
 export function getTotalSelectedDuration(segments: SelectedCopySegment[]) {
   return segments.reduce((sum, item) => sum + (item.end - item.start), 0);
-}
-
-/** 已选文案的原文时间区间（不含前后留白），用于在文案分段中标色 */
-export function getSelectedCopyOriginRanges(
-  segments: SelectedCopySegment[]
-): Array<{ start: number; end: number }> {
-  return segments
-    .map((segment) => {
-      const start = Number.isFinite(segment.originStart)
-        ? Number(segment.originStart)
-        : segment.start;
-      const end = Number.isFinite(segment.originEnd) ? Number(segment.originEnd) : segment.end;
-      return { start, end };
-    })
-    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start);
-}
-
-/** 文案分段时间轴是否与已选原文区间重叠 */
-export function isTranscriptRangeSelected(
-  start: number,
-  end: number,
-  selectedRanges: Array<{ start: number; end: number }>
-): boolean {
-  if (!selectedRanges.length || !Number.isFinite(start) || !Number.isFinite(end)) {
-    return false;
-  }
-
-  const EPS = 1e-3;
-  return selectedRanges.some((range) => {
-    // ASR 末尾字/标点常见 start===end；点落在半开区间 [start, end)
-    // 避免下一段起点/首字标点（恰等于 end）被误高亮而「超出」
-    if (!(end > start)) {
-      return start >= range.start - EPS && start < range.end;
-    }
-    // 正长度区间同样按半开 [start, end)
-    return start < range.end && range.start < end;
-  });
 }
 
 export function reorderSegments(
@@ -964,11 +2189,16 @@ export function reorderSegments(
   toIndex: number
 ) {
   if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return segments;
-  if (fromIndex >= segments.length || toIndex >= segments.length) return segments;
+  if (fromIndex >= segments.length || toIndex > segments.length) return segments;
 
   const next = [...segments];
   const [moved] = next.splice(fromIndex, 1);
   if (!moved) return segments;
+
+  if (toIndex >= next.length) {
+    next.push(moved);
+    return next;
+  }
 
   let targetIndex = toIndex;
   if (fromIndex < toIndex) {

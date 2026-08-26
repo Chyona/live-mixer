@@ -1,17 +1,10 @@
-import axios from 'axios';
-
-import { apiPath } from '~/utils/api';
-
 import type { BaseResponse } from './types';
-import { AppError, request } from './http';
+import { request } from './http';
 
 export type ClipTaskItemStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 /** 任务类型 */
 export type GenerationTaskType = 'ai_slice' | 'draft' | 'ai_slice_draft' | (string & {});
-
-/** 大文件下载超时（合成视频 / 片段压缩包） */
-const TASK_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** ext 字段解析结果 */
 export interface ClipTaskExt {
@@ -172,141 +165,16 @@ function resolveClipsTarUrl(
   return '';
 }
 
-function parseContentDispositionFilename(header?: string): string | null {
-  if (!header) return null;
-
-  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(header);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1].trim());
-    } catch {
-      return utf8Match[1].trim();
-    }
-  }
-
-  const plainMatch = /filename="?([^";]+)"?/i.exec(header);
-  return plainMatch?.[1]?.trim() || null;
-}
-
-function triggerBlobDownload(blob: Blob, filename: string) {
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(objectUrl);
-}
-
-function triggerUrlDownload(url: string, filename: string) {
+/** 浏览器原生下载：打开 CDN 直链，由浏览器处理下载 */
+function triggerNativeDownload(url: string): void {
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = filename;
-  anchor.target = '_blank';
   anchor.rel = 'noopener noreferrer';
+  anchor.target = '_blank';
+  anchor.style.display = 'none';
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-}
-
-async function resolveBlobErrorMessage(error: unknown, fallback: string): Promise<string> {
-  if (!(error instanceof AppError)) {
-    return fallback;
-  }
-
-  const data = error.resp?.response?.data;
-  if (data instanceof Blob) {
-    try {
-      const text = await data.text();
-      const payload = JSON.parse(text) as { message?: string; errorMessage?: string };
-      if (payload.message) return payload.message;
-      if (payload.errorMessage) return payload.errorMessage;
-    } catch {
-      // ignore parse failure
-    }
-  }
-
-  return error.errorMessage || fallback;
-}
-
-async function downloadRemoteFile(url: string, filename: string): Promise<void> {
-  try {
-    const response = await axios.request<Blob>({
-      url,
-      method: 'get',
-      responseType: 'blob',
-      timeout: TASK_DOWNLOAD_TIMEOUT_MS,
-    });
-    const blob = response.data;
-    if (!blob || blob.size === 0) {
-      throw new Error('下载文件为空');
-    }
-    const resolvedName =
-      parseContentDispositionFilename(response.headers['content-disposition']) || filename;
-    triggerBlobDownload(blob, resolvedName);
-  } catch {
-    // 跨域或直链场景：回退为浏览器打开/下载
-    triggerUrlDownload(url, filename);
-  }
-}
-
-async function downloadTaskBlob(path: string, fallbackFilename: string, fallbackError: string) {
-  try {
-    const response = await axios.request<Blob>({
-      url: apiPath(path),
-      method: 'get',
-      responseType: 'blob',
-      timeout: TASK_DOWNLOAD_TIMEOUT_MS,
-    });
-
-    const blob = response.data;
-    if (!blob || blob.size === 0) {
-      throw new Error(fallbackError);
-    }
-
-    // 兼容接口返回 JSON：{ code, data: { url } }
-    if (blob.type.includes('application/json') || blob.type.includes('text/')) {
-      try {
-        const payload = JSON.parse(await blob.text()) as {
-          code?: number;
-          message?: string;
-          data?: { url?: string } | string | null;
-        };
-        if (payload.code != null && payload.code !== 0) {
-          throw new Error(payload.message || fallbackError);
-        }
-        const url =
-          typeof payload.data === 'string'
-            ? payload.data.trim()
-            : String(payload.data?.url ?? '').trim();
-        if (!url) {
-          throw new Error(fallbackError);
-        }
-        await downloadRemoteFile(url, fallbackFilename);
-        return;
-      } catch (error) {
-        if (error instanceof Error) throw error;
-        throw new Error(fallbackError);
-      }
-    }
-
-    const filename =
-      parseContentDispositionFilename(response.headers['content-disposition']) || fallbackFilename;
-    triggerBlobDownload(blob, filename);
-  } catch (error) {
-    if (error instanceof Error && (error.message === fallbackError || error.message === '下载文件为空')) {
-      throw error;
-    }
-    const message = await resolveBlobErrorMessage(error, fallbackError);
-    if (error instanceof AppError) {
-      throw new AppError(message, error.errorCode, error.resp);
-    }
-    throw new Error(message);
-  }
-}
-
-function sanitizeDownloadFilename(name: string, fallback: string) {
-  const trimmed = name.trim() || fallback;
-  return trimmed.replace(/[\\/:*?"<>|]+/g, '_');
 }
 
 function resolveLiveName(
@@ -416,42 +284,26 @@ export async function deleteClipTask(taskId: string): Promise<BaseResponse<null>
   });
 }
 
-/** 下载任务合成视频（优先接口文件流，其次任务上的 video_url） */
-export async function downloadTaskVideo(
-  task: Pick<ClipTaskItem, 'id' | 'video_url' | 'video_project_name'>
-): Promise<void> {
-  const filename = `${sanitizeDownloadFilename(task.video_project_name, task.id)}-合成视频.mp4`;
-  const directUrl = task.video_url?.trim();
-
-  try {
-    await downloadTaskBlob(`/v1/tasks/${task.id}/video`, filename, '暂无合成视频');
-    return;
-  } catch (error) {
-    if (directUrl) {
-      await downloadRemoteFile(directUrl, filename);
-      return;
-    }
-    throw error instanceof Error ? error : new Error('视频下载失败');
+/** 下载任务合成视频（CDN 直链，浏览器原生下载） */
+export function downloadTaskVideo(
+  task: Pick<ClipTaskItem, 'video_url'>
+): void {
+  const url = task.video_url?.trim();
+  if (!url) {
+    throw new Error('暂无合成视频');
   }
+  triggerNativeDownload(url);
 }
 
-/** 下载任务全部视频片段压缩包 */
-export async function downloadTaskClipsTar(
-  task: Pick<ClipTaskItem, 'id' | 'clips_tar_url' | 'video_project_name'>
-): Promise<void> {
-  const filename = `${sanitizeDownloadFilename(task.video_project_name, task.id)}-视频片段.tar`;
-  const directUrl = task.clips_tar_url?.trim();
-
-  try {
-    await downloadTaskBlob(`/v1/tasks/${task.id}/clips-tar`, filename, '暂无视频片段压缩包');
-    return;
-  } catch (error) {
-    if (directUrl) {
-      await downloadRemoteFile(directUrl, filename);
-      return;
-    }
-    throw error instanceof Error ? error : new Error('视频片段下载失败');
+/** 下载任务全部视频片段压缩包（CDN 直链，浏览器原生下载） */
+export function downloadTaskClipsTar(
+  task: Pick<ClipTaskItem, 'clips_tar_url'>
+): void {
+  const url = task.clips_tar_url?.trim();
+  if (!url) {
+    throw new Error('暂无视频片段压缩包');
   }
+  triggerNativeDownload(url);
 }
 
 export function canDownloadTaskOutputs(task: Pick<ClipTaskItem, 'status' | 'type'>) {

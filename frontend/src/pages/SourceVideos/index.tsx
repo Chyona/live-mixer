@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useNavigate } from 'react-router-dom';
 import { Button, DatePicker, Input, Popconfirm, Space } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { LuCopy, LuPlus, LuScissors, LuSparkles, LuTrash2 } from 'react-icons/lu';
+import { LuPlus, LuScissors, LuSparkles, LuTrash2 } from 'react-icons/lu';
+import CopyableText from '~/components/CopyableText';
 
 import DisabledActionWrap from '~/components/DisabledActionWrap';
 import EllipsisTooltip from '~/components/EllipsisTooltip';
@@ -21,13 +22,14 @@ import { AppError } from '~/services/http';
 import {
   deleteSourceVideo,
   fetchSourceVideoList,
+  fetchSourceVideoRelatedProjects,
   retrySourceVideoAsr,
   updateSourceVideo,
   type SourceVideo,
 } from '~/services/sourceVideo';
 import { formatToDateTime } from '~/utils/date';
 import { formatVideoDurationMs } from '~/utils/duration';
-import { parseListKeywords, toApiKeywords } from '~/utils/listKeywords';
+import { parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
 import { DEFAULT_TABLE_PAGINATION, handleTablePaginationChange } from '~/utils/table';
 import { showAppError, showScopedError, handleRequestError, toast } from '~/utils/toast';
 
@@ -81,6 +83,99 @@ function renderSliceAction(options: {
   );
 
   return <DisabledActionWrap disabledReason={options.disabledReason}>{button}</DisabledActionWrap>;
+}
+
+function getSourceVideoProjectCount(record: Pick<SourceVideo, 'project_count'>): number {
+  const count = Number(record.project_count);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+
+function SourceVideoDeleteButton({
+  record,
+  deletingId,
+  onDelete,
+}: {
+  record: SourceVideo;
+  deletingId: number | null;
+  onDelete: (id: number) => void;
+}) {
+  const [checkingRelated, setCheckingRelated] = useState(false);
+
+  const showRelatedProjectsDeleteToast = (projectCount: number) => {
+    const toastKey = `delete-source-video-related-${record.id}`;
+    toast.notify.warning(
+      '存在关联的项目',
+      `关联的 ${projectCount} 个剪辑项目将一并删除，若存在进行中的任务可能导致任务执行失败，此操作不可撤销。`,
+      {
+        key: toastKey,
+        duration: 0,
+        btn: (
+          <Space size={8}>
+            <Button size="small" onClick={() => toast.notify.destroy(toastKey)}>
+              取消
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              danger
+              onClick={() => {
+                toast.notify.destroy(toastKey);
+                onDelete(record.id);
+              }}
+            >
+              继续删除
+            </Button>
+          </Space>
+        ),
+      }
+    );
+  };
+
+  const handleConfirm = async () => {
+    setCheckingRelated(true);
+    try {
+      const response = await fetchSourceVideoRelatedProjects(record.id);
+      if (response.code !== 0) {
+        toast.notify.error(response.message || '检查关联项目失败，请稍后重试');
+        return;
+      }
+
+      const projectCount = Math.max(0, Number(response.data?.total ?? 0));
+      if (projectCount > 0) {
+        showRelatedProjectsDeleteToast(projectCount);
+        return;
+      }
+
+      onDelete(record.id);
+    } catch {
+      toast.notify.error('检查关联项目失败，请稍后重试');
+    } finally {
+      setCheckingRelated(false);
+    }
+  };
+
+  const actionLoading = checkingRelated || deletingId === record.id;
+
+  return (
+    <Popconfirm
+      title="确认删除该源视频？"
+      description="删除后不可恢复"
+      okText="删除"
+      cancelText="取消"
+      okButtonProps={{ danger: true, loading: actionLoading }}
+      onConfirm={() => void handleConfirm()}
+    >
+      <Button
+        type="link"
+        danger
+        className="list-page__action-btn"
+        icon={<LuTrash2 size={14} />}
+        loading={actionLoading}
+      >
+        删除
+      </Button>
+    </Popconfirm>
+  );
 }
 
 const SourceVideosPage = () => {
@@ -286,7 +381,7 @@ const SourceVideosPage = () => {
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = useCallback(async (id: number) => {
     setDeletingId(id);
     try {
       const response = await deleteSourceVideo(id);
@@ -296,6 +391,7 @@ const SourceVideosPage = () => {
       }
 
       toast.notify.success('已删除源视频');
+
       if (list.length === 1 && page > 1) {
         setPage((prev) => prev - 1);
       } else {
@@ -310,7 +406,7 @@ const SourceVideosPage = () => {
     } finally {
       setDeletingId(null);
     }
-  };
+  }, [list.length, loadList, page]);
 
   const columns = useMemo<ColumnsType<SourceVideo>>(() => {
     const allColumns: ColumnsType<SourceVideo> = [
@@ -346,54 +442,20 @@ const SourceVideosPage = () => {
         dataIndex: 'live_url',
         key: 'live_url',
         ellipsis: true,
-        render: (url: string) => {
-          const text = url?.trim();
-          if (!text) return '-';
-
-          const handleCopy = async () => {
-            try {
-              if (navigator.clipboard?.writeText) {
-                await navigator.clipboard.writeText(text);
-              } else {
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                textarea.style.position = 'fixed';
-                textarea.style.opacity = '0';
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-              }
-              toast.notify.success('已复制');
-            } catch {
-              toast.notify.error('复制失败，请手动复制链接');
-            }
-          };
-
-          return (
-            <div className="source-videos-url-cell">
-              <EllipsisTooltip
-                text={text}
-                className="list-page__cell-ellipsis source-videos-url-cell__text"
-              />
-              <Button
-                type="link"
-                size="small"
-                className="source-videos-url-cell__action"
-                icon={<LuCopy size={14} />}
-                aria-label="复制视频URL"
-                title="复制"
-                onClick={() => void handleCopy()}
-              />
-            </div>
-          );
-        },
+        render: (url: string) => (
+          <CopyableText
+            text={url}
+            layout="row"
+            className="source-videos-url-cell"
+            emptyFallback="-"
+          />
+        ),
       },
       {
         title: '时长',
         dataIndex: 'duration',
         key: 'duration',
-        width: 80,
+        width: 90,
         align: 'right',
         render: (duration: number) => (duration > 0 ? formatVideoDurationMs(duration) : '-'),
       },
@@ -419,7 +481,7 @@ const SourceVideosPage = () => {
         title: 'ASR开始时间',
         dataIndex: 'asr_started_at',
         key: 'asr_started_at',
-        width: 160,
+        width: 170,
         align: 'right',
         render: (value: string) => formatToDateTime(value),
       },
@@ -427,7 +489,7 @@ const SourceVideosPage = () => {
         title: 'ASR完成时间',
         dataIndex: 'asr_updated_at',
         key: 'asr_updated_at',
-        width: 160,
+        width: 170,
         align: 'right',
         render: (value: string, record) =>
           record.asr_status === 'completed' ? formatToDateTime(value) : '-',
@@ -446,7 +508,7 @@ const SourceVideosPage = () => {
         title: '创建时间',
         dataIndex: 'created_at',
         key: 'created_at',
-        width: 160,
+        width: 170,
         render: (created_at: string) => formatToDateTime(created_at),
       },
       {
@@ -486,6 +548,7 @@ const SourceVideosPage = () => {
             record.asr_status,
             record.asr_error_msg
           );
+          const projectCount = getSourceVideoProjectCount(record);
 
           return (
             <Space size={8}>
@@ -503,24 +566,11 @@ const SourceVideosPage = () => {
                 disabledReason: asrDisabledReason,
                 onNavigate: navigate,
               })}
-              <Popconfirm
-                title="确认删除该源视频？"
-                description="删除后不可恢复，仅删除您自己的源视频数据。"
-                okText="删除"
-                cancelText="取消"
-                okButtonProps={{ danger: true, loading: deletingId === record.id }}
-                onConfirm={() => void handleDelete(record.id)}
-              >
-                <Button
-                  type="link"
-                  danger
-                  className="list-page__action-btn"
-                  icon={<LuTrash2 size={14} />}
-                  loading={deletingId === record.id}
-                >
-                  删除
-                </Button>
-              </Popconfirm>
+              <SourceVideoDeleteButton
+                record={record}
+                deletingId={deletingId}
+                onDelete={handleDelete}
+              />
             </Space>
           );
         },
@@ -551,7 +601,16 @@ const SourceVideosPage = () => {
         render: () => null,
       },
     ];
-  }, [deletingId, defaultVisibleKeys, navigate, retryingAsrId, setVisibleKeys, visibleKeySet, visibleKeys]);
+  }, [
+    deletingId,
+    defaultVisibleKeys,
+    handleDelete,
+    navigate,
+    retryingAsrId,
+    setVisibleKeys,
+    visibleKeySet,
+    visibleKeys,
+  ]);
 
   const hasActiveAdvancedFilters = Boolean(dateRange?.[0] || appliedAsrKeyword);
   const hasActiveFilters = Boolean(appliedKeyword || hasActiveAdvancedFilters);
@@ -564,7 +623,7 @@ const SourceVideosPage = () => {
       : true
     : false;
   const asrHitKeywords = useMemo(
-    () => parseListKeywords(appliedAsrKeyword),
+    () => parseHighlightKeywords(appliedAsrKeyword),
     [appliedAsrKeyword]
   );
   const asrHitExpandedRowKeys = useMemo(
@@ -643,6 +702,7 @@ const SourceVideosPage = () => {
               key={`${record.id}-${asrHitKeywords.join('\u0001')}`}
               paragraphs={record.matched_paragraphs ?? []}
               keywords={asrHitKeywords}
+              keywordInput={appliedAsrKeyword}
             />
           ),
         }}

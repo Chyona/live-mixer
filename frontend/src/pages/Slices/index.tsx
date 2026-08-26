@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { appendDebugAsrKeyToPath } from '~/utils/asrParagraphsKey';
 import { Button, DatePicker, Popconfirm, Space } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { LuSquarePen, LuTrash2, LuVideo } from 'react-icons/lu';
@@ -16,6 +17,7 @@ import { AppError } from '~/services/http';
 import {
   deleteSliceProject,
   fetchSliceProjectList,
+  fetchSliceProjectRunningTasks,
   getSliceProjectSegmentCount,
   getSliceProjectAspectRatio,
   updateSliceProject,
@@ -29,6 +31,92 @@ import { showAppError, showScopedError, handleRequestError, toast } from '~/util
 import './index.css';
 
 const SLICES_LIST_ERROR_SCOPE = 'slices-list';
+
+function SliceProjectDeleteButton({
+  record,
+  deletingId,
+  onDelete,
+}: {
+  record: SliceProject;
+  deletingId: number | null;
+  onDelete: (id: number) => void;
+}) {
+  const [checkingTasks, setCheckingTasks] = useState(false);
+
+  const showRunningTasksDeleteToast = (runningTaskCount: number) => {
+    const toastKey = `delete-slice-project-${record.id}`;
+    toast.notify.warning(
+      '存在进行中的任务',
+      `该项目有 ${runningTaskCount} 个正在执行中的任务，删除可能导致任务执行失败。是否继续删除？`,
+      {
+        key: toastKey,
+        duration: 0,
+        btn: (
+          <Space size={8}>
+            <Button size="small" onClick={() => toast.notify.destroy(toastKey)}>
+              取消
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              danger
+              onClick={() => {
+                toast.notify.destroy(toastKey);
+                onDelete(record.id);
+              }}
+            >
+              继续删除
+            </Button>
+          </Space>
+        ),
+      }
+    );
+  };
+
+  const handleConfirm = async () => {
+    setCheckingTasks(true);
+    try {
+      const response = await fetchSliceProjectRunningTasks(record.id);
+      const runningTaskCount =
+        response.code === 0 ? Math.max(0, Number(response.data?.total ?? 0)) : 0;
+
+      if (runningTaskCount > 0) {
+        showRunningTasksDeleteToast(runningTaskCount);
+        return;
+      }
+
+      onDelete(record.id);
+    } catch {
+      toast.notify.error('检查关联任务失败，请稍后重试');
+    } finally {
+      setCheckingTasks(false);
+    }
+  };
+
+  const actionLoading = checkingTasks || deletingId === record.id;
+
+  return (
+    <Popconfirm
+      title="确认删除该剪辑项目？"
+      description="删除后不可恢复"
+      okText="删除"
+      cancelText="取消"
+      okButtonProps={{ danger: true, loading: actionLoading }}
+      onConfirm={() => void handleConfirm()}
+    >
+      <Button
+        type="link"
+        size="small"
+        danger
+        className="list-page__action-btn"
+        icon={<LuTrash2 size={14} />}
+        loading={actionLoading}
+      >
+        删除
+      </Button>
+    </Popconfirm>
+  );
+}
 
 const SlicesPage = () => {
   const navigate = useNavigate();
@@ -284,7 +372,7 @@ const SlicesPage = () => {
         title: '更新时间',
         dataIndex: 'updated_at',
         key: 'updated_at',
-        width: 160,
+        width: 170,
         render: (value: string) => formatToDateTime(value),
       },
       {
@@ -314,30 +402,16 @@ const SlicesPage = () => {
             >
               编辑
             </Button>
-            <Popconfirm
-              title="确认删除该剪辑项目？"
-              description="删除后不可恢复"
-              okText="删除"
-              cancelText="取消"
-              okButtonProps={{ danger: true, loading: deletingId === record.id }}
-              onConfirm={() => void handleDelete(record.id)}
-            >
-              <Button
-                type="link"
-                size="small"
-                danger
-                className="list-page__action-btn"
-                icon={<LuTrash2 size={14} />}
-                loading={deletingId === record.id}
-              >
-                删除
-              </Button>
-            </Popconfirm>
+            <SliceProjectDeleteButton
+              record={record}
+              deletingId={deletingId}
+              onDelete={(id) => void handleDelete(id)}
+            />
           </Space>
         ),
       },
     ],
-    [deletingId, navigate]
+    [deletingId, handleDelete, navigate]
   );
 
   return (
@@ -387,7 +461,7 @@ const SlicesPage = () => {
               description: '在源视频中完成切片后，对应项目会自动汇总到这里',
               tone: 'primary',
               action: (
-                <Link to="/source-videos">
+                <Link to={appendDebugAsrKeyToPath('/source-videos')}>
                   <Button type="primary" icon={<LuVideo size={16} />}>
                     前往源视频管理
                   </Button>

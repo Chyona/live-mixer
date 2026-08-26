@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { Button, Descriptions, Drawer, Progress, Typography } from 'antd';
 import { LuDownload, LuPackage, LuX } from 'react-icons/lu';
 
-import { AppError } from '~/services/http';
+import CopyableText from '~/components/CopyableText';
 import {
   downloadTaskClipsTar,
   downloadTaskVideo,
   type ClipTaskItem,
 } from '~/services/task';
 import { formatToDateTime } from '~/utils/date';
-import { showAppError, toast } from '~/utils/toast';
+import { toast } from '~/utils/toast';
 import {
   getClipTaskAspectRatio,
   getClipTaskDisplayName,
@@ -31,19 +31,18 @@ function EmptyValue() {
 }
 
 function CopyableUrl({ url }: { url: string }) {
-  const text = url.trim();
-  if (!text) return <EmptyValue />;
-
   return (
-    <Typography.Paragraph className="tasks-detail-draft" copyable={{ text }}>
-      {text}
-    </Typography.Paragraph>
+    <CopyableText
+      text={url}
+      layout="paragraph"
+      className="tasks-detail-draft"
+      emptyFallback={<EmptyValue />}
+    />
   );
 }
 
 const ClipTaskDetailModal = ({ open, task, onClose }: ClipTaskDetailModalProps) => {
   const [promptOpen, setPromptOpen] = useState(false);
-  const [downloadAction, setDownloadAction] = useState<DetailDownloadAction | null>(null);
   const draftUrl = task?.draft_url?.trim() || '';
   const liveUrl = task?.live_url?.trim() || '';
   const videoUrl = task?.video_url?.trim() || '';
@@ -61,7 +60,6 @@ const ClipTaskDetailModal = ({ open, task, onClose }: ClipTaskDetailModalProps) 
   useEffect(() => {
     if (!open) {
       setPromptOpen(false);
-      setDownloadAction(null);
     }
   }, [open]);
 
@@ -70,26 +68,18 @@ const ClipTaskDetailModal = ({ open, task, onClose }: ClipTaskDetailModalProps) 
     onClose();
   };
 
-  const handleDownload = async (action: DetailDownloadAction) => {
+  const handleDownload = (action: DetailDownloadAction) => {
     if (!task) return;
     const label = action === 'video' ? '视频' : '视频片段压缩包';
-    setDownloadAction(action);
-    toast.notify.info(`正在下载 ${label}，请稍候…`);
 
     try {
       if (action === 'video') {
-        await downloadTaskVideo(task);
+        downloadTaskVideo(task);
       } else {
-        await downloadTaskClipsTar(task);
+        downloadTaskClipsTar(task);
       }
     } catch (error) {
-      if (error instanceof AppError) {
-        showAppError(error);
-      } else {
-        toast.notify.error(error instanceof Error ? error.message : `${label}下载失败`);
-      }
-    } finally {
-      setDownloadAction((current) => (current === action ? null : current));
+      toast.notify.error(error instanceof Error ? error.message : `${label}下载失败`);
     }
   };
 
@@ -220,9 +210,8 @@ const ClipTaskDetailModal = ({ open, task, onClose }: ClipTaskDetailModalProps) 
                     size="small"
                     className="tasks-detail-download-btn"
                     icon={<LuDownload size={14} />}
-                    disabled={!videoUrl || (Boolean(downloadAction) && downloadAction !== 'video')}
-                    loading={downloadAction === 'video'}
-                    onClick={() => void handleDownload('video')}
+                    disabled={!videoUrl}
+                    onClick={() => handleDownload('video')}
                   >
                     下载视频
                   </Button>
@@ -233,11 +222,8 @@ const ClipTaskDetailModal = ({ open, task, onClose }: ClipTaskDetailModalProps) 
                     size="small"
                     className="tasks-detail-download-btn"
                     icon={<LuPackage size={14} />}
-                    disabled={
-                      !clipsTarUrl || (Boolean(downloadAction) && downloadAction !== 'clips-tar')
-                    }
-                    loading={downloadAction === 'clips-tar'}
-                    onClick={() => void handleDownload('clips-tar')}
+                    disabled={!clipsTarUrl}
+                    onClick={() => handleDownload('clips-tar')}
                   >
                     下载片段
                   </Button>

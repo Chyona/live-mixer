@@ -1,4 +1,5 @@
 import type { SliceProjectSource } from '~/services/sliceProject';
+import { appendDebugAsrKeyToPath, mergeDebugAsrKeySearchParams } from '~/utils/asrParagraphsKey';
 
 export type SliceEditorEntryFrom = 'source-videos' | 'slices' | 'tasks';
 
@@ -12,8 +13,10 @@ export type SliceEditorLinkOptions = {
 
 function appendProjectId(path: string, options?: SliceEditorLinkOptions) {
   const projectId = options?.projectId;
-  if (projectId == null || projectId === '') return path;
-  const search = new URLSearchParams({ projectId: String(projectId) });
+  if (projectId == null || projectId === '') return appendDebugAsrKeyToPath(path);
+  const search = mergeDebugAsrKeySearchParams(
+    new URLSearchParams({ projectId: String(projectId) })
+  );
   return `${path}?${search.toString()}`;
 }
 
@@ -58,14 +61,18 @@ export function parseProjectId(value: string | null | undefined): number | null 
 
 /** 项目管理列表链接；可带 keyword 作为搜索条件（如源视频名称） */
 export function buildSlicesListLink(options?: { keyword?: string | null }) {
+  const search = mergeDebugAsrKeySearchParams(new URLSearchParams());
   const keyword = options?.keyword?.trim();
-  if (!keyword) return '/slices';
-  return `/slices?${new URLSearchParams({ keyword }).toString()}`;
+  if (keyword) search.set('keyword', keyword);
+  const str = search.toString();
+  return str ? `/slices?${str}` : '/slices';
 }
 
 /** 任务管理列表链接；可带 keyword 作为搜索条件（如源视频名称 / 项目名称） */
 export function buildTasksListLink(options?: { keyword?: string | null }) {
+  const search = mergeDebugAsrKeySearchParams(new URLSearchParams());
   const keyword = options?.keyword?.trim();
-  if (!keyword) return '/tasks';
-  return `/tasks?${new URLSearchParams({ keyword }).toString()}`;
+  if (keyword) search.set('keyword', keyword);
+  const str = search.toString();
+  return str ? `/tasks?${str}` : '/tasks';
 }

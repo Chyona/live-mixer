@@ -10,6 +10,7 @@
   "dependencies": {
     "@ant-design/cssinjs": "^1.23.0",
     "@ant-design/icons": "^5.5.0",
+    "@tanstack/react-virtual": "^3.14.9",
     "antd": "^5.22.2",
     "axios": "^1.18.1",
     "clsx": "^2.1.1",

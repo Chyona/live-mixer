@@ -1,5 +1,6 @@
 import { Avatar, Button, Divider, Dropdown, Flex, Tooltip, Typography } from 'antd';
 import { FaSignOutAlt, FaUser } from 'react-icons/fa';
+import { buildCopyableConfig } from '~/components/CopyIcon';
 import { useAuth } from '~/context/AuthContext';
 import { hasAuthCredentials, type UserLoginResult } from '~/services/login';
 import { openLogin } from '~/utils/loginFlow';
@@ -25,7 +26,7 @@ const userDropdownMenu = (userInfo: Partial<UserLoginResult>, logout: () => void
               <div className="user-dropdown-id">
                 ID: {userInfo.id || '-'}
                 <Typography.Text
-                  copyable={{ text: String(userInfo.id || '-') }}
+                  copyable={buildCopyableConfig(String(userInfo.id || '-'))}
                   className="ml-1 packages-user-id-copy"
                 />
               </div>
@@ -62,7 +63,7 @@ const UserActions = ({ compact, collapsed = false }: UserActionsProps) => {
               <span className="zt-sider-user-id">
                 ID: {userInfo.id || '-'}
                 <Typography.Text
-                  copyable={{ text: userInfo.id || '-' }}
+                  copyable={buildCopyableConfig(userInfo.id || '-')}
                   className="zt-sider-user-id-copy"
                   onClick={(e) => e.stopPropagation()}
                 />

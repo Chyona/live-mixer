@@ -134,7 +134,7 @@ function buildAiSelectedSegments(
         seen.add(segment.id);
         selected.push({
           id: segment.id,
-          speakerId: paragraph.speakerId,
+          speaker: paragraph.speaker,
           speakerName: paragraph.speakerName,
           text: segment.text,
           start: segment.start,

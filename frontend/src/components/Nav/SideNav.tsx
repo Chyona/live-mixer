@@ -1,12 +1,14 @@
 import { Button, Layout, Tooltip } from 'antd';
 import { MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import Logo_src from '~/assets/images/logo.png';
 import { appConfig } from '~/utils/config';
 import { DEFAULT_APP_PATH } from '~/routes/const';
+import { useSliceLeaveGuardContext } from '~/context/SliceLeaveGuardContext';
 import NavMenuItems from './NavMenuItems';
 import UserActions from './UserActions';
 import { useNavItems } from './useNavItems';
+import { handleGuardedNavClick } from './guardedNavClick';
 
 import './index.css';
 
@@ -22,6 +24,8 @@ type SideNavProps = {
 
 const SideNav = ({ collapsed, onCollapse }: SideNavProps) => {
   const { navItems, rotatedItemKey, setRotatedItemKey } = useNavItems();
+  const location = useLocation();
+  const leaveGuard = useSliceLeaveGuardContext();
 
   return (
     <Sider
@@ -37,7 +41,19 @@ const SideNav = ({ collapsed, onCollapse }: SideNavProps) => {
       <div className="zt-sider-inner">
         <div className={`zt-sider-header${collapsed ? ' zt-sider-header_collapsed' : ''}`}>
           {!collapsed && (
-            <Link to={DEFAULT_APP_PATH} className="zt-sider-brand">
+            <Link
+              to={DEFAULT_APP_PATH}
+              className="zt-sider-brand"
+              onClick={(event) =>
+                handleGuardedNavClick(
+                  event,
+                  DEFAULT_APP_PATH,
+                  location.pathname,
+                  location.search,
+                  leaveGuard?.requestNavigate
+                )
+              }
+            >
               <img src={Logo_src} className="zt-sider-logo" alt="logo" />
               <span className="zt-sider-brand-name">{appConfig.title}</span>
             </Link>

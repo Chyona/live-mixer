@@ -3,9 +3,11 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Button, Descriptions, Drawer, Tooltip, Typography } from 'antd';
 import { LuX } from 'react-icons/lu';
 import VideoTimeline, { type TimeRange } from '~/components/VideoTimeline';
-import StreamVideoPlayer, { type StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
+import SliceVideoPlayer from '~/components/SliceVideoPlayer';
+import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
 import SlicePageHeader from '~/components/SlicePageHeader';
 import SlicePageEmptyState from '~/components/SlicePageEmptyState';
+import CopyableText from '~/components/CopyableText';
 import { useAppSEO } from '~/hooks/useAppSEO';
 import { useSliceProjectTaskStats } from '~/hooks/useSliceProjectTaskStats';
 import {
@@ -18,6 +20,8 @@ import { submitAiSliceSelection } from '~/services/aiSlice';
 import { type AiPrompt } from '~/services/aiPrompt';
 import {
   fetchSliceProjectDetail,
+  toSliceProjectClips,
+  saveSliceProject,
   updateSliceProject,
   type SliceProjectClip,
 } from '~/services/sliceProject';
@@ -25,17 +29,27 @@ import { showAppError, toast } from '~/utils/toast';
 import { formatToDateTime } from '~/utils/date';
 import { formatVideoDurationMs } from '~/utils/duration';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
+import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import {
   buildManualVideoSliceLink,
   buildSourceVideoSliceLink,
   parseProjectId,
 } from '~/routes/links';
-import { buildSliceBreadcrumbItems } from '~/utils/sliceBreadcrumbs';
+import { buildSliceBreadcrumbItems, resolveSlicePageTitle } from '~/utils/sliceBreadcrumbs';
+import { serializeTimelineSliceProjectState } from '~/utils/sliceProjectDirty';
 import { getVideoFormatLabel, isPlayableVideoUrl } from '~/utils/videoUrl';
 import SelectedSegmentsPanel from './SelectedSegmentsPanel';
 import SourceVideoSlicePageSkeleton from './SourceVideoSlicePageSkeleton';
 import TimelineLoadingSkeleton from './TimelineLoadingSkeleton';
 import PromptPickerPanel from './PromptPickerPanel';
+import {
+  asrParagraphsToTranscriptParagraphs,
+  normalizeTranscriptParagraphs,
+} from '../ManualVideoSlice/utils';
+import type { TranscriptParagraph } from '../ManualVideoSlice/types';
+
+const MAX_TOTAL_DURATION = 2 * 60 * 60;
+const MIN_TOTAL_DURATION = 5 * 60;
 
 function clips0ToTimeRanges(clips: SliceProjectClip[] | undefined): TimeRange[] {
   if (!clips?.length) return [];
@@ -100,6 +114,7 @@ const SourceVideoSlicePage = () => {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [paragraphs, setParagraphs] = useState<TranscriptParagraph[]>([]);
   const [selectedRanges, setSelectedRanges] = useState<TimeRange[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [aiSelecting, setAiSelecting] = useState(false);
@@ -110,13 +125,18 @@ const SourceVideoSlicePage = () => {
   const [selectedPrompt, setSelectedPrompt] = useState<AiPrompt | null>(null);
   const [preferredPromptId, setPreferredPromptId] = useState<number | null>(null);
   const playerRef = useRef<StreamVideoPlayerHandle>(null);
-  const rafRef = useRef<number>(0);
   /** streamUrl 变更会清空选区；项目回显需在其后写入 */
   const pendingRangesRef = useRef<TimeRange[] | null>(null);
   const streamUrlRef = useRef('');
+  const savedSnapshotRef = useRef('');
+  const baselineSyncedRef = useRef(false);
+  const [promptSelectionReady, setPromptSelectionReady] = useState(false);
 
   useAppSEO({
-    title: video ? `${video.name} - 切片` : '视频切片',
+    title: resolveSlicePageTitle({
+      projectName,
+      saved: Boolean(projectId),
+    }),
     path: sourceVideoId
       ? buildSourceVideoSliceLink(sourceVideoId, { projectId: projectId || undefined })
       : '/source-videos',
@@ -129,6 +149,82 @@ const SourceVideoSlicePage = () => {
   const canPreview = hasVideoUrl && isPlayableVideoUrl(streamUrl);
   const videoFormatLabel = useMemo(() => getVideoFormatLabel(streamUrl), [streamUrl]);
 
+  const resetDirtyBaseline = useCallback(
+    (baseline: {
+      ranges: TimeRange[];
+      promptId: number | null;
+      projectName: string;
+    }) => {
+      savedSnapshotRef.current = serializeTimelineSliceProjectState(baseline);
+      baselineSyncedRef.current = true;
+    },
+    []
+  );
+
+  const getIsDirty = useCallback(() => {
+    if (loading || !video || !baselineSyncedRef.current) return false;
+    return (
+      serializeTimelineSliceProjectState({
+        ranges: selectedRanges,
+        promptId: selectedPrompt?.id ?? preferredPromptId,
+        projectName,
+      }) !== savedSnapshotRef.current
+    );
+  }, [loading, preferredPromptId, projectName, selectedPrompt?.id, selectedRanges, video]);
+
+  const { confirmLeave } = useSliceProjectLeaveGuard(getIsDirty);
+
+  useEffect(() => {
+    baselineSyncedRef.current = false;
+    savedSnapshotRef.current = '';
+    setPromptSelectionReady(false);
+  }, [projectId, sourceVideoId]);
+
+  useEffect(() => {
+    if (loading || !video || baselineSyncedRef.current) return;
+
+    // 回显提示词尚在分页加载
+    if (preferredPromptId != null && !selectedPrompt) return;
+
+    // 等待默认提示词自动选中；无可用提示词时由 promptSelectionReady 放行
+    if (!selectedPrompt && !promptSelectionReady) return;
+
+    resetDirtyBaseline({
+      ranges: selectedRanges,
+      promptId: selectedPrompt?.id ?? preferredPromptId,
+      projectName,
+    });
+  }, [
+    loading,
+    preferredPromptId,
+    projectName,
+    promptSelectionReady,
+    resetDirtyBaseline,
+    selectedPrompt,
+    selectedRanges,
+    video,
+  ]);
+
+  // 兜底：基线先于默认提示词选中建立时，prompt 就绪后重新对齐
+  useEffect(() => {
+    if (loading || !video || !baselineSyncedRef.current || !selectedPrompt) return;
+
+    let baselinePromptId = 0;
+    try {
+      baselinePromptId = JSON.parse(savedSnapshotRef.current).promptId ?? 0;
+    } catch {
+      baselinePromptId = 0;
+    }
+
+    if (baselinePromptId !== 0 || selectedPrompt.id === 0) return;
+
+    resetDirtyBaseline({
+      ranges: selectedRanges,
+      promptId: selectedPrompt.id,
+      projectName,
+    });
+  }, [loading, projectName, resetDirtyBaseline, selectedPrompt, selectedRanges, video]);
+
   const loadPageData = useCallback(async () => {
     if (!sourceVideoId) return;
 
@@ -136,6 +232,7 @@ const SourceVideoSlicePage = () => {
     pendingRangesRef.current = null;
     setPreferredPromptId(null);
     setSelectedPrompt(null);
+    setPromptSelectionReady(false);
     if (!projectId) setProjectName('');
 
     try {
@@ -148,6 +245,7 @@ const SourceVideoSlicePage = () => {
       if (videoRes.code !== 0) {
         toast.notify.error(videoRes.message || '加载源视频失败');
         setVideo(null);
+        setParagraphs([]);
         return;
       }
 
@@ -155,6 +253,9 @@ const SourceVideoSlicePage = () => {
       const sameStream = streamUrlRef.current === nextStreamUrl;
 
       setVideo(videoRes.data);
+      setParagraphs(
+        normalizeTranscriptParagraphs(asrParagraphsToTranscriptParagraphs(videoRes.data.asr_paragraphs))
+      );
 
       const projectRes = projectId ? projectSettled : null;
       const clips0 =
@@ -170,14 +271,17 @@ const SourceVideoSlicePage = () => {
       }
 
       if (projectRes?.code === 0 && projectRes.data) {
-        setProjectName(projectRes.data.name?.trim() || '');
+        const loadedProjectName = projectRes.data.name?.trim() || '';
         const promptId = Number(projectRes.data.prompt_id ?? 0);
-        setPreferredPromptId(promptId > 0 ? promptId : null);
+        const loadedPromptId = promptId > 0 ? promptId : null;
+        setProjectName(loadedProjectName);
+        setPreferredPromptId(loadedPromptId);
       } else if (projectId) {
         toast.notify.warning(projectRes?.message || '剪辑项目加载失败');
       }
     } catch (error) {
       setVideo(null);
+      setParagraphs([]);
       if (error instanceof AppError) {
         showAppError(error);
       } else {
@@ -197,6 +301,7 @@ const SourceVideoSlicePage = () => {
     setCurrentTime(0);
     setActiveRangeId(null);
     setVideoError(null);
+    baselineSyncedRef.current = false;
 
     if (pendingRangesRef.current) {
       setSelectedRanges(pendingRangesRef.current);
@@ -223,24 +328,22 @@ const SourceVideoSlicePage = () => {
   }, []);
 
   useEffect(() => {
-    const updateTime = () => {
-      const video = playerRef.current?.video;
-      if (video && Number.isFinite(video.duration)) {
-        setCurrentTime(video.currentTime || 0);
-      }
-      rafRef.current = requestAnimationFrame(updateTime);
+    const video = playerRef.current?.video;
+    if (!video || !isTimelineReady) return;
+
+    const syncCurrentTime = () => {
+      if (!Number.isFinite(video.duration)) return;
+      setCurrentTime(video.currentTime || 0);
     };
 
-    if (isTimelineReady) {
-      rafRef.current = requestAnimationFrame(updateTime);
-    }
+    video.addEventListener('timeupdate', syncCurrentTime);
+    video.addEventListener('seeked', syncCurrentTime);
 
     return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-      }
+      video.removeEventListener('timeupdate', syncCurrentTime);
+      video.removeEventListener('seeked', syncCurrentTime);
     };
-  }, [isTimelineReady]);
+  }, [isTimelineReady, streamUrl]);
 
   // 选中片段播放到结尾后自动取消选中并暂停
   useEffect(() => {
@@ -298,6 +401,16 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
+      const duration = preview.end - preview.start;
+      const currentTotal = selectedRanges.reduce(
+        (sum, range) => sum + (range.end - range.start),
+        0
+      );
+      if (currentTotal + duration > MAX_TOTAL_DURATION) {
+        toast.notify.warning(`选中总时长不能超过 ${MAX_TOTAL_DURATION / 3600} 小时`);
+        return;
+      }
+
       const nextRange: TimeRange = {
         id: `range-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         start: preview.start,
@@ -351,18 +464,45 @@ const SourceVideoSlicePage = () => {
       return;
     }
 
+    if (totalSelectedDuration < MIN_TOTAL_DURATION) {
+      toast.notify.warning(`已选时长需不少于 ${MIN_TOTAL_DURATION / 60} 分钟`);
+      return;
+    }
+
     if (!selectedPrompt) {
       toast.notify.warning('请先选择一个 AI 提示词');
       return;
     }
 
+    const projectName = `一键成片_${formatToDateTime(Date.now(), 'YYYY-MM-DD_HH:mm:ss')}`;
+    const projectPayload = {
+      live_id: video.id,
+      name: projectName,
+      prompt_id: selectedPrompt.id,
+      project_source: 'timeline' as const,
+      clips0: selectedRangesToClips0(selectedRanges),
+      clips1: [] as ReturnType<typeof toSliceProjectClips>,
+    };
+
     setSubmitting(true);
     try {
+      const { code, message, data } = projectId
+        ? await updateSliceProject(projectId, projectPayload)
+        : await saveSliceProject(projectPayload);
+
+      if (code !== 0) {
+        toast.notify.error(message || '保存项目失败');
+        return;
+      }
+
+      const savedProjectId = data?.id || projectId;
+      if (!savedProjectId) {
+        toast.notify.error('保存成功但未返回项目 ID');
+        return;
+      }
+
       const response = await submitClip({
-        live_id: video.id,
-        prompt_id: selectedPrompt.id,
-        project_source: 'timeline',
-        clips0: selectedRangesToClips0(selectedRanges),
+        video_project_id: savedProjectId,
       });
 
       if (response.code !== 0) {
@@ -370,11 +510,7 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
-      const created = response.data?.total ?? response.data?.list?.length ?? 1;
-      toast.notify.success(
-        created > 1 ? `已创建 ${created} 个项目与任务` : '创建成功',
-        '可前往任务管理查看'
-      );
+      toast.notify.success('创建成功', '可前往任务管理查看');
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -384,7 +520,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [projectTaskReadOnly, selectedPrompt, selectedRanges, video]);
+  }, [projectId, projectTaskReadOnly, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
 
   const handleAiSelect = useCallback(async () => {
     if (projectTaskReadOnly) {
@@ -398,19 +534,46 @@ const SourceVideoSlicePage = () => {
       return;
     }
 
+    if (totalSelectedDuration < MIN_TOTAL_DURATION) {
+      toast.notify.warning(`已选时长需不少于 ${MIN_TOTAL_DURATION / 60} 分钟`);
+      return;
+    }
+
     if (!selectedPrompt) {
       toast.notify.warning('请先选择一个 AI 提示词');
       return;
     }
 
+    const projectName = `AI选片_${formatToDateTime(Date.now(), 'YYYY-MM-DD_HH:mm:ss')}`;
+    const projectPayload = {
+      live_id: video.id,
+      name: projectName,
+      prompt_id: selectedPrompt.id,
+      // AI 选片结果在人工切片页编辑
+      project_source: 'manual' as const,
+      clips0: selectedRangesToClips0(selectedRanges),
+      clips1: [] as ReturnType<typeof toSliceProjectClips>,
+    };
+
     setAiSelecting(true);
     try {
+      const { code, message, data } = projectId
+        ? await updateSliceProject(projectId, projectPayload)
+        : await saveSliceProject(projectPayload);
+
+      if (code !== 0) {
+        toast.notify.error(message || '保存项目失败');
+        return;
+      }
+
+      const savedProjectId = data?.id || projectId;
+      if (!savedProjectId) {
+        toast.notify.error('保存成功但未返回项目 ID');
+        return;
+      }
+
       const response = await submitAiSliceSelection({
-        live_id: video.id,
-        prompt_id: selectedPrompt.id,
-        // AI 选片结果在人工切片页编辑
-        project_source: 'manual',
-        clips0: selectedRangesToClips0(selectedRanges),
+        video_project_id: savedProjectId,
       });
 
       if (response.code !== 0) {
@@ -418,11 +581,7 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
-      const created = response.data?.total ?? response.data?.list?.length ?? 1;
-      toast.notify.success(
-        created > 1 ? `已创建 ${created} 个项目与任务` : '创建成功',
-        '可前往任务管理查看'
-      );
+      toast.notify.success('创建成功', '可前往任务管理查看');
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -432,7 +591,35 @@ const SourceVideoSlicePage = () => {
     } finally {
       setAiSelecting(false);
     }
-  }, [projectTaskReadOnly, selectedPrompt, selectedRanges, video]);
+  }, [projectId, projectTaskReadOnly, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+
+  const handleSwitchToManual = useCallback(() => {
+    confirmLeave(() => {
+      if (projectId) {
+        void updateSliceProject(projectId, { project_source: 'manual' });
+      }
+
+      navigate(buildManualVideoSliceLink(sourceVideoId, { projectId: projectId || undefined }), {
+        state: { from: entryFrom },
+      });
+    });
+  }, [confirmLeave, entryFrom, navigate, projectId, sourceVideoId]);
+
+  const handleLeaveNavigate = useCallback(
+    (to: string) => {
+      confirmLeave(() => navigate(to));
+    },
+    [confirmLeave, navigate]
+  );
+
+  const pageTitle = useMemo(
+    () =>
+      resolveSlicePageTitle({
+        projectName,
+        saved: Boolean(projectId),
+      }),
+    [projectId, projectName]
+  );
 
   const breadcrumbItems = useMemo(
     () =>
@@ -441,19 +628,12 @@ const SourceVideoSlicePage = () => {
         sourceVideoId,
         pageKind: 'timeline',
         videoName: video?.name,
+        projectName,
+        saved: Boolean(projectId),
+        onNavigate: handleLeaveNavigate,
       }),
-    [entryFrom, sourceVideoId, video?.name]
+    [entryFrom, handleLeaveNavigate, projectId, projectName, sourceVideoId, video?.name]
   );
-
-  const handleSwitchToManual = useCallback(() => {
-    if (projectId) {
-      updateSliceProject(projectId, { project_source: 'manual' });
-    }
-
-    navigate(buildManualVideoSliceLink(sourceVideoId, { projectId: projectId || undefined }), {
-      state: { from: entryFrom },
-    });
-  }, [entryFrom, navigate, projectId, sourceVideoId]);
 
   if (loading) {
     return <SourceVideoSlicePageSkeleton breadcrumbItems={breadcrumbItems} />;
@@ -462,7 +642,7 @@ const SourceVideoSlicePage = () => {
   if (!video) {
     return (
       <div className="slice-page slice-page_timeline">
-        <SlicePageHeader breadcrumbItems={breadcrumbItems} title="视频切片" />
+        <SlicePageHeader breadcrumbItems={breadcrumbItems} title="" />
         <div className="slice-page-empty-shell">
           <SlicePageEmptyState variant="video-unavailable" entryFrom={entryFrom} />
         </div>
@@ -473,15 +653,13 @@ const SourceVideoSlicePage = () => {
   const pageHeader = (
     <SlicePageHeader
       breadcrumbItems={breadcrumbItems}
-      title={`${video.name} - 视频切片`}
+      title={pageTitle}
       actions={
         <>
           <Button onClick={() => setSourceModalVisible(true)}>查看播放源</Button>
-          <Tooltip title="切换后未保存的数据将丢失">
-            <Button className="slice-mode-switch-btn" onClick={handleSwitchToManual}>
-              切换到人工切片
-            </Button>
-          </Tooltip>
+          <Button className="slice-mode-switch-btn" onClick={handleSwitchToManual}>
+            切换到人工切片
+          </Button>
         </>
       }
     />
@@ -508,11 +686,15 @@ const SourceVideoSlicePage = () => {
         <div className="slice-workspace-card">
           <div className="slice-main-section">
             <div className="slice-video-section">
-              <StreamVideoPlayer
+              <SliceVideoPlayer
                 ref={playerRef}
                 url={streamUrl}
                 className="slice-video"
                 errorClassName="slice-video-error"
+                paragraphs={paragraphs}
+                currentTime={currentTime}
+                onSeek={handleTimeChange}
+                screenshotBaseName={video?.name ?? 'video-screenshot'}
                 onDurationChange={handleDurationChange}
                 onPlaybackError={handlePlaybackError}
               />
@@ -522,6 +704,7 @@ const SourceVideoSlicePage = () => {
               selectedId={selectedPrompt?.id ?? null}
               preferredId={preferredPromptId}
               onSelect={setSelectedPrompt}
+              onInitialSelectionReady={() => setPromptSelectionReady(true)}
             />
           </div>
 
@@ -533,6 +716,8 @@ const SourceVideoSlicePage = () => {
                 videoDuration={videoDuration}
                 selectedRanges={selectedRanges}
                 totalSelectedDuration={totalSelectedDuration}
+                minTotalDuration={MIN_TOTAL_DURATION}
+                maxTotalDuration={MAX_TOTAL_DURATION}
                 submitting={submitting}
                 aiSelecting={aiSelecting}
                 zoomLevel={timelineZoomLevel}
@@ -551,6 +736,7 @@ const SourceVideoSlicePage = () => {
                 currentTime={currentTime}
                 selectedRanges={selectedRanges}
                 previewRanges={aiPreviewRanges}
+                maxTotalDuration={MAX_TOTAL_DURATION}
                 zoomLevel={timelineZoomLevel}
                 onZoomLevelChange={setTimelineZoomLevel}
                 activeRangeId={activeRangeId}
@@ -598,12 +784,12 @@ const SourceVideoSlicePage = () => {
               <Descriptions.Item label="源视频名称">{video.name}</Descriptions.Item>
               <Descriptions.Item label="备注">{video.remark || '-'}</Descriptions.Item>
               <Descriptions.Item label="直播地址">
-                <Typography.Paragraph
+                <CopyableText
+                  text={video.live_url}
+                  layout="paragraph"
                   className="slice-source-url"
-                  copyable={{ text: video.live_url }}
-                >
-                  {video.live_url}
-                </Typography.Paragraph>
+                  emptyFallback="-"
+                />
               </Descriptions.Item>
               <Descriptions.Item label="时长">
                 {video.duration > 0 ? formatVideoDurationMs(video.duration) : '-'}

@@ -12,14 +12,19 @@ import {
   // LuVolumeX,
   LuX,
 } from 'react-icons/lu';
-import StreamVideoPlayer, { type StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
-import type { SelectedCopySegment } from '../types';
-import { formatSliceTime } from '../utils';
+import SliceVideoPlayer from '~/components/SliceVideoPlayer';
+import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
+import type { SelectedCopySegment, TranscriptParagraph } from '../types';
+import { formatSliceTime, getSegmentPlaybackStopTime, resolveCopySegmentWords, resolvePreviewCaptionLines } from '../utils';
 
 interface SegmentPreviewModalProps {
   open: boolean;
   url: string;
   segments: SelectedCopySegment[];
+  paragraphs?: TranscriptParagraph[];
+  /** 勾选「生成字幕」时在预览画面构造显示片段文案 */
+  enableCaptions?: boolean;
+  screenshotBaseName?: string;
   onClose: () => void;
 }
 
@@ -84,26 +89,76 @@ function formatComposedClock(seconds: number) {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
-function seekVideo(video: HTMLVideoElement, time: number): Promise<void> {
-  const target = Math.max(0, time);
+function waitForVideoCanPlay(video: HTMLVideoElement, timeoutMs = 6000): Promise<void> {
+  if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && !video.seeking) {
+    return Promise.resolve();
+  }
 
   return new Promise((resolve) => {
-    if (Math.abs(video.currentTime - target) < 0.04) {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('canplay', onReady);
+      video.removeEventListener('loadeddata', onReady);
+      window.clearTimeout(timer);
       resolve();
-      return;
-    }
+    };
+    const onReady = () => finish();
+    const timer = window.setTimeout(finish, timeoutMs);
+    video.addEventListener('canplay', onReady);
+    video.addEventListener('loadeddata', onReady);
+  });
+}
 
+/** play() 后等待真正开始播放，避免 HLS 短暂 waiting 导致加载态卡住 */
+function waitForVideoPlaying(video: HTMLVideoElement, timeoutMs = 3000): Promise<void> {
+  if (!video.paused && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const onPlaying = () => finish();
+    const onTimeUpdate = () => {
+      if (!video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        finish();
+      }
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('timeupdate', onTimeUpdate);
+  });
+}
+
+/** seek 后等待解码就绪，减少跨段跳转时的长时间卡住感 */
+async function seekVideoAndWait(video: HTMLVideoElement, time: number): Promise<void> {
+  const target = Math.max(0, time);
+
+  if (Math.abs(video.currentTime - target) < 0.04) {
+    await waitForVideoCanPlay(video, 2000);
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
     let settled = false;
     const finish = () => {
       if (settled) return;
       settled = true;
       video.removeEventListener('seeked', onSeeked);
       window.clearTimeout(timer);
-      resolve();
+      void waitForVideoCanPlay(video, 6000).then(resolve);
     };
-
     const onSeeked = () => finish();
-    const timer = window.setTimeout(finish, 2500);
+    const timer = window.setTimeout(finish, 5000);
 
     video.addEventListener('seeked', onSeeked);
     try {
@@ -114,13 +169,29 @@ function seekVideo(video: HTMLVideoElement, time: number): Promise<void> {
   });
 }
 
-const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewModalProps) => {
+function formatSegmentSwitchMessage(index: number, total: number, segment: SelectedCopySegment) {
+  const preview = segment.text.trim().slice(0, 18);
+  const suffix = preview.length < segment.text.trim().length ? '…' : '';
+  return `正在加载第 ${index + 1}/${total} 段${preview ? `：${preview}${suffix}` : ''}`;
+}
+
+const SegmentPreviewModal = ({
+  open,
+  url,
+  segments,
+  paragraphs = [],
+  enableCaptions = false,
+  screenshotBaseName = 'segment-preview',
+  onClose,
+}: SegmentPreviewModalProps) => {
   const playerRef = useRef<StreamVideoPlayerHandle>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const playlistRef = useRef<HTMLDivElement>(null);
   const segmentsRef = useRef(segments);
   const indexRef = useRef(0);
   const switchingRef = useRef(false);
+  const prepareTokenRef = useRef(0);
+  const segmentLoadMessageRef = useRef<string | null>(null);
   const watchTimerRef = useRef(0);
   const playSegmentAtRef = useRef<(index: number, sourceTime?: number) => Promise<void>>(
     async () => undefined
@@ -129,12 +200,18 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
   const [playerReady, setPlayerReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [composedCurrent, setComposedCurrent] = useState(0);
+  const [sourceCurrentTime, setSourceCurrentTime] = useState(0);
   // const [volume, setVolume] = useState(0.8);
   // const [muted, setMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [previewFrameReady, setPreviewFrameReady] = useState(false);
+  const [segmentLoadMessage, setSegmentLoadMessage] = useState<string | null>(null);
   // const volumeBeforeMuteRef = useRef(0.8);
 
   segmentsRef.current = segments;
+  segmentLoadMessageRef.current = segmentLoadMessage;
+
+  const firstSegmentStart = segments[0]?.start ?? 0;
 
   const composedTotal = useMemo(() => getComposedTotal(segments), [segments]);
 
@@ -167,6 +244,7 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
   const syncComposedTime = () => {
     const video = playerRef.current?.video;
     if (!video) return;
+    setSourceCurrentTime(video.currentTime || 0);
     setComposedCurrent(
       sourceToComposed(segmentsRef.current, indexRef.current, video.currentTime)
     );
@@ -181,15 +259,17 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
     }, 50);
   };
 
-  const playSegmentAt = async (index: number, sourceTime?: number) => {
+  const prepareSegmentAt = async (index: number, sourceTime?: number, resumePlaying = false) => {
     const video = playerRef.current?.video;
-    const segment = segmentsRef.current[index];
-    if (!video || !segment) return;
+    const list = segmentsRef.current;
+    const segment = list[index];
+    if (!video || !segment) return false;
 
-    ensureWatch();
+    const token = ++prepareTokenRef.current;
     switchingRef.current = true;
     indexRef.current = index;
     setCurrentIndex(index);
+    setSegmentLoadMessage(formatSegmentSwitchMessage(index, list.length, segment));
 
     const clamped =
       sourceTime == null
@@ -197,20 +277,41 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
         : Math.min(Math.max(sourceTime, segment.start), Math.max(segment.end - 0.05, segment.start));
 
     video.pause();
-    await seekVideo(video, clamped);
+    await seekVideoAndWait(video, clamped);
 
-    if (Math.abs(video.currentTime - clamped) > 0.35) {
-      await seekVideo(video, clamped);
-    }
+    if (token !== prepareTokenRef.current) return false;
 
     switchingRef.current = false;
     syncComposedTime();
+    setPreviewFrameReady(true);
+
+    if (!resumePlaying) {
+      setSegmentLoadMessage(null);
+      setIsPlaying(false);
+    }
+
+    return true;
+  };
+
+  const playSegmentAt = async (index: number, sourceTime?: number) => {
+    const video = playerRef.current?.video;
+    if (!video) return;
+
+    ensureWatch();
+    const prepared = await prepareSegmentAt(index, sourceTime, true);
+    if (!prepared) {
+      setSegmentLoadMessage(null);
+      return;
+    }
 
     try {
       await video.play();
+      await waitForVideoPlaying(video);
       setIsPlaying(true);
     } catch {
       setIsPlaying(false);
+    } finally {
+      setSegmentLoadMessage(null);
     }
   };
 
@@ -239,6 +340,15 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
     if (!video || !segment) return;
 
     syncComposedTime();
+
+    if (
+      segmentLoadMessageRef.current &&
+      !video.paused &&
+      video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+    ) {
+      setSegmentLoadMessage(null);
+    }
+
     if (video.paused) return;
 
     const time = video.currentTime;
@@ -248,7 +358,7 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
       return;
     }
 
-    if (time >= segment.end - END_EPS) {
+    if (time >= getSegmentPlaybackStopTime(segment) - END_EPS) {
       advanceOrStop();
     }
   };
@@ -262,6 +372,9 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
       setPlayerReady(false);
       setIsPlaying(false);
       setComposedCurrent(0);
+      setPreviewFrameReady(false);
+      setSegmentLoadMessage(null);
+      prepareTokenRef.current += 1;
       return;
     }
 
@@ -299,13 +412,17 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
   // }, [volume, muted, playerReady]);
 
   useEffect(() => {
-    const onFullscreenChange = () => {
+    const syncFullscreen = () => {
       const stage = stageRef.current;
       setIsFullscreen(Boolean(stage && document.fullscreenElement === stage));
     };
 
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    document.addEventListener('webkitfullscreenchange', syncFullscreen as EventListener);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreen);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreen as EventListener);
+    };
   }, []);
 
   useEffect(() => {
@@ -354,12 +471,14 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
 
     try {
       if (document.fullscreenElement === stage) {
+        setIsFullscreen(false);
         await document.exitFullscreen();
         return;
       }
+      setIsFullscreen(true);
       await stage.requestFullscreen();
     } catch {
-      // 浏览器策略或设备不支持时忽略
+      setIsFullscreen(false);
     }
   };
 
@@ -373,7 +492,7 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
       const atEnd =
         composedCurrent >= composedTotal - 0.05 ||
         (segment != null &&
-          video.currentTime >= segment.end - END_EPS &&
+          video.currentTime >= getSegmentPlaybackStopTime(segment) - END_EPS &&
           indexRef.current >= segmentsRef.current.length - 1);
 
       if (atEnd) {
@@ -381,7 +500,7 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
         return;
       }
 
-      if (segment && video.currentTime >= segment.end - END_EPS) {
+      if (segment && video.currentTime >= getSegmentPlaybackStopTime(segment) - END_EPS) {
         advanceOrStop();
         return;
       }
@@ -425,6 +544,22 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
 
   const progressRatio = composedTotal > 0 ? Math.min(composedCurrent / composedTotal, 1) : 0;
 
+  const currentSegment = segments[currentIndex];
+  const captionLines = useMemo(() => {
+    if (!enableCaptions || !currentSegment?.text.trim()) return [];
+    const words = resolveCopySegmentWords(currentSegment, paragraphs);
+    return resolvePreviewCaptionLines(
+      currentSegment.text,
+      currentSegment.start,
+      currentSegment.end,
+      sourceCurrentTime,
+      words
+    );
+  }, [enableCaptions, currentSegment, paragraphs, sourceCurrentTime]);
+
+  const overlayMessage = segmentLoadMessage;
+  const showSegmentOverlay = Boolean(previewFrameReady && overlayMessage);
+
   return (
     <Modal
       open={open}
@@ -450,16 +585,64 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
           <LuX size={16} />
         </button>
 
-        <div className="slice-editor-preview-stage" ref={stageRef}>
-          <div className="slice-editor-preview-video-shell">
-            <StreamVideoPlayer
+        <div
+          className={[
+            'slice-editor-preview-stage',
+            isFullscreen ? 'slice-editor-preview-stage_fullscreen' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          ref={stageRef}
+        >
+          <div
+            className={[
+              'slice-editor-preview-video-shell',
+              previewFrameReady ? 'is-frame-ready' : 'is-buffering',
+            ].join(' ')}
+          >
+            {!previewFrameReady ? (
+              <div className="slice-editor-preview-video-placeholder" aria-hidden>
+                <span className="slice-editor-preview-video-placeholder-spinner" />
+                <span>加载预览画面…</span>
+              </div>
+            ) : null}
+            <SliceVideoPlayer
               ref={playerRef}
               url={url}
               className="slice-editor-preview-video"
               controls={false}
-              showFirstFrame={false}
+              showFirstFrame
+              firstFrameTime={firstSegmentStart}
+              paragraphs={paragraphs}
+              currentTime={sourceCurrentTime}
+              onSeek={(time) => {
+                const index = segmentsRef.current.findIndex(
+                  (segment) => time >= segment.start - 0.05 && time <= segment.end + 0.05
+                );
+                void playSegmentAtRef.current(index >= 0 ? index : indexRef.current, time);
+              }}
+              screenshotBaseName={screenshotBaseName}
               onReady={handleReady}
+              onFirstFramePrepared={() => setPreviewFrameReady(true)}
             />
+            {enableCaptions && previewFrameReady && !overlayMessage && captionLines.length ? (
+              <div className="slice-editor-preview-caption" aria-live="polite">
+                {captionLines.map((line, lineIndex) => (
+                  <p
+                    key={`${currentIndex}-${lineIndex}-${line}`}
+                    className="slice-editor-preview-caption-line"
+                  >
+                    {line}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {showSegmentOverlay ? (
+              <div className="slice-editor-preview-segment-loading" role="status" aria-live="polite">
+                <span className="slice-editor-preview-video-placeholder-spinner" />
+                <span>{overlayMessage}</span>
+              </div>
+            ) : null}
           </div>
 
           <div className="slice-editor-preview-controls">
@@ -520,9 +703,11 @@ const SegmentPreviewModal = ({ open, url, segments, onClose }: SegmentPreviewMod
               >
                 {isEnded
                   ? '已播完'
-                  : isPlaying
-                    ? `播放中 ${currentIndex + 1}/${segments.length}`
-                    : `片段 ${Math.min(currentIndex + 1, segments.length)}/${segments.length}`}
+                  : overlayMessage
+                    ? '加载中'
+                    : isPlaying
+                      ? `播放中 ${currentIndex + 1}/${segments.length}`
+                      : `片段 ${Math.min(currentIndex + 1, segments.length)}/${segments.length}`}
               </div>
 
               <div className="slice-editor-preview-media-tools">

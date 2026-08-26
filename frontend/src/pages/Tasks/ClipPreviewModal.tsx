@@ -1,14 +1,21 @@
 import { Modal } from 'antd';
-import StreamVideoPlayer from '~/components/StreamVideoPlayer';
+import SliceVideoPlayer from '~/components/SliceVideoPlayer';
 
 interface ClipPreviewModalProps {
   open: boolean;
   url: string | null;
   title?: string;
+  screenshotBaseName?: string;
   onClose: () => void;
 }
 
-const ClipPreviewModal = ({ open, url, title = '成片预览', onClose }: ClipPreviewModalProps) => {
+const ClipPreviewModal = ({
+  open,
+  url,
+  title = '成片预览',
+  screenshotBaseName = 'clip-preview',
+  onClose,
+}: ClipPreviewModalProps) => {
   return (
     <Modal
       open={open}
@@ -20,7 +27,12 @@ const ClipPreviewModal = ({ open, url, title = '成片预览', onClose }: ClipPr
       className="tasks-preview-modal noanimation-modal"
     >
       {url ? (
-        <StreamVideoPlayer url={url} className="tasks-preview-video" controls />
+        <SliceVideoPlayer
+          url={url}
+          className="tasks-preview-video"
+          controls
+          screenshotBaseName={screenshotBaseName}
+        />
       ) : (
         <div className="tasks-preview-empty">暂无可预览的成片</div>
       )}

@@ -4,10 +4,12 @@ import { Link, useLocation } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import { RoutesCfg } from '~/routes/const';
 import { useResponsive } from '~/hooks/useResponsive';
+import { useSliceLeaveGuardContext } from '~/context/SliceLeaveGuardContext';
 import NavMenuItems from './NavMenuItems';
 import UserActions from './UserActions';
 import { getNavActive, useNavItems } from './useNavItems';
 import type { SliceEditorEntryFrom } from '~/routes/links';
+import { handleGuardedNavClick } from './guardedNavClick';
 
 import './index.css';
 
@@ -15,6 +17,7 @@ const mobileNavPaths = ['/source-videos', '/slices', '/tasks'];
 
 export const MobileBottomNav = () => {
   const location = useLocation();
+  const leaveGuard = useSliceLeaveGuardContext();
   const entryFrom = (location.state as { from?: SliceEditorEntryFrom } | null)?.from;
 
   const navItems = useMemo(() => {
@@ -63,6 +66,15 @@ export const MobileBottomNav = () => {
           <Link
             key={item.path}
             to={item.path}
+            onClick={(event) =>
+              handleGuardedNavClick(
+                event,
+                item.path,
+                location.pathname,
+                location.search,
+                leaveGuard?.requestNavigate
+              )
+            }
             className={`mobile-nav-item ${isActive ? 'active' : ''}`}
           >
             <item.icon size={22} className={isActive ? 'nav-icon-active' : undefined} />

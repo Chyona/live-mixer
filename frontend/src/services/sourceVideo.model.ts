@@ -16,7 +16,7 @@ export interface LiveAsrSegment {
   words?: LiveAsrWord[];
 }
 
-/** 详情接口 `asr_paragraphs` 字段 */
+/** 详情接口 ASR 文案分段（asr_paragraphs / live_asr 结构相同） */
 export type AsrParagraphs = LiveAsrSegment[];
 
 /** ASR 摘要段落（时间轴默认选区），时间单位为毫秒 */
@@ -49,7 +49,7 @@ export interface SourceVideo {
    * 无文案搜索时通常为空或不返回。时间单位为 ms。
    */
   matched_paragraphs?: LiveAsrSegment[] | null;
-  /** 详情接口返回的 ASR 文案分段；列表接口通常不带此字段。时间单位为 ms */
+  /** 详情接口返回的 ASR 文案分段（normalize 后统一字段名）；时间单位为 ms */
   asr_paragraphs?: AsrParagraphs | null;
   /** 详情接口返回的 ASR 摘要选区；无 clips0 时用于填充时间轴 */
   asr_summaries?: AsrSummary[] | null;

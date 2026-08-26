@@ -585,3 +585,144 @@
     margin-inline-start: 0 !important;
   }
 }
+
+/* 统一复制图标：默认继承上下文颜色，避免下拉菜单等场景单独发蓝 */
+.app-copy-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
+  color: currentColor;
+}
+
+.app-copy-icon svg {
+  display: block;
+}
+
+.app-copy-icon_copied {
+  color: var(--success-color, #52c41a);
+}
+
+.ant-typography-copy .app-copy-icon {
+  vertical-align: -0.125em;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.45));
+  transition: color 0.2s;
+}
+
+.ant-typography-copy:hover .app-copy-icon,
+.ant-typography-copy:focus-visible .app-copy-icon {
+  color: var(--primary-color);
+}
+
+/* 下拉菜单项图标与文字间距（避免重叠） */
+.app-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  line-height: 0;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.45));
+  transition: color 0.2s;
+}
+
+.app-menu-item-icon svg {
+  display: block;
+}
+
+.ant-dropdown-menu-item:hover .app-menu-item-icon,
+.ant-dropdown-menu-item-active .app-menu-item-icon {
+  color: var(--primary-color);
+}
+
+.ant-dropdown-menu-item-disabled .app-menu-item-icon {
+  color: inherit;
+  opacity: 0.45;
+}
+
+.ant-dropdown-menu-item-icon:has(.app-menu-item-icon) {
+  min-width: 14px;
+  margin-inline-end: 8px !important;
+}
+
+/* 列表页操作下拉：悬停时图标与文字同步变蓝 */
+.list-page-action-dropdown .ant-dropdown-menu-item:hover:not(.ant-dropdown-menu-item-disabled),
+.list-page-action-dropdown .ant-dropdown-menu-item-active:not(.ant-dropdown-menu-item-disabled) {
+  color: var(--primary-color);
+}
+
+.list-page-action-dropdown
+  .ant-dropdown-menu-item:hover:not(.ant-dropdown-menu-item-disabled)
+  .ant-dropdown-menu-title-content,
+.list-page-action-dropdown
+  .ant-dropdown-menu-item-active:not(.ant-dropdown-menu-item-disabled)
+  .ant-dropdown-menu-title-content {
+  color: var(--primary-color);
+}
+
+/* 可复制文本：点击文字区或图标均可复制 */
+.app-copyable-text_paragraph {
+  cursor: pointer;
+}
+
+.app-copyable-text_paragraph:hover {
+  color: var(--primary-color);
+}
+
+.app-copyable-text_row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.app-copyable-text__trigger {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  line-height: 22px;
+}
+
+.app-copyable-text__trigger:hover {
+  color: var(--primary-color);
+}
+
+.app-copyable-text__label {
+  display: block;
+  width: 100%;
+}
+
+.app-copyable-text__icon-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--primary-color);
+  transition:
+    color 0.2s,
+    background-color 0.2s;
+  border-radius: 4px;
+}
+
+.app-copyable-text__icon-btn:hover {
+  color: var(--primary-light, var(--primary-color));
+  background: rgba(var(--primary-color-rgb), 0.06);
+}

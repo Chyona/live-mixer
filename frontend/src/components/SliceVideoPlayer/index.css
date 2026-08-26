@@ -1,0 +1,75 @@
+.slice-video-player-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  /* border-radius: 8px; */
+  background: #000;
+}
+
+.slice-video-player-frame .stream-video-player {
+  padding-inline: 0;
+  gap: 0;
+}
+
+.slice-video-player-frame:hover .slice-video-player-toolbar,
+.slice-video-player-frame:focus-within .slice-video-player-toolbar {
+  opacity: 0.92;
+}
+
+.slice-video-player-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+  pointer-events: auto;
+}
+
+.slice-video-player-toolbar-btn-wrap {
+  display: inline-flex;
+}
+
+.slice-video-player-toolbar-btn-wrap_disabled {
+  cursor: not-allowed;
+}
+
+.slice-video-player-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.88);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.slice-video-player-toolbar-rate {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.slice-video-player-toolbar-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.slice-video-player-toolbar-btn:disabled {
+  color: rgba(255, 255, 255, 0.28);
+  cursor: not-allowed;
+}

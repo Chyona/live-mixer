@@ -12,6 +12,7 @@ import {
   detectVideoSourceType,
   getUnsupportedVideoMessage,
   getVideoErrorMessage,
+  resolveVideoCrossOrigin,
   resolveVideoPlayUrl,
   type VideoSourceType,
 } from '~/utils/videoUrl';
@@ -31,8 +32,11 @@ export interface StreamVideoPlayerProps
   url: string;
   /** 加载后显示视频首帧，默认开启 */
   showFirstFrame?: boolean;
+  /** 首帧 seek 时间（秒），默认视频开头附近 */
+  firstFrameTime?: number;
   errorClassName?: string;
   onReady?: () => void;
+  onFirstFramePrepared?: () => void;
   onDurationChange?: (duration: number) => void;
   onPlaybackError?: (message: string) => void;
   onVideoLoadedMetadata?: VideoHTMLAttributes<HTMLVideoElement>['onLoadedMetadata'];
@@ -83,17 +87,30 @@ function waitForCanPlay(video: HTMLVideoElement, timeoutMs = 10000): Promise<voi
   });
 }
 
-function seekToFirstFrame(video: HTMLVideoElement): Promise<boolean> {
+function resolveFirstFrameTime(video: HTMLVideoElement, firstFrameTime?: number): number {
+  if (firstFrameTime != null && Number.isFinite(firstFrameTime) && firstFrameTime >= 0) {
+    const duration = video.duration;
+    if (Number.isFinite(duration) && duration > 0) {
+      return Math.min(Math.max(firstFrameTime, 0), Math.max(duration - 0.01, 0));
+    }
+    return firstFrameTime;
+  }
+
+  if (Number.isFinite(video.duration) && video.duration > 0) {
+    return Math.min(0.1, Math.max(video.duration - 0.01, 0));
+  }
+
+  return 0.001;
+}
+
+function seekToFirstFrame(video: HTMLVideoElement, firstFrameTime?: number): Promise<boolean> {
   return new Promise((resolve) => {
     if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
       resolve(false);
       return;
     }
 
-    const seekTime =
-      Number.isFinite(video.duration) && video.duration > 0
-        ? Math.min(0.1, Math.max(video.duration - 0.01, 0))
-        : 0.001;
+    const seekTime = resolveFirstFrameTime(video, firstFrameTime);
 
     const timeout = window.setTimeout(() => {
       cleanup();
@@ -115,13 +132,16 @@ function seekToFirstFrame(video: HTMLVideoElement): Promise<boolean> {
   });
 }
 
-async function renderFirstFrame(video: HTMLVideoElement): Promise<boolean> {
+async function renderFirstFrame(
+  video: HTMLVideoElement,
+  firstFrameTime?: number
+): Promise<boolean> {
   if (!video.paused) return true;
 
   try {
     await waitForCanPlay(video);
   } catch {
-    return seekToFirstFrame(video);
+    return seekToFirstFrame(video, firstFrameTime);
   }
 
   const previousMuted = video.muted;
@@ -130,14 +150,10 @@ async function renderFirstFrame(video: HTMLVideoElement): Promise<boolean> {
   try {
     await video.play();
     video.pause();
-    const seekTime =
-      Number.isFinite(video.duration) && video.duration > 0
-        ? Math.min(0.1, Math.max(video.duration - 0.01, 0))
-        : 0.001;
-    video.currentTime = seekTime;
+    video.currentTime = resolveFirstFrameTime(video, firstFrameTime);
     return true;
   } catch {
-    return seekToFirstFrame(video);
+    return seekToFirstFrame(video, firstFrameTime);
   } finally {
     video.muted = previousMuted;
   }
@@ -147,7 +163,9 @@ function attachFirstFrameHandler(
   video: HTMLVideoElement,
   enabled: boolean,
   preparedRef: { current: boolean },
-  preparingRef: { current: boolean }
+  preparingRef: { current: boolean },
+  firstFrameTime?: number,
+  onFirstFramePrepared?: () => void
 ) {
   if (!enabled) {
     return () => undefined;
@@ -157,10 +175,11 @@ function attachFirstFrameHandler(
     if (preparedRef.current || preparingRef.current || !video.paused) return;
 
     preparingRef.current = true;
-    void renderFirstFrame(video).then((ok) => {
+    void renderFirstFrame(video, firstFrameTime).then((ok) => {
       preparingRef.current = false;
       if (ok) {
         preparedRef.current = true;
+        onFirstFramePrepared?.();
       }
     });
   };
@@ -180,8 +199,10 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
       url,
       className,
       showFirstFrame = true,
+      firstFrameTime,
       errorClassName,
       onReady,
+      onFirstFramePrepared,
       onDurationChange,
       onPlaybackError,
       onVideoLoadedMetadata,
@@ -193,20 +214,26 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
     const videoRef = useRef<HTMLVideoElement>(null);
     const hlsRef = useRef<Hls | null>(null);
     const onReadyRef = useRef(onReady);
+    const onFirstFramePreparedRef = useRef(onFirstFramePrepared);
     const onDurationChangeRef = useRef(onDurationChange);
     const onPlaybackErrorRef = useRef(onPlaybackError);
+    const firstFrameTimeRef = useRef(firstFrameTime);
+    const lastEmittedDurationRef = useRef(0);
     const firstFramePreparedRef = useRef(false);
     const firstFramePreparingRef = useRef(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     useEffect(() => {
       onReadyRef.current = onReady;
+      onFirstFramePreparedRef.current = onFirstFramePrepared;
       onDurationChangeRef.current = onDurationChange;
       onPlaybackErrorRef.current = onPlaybackError;
+      firstFrameTimeRef.current = firstFrameTime;
     });
 
     const sourceUrl = url.trim();
     const playUrl = useMemo(() => resolveVideoPlayUrl(sourceUrl), [sourceUrl]);
+    const crossOrigin = useMemo(() => resolveVideoCrossOrigin(playUrl), [playUrl]);
     const sourceType = useMemo(() => detectVideoSourceType(sourceUrl), [sourceUrl]);
 
     useImperativeHandle(ref, () => ({
@@ -216,9 +243,10 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
 
     const emitDuration = () => {
       const duration = readDuration(videoRef.current);
-      if (duration > 0) {
-        onDurationChangeRef.current?.(duration);
-      }
+      if (duration <= 0) return;
+      if (Math.abs(duration - lastEmittedDurationRef.current) < 0.001) return;
+      lastEmittedDurationRef.current = duration;
+      onDurationChangeRef.current?.(duration);
     };
 
     const emitError = (message: string) => {
@@ -229,6 +257,7 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
     useEffect(() => {
       firstFramePreparedRef.current = false;
       firstFramePreparingRef.current = false;
+      lastEmittedDurationRef.current = 0;
     }, [playUrl]);
 
     useEffect(() => {
@@ -245,6 +274,12 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
         return;
       }
 
+      if (crossOrigin) {
+        video.crossOrigin = crossOrigin;
+      } else {
+        video.removeAttribute('crossorigin');
+      }
+
       const destroyHls = () => {
         if (hlsRef.current) {
           hlsRef.current.destroy();
@@ -256,7 +291,9 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
         video,
         showFirstFrame,
         firstFramePreparedRef,
-        firstFramePreparingRef
+        firstFramePreparingRef,
+        firstFrameTimeRef.current,
+        () => onFirstFramePreparedRef.current?.()
       );
 
       const handleReady = () => {
@@ -272,15 +309,33 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
           video.src = playUrl;
           video.load();
         } else if (Hls.isSupported()) {
-          const hls = new Hls();
+          const hls = new Hls({
+            xhrSetup: (xhr) => {
+              xhr.withCredentials = false;
+            },
+          });
           hlsRef.current = hls;
           hls.loadSource(playUrl);
           hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, handleReady);
-          hls.on(Hls.Events.ERROR, (_, data) => {
+          const onManifestParsed = () => {
+            handleReady();
+          };
+          const onHlsError = (_: string, data: { fatal?: boolean; type: string }) => {
             if (!data.fatal) return;
             emitError(getHlsErrorMessage(data.type));
-          });
+          };
+          hls.on(Hls.Events.MANIFEST_PARSED, onManifestParsed);
+          hls.on(Hls.Events.ERROR, onHlsError);
+
+          return () => {
+            hls.off(Hls.Events.MANIFEST_PARSED, onManifestParsed);
+            hls.off(Hls.Events.ERROR, onHlsError);
+            detachFirstFrameHandler();
+            destroyHls();
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+          };
         } else {
           emitError('当前浏览器不支持 HLS (m3u8) 播放');
         }
@@ -297,7 +352,7 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
         video.removeAttribute('src');
         video.load();
       };
-    }, [playUrl, showFirstFrame, sourceType, sourceUrl]);
+    }, [crossOrigin, playUrl, showFirstFrame, firstFrameTime, sourceType, sourceUrl]);
 
     const handleLoadedMetadata = (event: React.SyntheticEvent<HTMLVideoElement>) => {
       emitDuration();
@@ -326,6 +381,7 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
           onDurationChange={handleDurationChange}
           onError={handleVideoError}
           {...videoProps}
+          crossOrigin={crossOrigin || undefined}
         />
         {errorMessage && (
           <p className={errorClassName ?? 'stream-video-player__error'}>{errorMessage}</p>

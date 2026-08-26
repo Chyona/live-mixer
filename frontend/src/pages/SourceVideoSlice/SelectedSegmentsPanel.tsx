@@ -12,8 +12,8 @@ function buildActionDisabledReason(options: {
   hasSelectedPrompt: boolean;
   isUnderMin: boolean;
   isOverLimit: boolean;
-  minTotalDuration?: number;
-  maxTotalDuration?: number;
+  minTotalDuration: number;
+  maxTotalDuration: number;
 }) {
   const {
     actionLoading,
@@ -35,10 +35,10 @@ function buildActionDisabledReason(options: {
   if (!hasSelectedPrompt) {
     missing.push('请在上方提示词列表中选择合适的提示词');
   }
-  if (isUnderMin && minTotalDuration) {
+  if (isUnderMin) {
     missing.push(`已选时长需不少于 ${minTotalDuration / 60} 分钟`);
   }
-  if (isOverLimit && maxTotalDuration) {
+  if (isOverLimit) {
     missing.push(`已选时长需不超过 ${maxTotalDuration / 60} 分钟`);
   }
 
@@ -49,8 +49,8 @@ interface SelectedSegmentsPanelProps {
   videoDuration: number;
   selectedRanges: TimeRange[];
   totalSelectedDuration: number;
-  minTotalDuration?: number;
-  maxTotalDuration?: number;
+  minTotalDuration: number;
+  maxTotalDuration: number;
   submitting: boolean;
   aiSelecting: boolean;
   zoomLevel: number;
@@ -85,11 +85,8 @@ const SelectedSegmentsPanel = ({
   readOnly = false,
 }: SelectedSegmentsPanelProps) => {
   const isUnderMin =
-    Boolean(minTotalDuration) &&
-    selectedRanges.length > 0 &&
-    totalSelectedDuration < (minTotalDuration ?? 0);
-  const isOverLimit =
-    Boolean(maxTotalDuration) && totalSelectedDuration > (maxTotalDuration ?? 0);
+    selectedRanges.length > 0 && totalSelectedDuration < minTotalDuration;
+  const isOverLimit = totalSelectedDuration > maxTotalDuration;
   const canAction =
     !readOnly &&
     selectedRanges.length > 0 &&
@@ -147,14 +144,14 @@ const SelectedSegmentsPanel = ({
             {selectedRanges.length > 0 && (
               <p className="slice-selected-stats">
                 已选时长 {formatVideoDuration(totalSelectedDuration)}
-                {isUnderMin && minTotalDuration ? (
+                {isUnderMin && (
                   <span className="slice-under-min">
                     （需不少于 {minTotalDuration / 60} 分钟）
                   </span>
-                ) : null}
-                {isOverLimit && maxTotalDuration ? (
+                )}
+                {isOverLimit && (
                   <span className="slice-over-limit">（超出 {maxTotalDuration / 60} 分钟限制）</span>
-                ) : null}
+                )}
               </p>
             )}
           </div>

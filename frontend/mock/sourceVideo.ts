@@ -12,7 +12,13 @@ import {
 import { API_PREFIX } from './_config';
 import { LIVE_URL } from './_Live_URL';
 import { getAsrSummaries, getTranscript } from './transcript';
-import { countSliceProjectsBySourceVideoId } from './sliceProjectStore';
+import { deleteClipTasksBySourceVideoId } from './clipTaskStore';
+import {
+  countSliceProjectsBySourceVideoId,
+  deleteSliceProjectsBySourceVideoId,
+  listSliceProjectsBySourceVideoId,
+  toPublicSliceProject,
+} from './sliceProjectStore';
 
 type MockSourceVideo = Omit<
   SourceVideo,
@@ -26,6 +32,10 @@ type MockSourceVideo = Omit<
 };
 
 const CURRENT_USER_ID = '222';
+
+function withAsrParagraphsField(paragraphs: SourceVideo['asr_paragraphs']) {
+  return { asr_paragraphs: paragraphs };
+}
 
 const MOCK_LIVE_TEMPLATES = [
   { name: '周末游戏直播回放', remark: '游戏专场素材' },
@@ -170,7 +180,7 @@ function toPublicItem(item: MockSourceVideo): SourceVideo {
     ...rest,
     project_count: countSliceProjectsBySourceVideoId(item.id),
     matched_paragraphs: null,
-    asr_paragraphs: null,
+    ...withAsrParagraphsField(null),
     asr_summaries: null,
   };
 }
@@ -205,11 +215,11 @@ function collectMatchedParagraphs(
 function toPublicDetail(item: MockSourceVideo): SourceVideo {
   const base = toPublicItem(item);
   if (item.asr_status !== 'completed') {
-    return { ...base, asr_paragraphs: null, asr_summaries: null };
+    return { ...base, ...withAsrParagraphsField(null), asr_summaries: null };
   }
   return {
     ...base,
-    asr_paragraphs: getTranscript(String(item.id)),
+    ...withAsrParagraphsField(getTranscript(String(item.id))),
     asr_summaries: getAsrSummaries(String(item.id)),
   };
 }
@@ -464,6 +474,31 @@ export default [
     },
   },
   {
+    url: `${API_PREFIX}/v1/live-materials/:id/video-projects`,
+    method: 'get',
+    response: ({ query }: { query: { id: string } }) => {
+      const item = sourceVideos.find(
+        (video) => String(video.id) === query.id && video.ownerId === CURRENT_USER_ID
+      );
+      if (!item) {
+        return { code: 404, message: '源视频不存在', data: null };
+      }
+
+      const projects = listSliceProjectsBySourceVideoId(item.id);
+
+      return {
+        code: 0,
+        message: 'success',
+        data: {
+          list: projects.map((project) => toPublicSliceProject(project)),
+          page: 1,
+          page_size: 10,
+          total: projects.length,
+        },
+      };
+    },
+  },
+  {
     url: `${API_PREFIX}/v1/live-materials/:id`,
     method: 'delete',
     response: ({ query }: { query: { id: string } }) => {
@@ -473,8 +508,19 @@ export default [
       if (index < 0) {
         return { code: 404, message: '源视频不存在', data: null };
       }
+
+      const deletedProjectCount = deleteSliceProjectsBySourceVideoId(query.id);
+      const deletedTaskCount = deleteClipTasksBySourceVideoId(query.id);
       sourceVideos.splice(index, 1);
-      return { code: 0, message: '', data: null };
+
+      return {
+        code: 0,
+        message: '',
+        data: {
+          deleted_project_count: deletedProjectCount,
+          deleted_task_count: deletedTaskCount,
+        },
+      };
     },
   },
   {

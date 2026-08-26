@@ -195,7 +195,7 @@ const AiPromptsPage = () => {
         title: '名称',
         dataIndex: 'name',
         key: 'name',
-        width: 220,
+        width: 260,
         ellipsis: true,
         render: (name: string, record) =>
           record.is_editable === 1 ? (
@@ -249,14 +249,14 @@ const AiPromptsPage = () => {
         title: '创建时间',
         dataIndex: 'created_at',
         key: 'created_at',
-        width: 160,
+        width: 170,
         render: (createdAt: string) => formatToDateTime(createdAt),
       },
       {
         title: '编辑时间',
         dataIndex: 'updated_at',
         key: 'updated_at',
-        width: 160,
+        width: 170,
         render: (updatedAt: string) => formatToDateTime(updatedAt),
       },
       {

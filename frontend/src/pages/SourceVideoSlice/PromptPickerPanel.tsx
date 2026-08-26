@@ -65,6 +65,8 @@ interface PromptPickerPanelProps {
   /** 编辑回显：优先选中该 id（若不在首屏则继续分页查找） */
   preferredId?: number | null;
   onSelect: (prompt: AiPrompt) => void;
+  /** 首次自动选中（或确认无可用项）完成后回调，供离开守卫建立脏检查基线 */
+  onInitialSelectionReady?: () => void;
   /** 只读：不可新增/编辑/切换提示词 */
   readOnly?: boolean;
 }
@@ -73,6 +75,7 @@ const PromptPickerPanel = ({
   selectedId,
   preferredId = null,
   onSelect,
+  onInitialSelectionReady,
   readOnly = false,
 }: PromptPickerPanelProps) => {
   const [keyword, setKeyword] = useState('');
@@ -87,6 +90,13 @@ const PromptPickerPanel = ({
   const [previewPrompt, setPreviewPrompt] = useState<AiPrompt | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
+  const initialSelectionReadyRef = useRef(false);
+
+  const markInitialSelectionReady = useCallback(() => {
+    if (initialSelectionReadyRef.current) return;
+    initialSelectionReadyRef.current = true;
+    onInitialSelectionReady?.();
+  }, [onInitialSelectionReady]);
 
   const hasMore = list.length < total;
 
@@ -140,6 +150,15 @@ const PromptPickerPanel = ({
   }, [appliedKeyword, loadPage]);
 
   useEffect(() => {
+    initialSelectionReadyRef.current = false;
+  }, [preferredId]);
+
+  useEffect(() => {
+    if (loading || list.length > 0 || total > 0) return;
+    markInitialSelectionReady();
+  }, [list.length, loading, markInitialSelectionReady, total]);
+
+  useEffect(() => {
     if (selectedId || list.length === 0) return;
 
     if (preferredId) {
@@ -158,7 +177,10 @@ const PromptPickerPanel = ({
     const defaultItem = pickDefaultPrompt(list);
     if (defaultItem) {
       onSelect(defaultItem);
+      return;
     }
+
+    markInitialSelectionReady();
   }, [
     appliedKeyword,
     hasMore,
@@ -166,6 +188,7 @@ const PromptPickerPanel = ({
     loadPage,
     loading,
     loadingMore,
+    markInitialSelectionReady,
     onSelect,
     page,
     preferredId,

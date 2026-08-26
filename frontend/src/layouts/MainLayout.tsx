@@ -6,6 +6,7 @@ import Header from '~/components/Header';
 import FloatCom from '~/components/Float';
 import LoginModal from '~/components/LoginModal';
 import { MobileBottomNav, SideNav } from '~/components/Nav';
+import { SliceLeaveGuardProvider } from '~/context/SliceLeaveGuardContext';
 import { useResponsive } from '~/hooks';
 import { appConfig, isLeftNavLayout, isLoginModalMode } from '~/utils/config';
 
@@ -33,7 +34,7 @@ const MainLayout = () => {
     .filter(Boolean)
     .join(' ');
 
-  const mainContent = (
+  const pageContent = (
     <Content className={contentClassName}>
       <Outlet />
       {appConfig.enableFloat && <FloatCom />}
@@ -43,31 +44,37 @@ const MainLayout = () => {
 
   if (isPhone) {
     return (
-      <Layout className="zt-app zt-app--mobile">
-        <MobileBottomNav />
-        {mainContent}
-      </Layout>
+      <SliceLeaveGuardProvider>
+        <Layout className="zt-app zt-app--mobile">
+          <MobileBottomNav />
+          {pageContent}
+        </Layout>
+      </SliceLeaveGuardProvider>
     );
   }
 
   if (isLeftNavLayout) {
     return (
-      <Layout
-        className={`zt-app zt-app--left-nav${siderCollapsed ? ' zt-app--sider-collapsed' : ''}`}
-      >
-        <Layout hasSider className="zt-app-body">
-          <SideNav collapsed={siderCollapsed} onCollapse={handleSiderCollapse} />
-          <Layout>{mainContent}</Layout>
+      <SliceLeaveGuardProvider>
+        <Layout
+          className={`zt-app zt-app--left-nav${siderCollapsed ? ' zt-app--sider-collapsed' : ''}`}
+        >
+          <Layout hasSider className="zt-app-body">
+            <SideNav collapsed={siderCollapsed} onCollapse={handleSiderCollapse} />
+            <Layout>{pageContent}</Layout>
+          </Layout>
         </Layout>
-      </Layout>
+      </SliceLeaveGuardProvider>
     );
   }
 
   return (
-    <Layout className="zt-app zt-app--top-nav">
-      <Header />
-      {mainContent}
-    </Layout>
+    <SliceLeaveGuardProvider>
+      <Layout className="zt-app zt-app--top-nav">
+        <Header />
+        {pageContent}
+      </Layout>
+    </SliceLeaveGuardProvider>
   );
 };
 

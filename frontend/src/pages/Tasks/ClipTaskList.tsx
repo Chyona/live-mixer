@@ -2,12 +2,12 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Button, Dropdown, Space } from 'antd';
 import type { MenuProps } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
-import { LuCopy, LuDownload, LuEllipsis, LuFileText, LuLoaderCircle, LuPackage } from 'react-icons/lu';
+import { LuDownload, LuEllipsis, LuFileText, LuPackage } from 'react-icons/lu';
 
 import EllipsisTooltip from '~/components/EllipsisTooltip';
+import { CopyIcon } from '~/components/CopyIcon';
 import ListPageTable from '~/components/ListPageTable';
 import type { ListTableEmptyProps } from '~/components/ListTableEmpty';
-import { AppError } from '~/services/http';
 import {
   canDownloadTaskOutputs,
   downloadTaskClipsTar,
@@ -16,7 +16,7 @@ import {
   type GenerationTaskType,
 } from '~/services/task';
 import { formatToDateTime } from '~/utils/date';
-import { showAppError, toast } from '~/utils/toast';
+import { toast } from '~/utils/toast';
 
 import ClipTaskDetailModal from './ClipTaskDetailModal';
 import TaskProgressCell from './TaskProgressCell';
@@ -43,11 +43,8 @@ function canCopyDraft(taskType: GenerationTaskType) {
   return taskType === 'draft' || taskType === 'ai_slice_draft';
 }
 
-function menuIcon(icon: ReactNode, loading?: boolean) {
-  if (loading) {
-    return <LuLoaderCircle size={14} className="tasks-action-menu-loading" />;
-  }
-  return icon;
+function menuIcon(icon: ReactNode) {
+  return <span className="app-menu-item-icon">{icon}</span>;
 }
 
 function renderTaskTypeLabel(taskType: GenerationTaskType) {
@@ -68,7 +65,6 @@ function ClipTaskList({
   empty,
 }: ClipTaskListProps) {
   const [detailTask, setDetailTask] = useState<ClipTaskItem | null>(null);
-  const [downloadKey, setDownloadKey] = useState<string | null>(null);
 
   const handleCopyDraft = useCallback(async (url: string) => {
     const draftUrl = url.trim();
@@ -84,28 +80,17 @@ function ClipTaskList({
     toast.notify.error('复制失败，请手动复制链接');
   }, []);
 
-  const handleDownload = useCallback(async (task: ClipTaskItem, action: DownloadAction) => {
-    const key = `${action}:${task.id}`;
-    setDownloadKey(key);
+  const handleDownload = useCallback((task: ClipTaskItem, action: DownloadAction) => {
     const label = action === 'video' ? '视频' : '视频片段压缩包';
-    toast.notify.info(`正在下载 ${label}，请稍候…`);
 
     try {
       if (action === 'video') {
-        await downloadTaskVideo(task);
-        // toast.notify.success('合成视频已开始下载');
+        downloadTaskVideo(task);
       } else {
-        await downloadTaskClipsTar(task);
-        // toast.notify.success('视频片段压缩包已开始下载');
+        downloadTaskClipsTar(task);
       }
     } catch (error) {
-      if (error instanceof AppError) {
-        showAppError(error);
-      } else {
-        toast.notify.error(error instanceof Error ? error.message : `${label}下载失败`);
-      }
-    } finally {
-      setDownloadKey((current) => (current === key ? null : current));
+      toast.notify.error(error instanceof Error ? error.message : `${label}下载失败`);
     }
   }, []);
 
@@ -179,7 +164,7 @@ function ClipTaskList({
         title: '创建时间',
         dataIndex: 'created_at',
         key: 'created_at',
-        width: 160,
+        width: 170,
         render: (value: string) => formatToDateTime(value),
       },
       {
@@ -193,33 +178,30 @@ function ClipTaskList({
           const clipsTarUrl = record.clips_tar_url?.trim() || '';
           // AI 选片仅「详情」；生成草稿 / 一键成片显示三点菜单
           const showMoreActions = canCopyDraft(record.type);
-          const videoDownloading = downloadKey === `video:${record.id}`;
-          const clipsDownloading = downloadKey === `clips-tar:${record.id}`;
-          const rowBusy = Boolean(downloadKey);
           const canDownload = canDownloadTaskOutputs(record);
 
           const menuItems: MenuProps['items'] = showMoreActions
             ? [
               {
                 key: 'draft',
-                icon: menuIcon(<LuCopy size={14} />),
+                icon: menuIcon(<CopyIcon />),
                 label: '草稿地址',
-                disabled: !draftUrl || rowBusy,
+                disabled: !draftUrl,
                 onClick: () => void handleCopyDraft(draftUrl),
               },
               {
                 key: 'video',
-                icon: menuIcon(<LuDownload size={14} />, videoDownloading),
-                label: videoDownloading ? '视频下载中…' : '视频下载',
-                disabled: !videoUrl || !canDownload || (rowBusy && !videoDownloading),
-                onClick: () => void handleDownload(record, 'video'),
+                icon: menuIcon(<LuDownload size={14} />),
+                label: '视频下载',
+                disabled: !videoUrl || !canDownload,
+                onClick: () => handleDownload(record, 'video'),
               },
               {
                 key: 'clips-tar',
-                icon: menuIcon(<LuPackage size={14} />, clipsDownloading),
-                label: clipsDownloading ? '片段下载中…' : '视频片段下载',
-                disabled: !clipsTarUrl || !canDownload || (rowBusy && !clipsDownloading),
-                onClick: () => void handleDownload(record, 'clips-tar'),
+                icon: menuIcon(<LuPackage size={14} />),
+                label: '视频片段下载',
+                disabled: !clipsTarUrl || !canDownload,
+                onClick: () => handleDownload(record, 'clips-tar'),
               },
             ]
             : [];
@@ -236,18 +218,17 @@ function ClipTaskList({
                 详情
               </Button>
               {showMoreActions ? (
-                <Dropdown menu={{ items: menuItems }} trigger={['hover']} placement="bottomRight">
+                <Dropdown
+                  menu={{ items: menuItems }}
+                  trigger={['hover']}
+                  placement="bottomRight"
+                  overlayClassName="list-page-action-dropdown"
+                >
                   <Button
                     type="link"
                     size="small"
                     className="list-page__action-btn"
-                    icon={
-                      videoDownloading || clipsDownloading ? (
-                        <LuLoaderCircle size={14} className="tasks-action-menu-loading" />
-                      ) : (
-                        <LuEllipsis size={16} />
-                      )
-                    }
+                    icon={<LuEllipsis size={16} />}
                     aria-label="更多操作"
                   />
                 </Dropdown>
@@ -257,7 +238,7 @@ function ClipTaskList({
         },
       },
     ],
-    [downloadKey, handleCopyDraft, handleDownload]
+    [handleCopyDraft, handleDownload]
   );
 
   return (

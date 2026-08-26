@@ -17,7 +17,7 @@ export default () => {
           className="flex items-center gap-2 ml-4 mr-2 cursor-pointer"
           onClick={() => navigateTo(DEFAULT_APP_PATH)}
         >
-          <img src={Logo_src} className="ml-2 h-[32px]" alt="logo" />
+          <img src={Logo_src} className="ml-2 h-[32px] w-[32px] rounded-md object-contain" alt="logo" />
           <span className="brand-logo">{appConfig.title}</span>
         </div>
         <NavModule />

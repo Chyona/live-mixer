@@ -8,6 +8,7 @@ import {
   LuRotateCw,
 } from 'react-icons/lu';
 import type { SliceEditorEntryFrom } from '~/routes/links';
+import { appendDebugAsrKeyToPath } from '~/utils/asrParagraphsKey';
 
 import './index.css';
 
@@ -73,7 +74,7 @@ const SlicePageEmptyState = ({ variant, entryFrom = 'source-videos' }: SlicePage
           ))}
         </ul>
         <div className="slice-page-empty-actions">
-          <Link to={backAction.to}>
+          <Link to={appendDebugAsrKeyToPath(backAction.to)}>
             <Button type="primary" icon={<LuArrowLeft size={14} />}>
               {backAction.label}
             </Button>

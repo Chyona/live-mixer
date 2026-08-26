@@ -76,40 +76,7 @@
 }
 
 .source-videos-url-cell {
-  display: flex;
-  align-items: center;
-  gap: 1px;
   width: 100%;
-  max-width: 100%;
-  min-width: 0;
-}
-
-.source-videos-url-cell__text {
-  flex: 1;
-  min-width: 0;
-  line-height: 22px;
-}
-
-.source-videos-url-cell__action.ant-btn {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px !important;
-  min-width: 22px;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  line-height: 1;
-}
-
-.source-videos-url-cell__action.ant-btn .anticon,
-.source-videos-url-cell__action.ant-btn > span {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
 }
 
 .source-videos-form-date {
@@ -235,14 +202,6 @@
 
 .source-videos-asr-hits__line + .source-videos-asr-hits__line {
   border-top: 1px dashed var(--surface-item-border, #eef0f4);
-}
-
-.source-videos-asr-hits__line mark {
-  color: var(--color-danger, #ff4d4f);
-  background: rgba(255, 77, 79, 0.12);
-  padding: 0 2px;
-  border-radius: 2px;
-  font-weight: 600;
 }
 
 /* 文案命中展开行：贴紧上一行，去掉顶部分隔感 */

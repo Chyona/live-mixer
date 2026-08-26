@@ -6,6 +6,7 @@ import { isLoginPageMode } from '~/utils/config';
 import { AuthLayout, MainLayout } from '~/layouts';
 import PageLoading from '~/components/PageLoading';
 import GtmRouterTracker from './gtmRouterTracker';
+import IsDebugSearchPersist from './IsDebugSearchPersist';
 import NotFound from '~/pages/404';
 import { LoginRoute, ErrorPage, RoutesCfg, isAppRoute, DEFAULT_APP_PATH } from './const';
 
@@ -26,6 +27,7 @@ const AppRoutes = () => {
   return (
     <>
       <GtmRouterTracker />
+      <IsDebugSearchPersist />
       <Suspense fallback={<PageFallback />}>
         <Routes>
           {isLoginPageMode ? (

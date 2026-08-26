@@ -35,21 +35,9 @@
   width: 50px;
   height: 50px;
   border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 8px;
-  box-shadow: 0 4px 10px rgba(78, 110, 242, 0.25);
-
-  .logo-text {
-    position: absolute;
-  }
-}
-
-.login-logo img {
-  width: 30px;
-  height: 30px;
   object-fit: contain;
+  margin-right: 8px;
+  box-shadow: 0 4px 10px rgba(53, 107, 253, 0.25);
 }
 
 .login-brand-text {

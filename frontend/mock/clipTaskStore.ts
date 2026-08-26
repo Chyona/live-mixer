@@ -101,7 +101,7 @@ function seedMockClipTasks() {
       aiSegments: [
         {
           id: 'ai-seg-1',
-          speakerId: 'host',
+          speaker: 'host',
           speakerName: '主播',
           text: '今天给大家带来的是春季上新系列，性价比非常高。',
           start: 4,
@@ -109,7 +109,7 @@ function seedMockClipTasks() {
         },
         {
           id: 'ai-seg-2',
-          speakerId: 'guest',
+          speaker: 'guest',
           speakerName: '嘉宾',
           text: '很多老用户反馈上身效果比上一代更舒适。',
           start: 13.5,
@@ -403,6 +403,29 @@ export function deleteClipTask(taskId: string) {
   if (index < 0) return false;
   clipTaskStore.splice(index, 1);
   return true;
+}
+
+function matchesSourceVideoId(
+  taskSourceVideoId: string,
+  sourceVideoId: string | number
+): boolean {
+  const id = String(sourceVideoId);
+  if (taskSourceVideoId === id) return true;
+  const numericId = Number(id.replace(/\D/g, '')) || 0;
+  if (numericId <= 0) return false;
+  return (Number(taskSourceVideoId.replace(/\D/g, '')) || 0) === numericId;
+}
+
+/** 删除某源视频下的全部关联任务 */
+export function deleteClipTasksBySourceVideoId(sourceVideoId: string | number) {
+  let deleted = 0;
+  for (let index = clipTaskStore.length - 1; index >= 0; index -= 1) {
+    if (matchesSourceVideoId(clipTaskStore[index].sourceVideoId, sourceVideoId)) {
+      clipTaskStore.splice(index, 1);
+      deleted += 1;
+    }
+  }
+  return deleted;
 }
 
 /** 统计某源视频关联的任务数（兼容数字 id 与 sv-001 形式） */

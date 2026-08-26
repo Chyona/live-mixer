@@ -7,9 +7,10 @@ import { highlightListKeywords } from '~/utils/listKeywords';
 interface AsrHitsPanelProps {
   paragraphs: LiveAsrSegment[];
   keywords: string[];
+  keywordInput?: string;
 }
 
-const AsrHitsPanel = ({ paragraphs, keywords }: AsrHitsPanelProps) => {
+const AsrHitsPanel = ({ paragraphs, keywords, keywordInput }: AsrHitsPanelProps) => {
   const [expanded, setExpanded] = useState(true);
 
   if (!paragraphs.length) return null;
@@ -39,7 +40,7 @@ const AsrHitsPanel = ({ paragraphs, keywords }: AsrHitsPanelProps) => {
               key={`${paragraph.start_time}-${paragraph.end_time}-${index}`}
               className="source-videos-asr-hits__line"
               dangerouslySetInnerHTML={{
-                __html: highlightListKeywords(paragraph.text, keywords),
+                __html: highlightListKeywords(paragraph.text, keywords, keywordInput),
               }}
             />
           ))}

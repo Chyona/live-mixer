@@ -3,6 +3,7 @@
 }
 
 .manual-slice-loading__video {
+  margin-top: var(--slice-editor-inner-padding);
   flex: 0 0 auto;
   height: min(280px, 36vh);
   min-height: 180px;
@@ -163,6 +164,7 @@
   0% {
     background-position: 100% 0;
   }
+
   100% {
     background-position: -100% 0;
   }
@@ -173,6 +175,7 @@
   100% {
     opacity: 0.55;
   }
+
   50% {
     opacity: 1;
   }

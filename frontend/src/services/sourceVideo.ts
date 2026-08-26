@@ -1,6 +1,11 @@
 import axios from 'axios';
 
 import { apiPath } from '~/utils/api';
+import {
+  getAsrParagraphsApiKey,
+  isAsrParagraphsApiKeyOverridden,
+} from '~/utils/asrParagraphsKey';
+import { verifyAsrParagraphsFieldsFromRaw } from '~/utils/asrParagraphsVerify';
 
 import type { BaseResponse } from './types';
 import { AppError, DEFAULT_REQUEST_TIMEOUT_MS, request } from './http';
@@ -16,7 +21,7 @@ export {
   SOURCE_VIDEO_URL_DUPLICATE_CODE,
 } from './sourceVideo.model';
 
-import type { SourceVideo } from './sourceVideo.model';
+import type { AsrParagraphs, SourceVideo } from './sourceVideo.model';
 
 function parseContentDispositionFilename(header?: string): string | null {
   if (!header) return null;
@@ -140,6 +145,21 @@ function normalizeMatchedParagraphs(raw: unknown): SourceVideo['matched_paragrap
   return list.length ? list : [];
 }
 
+function normalizeAsrParagraphs(raw: Record<string, unknown>): AsrParagraphs | null {
+  try {
+    const configuredKey = getAsrParagraphsApiKey();
+    const value = raw[configuredKey];
+    if (value != null) return value as AsrParagraphs;
+    if (configuredKey !== 'asr_paragraphs' && raw.asr_paragraphs != null) {
+      return raw.asr_paragraphs as AsrParagraphs;
+    }
+    return null;
+  } catch {
+    const fallback = raw.asr_paragraphs;
+    return fallback != null ? (fallback as AsrParagraphs) : null;
+  }
+}
+
 export function normalizeSourceVideo(
   raw: Partial<SourceVideo> & Record<string, unknown>
 ): SourceVideo {
@@ -162,7 +182,7 @@ export function normalizeSourceVideo(
     matched_paragraphs: normalizeMatchedParagraphs(
       raw.matched_paragraphs ?? raw.matchedParagraphs
     ),
-    asr_paragraphs: (raw.asr_paragraphs as SourceVideo['asr_paragraphs']) ?? null,
+    asr_paragraphs: normalizeAsrParagraphs(raw),
     asr_summaries: normalizeAsrSummaries(raw.asr_summaries),
   };
 }
@@ -193,11 +213,19 @@ export async function fetchSourceVideoDetail(
     method: 'get',
   });
 
+  const raw = (response.data ?? {}) as Partial<SourceVideo> & Record<string, unknown>;
+
+  try {
+    if (isAsrParagraphsApiKeyOverridden()) {
+      verifyAsrParagraphsFieldsFromRaw(id, raw);
+    }
+  } catch (error) {
+    console.warn(`[isdebug] ASR 校对入口异常（源视频 ${id}），已跳过`, error);
+  }
+
   return {
     ...response,
-    data: normalizeSourceVideo(
-      (response.data ?? {}) as Partial<SourceVideo> & Record<string, unknown>
-    ),
+    data: normalizeSourceVideo(raw),
   };
 }
 
@@ -215,6 +243,52 @@ export async function updateSourceVideo(
     data: normalizeSourceVideo(
       (response.data ?? {}) as Partial<SourceVideo> & Record<string, unknown>
     ),
+  };
+}
+
+/** GET /v1/live-materials/:id/video-projects 返回的分页结构（删除流程仅使用 total） */
+export interface SourceVideoRelatedProjects {
+  list: unknown[];
+  page?: number;
+  page_size?: number;
+  total: number;
+}
+
+function normalizeSourceVideoRelatedProjects(raw: unknown): SourceVideoRelatedProjects {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { list: [], total: 0 };
+  }
+
+  const record = raw as Record<string, unknown>;
+  const list = Array.isArray(record.list) ? record.list : [];
+  const totalRaw = Number(record.total);
+  const total = Number.isFinite(totalRaw) ? Math.max(0, Math.floor(totalRaw)) : 0;
+
+  return {
+    list,
+    page: Number.isFinite(Number(record.page)) ? Number(record.page) : undefined,
+    page_size: Number.isFinite(Number(record.page_size ?? record.pageSize))
+      ? Number(record.page_size ?? record.pageSize)
+      : undefined,
+    total,
+  };
+}
+
+/**
+ * 按源视频 id 查询关联剪辑项目数据。
+ * GET /v1/live-materials/:id/video-projects
+ */
+export async function fetchSourceVideoRelatedProjects(
+  id: SourceVideoId
+): Promise<BaseResponse<SourceVideoRelatedProjects>> {
+  const response = await request<BaseResponse<SourceVideoRelatedProjects>>(
+    `/v1/live-materials/${id}/video-projects`,
+    { method: 'get' }
+  );
+
+  return {
+    ...response,
+    data: normalizeSourceVideoRelatedProjects(response.data),
   };
 }
 

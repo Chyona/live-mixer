@@ -29,7 +29,7 @@ function clipsToSegments(
     const end = (clip.end_time ?? 0) / 1000;
     return {
       id: `${prefix}-${index}-${Math.round(start * 1000)}-${Math.round(end * 1000)}`,
-      speakerId: '1',
+      speaker: '1',
       speakerName: '说话人1',
       text: '',
       start,

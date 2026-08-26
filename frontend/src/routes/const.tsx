@@ -61,7 +61,7 @@ export const RoutesCfg: RouteCfgType[] = [
   },
   {
     path: '/videos-slice/:id',
-    text: '视频切片',
+    text: '时间轴切片',
     icon: LuScissors,
     element: SourceVideoSlicePage,
     hideInMenu: true,

@@ -1,8 +1,11 @@
 import { Dropdown, Tooltip } from 'antd';
 import type { ReactNode } from 'react';
 import { FaCaretDown } from 'react-icons/fa';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { type RouteCfgType } from '~/routes/const';
+import { appendDebugAsrKeyToPath } from '~/utils/asrParagraphsKey';
+import { useSliceLeaveGuardContext } from '~/context/SliceLeaveGuardContext';
+import { handleGuardedNavClick } from './guardedNavClick';
 
 type NavMenuItemsProps = {
   items: RouteCfgType[];
@@ -23,6 +26,8 @@ const NavMenuItems = ({
   showMenu = false,
   setShowMenu = () => {},
 }: NavMenuItemsProps) => {
+  const location = useLocation();
+  const leaveGuard = useSliceLeaveGuardContext();
   const isVertical = variant === 'vertical';
   const navClassName = [
     'zt-nav',
@@ -120,8 +125,17 @@ const NavMenuItems = ({
       item,
       <Link
         key={item.path}
-        to={item.path}
-        onClick={() => setShowMenu(!showMenu)}
+        to={appendDebugAsrKeyToPath(item.path)}
+        onClick={(event) =>
+          handleGuardedNavClick(
+            event,
+            appendDebugAsrKeyToPath(item.path),
+            location.pathname,
+            location.search,
+            leaveGuard?.requestNavigate,
+            () => setShowMenu(!showMenu)
+          )
+        }
         className={`nav-item ${item.active ? 'active' : ''}`}
       >
         {renderIconText(item)}

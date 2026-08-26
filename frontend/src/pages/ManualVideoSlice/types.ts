@@ -17,18 +17,21 @@ export interface TranscriptSegment {
 
 export interface TranscriptParagraph {
   id: string;
-  speakerId: string;
+  /** 说话人标识，与 ASR 接口 `speaker` 一致 */
+  speaker: string;
   speakerName: string;
   segments: TranscriptSegment[];
 }
 
 export interface SelectedCopySegment {
   id: string;
-  speakerId: string;
+  speaker: string;
   speakerName: string;
   text: string;
   start: number;
   end: number;
+  /** 来源文案分段 id，用于部分删除时在原文中定位字级时间 */
+  sourceParagraphId?: string;
   /** 选入时的原始起点；用于计算前方留白，并限制收回时不切入原文案 */
   originStart?: number;
   /** 选入时的原始终点；用于计算后方留白，并限制收回时不切入原文案 */
