@@ -113,7 +113,25 @@
 .list-page__search-field {
   flex: 1 1 360px;
   min-width: 280px;
-  max-width: 640px;
+  max-width: 720px;
+}
+
+.keyword-search-input-wrap {
+  display: block;
+  width: 100%;
+}
+
+.ant-tooltip.keyword-search-input-tooltip {
+  width: max-content !important;
+  max-width: none !important;
+}
+
+.ant-tooltip.keyword-search-input-tooltip .ant-tooltip-inner {
+  width: max-content !important;
+  max-width: none !important;
+  white-space: nowrap;
+  word-wrap: normal;
+  overflow-wrap: normal;
 }
 
 .list-page__search-primary.ant-input-affix-wrapper,
@@ -194,6 +212,10 @@
   flex: 1 1 280px;
   min-width: 260px;
   max-width: 420px;
+}
+
+.asr-keyword-search-input-wrap {
+  max-width: 550px;
 }
 
 .list-page__filter-label {

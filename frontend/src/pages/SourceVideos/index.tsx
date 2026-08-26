@@ -29,7 +29,8 @@ import {
 } from '~/services/sourceVideo';
 import { formatToDateTime } from '~/utils/date';
 import { formatVideoDurationMs } from '~/utils/duration';
-import { buildKeywordSearchPlaceholder, parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
+import KeywordSearchInput from '~/components/KeywordSearchInput';
+import { parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
 import { DEFAULT_TABLE_PAGINATION, handleTablePaginationChange } from '~/utils/table';
 import { showAppError, showScopedError, handleRequestError, toast } from '~/utils/toast';
 
@@ -669,11 +670,11 @@ const SourceVideosPage = () => {
                   onChange={onDateChange}
                 />
               </div>
-              <div className="list-page__filter-field">
+              <div className="list-page__filter-field asr-keyword-search-input-wrap">
                 <span className="list-page__filter-label">视频文案</span>
-                <Input.Search
+                <KeywordSearchInput
                   allowClear
-                  placeholder={buildKeywordSearchPlaceholder('搜索已解析文案')}
+                  scopePlaceholder="搜索已解析文案"
                   value={asrKeyword}
                   loading={loading && (hasAsrKeyword || asrMaskPending)}
                   onChange={(event) => setAsrKeyword(event.target.value)}
