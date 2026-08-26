@@ -37,7 +37,7 @@ func newTestOSSProvider(t *testing.T, handler http.HandlerFunc) *ossProvider {
 		Concurrency:       2,
 		CheckpointDir:     t.TempDir(),
 		DisableCheckpoint: true,
-	}, 0)
+	}, DefaultSignedURLExpireDays)
 }
 
 // ossObjectKey 从请求路径中提取对象键名（兼容 path-style：/bucket/object）。
@@ -200,6 +200,21 @@ func TestOSSProvider_objectURL(t *testing.T) {
 	want := "https://my-bucket.oss-cn-hangzhou.aliyuncs.com/path/to/file.jpg"
 	if got != want {
 		t.Errorf("objectURL() = %q, want %q", got, want)
+	}
+}
+
+func TestOSSProvider_accessURL_UnsignedWhenExpireDaysZero(t *testing.T) {
+	provider := &ossProvider{bucketName: "my-bucket", endpoint: "oss-cn-hangzhou.aliyuncs.com", signedURLExpireDays: 0}
+	got, err := provider.accessURL("path/to/file.jpg")
+	if err != nil {
+		t.Fatalf("accessURL() error = %v", err)
+	}
+	want := "https://my-bucket.oss-cn-hangzhou.aliyuncs.com/path/to/file.jpg"
+	if got != want {
+		t.Errorf("accessURL() = %q, want unsigned %q", got, want)
+	}
+	if strings.Contains(got, "?") {
+		t.Errorf("unsigned URL should not contain query: %q", got)
 	}
 }
 

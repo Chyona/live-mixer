@@ -70,8 +70,11 @@ func (p *ossProvider) presignedURL(objectKey string) (string, error) {
 	return url, nil
 }
 
-// accessURL 返回上传完成后的可访问链接（默认带签名）。
+// accessURL 返回上传完成后的可访问链接；有效期为 0 时返回不带签名的对象直链。
 func (p *ossProvider) accessURL(objectKey string) (string, error) {
+	if useUnsignedObjectURL(p.signedURLExpireDays) {
+		return p.objectURL(objectKey), nil
+	}
 	return p.presignedURL(objectKey)
 }
 

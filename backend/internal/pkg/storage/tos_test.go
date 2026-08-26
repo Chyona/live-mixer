@@ -35,7 +35,7 @@ func newTestTOSProvider(t *testing.T, handler http.HandlerFunc) *tosProvider {
 		PartSizeBytes:     5 * 1024 * 1024,
 		Concurrency:       1,
 		DisableCheckpoint: true,
-	}, 0)
+	}, DefaultSignedURLExpireDays)
 }
 
 // writeTOSUploadFile 写入待上传的临时文件。
@@ -202,6 +202,21 @@ func TestTOSProvider_objectURL(t *testing.T) {
 	want := "https://my-bucket.tos-cn-beijing.volces.com/path/to/file.jpg"
 	if got != want {
 		t.Errorf("objectURL() = %q, want %q", got, want)
+	}
+}
+
+func TestTOSProvider_accessURL_UnsignedWhenExpireDaysZero(t *testing.T) {
+	provider := &tosProvider{bucketName: "my-bucket", endpoint: "tos-cn-beijing.volces.com", signedURLExpireDays: 0}
+	got, err := provider.accessURL("path/to/file.jpg")
+	if err != nil {
+		t.Fatalf("accessURL() error = %v", err)
+	}
+	want := "https://my-bucket.tos-cn-beijing.volces.com/path/to/file.jpg"
+	if got != want {
+		t.Errorf("accessURL() = %q, want unsigned %q", got, want)
+	}
+	if strings.Contains(got, "?") {
+		t.Errorf("unsigned URL should not contain query: %q", got)
 	}
 }
 

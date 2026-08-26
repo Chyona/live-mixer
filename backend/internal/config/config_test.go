@@ -27,6 +27,8 @@ func TestLoad_ServerHostPortAreBuiltIn(t *testing.T) {
 }
 
 func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
+	os.Unsetenv("APP_STORAGE_SIGNED_URL_EXPIRE_DAYS")
+
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -50,6 +52,9 @@ func TestLoad_StorageFromEmbeddedConfig(t *testing.T) {
 	}
 	if cfg.Storage.BasePath != "video_editing" {
 		t.Errorf("Storage.BasePath = %q, want video_editing", cfg.Storage.BasePath)
+	}
+	if cfg.Storage.SignedURLExpireDays != 30 {
+		t.Errorf("Storage.SignedURLExpireDays = %d, want 30", cfg.Storage.SignedURLExpireDays)
 	}
 
 	// ASR 默认 API Key 与轮询配置
@@ -93,6 +98,18 @@ func TestLoad_StorageEnvOverride(t *testing.T) {
 	}
 	if cfg.Storage.OSS.Endpoint != "oss-cn-shanghai.aliyuncs.com" {
 		t.Errorf("OSS.Endpoint = %q, want oss-cn-shanghai.aliyuncs.com", cfg.Storage.OSS.Endpoint)
+	}
+}
+
+func TestLoad_SignedURLExpireDaysEnvZero(t *testing.T) {
+	t.Setenv("APP_STORAGE_SIGNED_URL_EXPIRE_DAYS", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Storage.SignedURLExpireDays != 0 {
+		t.Errorf("SignedURLExpireDays = %d, want 0", cfg.Storage.SignedURLExpireDays)
 	}
 }
 
