@@ -127,9 +127,9 @@ CREATE TABLE IF NOT EXISTS video_project (
     -- 是否添加字幕：0否 1是，默认开启
     enable_captions INTEGER     NOT NULL DEFAULT 1,
     -- 短视频标题，2～12 个汉字；空表示尚未生成
-    title           VARCHAR(48) NOT NULL DEFAULT '',
+    title           VARCHAR(64) NOT NULL DEFAULT '',
     -- 短视频内容介绍，128 个字以内；空表示尚未生成
-    description     VARCHAR(384) NOT NULL DEFAULT '',
+    description     VARCHAR(512) NOT NULL DEFAULT '',
     -- 短视频话题（JSON 字符串数组），每个 2～12 个汉字，共 2～6 个；空数组表示尚未生成
     topics          JSONB       NOT NULL DEFAULT '[]',
     created_by      BIGINT      NOT NULL REFERENCES account (id),
