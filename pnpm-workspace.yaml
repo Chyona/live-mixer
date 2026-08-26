@@ -1,0 +1,6 @@
+packages:
+  - frontend
+
+onlyBuiltDependencies:
+  - '@swc/core'
+  - esbuild

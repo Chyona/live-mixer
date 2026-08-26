@@ -1,4 +1,6 @@
 import type { BaseResponse } from './types';
+import type { SliceProjectClip, SliceProjectSource } from './sliceProject';
+import type { TaskBatchCreateResult } from './task';
 import { request } from './http';
 
 export type SliceAuditStatus = 'approved' | 'rejected' | 'pending';
@@ -56,6 +58,14 @@ export interface ClipRange {
 }
 
 export interface SubmitClipParams {
+  live_id: number;
+  prompt_id: number;
+  clips0: SliceProjectClip[];
+  /** 默认 timeline */
+  project_source?: SliceProjectSource;
+}
+
+export interface SubmitDraftParams {
   video_project_id: string | number;
   /** 是否生成字幕（可选） */
   enable_captions?: boolean;
@@ -66,10 +76,10 @@ export interface ClipSubmitResult {
   taskId?: string;
 }
 
-/** 提交一键成片任务（依赖已保存的剪辑项目） */
+/** 提交一键成片任务（由后端创建剪辑项目并拆分任务） */
 export async function submitClip(
   params: SubmitClipParams
-): Promise<BaseResponse<ClipSubmitResult>> {
+): Promise<BaseResponse<TaskBatchCreateResult>> {
   return await request('/v1/tasks/ai-slice-draft', {
     method: 'post',
     data: params,
@@ -78,7 +88,7 @@ export async function submitClip(
 
 /** 人工切片提交成片（生成草稿） */
 export async function submitDraft(
-  params: SubmitClipParams
+  params: SubmitDraftParams
 ): Promise<BaseResponse<ClipSubmitResult>> {
   return await request('/v1/tasks/draft', {
     method: 'post',

@@ -13,7 +13,7 @@ function buildActionDisabledReason(options: {
   isUnderMin: boolean;
   isOverLimit: boolean;
   minTotalDuration: number;
-  maxTotalDuration: number;
+  maxTotalDuration?: number;
 }) {
   const {
     actionLoading,
@@ -38,7 +38,7 @@ function buildActionDisabledReason(options: {
   if (isUnderMin) {
     missing.push(`已选时长需不少于 ${minTotalDuration / 60} 分钟`);
   }
-  if (isOverLimit) {
+  if (isOverLimit && maxTotalDuration) {
     missing.push(`已选时长需不超过 ${maxTotalDuration / 60} 分钟`);
   }
 
@@ -50,7 +50,7 @@ interface SelectedSegmentsPanelProps {
   selectedRanges: TimeRange[];
   totalSelectedDuration: number;
   minTotalDuration: number;
-  maxTotalDuration: number;
+  maxTotalDuration?: number;
   submitting: boolean;
   aiSelecting: boolean;
   zoomLevel: number;
@@ -86,7 +86,10 @@ const SelectedSegmentsPanel = ({
 }: SelectedSegmentsPanelProps) => {
   const isUnderMin =
     selectedRanges.length > 0 && totalSelectedDuration < minTotalDuration;
-  const isOverLimit = totalSelectedDuration > maxTotalDuration;
+  const isOverLimit =
+    maxTotalDuration != null &&
+    maxTotalDuration > 0 &&
+    totalSelectedDuration > maxTotalDuration;
   const canAction =
     !readOnly &&
     selectedRanges.length > 0 &&
@@ -149,7 +152,7 @@ const SelectedSegmentsPanel = ({
                     （需不少于 {minTotalDuration / 60} 分钟）
                   </span>
                 )}
-                {isOverLimit && (
+                {isOverLimit && maxTotalDuration && (
                   <span className="slice-over-limit">（超出 {maxTotalDuration / 60} 分钟限制）</span>
                 )}
               </p>

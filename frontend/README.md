@@ -29,12 +29,15 @@
 ## 快速开始
 
 ```bash
+# 在仓库根目录安装（含 Git hooks）
 pnpm install
+
+cd frontend
 cp .env.example .env          # 按需修改
 pnpm dev                      # http://localhost:8008
 ```
 
-要求：Node ≥ 20，pnpm ≥ 10。
+要求：Node ≥ 20，pnpm ≥ 10。依赖与 Husky 在仓库根目录统一管理。
 
 ## 常用命令
 

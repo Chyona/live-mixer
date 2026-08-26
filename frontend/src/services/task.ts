@@ -6,6 +6,21 @@ export type ClipTaskItemStatus = 'pending' | 'processing' | 'completed' | 'faile
 /** 任务类型 */
 export type GenerationTaskType = 'ai_slice' | 'draft' | 'ai_slice_draft' | (string & {});
 
+/** 创建任务接口立即返回的单条摘要 */
+export interface TaskCreateItem {
+  id: string;
+  type: string;
+  status: string;
+  progress: number;
+  created_at: string;
+}
+
+/** 批量创建任务响应（AI 选片 / 一键成片） */
+export interface TaskBatchCreateResult {
+  list: TaskCreateItem[];
+  total: number;
+}
+
 /** ext 字段解析结果 */
 export interface ClipTaskExt {
   live_id?: number;

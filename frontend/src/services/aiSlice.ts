@@ -1,18 +1,20 @@
 import type { BaseResponse } from './types';
+import type { SliceProjectClip, SliceProjectSource } from './sliceProject';
+import type { TaskBatchCreateResult } from './task';
 import { request } from './http';
 
 export interface SubmitAiSliceParams {
-  video_project_id: string | number;
+  live_id: number;
+  prompt_id: number;
+  clips0: SliceProjectClip[];
+  /** 默认 manual：AI 选片结果在人工切片页编辑 */
+  project_source?: SliceProjectSource;
 }
 
-export interface AiSliceSelectResult {
-  task_id?: string;
-}
-
-/** 提交 AI 选片任务（依赖已保存的剪辑项目） */
+/** 提交 AI 选片任务（由后端创建剪辑项目并拆分任务） */
 export async function submitAiSliceSelection(
   params: SubmitAiSliceParams
-): Promise<BaseResponse<AiSliceSelectResult>> {
+): Promise<BaseResponse<TaskBatchCreateResult>> {
   return await request('/v1/tasks/ai-slice', {
     method: 'post',
     data: params,

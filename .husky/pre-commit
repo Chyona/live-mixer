@@ -1,2 +1,5 @@
-pnpm exec lint-staged
-pnpm typecheck
+#!/usr/bin/env sh
+cd "$(dirname "$0")/.." || exit 1
+
+pnpm --filter base-ui exec lint-staged
+pnpm --filter base-ui run typecheck

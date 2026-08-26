@@ -41,7 +41,6 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^15.15.0",
-    "husky": "^9.1.7",
     "jsdom": "^25.0.1",
     "lint-staged": "^15.5.1",
     "mockjs": "^1.1.0",
@@ -77,8 +76,7 @@
     "validate": "pnpm lint && pnpm lint:css && pnpm typecheck && pnpm test:run",
     "generate-sitemap": "node scripts/generate-sitemap.js",
     "clean:dist": "rimraf dist",
-    "clean:cache": "rimraf node_modules/.cache/ && rimraf node_modules/.vite",
-    "prepare": "husky"
+    "clean:cache": "rimraf node_modules/.cache/ && rimraf node_modules/.vite"
   },
   "lint-staged": {
     "src/**/*.{js,jsx,ts,tsx}": [

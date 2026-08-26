@@ -67,6 +67,18 @@ function filterClipTasks(query: Record<string, string | string[] | undefined>) {
   });
 }
 
+function toBatchTaskCreateResponse(taskId: string, type: string) {
+  const createdAt = new Date().toISOString();
+  return {
+    code: 0,
+    message: '',
+    data: {
+      list: [{ id: taskId, type, status: 'pending', progress: 0, created_at: createdAt }],
+      total: 1,
+    },
+  };
+}
+
 export default [
   {
     url: `${API_PREFIX}/v1/tasks`,
@@ -147,10 +159,34 @@ export default [
   {
     url: `${API_PREFIX}/v1/tasks/ai-slice`,
     method: 'post',
-    response: ({ body }: { body: { video_project_id?: string | number } }) => {
+    response: ({
+      body,
+    }: {
+      body: {
+        video_project_id?: string | number;
+        live_id?: number;
+        clips0?: Array<{ start_time: number; end_time: number }>;
+      };
+    }) => {
+      if (body?.live_id && body.clips0?.length) {
+        const taskId = `ai-slice-task-${Date.now()}`;
+        createAiSliceTask({
+          taskId,
+          sourceVideoId: String(body.live_id),
+          sourceVideoName: `源视频 ${body.live_id}`,
+          promptName: 'AI 选片',
+          clips: body.clips0.map((clip) => ({
+            start: clip.start_time,
+            end: clip.end_time,
+          })),
+          segments: [],
+        });
+        return toBatchTaskCreateResponse(taskId, 'ai_slice');
+      }
+
       const videoProjectId = body?.video_project_id;
       if (videoProjectId == null || videoProjectId === '') {
-        return { code: 400, message: '缺少 video_project_id', data: null };
+        return { code: 400, message: '缺少 live_id + clips0 或 video_project_id', data: null };
       }
 
       const project = getSliceProject(String(videoProjectId));
@@ -177,20 +213,36 @@ export default [
         videoProjectId: String(videoProjectId),
       });
 
-      return {
-        code: 0,
-        message: '',
-        data: { task_id: taskId },
-      };
+      return toBatchTaskCreateResponse(taskId, 'ai_slice');
     },
   },
   {
     url: `${API_PREFIX}/v1/tasks/ai-slice-draft`,
     method: 'post',
-    response: ({ body }: { body: { video_project_id?: string | number } }) => {
+    response: ({
+      body,
+    }: {
+      body: {
+        video_project_id?: string | number;
+        live_id?: number;
+        clips0?: Array<{ start_time: number; end_time: number }>;
+      };
+    }) => {
+      if (body?.live_id && body.clips0?.length) {
+        const taskId = `clip-task-${Date.now()}`;
+        createClipTask({
+          taskId,
+          sourceVideoId: String(body.live_id),
+          sourceVideoName: `源视频 ${body.live_id}`,
+          m3u8Url: '',
+          clipName: `一键成片_${taskId}`,
+        });
+        return toBatchTaskCreateResponse(taskId, 'ai_slice_draft');
+      }
+
       const videoProjectId = body?.video_project_id;
       if (videoProjectId == null || videoProjectId === '') {
-        return { code: 400, message: '缺少 video_project_id', data: null };
+        return { code: 400, message: '缺少 live_id + clips0 或 video_project_id', data: null };
       }
 
       const project = getSliceProject(String(videoProjectId));
@@ -208,11 +260,7 @@ export default [
         videoProjectId: String(videoProjectId),
       });
 
-      return {
-        code: 0,
-        message: '',
-        data: { task_id: taskId },
-      };
+      return toBatchTaskCreateResponse(taskId, 'ai_slice_draft');
     },
   },
   {
