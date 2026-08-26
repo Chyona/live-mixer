@@ -36,7 +36,7 @@ type TaskListOptions struct {
 }
 
 // CreateAISliceInput AI 切片任务创建入参。
-// 新路径：live_id + clips0，由后端创建项目并发布任务（超 30 分钟会拆成多个项目/任务）。
+// 新路径：live_id + clips0，由后端创建项目并发布任务（按有效 ASR 约每 30 分钟拆成多个项目/任务）。
 // 兼容路径：仅传 video_project_id，使用已有项目。
 type CreateAISliceInput struct {
 	VideoProjectID uint

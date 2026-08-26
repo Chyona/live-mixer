@@ -110,6 +110,7 @@ func TestIsTOSConfigured(t *testing.T) {
 }
 
 func TestLoadConfigFromEnv(t *testing.T) {
+	os.Unsetenv("STORAGE_SIGNED_URL_EXPIRE_DAYS")
 	t.Setenv("COS_SECRET_ID", "cos-id")
 	t.Setenv("COS_SECRET_KEY", "cos-key")
 	t.Setenv("COS_BUCKET_NAME", "cos-bucket")
@@ -134,6 +135,17 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 	if cfg.TOS.Region != "cn-beijing" {
 		t.Errorf("TOS.Region = %q, want cn-beijing", cfg.TOS.Region)
+	}
+	if cfg.SignedURLExpireDays != DefaultSignedURLExpireDays {
+		t.Errorf("SignedURLExpireDays = %d, want default %d", cfg.SignedURLExpireDays, DefaultSignedURLExpireDays)
+	}
+}
+
+func TestLoadConfigFromEnv_SignedURLExpireDaysZero(t *testing.T) {
+	t.Setenv("STORAGE_SIGNED_URL_EXPIRE_DAYS", "0")
+	cfg := LoadConfigFromEnv()
+	if cfg.SignedURLExpireDays != 0 {
+		t.Errorf("SignedURLExpireDays = %d, want 0", cfg.SignedURLExpireDays)
 	}
 }
 

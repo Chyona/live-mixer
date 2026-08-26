@@ -37,7 +37,7 @@ type Config struct {
 	OSS                 OSSConfig
 	TOS                 TOSConfig
 	BasePath            string // 对象键保存路径前缀，空值时使用 DefaultBasePath
-	SignedURLExpireDays int    // 上传后返回的签名链接有效期（天），0 表示 DefaultSignedURLExpireDays
+	SignedURLExpireDays int    // 上传后返回链接的签名有效期（天）；0 表示不签名、无有效期
 }
 
 // LoadConfigFromEnv 从独立环境变量加载对象存储配置（不经过 config.yaml）。
@@ -68,10 +68,10 @@ type Config struct {
 //
 // 通用：
 //   - STORAGE_BASE_PATH（可选，默认 video_editing）
-//   - STORAGE_SIGNED_URL_EXPIRE_DAYS（可选，默认 30）
+//   - STORAGE_SIGNED_URL_EXPIRE_DAYS（可选，默认 30；设为 0 时返回不带签名的对象直链）
 func LoadConfigFromEnv() Config {
-	signedURLExpireDays := 0
-	if val := os.Getenv("STORAGE_SIGNED_URL_EXPIRE_DAYS"); val != "" {
+	signedURLExpireDays := DefaultSignedURLExpireDays
+	if val, ok := os.LookupEnv("STORAGE_SIGNED_URL_EXPIRE_DAYS"); ok && val != "" {
 		if days, err := strconv.Atoi(val); err == nil {
 			signedURLExpireDays = days
 		}

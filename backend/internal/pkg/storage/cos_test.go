@@ -39,7 +39,7 @@ func newTestCOSProvider(t *testing.T, handler http.HandlerFunc) *cosProvider {
 		Concurrency:       2,
 		CheckpointDir:     t.TempDir(),
 		DisableCheckpoint: true,
-	}, 0)
+	}, DefaultSignedURLExpireDays)
 }
 
 // cosMockHandler 模拟 COS 简单上传与分片上传接口。
@@ -184,5 +184,20 @@ func TestCOSProvider_objectURL(t *testing.T) {
 	want := "https://my-bucket.cos.ap-beijing.myqcloud.com/path/to/file.jpg"
 	if got != want {
 		t.Errorf("objectURL() = %q, want %q", got, want)
+	}
+}
+
+func TestCOSProvider_accessURL_UnsignedWhenExpireDaysZero(t *testing.T) {
+	provider := &cosProvider{bucketName: "my-bucket", region: "ap-beijing", signedURLExpireDays: 0}
+	got, err := provider.accessURL(context.Background(), "path/to/file.jpg")
+	if err != nil {
+		t.Fatalf("accessURL() error = %v", err)
+	}
+	want := "https://my-bucket.cos.ap-beijing.myqcloud.com/path/to/file.jpg"
+	if got != want {
+		t.Errorf("accessURL() = %q, want unsigned %q", got, want)
+	}
+	if strings.Contains(got, "?") {
+		t.Errorf("unsigned URL should not contain query: %q", got)
 	}
 }

@@ -129,7 +129,7 @@ type JWTConfig struct {
 // StorageConfig 对象存储配置，多个后端同时配置完整时优先级为 COS > OSS > TOS。
 type StorageConfig struct {
 	BasePath            string           `mapstructure:"base_path"`
-	SignedURLExpireDays int              `mapstructure:"signed_url_expire_days"`
+	SignedURLExpireDays int              `mapstructure:"signed_url_expire_days"` // 签名有效期（天）；0 表示不签名、无有效期
 	COS                 COSStorageConfig `mapstructure:"cos"`
 	OSS      OSSStorageConfig `mapstructure:"oss"`
 	TOS      TOSStorageConfig `mapstructure:"tos"`
