@@ -2183,6 +2183,69 @@ export function getTotalSelectedDuration(segments: SelectedCopySegment[]) {
   return segments.reduce((sum, item) => sum + (item.end - item.start), 0);
 }
 
+/**
+ * 计算新片段 A 应插入到已选列表中的下标。
+ * 插入到片段 X 之后，使 X.end 与 A.start 的时间间隔尽量小：
+ * 1. 优先取满足 X.end <= A.start 且 X.end 最大的 X（最近前序）；
+ * 2. 若 A 早于全部已有片段，则插到开头；
+ * 3. 若与已有片段重叠，取 X.end - A.start 最小且 >= 0 的 X。
+ */
+export function findInsertIndexByTimelineProximity(
+  segments: SelectedCopySegment[],
+  aStart: number
+): number {
+  if (segments.length === 0) return 0;
+
+  const minStart = Math.min(...segments.map((item) => item.start));
+  if (aStart < minStart) return 0;
+
+  let predecessorIndex = -1;
+  let maxEnd = -Infinity;
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (!segment) continue;
+    const end = segment.end;
+    if (end <= aStart && end > maxEnd) {
+      maxEnd = end;
+      predecessorIndex = i;
+    }
+  }
+  if (predecessorIndex >= 0) {
+    return predecessorIndex + 1;
+  }
+
+  let bestIndex = segments.length;
+  let bestGap = Infinity;
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (!segment) continue;
+    const gap = segment.end - aStart;
+    if (gap >= 0 && gap < bestGap) {
+      bestGap = gap;
+      bestIndex = i;
+    }
+  }
+  if (bestGap < Infinity) {
+    return bestIndex + 1;
+  }
+
+  return segments.length;
+}
+
+/** 按时间邻近规则将新片段插入已选列表（支持批量） */
+export function insertSegmentsByTimelineProximity(
+  segments: SelectedCopySegment[],
+  incoming: SelectedCopySegment | SelectedCopySegment[]
+): SelectedCopySegment[] {
+  const items = Array.isArray(incoming) ? incoming : [incoming];
+  return items.reduce<SelectedCopySegment[]>((acc, segment) => {
+    const index = findInsertIndexByTimelineProximity(acc, segment.start);
+    const next = [...acc];
+    next.splice(index, 0, segment);
+    return next;
+  }, segments);
+}
+
 export function reorderSegments(
   segments: SelectedCopySegment[],
   fromIndex: number,

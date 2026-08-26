@@ -62,6 +62,7 @@ import {
   sanitizeDownloadFilename,
   sanitizeSelectedCopySegments,
   clampCopySegmentPlaybackBounds,
+  insertSegmentsByTimelineProximity,
 } from './utils';
 
 interface ManualSliceLocationState {
@@ -463,7 +464,7 @@ const ManualVideoSlicePage = () => {
     if (!segment) return;
 
     const sanitized = clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration);
-    setSelectedSegments((prev) => [...prev, sanitized]);
+    setSelectedSegments((prev) => insertSegmentsByTimelineProximity(prev, sanitized));
     setActiveSegmentId(sanitized.id);
     // 选片只加入预览，不打断当前播放进度
     toast.notify.success('已添加到文案预览');
@@ -485,7 +486,7 @@ const ManualVideoSlicePage = () => {
       const sanitized = segments.map((segment) =>
         clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration)
       );
-      setSelectedSegments((prev) => [...prev, ...sanitized]);
+      setSelectedSegments((prev) => insertSegmentsByTimelineProximity(prev, sanitized));
       setActiveSegmentId(sanitized[sanitized.length - 1]?.id ?? null);
       toast.notify.success(
         sanitized.length > 1

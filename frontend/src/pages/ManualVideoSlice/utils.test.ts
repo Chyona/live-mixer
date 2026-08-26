@@ -24,6 +24,8 @@ import {
   resolveSelectedCopyHighlightCharRange,
   resolveSourceParagraphIdForCopySegment,
   resolveTimingForCharRange,
+  findInsertIndexByTimelineProximity,
+  insertSegmentsByTimelineProximity,
   reorderSegments,
   sanitizeSelectedCopySegments,
   splitCaptionClauses,
@@ -32,26 +34,67 @@ import {
   SEGMENT_PLAYBACK_END_GUARD_SEC,
 } from './utils';
 
-function makeCopySegment(id: string): SelectedCopySegment {
+function makeCopySegment(id: string, start = 0, end = 1): SelectedCopySegment {
   return {
     id,
     speaker: '1',
     speakerName: '说话人1',
     text: id,
-    start: 0,
-    end: 1,
+    start,
+    end,
   };
 }
 
+describe('findInsertIndexByTimelineProximity', () => {
+  it('inserts at start when new clip is earlier than all existing clips', () => {
+    const existing = [
+      makeCopySegment('x1', 2874.7, 2913.2),
+      makeCopySegment('x2', 2913.9, 2922.1),
+    ];
+    expect(findInsertIndexByTimelineProximity(existing, 1.5)).toBe(0);
+  });
+
+  it('inserts after latest predecessor in timeline', () => {
+    const existing = [
+      makeCopySegment('x1', 2874.7, 2913.2),
+      makeCopySegment('x2', 2913.9, 2922.1),
+      makeCopySegment('x3', 2922.9, 2952.5),
+    ];
+    expect(findInsertIndexByTimelineProximity(existing, 2940)).toBe(2);
+  });
+
+  it('inserts after overlapping clip with smallest end gap', () => {
+    const existing = [
+      makeCopySegment('x1', 2874.7, 2913.2),
+      makeCopySegment('x2', 2913.9, 2922.1),
+    ];
+    expect(findInsertIndexByTimelineProximity(existing, 2900)).toBe(1);
+  });
+
+  it('appends when new clip is after all existing clips', () => {
+    const existing = [makeCopySegment('x1', 100, 200), makeCopySegment('x2', 250, 300)];
+    expect(findInsertIndexByTimelineProximity(existing, 350)).toBe(2);
+  });
+});
+
+describe('insertSegmentsByTimelineProximity', () => {
+  it('inserts multiple incoming segments sequentially by timeline proximity', () => {
+    const existing = [makeCopySegment('x1', 100, 200)];
+    const incoming = [makeCopySegment('a', 10, 20), makeCopySegment('b', 150, 180)];
+    const next = insertSegmentsByTimelineProximity(existing, incoming);
+    expect(next.map((item) => item.id)).toEqual(['a', 'b', 'x1']);
+  });
+});
+
 describe('reorderSegments', () => {
   it('moves an earlier segment to the last position', () => {
-    const segments = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(makeCopySegment);
+    const segments = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => makeCopySegment(id));
     const next = reorderSegments(segments, 3, segments.length);
     expect(next.map((item) => item.id)).toEqual(['a', 'b', 'c', 'e', 'f', 'g', 'd']);
   });
 
   it('keeps order when dropping after the last item at the last index', () => {
-    const segments = ['a', 'b', 'c'].map(makeCopySegment);
+    const segments = ['a', 'b', 'c'].map((id) => makeCopySegment(id));
     const next = reorderSegments(segments, 2, segments.length);
     expect(next.map((item) => item.id)).toEqual(['a', 'b', 'c']);
   });
