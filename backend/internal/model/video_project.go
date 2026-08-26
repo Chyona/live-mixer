@@ -24,9 +24,9 @@ type VideoProject struct {
 	// EnableCaptions 是否添加字幕：0否 1是，默认 1。
 	EnableCaptions int `gorm:"column:enable_captions;not null;default:1;comment:是否添加字幕0否1是" json:"enable_captions"`
 	// Title 短视频标题，2～12 个汉字；空表示尚未生成。
-	Title string `gorm:"size:48;not null;default:'';comment:短视频标题" json:"title"`
+	Title string `gorm:"size:64;not null;default:'';comment:短视频标题" json:"title"`
 	// Description 短视频内容介绍，128 个字以内；空表示尚未生成。
-	Description string `gorm:"size:384;not null;default:'';comment:短视频内容介绍" json:"description"`
+	Description string `gorm:"size:512;not null;default:'';comment:短视频内容介绍" json:"description"`
 	// Topics 短视频话题，每个 2～12 个汉字，共 2～6 个；空数组表示尚未生成。
 	Topics    []string  `gorm:"column:topics;serializer:json;type:jsonb;not null;default:'[]';comment:短视频话题" json:"topics"`
 	CreatedBy uint      `gorm:"not null;index;comment:创建人账号ID" json:"created_by"`
