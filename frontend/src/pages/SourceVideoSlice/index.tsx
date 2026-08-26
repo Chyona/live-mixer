@@ -480,6 +480,11 @@ const SourceVideoSlicePage = () => {
         '创建成功',
         total > 1 ? `已创建 ${total} 个任务，可前往任务管理查看` : '可前往任务管理查看'
       );
+      resetDirtyBaseline({
+        ranges: selectedRanges,
+        promptId: selectedPrompt.id,
+        projectName,
+      });
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -489,7 +494,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [projectTaskReadOnly, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+  }, [projectName, projectTaskReadOnly, resetDirtyBaseline, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
 
   const handleAiSelect = useCallback(async () => {
     if (projectTaskReadOnly) {
@@ -532,6 +537,11 @@ const SourceVideoSlicePage = () => {
         '创建成功',
         total > 1 ? `已创建 ${total} 个任务，可前往任务管理查看` : '可前往任务管理查看'
       );
+      resetDirtyBaseline({
+        ranges: selectedRanges,
+        promptId: selectedPrompt.id,
+        projectName,
+      });
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -541,7 +551,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setAiSelecting(false);
     }
-  }, [projectTaskReadOnly, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+  }, [projectName, projectTaskReadOnly, resetDirtyBaseline, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
 
   const handleSwitchToManual = useCallback(() => {
     confirmLeave(() => {

@@ -63,6 +63,7 @@ import {
   sanitizeSelectedCopySegments,
   clampCopySegmentPlaybackBounds,
   insertSegmentsByTimelineProximity,
+  resolveLoadedProjectSegments,
 } from './utils';
 
 interface ManualSliceLocationState {
@@ -71,7 +72,6 @@ interface ManualSliceLocationState {
 }
 
 const MAX_TOTAL_DURATION = 2 * 60 * 60;
-const DRAFT_STORAGE_KEY = 'manual-slice-draft-name';
 
 /** 人工切片项目自动命名：人工切片_时间 */
 function buildManualProjectAutoName() {
@@ -92,12 +92,33 @@ const ManualVideoSlicePage = () => {
   /** 项目管理进入时带 ?projectId=；源视频首次保存后也会回写 */
   const projectIdFromQuery = parseProjectId(searchParams.get('projectId'));
   const [projectId, setProjectId] = useState<number | null>(projectIdFromQuery);
+  /** 保存/另存为后回写 URL，不触发整页数据重载 */
+  const skipProjectReloadRef = useRef(false);
+  const taskReloadTimerRef = useRef<number | null>(null);
+  const reloadProjectDetailRef = useRef<() => Promise<void>>(async () => {});
+
+  const handleProjectTasksCompleted = useCallback(() => {
+    if (taskReloadTimerRef.current != null) {
+      window.clearTimeout(taskReloadTimerRef.current);
+    }
+    taskReloadTimerRef.current = window.setTimeout(() => {
+      taskReloadTimerRef.current = null;
+      void reloadProjectDetailRef.current();
+    }, 300);
+  }, []);
+
   const {
     runningTaskCount,
     readOnly: projectTaskReadOnly,
-  } = useSliceProjectTaskStats(projectId);
-  /** 保存/另存为后回写 URL，不触发整页数据重载 */
-  const skipProjectReloadRef = useRef(false);
+  } = useSliceProjectTaskStats(projectId, { onTasksCompleted: handleProjectTasksCompleted });
+
+  useEffect(() => {
+    return () => {
+      if (taskReloadTimerRef.current != null) {
+        window.clearTimeout(taskReloadTimerRef.current);
+      }
+    };
+  }, []);
 
   const [loading, setLoading] = useState(true);
   const [video, setVideo] = useState<SourceVideo | null>(null);
@@ -117,7 +138,7 @@ const ManualVideoSlicePage = () => {
   const [savingProject, setSavingProject] = useState(false);
   const [downloadingSubtitle, setDownloadingSubtitle] = useState(false);
   const [enableCaptions, setEnableCaptions] = useState(false);
-  const [draftName, setDraftName] = useState(() => localStorage.getItem(DRAFT_STORAGE_KEY) ?? '');
+  const [draftName, setDraftName] = useState('');
   const [projectRemark, setProjectRemark] = useState('');
   const savedSnapshotRef = useRef('');
   const baselineSyncedRef = useRef(false);
@@ -173,6 +194,73 @@ const ManualVideoSlicePage = () => {
     },
     []
   );
+
+  const applyLoadedProject = useCallback(
+    (
+      project: NonNullable<Awaited<ReturnType<typeof fetchSliceProjectDetail>>['data']>,
+      normalizedParagraphs: TranscriptParagraph[],
+      videoDurationSec: number,
+      options?: { syncSegments?: boolean }
+    ) => {
+      const loadedDraftName = project.name?.trim() || '';
+      const loadedRemark = project.remark || '';
+      const loadedEnableCaptions = Boolean(project.enable_captions);
+
+      setProjectId(project.id);
+      setProjectRemark(loadedRemark);
+      setEnableCaptions(loadedEnableCaptions);
+      setDraftName(loadedDraftName);
+
+      const loadedSegments =
+        options?.syncSegments === false
+          ? []
+          : resolveLoadedProjectSegments(project, normalizedParagraphs, videoDurationSec);
+
+      if (options?.syncSegments !== false) {
+        setSelectedSegments(loadedSegments);
+      }
+
+      resetDirtyBaseline({
+        segments: loadedSegments,
+        enableCaptions: loadedEnableCaptions,
+        draftName: loadedDraftName,
+        projectRemark: loadedRemark,
+      });
+    },
+    [resetDirtyBaseline]
+  );
+
+  const reloadProjectDetail = useCallback(
+    async (options?: { notifyOnSegments?: boolean }) => {
+      const targetProjectId = projectId ?? projectIdFromQuery;
+      if (!targetProjectId || !paragraphs.length) return;
+
+      try {
+        const projectRes = await fetchSliceProjectDetail(targetProjectId);
+        if (projectRes.code !== 0 || !projectRes.data) return;
+
+        const durationMs = Number(video?.duration) || 0;
+        const videoDurationSec = videoDuration > 0 ? videoDuration : durationMs / 1000;
+        const loadedSegments = resolveLoadedProjectSegments(
+          projectRes.data,
+          paragraphs,
+          videoDurationSec
+        );
+
+        applyLoadedProject(projectRes.data, paragraphs, videoDurationSec);
+
+        if (options?.notifyOnSegments && loadedSegments.length > 0) {
+          toast.notify.success('AI 选片结果已载入，可继续编辑文案片段');
+        }
+      } catch {
+        // 静默失败，保留当前编辑态
+      }
+    },
+    [applyLoadedProject, paragraphs, projectId, projectIdFromQuery, video?.duration, videoDuration]
+  );
+
+  reloadProjectDetailRef.current = () =>
+    reloadProjectDetail({ notifyOnSegments: true });
 
   useEffect(() => {
     baselineSyncedRef.current = false;
@@ -271,11 +359,9 @@ const ManualVideoSlicePage = () => {
         asrParagraphsToTranscriptParagraphs(videoRes.data.asr_paragraphs)
       );
       setParagraphs(normalizedParagraphs);
-      const nextDraftName = buildManualProjectAutoName();
-      const resolvedDraftName = localStorage.getItem(DRAFT_STORAGE_KEY)?.trim() || nextDraftName;
-      setDraftName(resolvedDraftName);
 
       if (!projectIdFromQuery) {
+        setDraftName(buildManualProjectAutoName());
         setProjectId(null);
         setProjectRemark('');
         const nextSegments = hasAiSegments ? (locationState?.aiSelectedSegments ?? []) : [];
@@ -287,24 +373,24 @@ const ManualVideoSlicePage = () => {
 
       const projectRes = projectSettled;
       if (projectRes?.code === 0 && projectRes.data) {
-        const loadedProjectId = projectRes.data.id || projectIdFromQuery;
-        setProjectId(loadedProjectId);
-        const loadedRemark = projectRes.data.remark || '';
-        const loadedEnableCaptions = Boolean(projectRes.data.enable_captions);
-        const loadedDraftName = projectRes.data.name;
-        setProjectRemark(loadedRemark);
-        setEnableCaptions(loadedEnableCaptions);
-        let loadedSegments: SelectedCopySegment[] = [];
-        if (!hasAiSegments && projectRes.data.segments.length > 0) {
-          const videoDurationSec = Number(videoRes.data.duration) || 0;
-          loadedSegments = sanitizeSelectedCopySegments(
-            projectRes.data.segments,
-            normalizedParagraphs,
-            videoDurationSec
+        const projectLiveId = String(projectRes.data.live_id || '');
+        if (projectLiveId && projectLiveId !== sourceVideoId) {
+          navigate(
+            buildManualVideoSliceLink(projectLiveId, { projectId: projectRes.data.id }),
+            { replace: true, state: location.state }
           );
-          setSelectedSegments(loadedSegments);
-          setDraftName(loadedDraftName);
+          return;
         }
+
+        const durationMs = Number(videoRes.data.duration) || 0;
+        const videoDurationSec = durationMs > 0 ? durationMs / 1000 : 0;
+
+        applyLoadedProject(
+          projectRes.data,
+          normalizedParagraphs,
+          videoDurationSec,
+          hasAiSegments ? { syncSegments: false } : undefined
+        );
       } else {
         toast.notify.warning(projectRes?.message || '剪辑项目加载失败');
       }
@@ -318,7 +404,7 @@ const ManualVideoSlicePage = () => {
     } finally {
       setLoading(false);
     }
-  }, [location.state, projectIdFromQuery, sourceVideoId]);
+  }, [applyLoadedProject, location.state, navigate, projectIdFromQuery, sourceVideoId]);
 
   useEffect(() => {
     if (skipProjectReloadRef.current) {
@@ -336,6 +422,12 @@ const ManualVideoSlicePage = () => {
 
     baselineSyncedRef.current = false;
     setSelectedSegments(aiSelectedSegments);
+    resetDirtyBaseline({
+      segments: aiSelectedSegments,
+      enableCaptions,
+      draftName,
+      projectRemark,
+    });
     toast.notify.success('AI 选片结果已载入，可继续编辑文案片段');
     const nextSearch = mergeDebugAsrKeySearchParams(new URLSearchParams(location.search));
     const search = nextSearch.toString();
@@ -343,7 +435,7 @@ const ManualVideoSlicePage = () => {
       { pathname: location.pathname, search: search ? `?${search}` : '' },
       { replace: true, state: null }
     );
-  }, [location.pathname, location.search, location.state, navigate]);
+  }, [draftName, enableCaptions, location.pathname, location.search, location.state, navigate, projectRemark, resetDirtyBaseline]);
 
   useEffect(() => {
     lastCurrentTimeRef.current = 0;
@@ -647,7 +739,6 @@ const ManualVideoSlicePage = () => {
           draftName: response.data.name,
           projectRemark: response.data.remark || nextRemark,
         });
-        localStorage.setItem(DRAFT_STORAGE_KEY, response.data.name);
         setSaveModalOpen(false);
         toast.notify.success('已保存为剪辑项目，可在项目管理中查看');
       } catch (error) {
@@ -728,7 +819,6 @@ const ManualVideoSlicePage = () => {
         if (response.data.id) {
           syncProjectIdInUrl(response.data.id, { reload: false });
         }
-        localStorage.setItem(DRAFT_STORAGE_KEY, response.data.name);
         setDraftName(response.data.name);
         setProjectRemark(response.data.remark || remark);
         resetDirtyBaseline({
