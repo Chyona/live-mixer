@@ -904,6 +904,17 @@ export function buildCopySegmentFromAiSegment(
   return segments[0] ?? null;
 }
 
+/** 打开已有项目时：仅使用 clips1（文案预览片段），clips0 不参与展示 */
+export function resolveLoadedProjectSegments(
+  project: { segments?: SelectedCopySegment[] },
+  paragraphs: TranscriptParagraph[],
+  videoDurationSec: number
+): SelectedCopySegment[] {
+  const raw = project.segments ?? [];
+  if (!raw.length) return [];
+  return sanitizeSelectedCopySegments(raw, paragraphs, videoDurationSec);
+}
+
 /** 扁平化全部字级时间轴（按开始时间排序） */
 export function flattenTranscriptWords(paragraphs: TranscriptParagraph[]): TranscriptWord[] {
   return paragraphs
