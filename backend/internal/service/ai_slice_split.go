@@ -10,11 +10,14 @@ import (
 )
 
 const (
-	// aiSliceProjectMaxDurationMS 单个剪辑项目 clips0 总时长上限（30 分钟）。
-	aiSliceProjectMaxDurationMS int64 = 30 * 60 * 1000
-	// aiSliceProjectMinDurationMS 拆分后单个项目 clips0 总时长下限（5 分钟）。
-	// 用户提交总时长本身不足 5 分钟时不拆分，仍创建 1 个项目。
-	aiSliceProjectMinDurationMS int64 = 5 * 60 * 1000
+	// aiSliceProjectMaxASRMS 单个剪辑项目有效 ASR 时长上限（30 分钟）。
+	// clips0 为视频时间范围：含大量静音时墙钟时长可以超过 30 分钟。
+	aiSliceProjectMaxASRMS int64 = 30 * 60 * 1000
+	// aiSliceProjectMinASRMS 拆分后单个项目有效 ASR 时长下限（10 分钟）。
+	// 用户提交的有效 ASR 本身不足 10 分钟时不拆分，仍创建 1 个项目。
+	aiSliceProjectMinASRMS int64 = 10 * 60 * 1000
+	// aiSliceProjectTargetWallMS 按选区墙钟时长估算项目数：N 分钟约 N/30 个（可多 1 或少 1）。
+	aiSliceProjectTargetWallMS int64 = 30 * 60 * 1000
 
 	aiSliceProjectNamePrefix      = "AI选片"
 	aiSliceDraftProjectNamePrefix = "一键成片"
@@ -24,6 +27,7 @@ const (
 type clipAtom struct {
 	model.ClipRange
 	atParagraphEnd bool
+	asrMS          int64
 }
 
 func clipRangesDurationMS(clips []model.ClipRange) int64 {
@@ -31,6 +35,38 @@ func clipRangesDurationMS(clips []model.ClipRange) int64 {
 	for _, c := range clips {
 		if c.EndTime > c.StartTime {
 			sum += c.EndTime - c.StartTime
+		}
+	}
+	return sum
+}
+
+func clipRangesASRDurationMS(clips []model.ClipRange, utterances []asr.Utterance) int64 {
+	if len(clips) == 0 {
+		return 0
+	}
+	if len(utterances) == 0 {
+		return clipRangesDurationMS(clips)
+	}
+	var sum int64
+	for _, c := range clips {
+		if c.EndTime <= c.StartTime {
+			continue
+		}
+		for _, u := range utterances {
+			if u.EndTime <= u.StartTime {
+				continue
+			}
+			start := c.StartTime
+			if u.StartTime > start {
+				start = u.StartTime
+			}
+			end := c.EndTime
+			if u.EndTime < end {
+				end = u.EndTime
+			}
+			if end > start {
+				sum += end - start
+			}
 		}
 	}
 	return sum
@@ -46,18 +82,71 @@ func atomsDurationMS(atoms []clipAtom) int64 {
 	return sum
 }
 
-// splitClips0IntoProjects 将已排序合并的 clips0 按 30 分钟上限拆成多组。
-// 总时长 ≤30 分钟时原样返回 1 组；>30 分钟时按 live_asr 分句边界切原子，并优先在 asr_paragraphs 段末切开。
-// 保证各组时长之和等于入参总时长（不丢选区）。
+func atomsASRDuration(atoms []clipAtom) int64 {
+	var sum int64
+	for _, a := range atoms {
+		if a.asrMS > 0 {
+			sum += a.asrMS
+		}
+	}
+	return sum
+}
+
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// targetProjectCount 估算拆分项目数：约 N/30（N 为选区墙钟分钟），并受 ASR 上下限约束。
+// 有效 ASR ≤30 分钟只需 1 组；每组有效 ASR 须 ≥10 分钟，因此静音很多时项目数会少于 N/30。
+func targetProjectCount(wallMS, asrMS int64) int {
+	if wallMS <= 0 {
+		return 0
+	}
+	target := int((wallMS + aiSliceProjectTargetWallMS/2) / aiSliceProjectTargetWallMS)
+	if target < 1 {
+		target = 1
+	}
+
+	minGroups := 1
+	if asrMS > aiSliceProjectMaxASRMS {
+		minGroups = int((asrMS + aiSliceProjectMaxASRMS - 1) / aiSliceProjectMaxASRMS)
+	}
+	maxGroups := 1
+	if asrMS > aiSliceProjectMinASRMS {
+		maxGroups = int(asrMS / aiSliceProjectMinASRMS)
+	}
+	if minGroups < 1 {
+		minGroups = 1
+	}
+	if maxGroups < minGroups {
+		maxGroups = minGroups
+	}
+	if target < minGroups {
+		return minGroups
+	}
+	if target > maxGroups {
+		return maxGroups
+	}
+	return target
+}
+
+// splitClips0IntoProjects 将已排序合并的 clips0 拆成多组剪辑项目。
+// 按有效 ASR 打包：每组 ASR ≤30 分钟、拆分后每组 ASR ≥10 分钟；静音不计入 ASR，故 clips0 墙钟可超过 30 分钟。
+// 项目数约等于选区墙钟 N/30（可多 1 或少 1）。保证各组时长之和等于入参总时长（不丢选区）。
 func splitClips0IntoProjects(merged []model.ClipRange, utterances []asr.Utterance, paragraphs []model.ASRParagraph) [][]model.ClipRange {
 	if len(merged) == 0 {
 		return nil
 	}
-	total := clipRangesDurationMS(merged)
-	if total <= 0 {
+	wallMS := clipRangesDurationMS(merged)
+	if wallMS <= 0 {
 		return nil
 	}
-	if total <= aiSliceProjectMaxDurationMS {
+
+	asrMS := clipRangesASRDurationMS(merged, utterances)
+	if targetProjectCount(wallMS, asrMS) <= 1 {
 		return [][]model.ClipRange{cloneClipRanges(merged)}
 	}
 
@@ -66,7 +155,14 @@ func splitClips0IntoProjects(merged []model.ClipRange, utterances []asr.Utteranc
 		return [][]model.ClipRange{cloneClipRanges(merged)}
 	}
 
-	groups := packClipAtoms(atoms, aiSliceProjectMaxDurationMS, aiSliceProjectMinDurationMS)
+	wallMS = atomsDurationMS(atoms)
+	asrMS = atomsASRDuration(atoms)
+	count := targetProjectCount(wallMS, asrMS)
+	if count <= 1 {
+		return [][]model.ClipRange{cloneClipRanges(merged)}
+	}
+
+	groups := packClipAtoms(atoms, count, aiSliceProjectMaxASRMS, aiSliceProjectMinASRMS)
 	out := make([][]model.ClipRange, 0, len(groups))
 	for _, g := range groups {
 		clips := mergeContiguousAtoms(g)
@@ -109,11 +205,27 @@ func utteranceBoundarySet(utterances []asr.Utterance) map[int64]struct{} {
 	return out
 }
 
+func sortedUtterances(utterances []asr.Utterance) []asr.Utterance {
+	if len(utterances) == 0 {
+		return nil
+	}
+	out := make([]asr.Utterance, len(utterances))
+	copy(out, utterances)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StartTime != out[j].StartTime {
+			return out[i].StartTime < out[j].StartTime
+		}
+		return out[i].EndTime < out[j].EndTime
+	})
+	return out
+}
+
 // buildClipAtoms 在每个合并选区内，仅在 ASR 分句起止（及选区端点）切开。
-// 无分句时退化为按 30 分钟硬切，避免超长静音无法拆分。
+// 无分句时退化为按 30 分钟硬切，并把墙钟视为有效时长。
 func buildClipAtoms(merged []model.ClipRange, utterances []asr.Utterance, paragraphs []model.ASRParagraph) []clipAtom {
+	sorted := sortedUtterances(utterances)
 	paraEnds := paragraphEndSet(paragraphs)
-	boundaries := utteranceBoundarySet(utterances)
+	boundaries := utteranceBoundarySet(sorted)
 	hasUtterances := len(boundaries) > 0
 
 	var atoms []clipAtom
@@ -134,7 +246,43 @@ func buildClipAtoms(merged []model.ClipRange, utterances []asr.Utterance, paragr
 			})
 		}
 	}
+	fillAtomASR(atoms, sorted, !hasUtterances)
 	return atoms
+}
+
+func fillAtomASR(atoms []clipAtom, utterances []asr.Utterance, fallbackWall bool) {
+	if fallbackWall || len(utterances) == 0 {
+		for i := range atoms {
+			d := atoms[i].EndTime - atoms[i].StartTime
+			if d < 0 {
+				d = 0
+			}
+			atoms[i].asrMS = d
+		}
+		return
+	}
+	j := 0
+	for i := range atoms {
+		a := &atoms[i]
+		for j < len(utterances) && utterances[j].EndTime <= a.StartTime {
+			j++
+		}
+		var sum int64
+		for k := j; k < len(utterances) && utterances[k].StartTime < a.EndTime; k++ {
+			start := utterances[k].StartTime
+			if start < a.StartTime {
+				start = a.StartTime
+			}
+			end := utterances[k].EndTime
+			if end > a.EndTime {
+				end = a.EndTime
+			}
+			if end > start {
+				sum += end - start
+			}
+		}
+		a.asrMS = sum
+	}
 }
 
 func collectAtomCutPoints(clip model.ClipRange, utteranceBoundaries map[int64]struct{}, hasUtterances bool) []int64 {
@@ -149,7 +297,7 @@ func collectAtomCutPoints(clip model.ClipRange, utteranceBoundaries map[int64]st
 			}
 		}
 	} else {
-		for t := clip.StartTime + aiSliceProjectMaxDurationMS; t < clip.EndTime; t += aiSliceProjectMaxDurationMS {
+		for t := clip.StartTime + aiSliceProjectTargetWallMS; t < clip.EndTime; t += aiSliceProjectTargetWallMS {
 			set[t] = struct{}{}
 		}
 	}
@@ -161,20 +309,64 @@ func collectAtomCutPoints(clip model.ClipRange, utteranceBoundaries map[int64]st
 	return cuts
 }
 
-func packClipAtoms(atoms []clipAtom, maxMS, minMS int64) [][]clipAtom {
+func packClipAtoms(atoms []clipAtom, count int, maxASR, minASR int64) [][]clipAtom {
 	if len(atoms) == 0 {
 		return nil
 	}
+	if count <= 1 {
+		return [][]clipAtom{cloneAtoms(atoms)}
+	}
 	var groups [][]clipAtom
-	for i := 0; i < len(atoms); {
-		end := findAtomCutIndex(atoms, i, maxMS, minMS)
+	i := 0
+	remaining := count
+	for remaining > 1 && i < len(atoms) {
+		restASR := atomsASRDuration(atoms[i:])
+		minThis := minASR
+		mustTake := restASR - maxASR*int64(remaining-1)
+		if mustTake > minThis {
+			minThis = mustTake
+		}
+
+		groupMax := maxASR
+		leaveMin := minASR * int64(remaining-1)
+		if restASR > leaveMin {
+			capForThis := restASR - leaveMin
+			if capForThis < groupMax && capForThis >= minThis {
+				groupMax = capForThis
+			}
+		}
+		if groupMax < minThis {
+			groupMax = minThis
+		}
+
+		targetASR := restASR / int64(remaining)
+		if targetASR > maxASR {
+			targetASR = maxASR
+		}
+		if targetASR < minThis {
+			targetASR = minThis
+		}
+
+		end := findAtomCutIndex(atoms, i, targetASR, groupMax, minThis)
 		if end < i {
 			end = i
 		}
+		end = extendTrailingSilence(atoms, end)
+		if !atomsHaveASR(atoms, end+1) {
+			end = len(atoms) - 1
+		}
+
 		groups = append(groups, cloneAtoms(atoms[i:end+1]))
 		i = end + 1
+		remaining--
+		if end >= len(atoms)-1 {
+			break
+		}
 	}
-	return rebalanceMinDuration(groups, minMS)
+	if i < len(atoms) {
+		groups = append(groups, cloneAtoms(atoms[i:]))
+	}
+	return rebalanceMinASR(groups, minASR)
 }
 
 func cloneAtoms(src []clipAtom) []clipAtom {
@@ -183,52 +375,87 @@ func cloneAtoms(src []clipAtom) []clipAtom {
 	return out
 }
 
-// findAtomCutIndex 从 start 起尽量装满 maxMS；若窗口内有段落结束且该段 ≥minMS，则对齐到最后一段段落末。
-func findAtomCutIndex(atoms []clipAtom, start int, maxMS, minMS int64) int {
+func atomsHaveASR(atoms []clipAtom, from int) bool {
+	for i := from; i < len(atoms); i++ {
+		if atoms[i].asrMS > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func extendTrailingSilence(atoms []clipAtom, end int) int {
+	for end+1 < len(atoms) && atoms[end+1].asrMS <= 0 {
+		end++
+	}
+	return end
+}
+
+// findAtomCutIndex 从 start 起装满 targetASR（不超过 maxASR）；优先对齐最接近目标的段落末。
+func findAtomCutIndex(atoms []clipAtom, start int, targetASR, maxASR, minASR int64) int {
 	if start >= len(atoms) {
 		return start
 	}
+	if maxASR <= 0 {
+		maxASR = aiSliceProjectMaxASRMS
+	}
+	if targetASR <= 0 {
+		targetASR = maxASR
+	}
+	if minASR < 0 {
+		minASR = 0
+	}
+
 	lastCut := -1
-	lastPara := -1
+	bestPara := -1
+	bestParaDist := int64(-1)
+	reached := -1
 	var acc int64
 	for i := start; i < len(atoms); i++ {
-		d := atoms[i].EndTime - atoms[i].StartTime
+		d := atoms[i].asrMS
 		if d < 0 {
 			d = 0
 		}
 		next := acc + d
-		if next > maxMS && lastCut >= start {
+		if next > maxASR && lastCut >= start {
 			break
 		}
 		acc = next
 		lastCut = i
-		if atoms[i].atParagraphEnd {
-			lastPara = i
+		if atoms[i].atParagraphEnd && acc >= minASR {
+			dist := absInt64(acc - targetASR)
+			if bestPara < 0 || dist <= bestParaDist {
+				bestPara = i
+				bestParaDist = dist
+			}
 		}
-		if next > maxMS {
+		if reached < 0 && acc >= targetASR && acc >= minASR {
+			reached = i
+		}
+		if next > maxASR {
 			break
 		}
 	}
 	if lastCut < start {
 		return start
 	}
-	if lastPara >= start {
-		paraDur := atomsDurationMS(atoms[start : lastPara+1])
-		if paraDur >= minMS {
-			return lastPara
-		}
+	if bestPara >= start {
+		return bestPara
+	}
+	if reached >= start {
+		return reached
 	}
 	return lastCut
 }
 
-// rebalanceMinDuration 从尾部向前：末组 <min 时整颗原子挪到末组；无法保持前组 ≥min 则与前组合并（允许超过 max，避免丢片）。
-func rebalanceMinDuration(groups [][]clipAtom, minMS int64) [][]clipAtom {
+// rebalanceMinASR 从尾部向前：末组有效 ASR <min 时整颗原子挪到末组；无法保持前组 ≥min 则与前组合并。
+func rebalanceMinASR(groups [][]clipAtom, minASR int64) [][]clipAtom {
 	if len(groups) <= 1 {
 		return groups
 	}
 	for len(groups) >= 2 {
 		last := groups[len(groups)-1]
-		if atomsDurationMS(last) >= minMS {
+		if atomsASRDuration(last) >= minASR {
 			break
 		}
 		prev := groups[len(groups)-2]
@@ -238,7 +465,7 @@ func rebalanceMinDuration(groups [][]clipAtom, minMS int64) [][]clipAtom {
 		}
 		stolen := prev[len(prev)-1]
 		prevRest := prev[:len(prev)-1]
-		if atomsDurationMS(prevRest) < minMS {
+		if atomsASRDuration(prevRest) < minASR {
 			merged := append(cloneAtoms(prev), last...)
 			groups[len(groups)-2] = merged
 			groups = groups[:len(groups)-1]

@@ -23,6 +23,36 @@ func TestAutoSliceProjectNames(t *testing.T) {
 	}
 }
 
+func TestTargetProjectCount(t *testing.T) {
+	const min = int64(60 * 1000)
+	tests := []struct {
+		name   string
+		wallMS int64
+		asrMS  int64
+		want   int
+	}{
+		{name: "20min dense", wallMS: 20 * min, asrMS: 20 * min, want: 1},
+		{name: "30min dense", wallMS: 30 * min, asrMS: 30 * min, want: 1},
+		{name: "32min dense needs 2 for ASR cap", wallMS: 32 * min, asrMS: 32 * min, want: 2},
+		{name: "45min dense", wallMS: 45 * min, asrMS: 45 * min, want: 2},
+		{name: "60min dense", wallMS: 60 * min, asrMS: 60 * min, want: 2},
+		{name: "90min dense", wallMS: 90 * min, asrMS: 90 * min, want: 3},
+		{name: "120min dense", wallMS: 120 * min, asrMS: 120 * min, want: 4},
+		{name: "60min sparse 12min ASR stays 1", wallMS: 60 * min, asrMS: 12 * min, want: 1},
+		{name: "90min sparse 24min ASR at most 2", wallMS: 90 * min, asrMS: 24 * min, want: 2},
+		{name: "120min half speech", wallMS: 120 * min, asrMS: 60 * min, want: 4},
+		{name: "all silence", wallMS: 60 * min, asrMS: 0, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := targetProjectCount(tt.wallMS, tt.asrMS)
+			if got != tt.want {
+				t.Fatalf("got %d want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitClips0IntoProjects_WithinMaxKeepsOne(t *testing.T) {
 	merged := []model.ClipRange{{StartTime: 0, EndTime: 20 * 60 * 1000}}
 	got := splitClips0IntoProjects(merged, nil, nil)
@@ -47,19 +77,8 @@ func TestSplitClips0IntoProjects_PreservesSixtyMinutes(t *testing.T) {
 
 	got := splitClips0IntoProjects(merged, utterances, paragraphs)
 	assertSplitCoversMerged(t, merged, got)
-
-	if len(got) < 2 {
-		t.Fatalf("expected multiple projects for 60min, got %d", len(got))
-	}
-	for i, g := range got {
-		d := clipRangesDurationMS(g)
-		if d > aiSliceProjectMaxDurationMS {
-			t.Errorf("group[%d] duration %d exceeds 30min", i, d)
-		}
-		if d < aiSliceProjectMinDurationMS {
-			t.Errorf("group[%d] duration %d below 5min", i, d)
-		}
-	}
+	assertDenseProjectCount(t, hourMS, len(got))
+	assertGroupsASR(t, got, utterances)
 }
 
 func TestSplitClips0IntoProjects_NoDroppedGap(t *testing.T) {
@@ -69,6 +88,7 @@ func TestSplitClips0IntoProjects_NoDroppedGap(t *testing.T) {
 	utterances := makeUtterances(0, hourMS, 60*1000)
 	got := splitClips0IntoProjects(merged, utterances, nil)
 	assertSplitCoversMerged(t, merged, got)
+	assertDenseProjectCount(t, hourMS, len(got))
 }
 
 func TestSplitClips0IntoProjects_MergesOverlapThenSplits(t *testing.T) {
@@ -84,6 +104,7 @@ func TestSplitClips0IntoProjects_MergesOverlapThenSplits(t *testing.T) {
 	utterances := makeUtterances(0, 50*60*1000, 30*1000)
 	got := splitClips0IntoProjects(merged, utterances, nil)
 	assertSplitCoversMerged(t, merged, got)
+	assertDenseProjectCount(t, clipRangesDurationMS(merged), len(got))
 }
 
 func TestSplitClips0IntoProjects_DoesNotSplitLongUtterance(t *testing.T) {
@@ -123,8 +144,9 @@ func TestSplitClips0IntoProjects_ScatteredManySegmentsOver30Min(t *testing.T) {
 		merged = append(merged, model.ClipRange{StartTime: cursor, EndTime: end})
 		cursor += 10 * 60 * 1000 // 每段 5 分钟，间隔 5 分钟
 	}
-	if clipRangesDurationMS(merged) <= aiSliceProjectMaxDurationMS {
-		t.Fatalf("fixture total = %d, want > 30min", clipRangesDurationMS(merged))
+	wallMS := clipRangesDurationMS(merged)
+	if wallMS <= aiSliceProjectMaxASRMS {
+		t.Fatalf("fixture total = %d, want > 30min", wallMS)
 	}
 
 	utterances := makeUtterances(0, 90*60*1000, 30*1000)
@@ -135,17 +157,9 @@ func TestSplitClips0IntoProjects_ScatteredManySegmentsOver30Min(t *testing.T) {
 	}
 	got := splitClips0IntoProjects(merged, utterances, paragraphs)
 	assertSplitCoversMerged(t, merged, got)
-	if len(got) < 2 {
-		t.Fatalf("expected multiple projects, got %d", len(got))
-	}
+	assertDenseProjectCount(t, wallMS, len(got))
+	assertGroupsASR(t, got, utterances)
 	for i, g := range got {
-		d := clipRangesDurationMS(g)
-		if d > aiSliceProjectMaxDurationMS {
-			t.Errorf("group[%d] duration %d exceeds 30min", i, d)
-		}
-		if d < aiSliceProjectMinDurationMS {
-			t.Errorf("group[%d] duration %d below 5min", i, d)
-		}
 		for j := 1; j < len(g); j++ {
 			if g[j-1].EndTime > g[j].StartTime {
 				t.Errorf("group[%d] clip[%d] overlaps next: %#v vs %#v", i, j-1, g[j-1], g[j])
@@ -155,7 +169,7 @@ func TestSplitClips0IntoProjects_ScatteredManySegmentsOver30Min(t *testing.T) {
 }
 
 func TestSplitClips0IntoProjects_RebalanceShortTail(t *testing.T) {
-	// 32 分钟：先切 30，余 2；再把尾部补到 ≥5，且总和仍为 32。
+	// 32 分钟满口播：ASR 上限要求拆 2 组，且每组有效 ASR ≥10 分钟。
 	const total int64 = 32 * 60 * 1000
 	merged := []model.ClipRange{{StartTime: 0, EndTime: total}}
 	utterances := makeUtterances(0, total, 60*1000)
@@ -164,15 +178,69 @@ func TestSplitClips0IntoProjects_RebalanceShortTail(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("groups = %d, want 2", len(got))
 	}
-	for i, g := range got {
+	assertGroupsASR(t, got, utterances)
+}
+
+func TestSplitClips0IntoProjects_SilenceAllowsClips0Over30Min(t *testing.T) {
+	// 60 分钟选区仅 12 分钟 ASR：有效内容不足拆两段，应保持 1 个项目，clips0 墙钟 >30 分钟。
+	const total int64 = 60 * 60 * 1000
+	merged := []model.ClipRange{{StartTime: 0, EndTime: total}}
+	utterances := makeDutyCycleUtterances(0, total, 60*1000, 4*60*1000)
+	asrMS := clipRangesASRDurationMS(merged, utterances)
+	if asrMS != 12*60*1000 {
+		t.Fatalf("fixture ASR = %d, want 12min", asrMS)
+	}
+
+	got := splitClips0IntoProjects(merged, utterances, nil)
+	assertSplitCoversMerged(t, merged, got)
+	if len(got) != 1 {
+		t.Fatalf("groups = %d, want 1 (ASR too short to split)", len(got))
+	}
+	if clipRangesDurationMS(got[0]) <= aiSliceProjectMaxASRMS {
+		t.Fatalf("clips0 duration = %d, want > 30min when mostly silence", clipRangesDurationMS(got[0]))
+	}
+	if clipRangesASRDurationMS(got[0], utterances) != asrMS {
+		t.Fatalf("group ASR = %d, want %d", clipRangesASRDurationMS(got[0], utterances), asrMS)
+	}
+}
+
+func TestSplitClips0IntoProjects_SparseSpeechFewerThanWallClock(t *testing.T) {
+	// 90 分钟选区约 24 分钟 ASR：N/30=3，但每组须 >10 分钟 ASR，最多 2 个项目。
+	const total int64 = 90 * 60 * 1000
+	merged := []model.ClipRange{{StartTime: 0, EndTime: total}}
+	utterances := makeDutyCycleUtterances(0, total, 80*1000, 220*1000)
+	asrMS := clipRangesASRDurationMS(merged, utterances)
+	if asrMS < 20*60*1000 || asrMS > 26*60*1000 {
+		t.Fatalf("fixture ASR = %d, want ~24min", asrMS)
+	}
+
+	got := splitClips0IntoProjects(merged, utterances, nil)
+	assertSplitCoversMerged(t, merged, got)
+	if len(got) != 2 {
+		t.Fatalf("groups = %d, want 2", len(got))
+	}
+	assertGroupsASR(t, got, utterances)
+	var maxWall int64
+	for _, g := range got {
 		d := clipRangesDurationMS(g)
-		if d < aiSliceProjectMinDurationMS {
-			t.Errorf("group[%d] duration %d below 5min", i, d)
-		}
-		if d > aiSliceProjectMaxDurationMS {
-			t.Errorf("group[%d] duration %d exceeds 30min", i, d)
+		if d > maxWall {
+			maxWall = d
 		}
 	}
+	if maxWall <= aiSliceProjectMaxASRMS {
+		t.Fatalf("expected some clips0 > 30min due to silence, max wall = %d", maxWall)
+	}
+}
+
+func TestSplitClips0IntoProjects_HalfSpeechKeepsNOver30(t *testing.T) {
+	// 120 分钟、约一半口播：应分成约 4 个项目，每组 ASR ≤30 且 ≥10。
+	const total int64 = 120 * 60 * 1000
+	merged := []model.ClipRange{{StartTime: 0, EndTime: total}}
+	utterances := makeDutyCycleUtterances(0, total, 60*1000, 60*1000)
+	got := splitClips0IntoProjects(merged, utterances, nil)
+	assertSplitCoversMerged(t, merged, got)
+	assertDenseProjectCount(t, total, len(got))
+	assertGroupsASR(t, got, utterances)
 }
 
 func makeUtterances(start, end, step int64) []asr.Utterance {
@@ -188,6 +256,49 @@ func makeUtterances(start, end, step int64) []asr.Utterance {
 		out = append(out, asr.Utterance{StartTime: t, EndTime: uEnd, Text: "x"})
 	}
 	return out
+}
+
+func makeDutyCycleUtterances(start, end, speechMS, gapMS int64) []asr.Utterance {
+	if speechMS <= 0 {
+		return nil
+	}
+	out := make([]asr.Utterance, 0)
+	t := start
+	for t < end {
+		uEnd := t + speechMS
+		if uEnd > end {
+			uEnd = end
+		}
+		if uEnd > t {
+			out = append(out, asr.Utterance{StartTime: t, EndTime: uEnd, Text: "x"})
+		}
+		t = uEnd + gapMS
+	}
+	return out
+}
+
+func assertDenseProjectCount(t *testing.T, wallMS int64, got int) {
+	t.Helper()
+	want := int((wallMS + aiSliceProjectTargetWallMS/2) / aiSliceProjectTargetWallMS)
+	if want < 1 {
+		want = 1
+	}
+	if got < want-1 || got > want+1 {
+		t.Errorf("project count = %d, want ~%d (±1) for %d min wall", got, want, wallMS/(60*1000))
+	}
+}
+
+func assertGroupsASR(t *testing.T, groups [][]model.ClipRange, utterances []asr.Utterance) {
+	t.Helper()
+	for i, g := range groups {
+		asrMS := clipRangesASRDurationMS(g, utterances)
+		if asrMS > aiSliceProjectMaxASRMS {
+			t.Errorf("group[%d] ASR %d exceeds 30min", i, asrMS)
+		}
+		if len(groups) > 1 && asrMS < aiSliceProjectMinASRMS {
+			t.Errorf("group[%d] ASR %d below 10min", i, asrMS)
+		}
+	}
 }
 
 func assertSplitCoversMerged(t *testing.T, merged []model.ClipRange, groups [][]model.ClipRange) {

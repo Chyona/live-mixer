@@ -10,6 +10,7 @@ import (
 
 	"live-mixer/internal/draft"
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/repository"
 
 	"github.com/glebarez/sqlite"
@@ -533,15 +534,17 @@ func TestTaskService_CreateAISlice_FromLiveID_SplitsOver30Min(t *testing.T) {
 	if len(projects.created) != len(got) {
 		t.Fatalf("projects = %d tasks = %d", len(projects.created), len(got))
 	}
+	utterances := asr.FormatUtterancesForAPI(live.material.LiveASR)
 	var sum int64
 	for i, p := range projects.created {
 		d := clipRangesDurationMS(p.Clips0)
 		sum += d
-		if d > aiSliceProjectMaxDurationMS {
-			t.Errorf("project[%d] duration %d exceeds 30min", i, d)
+		asrMS := clipRangesASRDurationMS(p.Clips0, utterances)
+		if asrMS > aiSliceProjectMaxASRMS {
+			t.Errorf("project[%d] ASR %d exceeds 30min", i, asrMS)
 		}
-		if d < aiSliceProjectMinDurationMS {
-			t.Errorf("project[%d] duration %d below 5min", i, d)
+		if asrMS < aiSliceProjectMinASRMS {
+			t.Errorf("project[%d] ASR %d below 10min", i, asrMS)
 		}
 		if !strings.HasPrefix(p.Name, "AI选片_") {
 			t.Errorf("project[%d] name = %q", i, p.Name)
