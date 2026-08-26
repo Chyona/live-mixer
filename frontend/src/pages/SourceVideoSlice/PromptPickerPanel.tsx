@@ -265,7 +265,7 @@ const PromptPickerPanel = ({
           </div>
           <p className="slice-prompt-panel__empty-title">未找到匹配的提示词</p>
           <p className="slice-prompt-panel__empty-desc">
-            试试更换关键词，或使用 关键词A+关键词B 组合搜索
+            试试更换关键词，或使用「,」与、「|」或组合搜索
           </p>
           <div className="slice-prompt-panel__empty-actions">
             <Button size="small" onClick={handleClearSearch}>

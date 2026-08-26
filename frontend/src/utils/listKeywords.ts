@@ -1,3 +1,14 @@
+/** 列表搜索空文本提示：与后端 keywords 表达式一致（组内 AND、组间 OR） */
+export const LIST_KEYWORD_SEARCH_HINT =
+  '逗号 分隔 = 同时匹配，| 分隔= 匹配任意一个';
+
+/** 拼接搜索范围与语法说明，用作 Input placeholder */
+export function buildKeywordSearchPlaceholder(scope?: string): string {
+  const trimmedScope = scope?.trim();
+  if (!trimmedScope) return LIST_KEYWORD_SEARCH_HINT;
+  return `${trimmedScope}；${LIST_KEYWORD_SEARCH_HINT}`;
+}
+
 /** 列表搜索可识别为「多关键词分隔」的字符（含常见中文/全角分隔线） */
 const KEYWORD_SEPARATOR_RE = /[,，+＋|｜丨、；;/／\\\s]+/;
 
@@ -20,6 +31,7 @@ export function normalizeKeywordSeparators(input: string): string {
 
 /**
  * 解析列表搜索关键词：支持「A+B」「A B」「A,B」「A|B」「A｜B」等分隔。
+ * 传给后端的表达式语义：「,」组内 AND，「|」组间 OR（见 parseKeywordExpr）。
  */
 export function parseListKeywords(input?: string | null): string[] {
   if (!input?.trim()) return [];

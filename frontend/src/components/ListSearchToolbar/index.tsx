@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Button, Input } from 'antd';
 import { LuChevronDown, LuRefreshCw, LuSlidersHorizontal } from 'react-icons/lu';
+import { buildKeywordSearchPlaceholder } from '~/utils/listKeywords';
 
 export interface ListSearchToolbarProps {
   keyword: string;
@@ -44,16 +45,18 @@ const ListSearchToolbar = ({
   return (
     <div className="list-page__toolbar-search">
       <div className="list-page__toolbar-main">
-        <Input.Search
-          className="list-page__search-primary"
-          size="large"
-          allowClear
-          placeholder={keywordPlaceholder}
-          value={keyword}
-          onChange={(event) => onKeywordChange(event.target.value)}
-          onSearch={() => onSearch()}
-          onClear={onKeywordClear}
-        />
+        <div className="list-page__search-field">
+          <Input.Search
+            className="list-page__search-primary"
+            size="large"
+            allowClear
+            placeholder={buildKeywordSearchPlaceholder(keywordPlaceholder)}
+            value={keyword}
+            onChange={(event) => onKeywordChange(event.target.value)}
+            onSearch={() => onSearch()}
+            onClear={onKeywordClear}
+          />
+        </div>
 
         {inlineFilters}
 

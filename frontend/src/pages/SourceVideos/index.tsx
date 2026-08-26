@@ -29,7 +29,7 @@ import {
 } from '~/services/sourceVideo';
 import { formatToDateTime } from '~/utils/date';
 import { formatVideoDurationMs } from '~/utils/duration';
-import { parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
+import { buildKeywordSearchPlaceholder, parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
 import { DEFAULT_TABLE_PAGINATION, handleTablePaginationChange } from '~/utils/table';
 import { showAppError, showScopedError, handleRequestError, toast } from '~/utils/toast';
 
@@ -646,7 +646,7 @@ const SourceVideosPage = () => {
         <ListSearchToolbar
           keyword={keyword}
           onKeywordChange={setKeyword}
-          keywordPlaceholder="搜索源视频名称 / 备注（支持 关键词A+关键词B）"
+          keywordPlaceholder="搜索源视频名称 / 备注"
           onSearch={applySearch}
           onKeywordClear={clearSearch}
           loading={loading || refreshing}
@@ -673,7 +673,7 @@ const SourceVideosPage = () => {
                 <span className="list-page__filter-label">视频文案</span>
                 <Input.Search
                   allowClear
-                  placeholder="搜索已解析文案（支持 关键词A+关键词B）"
+                  placeholder={buildKeywordSearchPlaceholder('搜索已解析文案')}
                   value={asrKeyword}
                   loading={loading && (hasAsrKeyword || asrMaskPending)}
                   onChange={(event) => setAsrKeyword(event.target.value)}

@@ -299,7 +299,7 @@ const AiPromptsPage = () => {
         <ListSearchToolbar
           keyword={keyword}
           onKeywordChange={setKeyword}
-          keywordPlaceholder="搜索名称 / 提示词 / 备注（支持 关键词A+关键词B）"
+          keywordPlaceholder="搜索名称 / 提示词 / 备注"
           onSearch={applySearch}
           onKeywordClear={clearSearch}
           loading={loading || refreshing}
@@ -323,7 +323,7 @@ const AiPromptsPage = () => {
           appliedKeyword
             ? {
               title: '未找到匹配的提示词',
-              description: '试试更换关键词，或使用 关键词A+关键词B 组合搜索',
+              description: '试试更换关键词，或使用「,」与、「|」或组合搜索',
             }
             : {
               title: '暂无提示词',

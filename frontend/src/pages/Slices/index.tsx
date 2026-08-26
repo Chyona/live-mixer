@@ -57,6 +57,24 @@ const SLICES_COLUMN_SETTINGS: TableColumnSettingItem[] = [
   { key: 'actions', label: '操作', locked: true },
 ];
 
+/** 与 columns 定义一致，用于动态计算 scroll.x（避免隐藏列后仍按 1800px 出现横滚） */
+const SLICES_COLUMN_MIN_WIDTHS: Record<string, number> = {
+  name: 200,
+  title: 160,
+  description: 180,
+  topics: 180,
+  live_name: 200,
+  remark: 160,
+  created_by: 120,
+  segment_count: 90,
+  task_count: 90,
+  aspect_ratio: 100,
+  updated_at: 170,
+  actions: 150,
+};
+
+const SLICES_COLUMN_SETTING_COL_WIDTH = 44;
+
 function SliceProjectDeleteButton({
   record,
   deletingId,
@@ -181,6 +199,14 @@ const SlicesPage = () => {
       lockedKeys: SLICES_LOCKED_COLUMN_KEYS,
       defaultHiddenKeys: SLICES_DEFAULT_HIDDEN_COLUMN_KEYS,
     });
+
+  const tableScrollX = useMemo(() => {
+    const dataWidth = visibleKeys.reduce(
+      (sum, key) => sum + (SLICES_COLUMN_MIN_WIDTHS[key] ?? 120),
+      0
+    );
+    return dataWidth + SLICES_COLUMN_SETTING_COL_WIDTH;
+  }, [visibleKeys]);
 
   const loadList = useCallback(async (options?: { silent?: boolean; refresh?: boolean }) => {
     const silent = options?.silent ?? false;
@@ -516,7 +542,7 @@ const SlicesPage = () => {
       ...visibleColumns,
       {
         key: '__column_setting__',
-        width: 44,
+        width: SLICES_COLUMN_SETTING_COL_WIDTH,
         fixed: 'right',
         align: 'center',
         className: 'table-column-setting-col',
@@ -550,7 +576,7 @@ const SlicesPage = () => {
         <ListSearchToolbar
           keyword={keyword}
           onKeywordChange={setKeyword}
-          keywordPlaceholder="搜索项目名称 / 标题 / 描述 / 源视频名称 / 备注（支持 关键词A+关键词B）"
+          keywordPlaceholder="搜索项目名称 / 标题 / 描述 / 源视频名称 / 备注"
           onSearch={applySearch}
           onKeywordClear={clearSearch}
           loading={loading || refreshing}
@@ -576,7 +602,7 @@ const SlicesPage = () => {
         loading={loading && list.length === 0}
         columns={columns}
         dataSource={list}
-        scrollX={1800}
+        scrollX={tableScrollX}
         empty={
           hasActiveFilters
             ? {
