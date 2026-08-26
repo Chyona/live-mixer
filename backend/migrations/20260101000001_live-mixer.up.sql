@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS video_project (
     project_source  VARCHAR(32) NOT NULL DEFAULT '',
     -- 是否添加字幕：0否 1是，默认开启
     enable_captions INTEGER     NOT NULL DEFAULT 1,
+    -- 短视频标题，2～12 个汉字；空表示尚未生成
+    title           VARCHAR(48) NOT NULL DEFAULT '',
+    -- 短视频内容介绍，128 个字以内；空表示尚未生成
+    description     VARCHAR(384) NOT NULL DEFAULT '',
+    -- 短视频话题（JSON 字符串数组），每个 2～12 个汉字，共 2～6 个；空数组表示尚未生成
+    topics          JSONB       NOT NULL DEFAULT '[]',
     created_by      BIGINT      NOT NULL REFERENCES account (id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -147,6 +153,9 @@ COMMENT ON COLUMN video_project.width IS '剪映草稿工程宽度（像素）�
 COMMENT ON COLUMN video_project.height IS '剪映草稿工程高度（像素），0 表示未设置';
 COMMENT ON COLUMN video_project.project_source IS '项目来源，默认为空';
 COMMENT ON COLUMN video_project.enable_captions IS '是否添加字幕：0否 1是，默认 1';
+COMMENT ON COLUMN video_project.title IS '短视频标题，2～12 个汉字；空表示尚未生成';
+COMMENT ON COLUMN video_project.description IS '短视频内容介绍，128 个字以内；空表示尚未生成';
+COMMENT ON COLUMN video_project.topics IS '短视频话题（JSON 字符串数组），格式：["话题1","话题2"]；每个 2～12 个汉字，共 2～6 个；空数组表示尚未生成';
 COMMENT ON COLUMN video_project.created_by IS '创建人（账号 ID）';
 COMMENT ON COLUMN video_project.created_at IS '创建时间';
 COMMENT ON COLUMN video_project.updated_at IS '最后编辑时间';

@@ -18,6 +18,7 @@ import {
   deleteSliceProject,
   fetchSliceProjectList,
   fetchSliceProjectRunningTasks,
+  formatSliceProjectTopics,
   getSliceProjectSegmentCount,
   getSliceProjectAspectRatio,
   updateSliceProject,
@@ -253,6 +254,34 @@ const SlicesPage = () => {
     }
   };
 
+  const handleTitleSave = async (id: number, title: string) => {
+    const trimmed = title.trim();
+    const runeCount = Array.from(trimmed).length;
+    if (trimmed && (runeCount < 2 || runeCount > 12)) {
+      toast.notify.warning('标题须为 2～12 个字');
+      throw new Error('标题须为 2～12 个字');
+    }
+    try {
+      const response = await updateSliceProject(id, { title: trimmed });
+      if (response.code !== 0) {
+        toast.notify.error(response.message || '标题保存失败');
+        throw new Error(response.message || '标题保存失败');
+      }
+
+      setList((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, title: response.data.title } : item))
+      );
+      toast.notify.success('标题已保存');
+    } catch (error) {
+      if (error instanceof AppError) {
+        showAppError(error);
+      } else if (!(error instanceof Error)) {
+        toast.notify.error('标题保存失败');
+      }
+      throw error instanceof Error ? error : new Error('标题保存失败');
+    }
+  };
+
   const handleDelete = async (id: number) => {
     setDeletingId(id);
     try {
@@ -295,6 +324,40 @@ const SlicesPage = () => {
             onSave={(value) => handleProjectNameSave(record.id, value)}
           />
         ),
+      },
+      {
+        title: '短视频标题',
+        dataIndex: 'title',
+        key: 'title',
+        width: 160,
+        render: (title: string, record) => (
+          <RemarkEditor
+            value={title}
+            placeholder="AI 选片后生成"
+            maxLength={12}
+            onSave={(value) => handleTitleSave(record.id, value)}
+          />
+        ),
+      },
+      {
+        title: '描述',
+        dataIndex: 'description',
+        key: 'description',
+        ellipsis: true,
+        render: (description: string) => (
+          <EllipsisTooltip text={description || '-'} className="list-page__cell-ellipsis" />
+        ),
+      },
+      {
+        title: '话题',
+        dataIndex: 'topics',
+        key: 'topics',
+        width: 180,
+        ellipsis: true,
+        render: (topics: string[] | undefined) => {
+          const text = formatSliceProjectTopics(topics);
+          return <EllipsisTooltip text={text || '-'} className="list-page__cell-ellipsis" />;
+        },
       },
       {
         title: '源视频名称',
@@ -423,7 +486,7 @@ const SlicesPage = () => {
         <ListSearchToolbar
           keyword={keyword}
           onKeywordChange={setKeyword}
-          keywordPlaceholder="搜索项目名称 / 源视频名称 / 备注（支持 关键词A+关键词B）"
+          keywordPlaceholder="搜索项目名称 / 标题 / 描述 / 源视频名称 / 备注（支持 关键词A+关键词B）"
           onSearch={applySearch}
           onKeywordClear={clearSearch}
           loading={loading || refreshing}
@@ -449,7 +512,7 @@ const SlicesPage = () => {
         loading={loading && list.length === 0}
         columns={columns}
         dataSource={list}
-        scrollX={1300}
+        scrollX={1800}
         empty={
           hasActiveFilters
             ? {

@@ -29,9 +29,14 @@ const (
 
 // aiSliceUserPromptOutputFormat 内置用户提示词中的「输出格式」固定段落。
 const aiSliceUserPromptOutputFormat = `## 输出格式
-- 仅输出一个 JSON 数组，包含选中的句段索引（整数），按原顺序递增。例如：[2, 5, 9, 13]。
-- 索引必须来自 视频ASR 列表的行号（从 0 开始）。
-- 不要输出任何额外文字、注释或角色标记。`
+- 仅输出一个 JSON 对象，不要输出任何额外文字、注释或角色标记。
+- 字段：
+  - indices：选中的句段索引（整数数组），按原顺序递增。索引必须来自 视频ASR 列表的行号（从 0 开始）。
+  - title：短视频标题，2～12 个汉字。
+  - description：短视频内容介绍，128 个字以内，概括成片核心观点。
+  - topics：短视频话题字符串数组，共 2～6 个；每个话题 2～12 个汉字，不要带 # 号。
+- 标题、介绍与话题须依据选中句段撰写，不得编造 ASR 未出现的事实。
+- 示例：{"indices":[2,5,9,13],"title":"利率上行的真相","description":"用公开数据拆解本轮加息如何影响资产价格与配置思路。","topics":["宏观经济","利率周期","资产配置"]}`
 
 // AISliceWorker AI 切片任务后台调度器：通过 DB 乐观锁抢占实现多实例安全调度。
 type AISliceWorker interface {
@@ -213,7 +218,7 @@ func (w *aiSliceWorker) Process(ctx context.Context, task *model.Task) error {
 // ProcessWithOptions 执行 AI 切片阶段：
 // 1. 读取 video_project.clips0 与 live_material.live_asr，筛选待分析句段；
 // 2. 组装内置用户提示词并回写 task.usr_prompt（系统提示词已在创建时写入 task.sys_prompt）；
-// 3. 调用 LLM 解析索引，合并相邻切片后写入 video_project.clips1（不覆盖 clips0）。
+// 3. 调用 LLM 解析索引与短视频标题/描述/话题，合并相邻切片后写入 video_project.clips1（不覆盖 clips0），并回写 title/description/topics。
 // opts.MarkComplete=false 时仅更新进度/ext，供一键成片继续执行草稿阶段。
 func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task, opts PhaseOptions) error {
 	if task == nil {
@@ -329,20 +334,26 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 
 	progress = setProgress(70)
 
-	// LLM 输出句段下标；越界下标在组装 clips1 时跳过。
-	indices, err := llm.ParseIndices(content)
+	// LLM 输出句段下标与短视频元数据；越界下标在组装 clips1 时跳过。
+	result, err := llm.ParseAISliceResult(content)
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, err)
 	}
-	clips1 := buildClips1FromIndices(segments, indices)
+	clips1 := buildClips1FromIndices(segments, result.Indices)
 	if clips1 == nil {
 		clips1 = []model.ClipWithText{}
 	}
+	title := sanitizeVideoTitleFromLLM(result.Title)
+	description := sanitizeVideoDescriptionFromLLM(result.Description)
+	topics := sanitizeVideoTopicsFromLLM(result.Topics)
 
 	progress = setProgress(85)
 
-	// 仅回写合并后的 clips1，保留用户预先配置的 clips0 分析窗口。
+	// 仅回写合并后的 clips1 与生成的标题/描述/话题，保留用户预先配置的 clips0 分析窗口。
 	project.Clips1 = clips1
+	project.Title = title
+	project.Description = description
+	project.Topics = topics
 	if err := w.videoProjectRepo.Update(ctx, project); err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("更新剪辑项目切片失败: %w", err))
 	}
@@ -367,8 +378,10 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 		zap.String("task_id", task.ID),
 		zap.Uint("video_project_id", project.ID),
 		zap.Int("segments", len(segments)),
-		zap.Int("indices", len(indices)),
+		zap.Int("indices", len(result.Indices)),
 		zap.Int("clips1", len(clips1)),
+		zap.String("title", title),
+		zap.Int("topics", len(topics)),
 		zap.Bool("mark_complete", opts.MarkComplete),
 	)
 	return nil

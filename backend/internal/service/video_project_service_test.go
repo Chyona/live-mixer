@@ -447,6 +447,45 @@ func TestVideoProjectService_Update_ClipsWhenProvided(t *testing.T) {
 	}
 }
 
+// TestVideoProjectService_CreateAndUpdate_ShortVideoMeta 验证标题/描述/话题校验与部分更新。
+func TestVideoProjectService_CreateAndUpdate_ShortVideoMeta(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{
+		materials: map[uint]*model.LiveMaterial{1: {ID: 1, Name: "素材"}},
+	}
+	projectRepo := &mockVideoProjectRepo{}
+	svc := NewVideoProjectService(projectRepo, liveRepo)
+
+	project, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "项目", LiveID: 1,
+		Title: "利率上行的真相", Description: "拆解加息传导。",
+		Topics: []string{"宏观经济", "利率周期"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if project.Title != "利率上行的真相" || len(project.Topics) != 2 {
+		t.Fatalf("meta = %q %#v", project.Title, project.Topics)
+	}
+
+	if _, err := svc.Create(context.Background(), 1, CreateVideoProjectInput{
+		Name: "坏标题", LiveID: 1, Title: "一",
+	}); err == nil {
+		t.Fatal("expected invalid title error")
+	}
+
+	newTitle := "配置思路"
+	updated, err := svc.Update(context.Background(), project.ID, VideoProjectUpdateInput{Title: &newTitle})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.Title != "配置思路" {
+		t.Errorf("Title = %q", updated.Title)
+	}
+	if updated.Description != "拆解加息传导。" {
+		t.Errorf("Description should remain, got %q", updated.Description)
+	}
+}
+
 // TestVideoProjectService_ListByLiveMaterial 验证按素材 ID 查询并计算分页 offset。
 func TestVideoProjectService_ListByLiveMaterial(t *testing.T) {
 	var gotFilter repository.VideoProjectListFilter

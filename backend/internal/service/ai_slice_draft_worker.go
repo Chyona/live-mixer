@@ -176,7 +176,7 @@ func (w *aiSliceDraftWorker) drain(ctx context.Context, workerID int) {
 	}
 }
 
-// Process 串联执行：AI 切片（进度 0–50）→ 校验 clips1 → 草稿（进度 50–100）。
+// Process 串联执行：AI 切片（进度 0–50，写 clips1 与标题/描述/话题）→ 校验 clips1 → 草稿（进度 50–100）。
 func (w *aiSliceDraftWorker) Process(ctx context.Context, task *model.Task) error {
 	if task == nil {
 		return fmt.Errorf("task 不能为空")

@@ -52,6 +52,9 @@ export default [
         prompt_id?: number;
         project_source?: 'timeline' | 'manual';
         enable_captions?: boolean;
+        title?: string;
+        description?: string;
+        topics?: string[];
         clips0?: Array<{ start_time: number; end_time: number }>;
         clips1?: Array<{ start_time: number; end_time: number }>;
       };
@@ -86,6 +89,9 @@ export default [
               ? 'manual'
               : 'timeline',
         enableCaptions: Boolean(body?.enable_captions),
+        title: body?.title ?? '',
+        description: body?.description ?? '',
+        topics: Array.isArray(body?.topics) ? body.topics : [],
         segments,
       });
 
@@ -201,6 +207,9 @@ export default [
         prompt_id?: number;
         project_source?: 'timeline' | 'manual';
         enable_captions?: boolean;
+        title?: string;
+        description?: string;
+        topics?: string[];
         clips0?: Array<{ start_time: number; end_time: number }>;
         clips1?: Array<{ start_time: number; end_time: number }>;
       };
@@ -248,6 +257,9 @@ export default [
         projectSource,
         enableCaptions:
           body?.enable_captions !== undefined ? Boolean(body.enable_captions) : existing.enableCaptions,
+        title: body?.title !== undefined ? body.title : existing.title,
+        description: body?.description !== undefined ? body.description : existing.description,
+        topics: body?.topics !== undefined ? body.topics : existing.topics,
         segments,
       });
 

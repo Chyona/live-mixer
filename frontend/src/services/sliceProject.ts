@@ -31,6 +31,12 @@ export interface CreateSliceProjectParams {
   enable_captions?: boolean;
   clips0?: SliceProjectClip[];
   clips1?: SliceProjectClip[];
+  /** 短视频标题，2～12 个汉字；AI 选片时生成 */
+  title?: string;
+  /** 短视频内容介绍，128 个字以内；AI 选片时生成 */
+  description?: string;
+  /** 短视频话题，每个 2～12 个汉字，共 2～6 个；AI 选片时生成 */
+  topics?: string[];
 }
 
 /** 更新剪辑项目请求体，均为可选 */
@@ -67,6 +73,9 @@ export type SliceProject = CreateSliceProjectParams & {
   height?: number;
   created_at: string;
   updated_at: string;
+  title: string;
+  description: string;
+  topics: string[];
 };
 
 /** 根据宽高推导列表展示比例：竖屏 9:16，横屏 16:9 */
@@ -156,6 +165,33 @@ function normalizeTaskCount(raw: Partial<SliceProject> & Record<string, unknown>
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+/** 将话题格式化为 #话题 展示文案 */
+export function formatSliceProjectTopics(topics?: string[] | null): string {
+  if (!topics?.length) return '';
+  return topics
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => (item.startsWith('#') ? item : `#${item}`))
+    .join(' ');
+}
+
+/** 内容展示：描述 + 话题，例如「冬天的故事 #冬天 #故事」 */
+export function formatSliceProjectContent(
+  description?: string | null,
+  topics?: string[] | null
+): string {
+  const desc = description?.trim() ?? '';
+  const topicText = formatSliceProjectTopics(topics);
+  return [desc, topicText].filter(Boolean).join(' ');
+}
+
+function normalizeTopics(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+}
+
 /** 规范化接口返回，补齐默认值 */
 export function normalizeSliceProject(raw: Partial<SliceProject> | null | undefined): SliceProject {
   const record = (raw ?? {}) as Partial<SliceProject> & Record<string, unknown>;
@@ -178,6 +214,9 @@ export function normalizeSliceProject(raw: Partial<SliceProject> | null | undefi
     clips0: Array.isArray(raw?.clips0) ? raw.clips0 : [],
     clips1: Array.isArray(raw?.clips1) ? raw.clips1 : [],
     enable_captions: Boolean(raw?.enable_captions),
+    title: String(raw?.title ?? ''),
+    description: String(raw?.description ?? ''),
+    topics: normalizeTopics(raw?.topics),
     project_source: getSliceProjectSource({
       project_source: raw?.project_source,
       clips0: Array.isArray(raw?.clips0) ? raw.clips0 : [],

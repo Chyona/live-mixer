@@ -132,7 +132,12 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 		t.Fatalf("claim: %v %#v", err, claimed)
 	}
 
-	mock := &mockLLMChat{content: `[0, 1]`}
+	mock := &mockLLMChat{content: `{
+		"indices":[0,1],
+		"title":"上新面料垂感",
+		"description":"讲解新品上新与面料垂感，适合想看面料细节的观众。",
+		"topics":["服装上新","面料垂感","穿搭分享"]
+	}`}
 	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 0, 0, webroot.Config{})
 
 	if err := worker.Process(ctx, claimed); err != nil {
@@ -200,6 +205,15 @@ func TestAISliceWorker_Process_Success(t *testing.T) {
 	if len(merged.Words) != 3 {
 		t.Errorf("merged words len = %d, want 3", len(merged.Words))
 	}
+	if updated.Title != "上新面料垂感" {
+		t.Errorf("title = %q", updated.Title)
+	}
+	if updated.Description != "讲解新品上新与面料垂感，适合想看面料细节的观众。" {
+		t.Errorf("description = %q", updated.Description)
+	}
+	if len(updated.Topics) != 3 || updated.Topics[0] != "服装上新" {
+		t.Errorf("topics = %#v", updated.Topics)
+	}
 }
 
 func TestAISliceWorker_Process_SkipOutOfRangeIndices(t *testing.T) {
@@ -253,7 +267,7 @@ func TestAISliceWorker_Process_LLMFail(t *testing.T) {
 
 	material := &model.LiveMaterial{
 		Name: "直播", LiveURL: "https://example.com/a.mp4",
-		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		LiveASR:   `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
@@ -291,7 +305,7 @@ func TestAISliceWorker_Process_EmptyClips0(t *testing.T) {
 
 	material := &model.LiveMaterial{
 		Name: "直播", LiveURL: "https://example.com/a.mp4",
-		LiveASR: `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
+		LiveASR:   `{"result":{"utterances":[{"additions":{},"start_time":0,"end_time":100,"text":"hi","words":[]}]}}`,
 		ASRStatus: model.ASRStatusCompleted, ASRProgress: 100, CreatedBy: 1,
 	}
 	_ = liveRepo.Create(ctx, material)
@@ -328,8 +342,11 @@ func TestBuildAISliceUserPrompt(t *testing.T) {
 	if !strings.Contains(got, "[1] (3.00 - 4.00) 第二句\n") {
 		t.Errorf("missing line1: %s", got)
 	}
-	if !strings.Contains(got, "## 输出格式") || !strings.Contains(got, `[2, 5, 9, 13]`) {
+	if !strings.Contains(got, "## 输出格式") || !strings.Contains(got, `"indices":[2,5,9,13]`) {
 		t.Errorf("missing output format: %s", got)
+	}
+	if !strings.Contains(got, `"title"`) || !strings.Contains(got, `"topics"`) {
+		t.Errorf("missing meta fields in output format: %s", got)
 	}
 }
 

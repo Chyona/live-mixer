@@ -70,7 +70,12 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 		t.Fatalf("claim: %v %#v", err, claimed)
 	}
 
-	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `[0]`}, zap.NewNop(), 0, 0, webroot.Config{})
+	aiSlice := NewAISliceWorker(taskRepo, liveRepo, projectRepo, &mockLLMChat{content: `{
+		"indices":[0],
+		"title":"上新面料垂感",
+		"description":"讲解新品上新与面料垂感。",
+		"topics":["服装上新","面料垂感"]
+	}`}, zap.NewNop(), 0, 0, webroot.Config{})
 	capcut := &mockCapCutAPI{}
 	draftWorker := newTestDraftWorker(taskRepo, liveRepo, projectRepo, capcut, webRoot)
 	worker := NewAISliceDraftWorker(taskRepo, projectRepo, aiSlice, draftWorker, zap.NewNop(), 0, 0)
@@ -99,6 +104,9 @@ func TestAISliceDraftWorker_Process_Success(t *testing.T) {
 	}
 	if len(updated.Clips1) != 1 || updated.Clips1[0].Text != "今天上新很好看" {
 		t.Errorf("clips1 = %#v", updated.Clips1)
+	}
+	if updated.Title != "上新面料垂感" || len(updated.Topics) != 2 {
+		t.Errorf("meta title/topics = %q %#v", updated.Title, updated.Topics)
 	}
 	if capcut.createCalls != 1 || capcut.addCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d", capcut.createCalls, capcut.addCalls)

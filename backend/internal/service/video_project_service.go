@@ -45,6 +45,7 @@ type VideoProjectListOptions struct {
 // ProjectSource 可选，未传时为空字符串。
 // Width / Height 可选：未传（均为 0）时按关联素材分辨率在 1920×1080 / 1080×1920 中自动选档。
 // EnableCaptions 可选：nil 时默认 1（添加字幕）；非 nil 时须为 0 或 1。
+// Title / Description / Topics 为短视频元数据，可选；空表示尚未生成。
 type CreateVideoProjectInput struct {
 	Name           string
 	Remark         string
@@ -56,6 +57,9 @@ type CreateVideoProjectInput struct {
 	Height         int
 	ProjectSource  string
 	EnableCaptions *int
+	Title          string
+	Description    string
+	Topics         []string
 }
 
 // VideoProjectUpdateInput 剪辑项目更新入参。
@@ -70,6 +74,9 @@ type VideoProjectUpdateInput struct {
 	Height         *int
 	ProjectSource  *string
 	EnableCaptions *int
+	Title          *string
+	Description    *string
+	Topics         *[]string
 }
 
 // VideoProjectService 剪辑项目业务接口。
@@ -177,6 +184,19 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		enableCaptions = *input.EnableCaptions
 	}
 
+	title, err := normalizeVideoTitle(input.Title)
+	if err != nil {
+		return nil, err
+	}
+	description, err := normalizeVideoDescription(input.Description)
+	if err != nil {
+		return nil, err
+	}
+	topics, err := normalizeVideoTopics(input.Topics)
+	if err != nil {
+		return nil, err
+	}
+
 	project := &model.VideoProject{
 		Name:           name,
 		Remark:         input.Remark,
@@ -188,6 +208,9 @@ func (s *videoProjectService) Create(ctx context.Context, createdBy uint, input 
 		Height:         height,
 		ProjectSource:  strings.TrimSpace(input.ProjectSource),
 		EnableCaptions: enableCaptions,
+		Title:          title,
+		Description:    description,
+		Topics:         topics,
 		CreatedBy:      createdBy,
 	}
 	if err := s.videoProjectRepo.Create(ctx, project); err != nil {
@@ -256,6 +279,27 @@ func (s *videoProjectService) Update(ctx context.Context, id uint, input VideoPr
 			return nil, err
 		}
 		project.EnableCaptions = *input.EnableCaptions
+	}
+	if input.Title != nil {
+		title, err := normalizeVideoTitle(*input.Title)
+		if err != nil {
+			return nil, err
+		}
+		project.Title = title
+	}
+	if input.Description != nil {
+		description, err := normalizeVideoDescription(*input.Description)
+		if err != nil {
+			return nil, err
+		}
+		project.Description = description
+	}
+	if input.Topics != nil {
+		topics, err := normalizeVideoTopics(*input.Topics)
+		if err != nil {
+			return nil, err
+		}
+		project.Topics = topics
 	}
 
 	if err := s.videoProjectRepo.Update(ctx, project); err != nil {
@@ -369,7 +413,7 @@ func pickProjectCanvasByMaterial(materialW, materialH int) (int, int) {
 	}
 	r := float64(materialW) / float64(materialH)
 	landscapeRatio := float64(projectCanvasLandscapeW) / float64(projectCanvasLandscapeH) // 16/9
-	portraitRatio := float64(projectCanvasPortraitW) / float64(projectCanvasPortraitH)   // 9/16
+	portraitRatio := float64(projectCanvasPortraitW) / float64(projectCanvasPortraitH)    // 9/16
 	dLandscape := math.Abs(r - landscapeRatio)
 	dPortrait := math.Abs(r - portraitRatio)
 	// 并列时选用竖屏（与草稿默认画布一致）。

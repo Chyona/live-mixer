@@ -9,6 +9,9 @@ export type SliceProjectRecord = {
   projectName: string;
   projectSource: SliceProjectSource;
   enableCaptions?: boolean;
+  title?: string;
+  description?: string;
+  topics?: string[];
   segmentCount: number;
   createdBy: string;
   updatedAt: string;
@@ -42,6 +45,9 @@ function seedSliceProjects() {
       remarkName: '发布会实录',
       projectName: '新品发布会直播 剪辑项目',
       projectSource: 'manual',
+      title: '发布会核心看点',
+      description: '新品发布会现场亮点回顾',
+      topics: ['新品发布', '产品亮点'],
       segmentCount: 1,
       createdBy: 'admin',
       updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 20).toISOString(),
@@ -99,6 +105,9 @@ export function upsertSliceProject(input: {
   projectName: string;
   projectSource?: SliceProjectSource;
   enableCaptions?: boolean;
+  title?: string;
+  description?: string;
+  topics?: string[];
   segmentCount: number;
   createdBy?: string;
   segments?: SelectedCopySegment[];
@@ -113,6 +122,9 @@ export function upsertSliceProject(input: {
     projectName: input.projectName,
     projectSource: input.projectSource ?? existing?.projectSource ?? 'manual',
     enableCaptions: input.enableCaptions ?? existing?.enableCaptions ?? false,
+    title: input.title ?? existing?.title ?? '',
+    description: input.description ?? existing?.description ?? '',
+    topics: input.topics ?? existing?.topics ?? [],
     segmentCount: input.segmentCount,
     createdBy: input.createdBy ?? existing?.createdBy ?? 'admin',
     updatedAt: new Date().toISOString(),
@@ -132,6 +144,9 @@ export function saveSliceProjectRecord(input: {
   projectName?: string;
   projectSource?: SliceProjectSource;
   enableCaptions?: boolean;
+  title?: string;
+  description?: string;
+  topics?: string[];
   segments: SelectedCopySegment[];
 }) {
   const existing = getSliceProject(input.id);
@@ -149,6 +164,9 @@ export function saveSliceProjectRecord(input: {
     projectName,
     projectSource: input.projectSource ?? existing?.projectSource ?? 'manual',
     enableCaptions: input.enableCaptions ?? existing?.enableCaptions,
+    title: input.title ?? existing?.title,
+    description: input.description ?? existing?.description,
+    topics: input.topics ?? existing?.topics,
     segmentCount: input.segments.length,
     segments: input.segments,
   });
@@ -240,6 +258,9 @@ export function toPublicSliceProject(project: SliceProjectRecord) {
     height: (Number(project.sourceVideoId) || 0) % 2 === 1 ? 1920 : 1080,
     project_source: project.projectSource,
     enable_captions: Boolean(project.enableCaptions),
+    title: String(project.title ?? ''),
+    description: String(project.description ?? ''),
+    topics: Array.isArray(project.topics) ? project.topics : [],
     clips0: timelineClips,
     clips1: manualClips,
   };

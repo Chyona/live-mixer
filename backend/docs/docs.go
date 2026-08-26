@@ -1159,7 +1159,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：按 video_project.prompt_id 加载系统提示词，用 clips0 时间段从 live_asr 筛选句段组装用户提示词，LLM 返回句段索引后回写 video_project.clips1；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
+                "description": "异步：按 video_project.prompt_id 加载系统提示词，用 clips0 时间段从 live_asr 筛选句段组装用户提示词，LLM 返回句段索引与短视频标题/描述/话题后回写 video_project.clips1 及 title/description/topics；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress",
                 "consumes": [
                     "application/json"
                 ],
@@ -1210,7 +1210,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url",
+                "description": "异步：等价于先执行 AI 切片（按 clips0 筛选 ASR、LLM 选索引写 clips1，并同时生成短视频标题/描述/话题）再执行剪映草稿（create_draft 画布取请求 canvas_*，否则用 video_project.width/height，创建时写入 task.width/height/live_url）并回写 task.draft_url，成功后继续 gen_video 回写 task.video_url（视频失败仍保留 draft_url，任务标记 completed）；立即返回 task，请轮询 GET /v1/tasks/:id 查看 status/progress/draft_url/video_url",
                 "consumes": [
                     "application/json"
                 ],
@@ -1425,7 +1425,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目",
+                "description": "添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；title/description/topics 为短视频元数据（可选，AI 选片时生成）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目",
                 "consumes": [
                     "application/json"
                 ],
@@ -1520,7 +1520,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 为 bool，入库为 0/1",
+                "description": "仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions/title/description/topics）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 为 bool，入库为 0/1",
                 "consumes": [
                     "application/json"
                 ],
@@ -1966,6 +1966,21 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 256
                 },
+                "title": {
+                    "description": "短视频标题，2～12 字；未传为空",
+                    "type": "string"
+                },
+                "description": {
+                    "description": "短视频内容介绍，128 字以内；未传为空",
+                    "type": "string"
+                },
+                "topics": {
+                    "description": "短视频话题，2～6 个，每个 2～12 字；未传为空数组",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "width": {
                     "description": "Width / Height 可选：仅支持 1920×1080 或 1080×1920；都不传时按素材分辨率自动选档。",
                     "type": "integer",
@@ -2124,6 +2139,18 @@ const docTemplate = `{
                 "remark": {
                     "type": "string",
                     "maxLength": 256
+                },
+                "title": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "topics": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "width": {
                     "type": "integer",

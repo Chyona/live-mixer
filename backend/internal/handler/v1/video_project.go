@@ -7,10 +7,10 @@ import (
 
 	"live-mixer/internal/middleware"
 	"live-mixer/internal/model"
-	"live-mixer/internal/repository"
-	"live-mixer/internal/service"
 	"live-mixer/internal/pkg/response"
 	"live-mixer/internal/pkg/utils"
+	"live-mixer/internal/repository"
+	"live-mixer/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -42,17 +42,20 @@ func NewVideoProjectHandler(videoProjectService service.VideoProjectService, acc
 // CreateVideoProjectRequest 创建剪辑项目请求体。
 // Clips0 / Clips1 为可选 JSON 数组；未传时存为空数组。
 type CreateVideoProjectRequest struct {
-	Name           string               `json:"name" binding:"required,max=64"`
-	Remark         string               `json:"remark" binding:"max=256"`
-	LiveID         uint                 `json:"live_id" binding:"required"`
-	PromptID       uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
-	Clips0         []model.ClipRange    `json:"clips0"`
-	Clips1         []model.ClipWithText `json:"clips1"`
+	Name     string               `json:"name" binding:"required,max=64"`
+	Remark   string               `json:"remark" binding:"max=256"`
+	LiveID   uint                 `json:"live_id" binding:"required"`
+	PromptID uint                 `json:"prompt_id"` // 提示词 ID，未传或为 0 时默认 1
+	Clips0   []model.ClipRange    `json:"clips0"`
+	Clips1   []model.ClipWithText `json:"clips1"`
 	// Width / Height 可选：仅支持 1920×1080 或 1080×1920；都不传时按素材分辨率自动选档。
-	Width          int                  `json:"width" binding:"omitempty,min=0"`
-	Height         int                  `json:"height" binding:"omitempty,min=0"`
-	ProjectSource  string               `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
-	EnableCaptions *bool                `json:"enable_captions"`                 // 是否添加字幕；未传默认 true，入库为 0/1
+	Width          int      `json:"width" binding:"omitempty,min=0"`
+	Height         int      `json:"height" binding:"omitempty,min=0"`
+	ProjectSource  string   `json:"project_source" binding:"max=32"` // 项目来源，未传默认为空
+	EnableCaptions *bool    `json:"enable_captions"`                 // 是否添加字幕；未传默认 true，入库为 0/1
+	Title          string   `json:"title"`                           // 短视频标题，2～12 字；未传为空
+	Description    string   `json:"description"`                     // 短视频内容介绍，128 字以内；未传为空
+	Topics         []string `json:"topics"`                          // 短视频话题，2～6 个，每个 2～12 字；未传为空数组
 }
 
 // UpdateVideoProjectRequest 更新剪辑项目请求体。
@@ -67,6 +70,9 @@ type UpdateVideoProjectRequest struct {
 	Height         *int                  `json:"height" binding:"omitempty,min=0"`
 	ProjectSource  *string               `json:"project_source" binding:"omitempty,max=32"`
 	EnableCaptions *bool                 `json:"enable_captions"` // 是否添加字幕；入库为 0/1
+	Title          *string               `json:"title"`
+	Description    *string               `json:"description"`
+	Topics         *[]string             `json:"topics"`
 }
 
 // enableCaptionsToInt 将前端 bool 转为库内 0/1；nil 表示未传。
@@ -95,6 +101,9 @@ type VideoProjectResponse struct {
 	Height         int                  `json:"height"`
 	ProjectSource  string               `json:"project_source"`
 	EnableCaptions int                  `json:"enable_captions"`
+	Title          string               `json:"title"`
+	Description    string               `json:"description"`
+	Topics         []string             `json:"topics"`
 	CreatedBy      string               `json:"created_by"`
 	CreatedAt      time.Time            `json:"created_at"`
 	UpdatedAt      time.Time            `json:"updated_at"`
@@ -110,6 +119,10 @@ func (h *VideoProjectHandler) toVideoProjectResponse(ctx context.Context, projec
 	if clips1 == nil {
 		clips1 = []model.ClipWithText{}
 	}
+	topics := project.Topics
+	if topics == nil {
+		topics = []string{}
+	}
 	return VideoProjectResponse{
 		ID:             project.ID,
 		Name:           project.Name,
@@ -122,6 +135,9 @@ func (h *VideoProjectHandler) toVideoProjectResponse(ctx context.Context, projec
 		Height:         project.Height,
 		ProjectSource:  project.ProjectSource,
 		EnableCaptions: project.EnableCaptions,
+		Title:          project.Title,
+		Description:    project.Description,
+		Topics:         topics,
 		CreatedBy:      h.createdBy.nameOf(ctx, project.CreatedBy),
 		CreatedAt:      project.CreatedAt,
 		UpdatedAt:      project.UpdatedAt,
@@ -156,6 +172,9 @@ type VideoProjectListResponse struct {
 	Height         int                  `json:"height"`
 	ProjectSource  string               `json:"project_source"`
 	EnableCaptions int                  `json:"enable_captions"`
+	Title          string               `json:"title"`
+	Description    string               `json:"description"`
+	Topics         []string             `json:"topics"`
 	CreatedBy      string               `json:"created_by"`
 	CreatedAt      time.Time            `json:"created_at"`
 	UpdatedAt      time.Time            `json:"updated_at"`
@@ -172,6 +191,10 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 	if clips1 == nil {
 		clips1 = []model.ClipWithText{}
 	}
+	topics := item.Topics
+	if topics == nil {
+		topics = []string{}
+	}
 	return VideoProjectListResponse{
 		ID:             item.ID,
 		Name:           item.Name,
@@ -185,6 +208,9 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 		Height:         item.Height,
 		ProjectSource:  item.ProjectSource,
 		EnableCaptions: item.EnableCaptions,
+		Title:          item.Title,
+		Description:    item.Description,
+		Topics:         topics,
 		CreatedBy:      createdByName,
 		CreatedAt:      item.CreatedAt,
 		UpdatedAt:      item.UpdatedAt,
@@ -195,10 +221,10 @@ func (h *VideoProjectHandler) toVideoProjectListResponse(item *model.VideoProjec
 
 // ListVideoProjects 剪辑项目列表
 // @Summary      剪辑项目列表
-// @Description  分页查询剪辑项目，支持关键词与日期筛选；列表项同时返回 live_id、live_name（关联 live_material.name）与 task_count（关联 task 总数）
+// @Description  分页查询剪辑项目，支持关键词与日期筛选；关键词匹配 name/remark/title/description/live_name；列表项同时返回 live_id、live_name（关联 live_material.name）与 task_count（关联 task 总数）
 // @Tags         剪辑项目
 // @Produce      json
-// @Param        keywords     query  string  false  "关键词：\",\"=与，\"|\"=或，匹配 name/remark/live_name；如 发布会,2026|精剪"
+// @Param        keywords     query  string  false  "关键词：\",\"=与，\"|\"=或，匹配 name/remark/title/description/live_name；如 发布会,2026|精剪"
 // @Param        start_date   query  string  false  "开始日期 YYYY-MM-DD"
 // @Param        end_date     query  string  false  "结束日期 YYYY-MM-DD"
 // @Param        page         query  int     false  "页码"
@@ -285,7 +311,7 @@ func (h *VideoProjectHandler) ListVideoProjectsByLiveMaterial(c *gin.Context) {
 
 // CreateVideoProject 创建剪辑项目
 // @Summary      创建剪辑项目
-// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
+// @Description  添加一条剪辑项目，创建人取自 JWT 当前用户；clips0/clips1 为可选 JSON 数组；enable_captions 可选（bool，默认 true）；title/description/topics 为短视频元数据（可选，AI 选片时生成）；width/height 可选，仅支持 1920×1080 或 1080×1920，不传时按关联素材分辨率自动选更接近的一档；成功后返回完整项目
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -319,6 +345,9 @@ func (h *VideoProjectHandler) CreateVideoProject(c *gin.Context) {
 		Height:         req.Height,
 		ProjectSource:  req.ProjectSource,
 		EnableCaptions: enableCaptionsToInt(req.EnableCaptions),
+		Title:          req.Title,
+		Description:    req.Description,
+		Topics:         req.Topics,
 	})
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -359,7 +388,7 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 
 // UpdateVideoProject 更新剪辑项目
 // @Summary      更新剪辑项目
-// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 为 bool，入库为 0/1
+// @Description  仅更新请求中显式传入且合法的字段（name/remark/prompt_id/clips0/clips1/width/height/project_source/enable_captions/title/description/topics）；未传字段保持不变；若传 width/height 须成对且仅为 1920×1080 或 1080×1920；enable_captions 为 bool，入库为 0/1；title 2～12 字、description≤128 字、topics 2～6 个且每个 2～12 字（空表示清空）
 // @Tags         剪辑项目
 // @Accept       json
 // @Produce      json
@@ -393,6 +422,9 @@ func (h *VideoProjectHandler) UpdateVideoProject(c *gin.Context) {
 		Height:         req.Height,
 		ProjectSource:  req.ProjectSource,
 		EnableCaptions: enableCaptionsToInt(req.EnableCaptions),
+		Title:          req.Title,
+		Description:    req.Description,
+		Topics:         req.Topics,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrVideoProjectNotFound) {

@@ -216,7 +216,7 @@ func (h *TaskHandler) toTaskResponseList(ctx context.Context, items []model.Task
 
 // CreateAISliceTask 创建 AI 切片任务
 // @Summary      创建 AI 切片任务
-// @Description  异步：推荐传 live_id + clips0，由后端排序合并选区、按 30 分钟拆成多个剪辑项目并各发一个任务；也可传 video_project_id 使用已有项目。立即返回 {list,total}，请轮询 GET /v1/tasks/:id
+// @Description  异步：推荐传 live_id + clips0，由后端排序合并选区、按 30 分钟拆成多个剪辑项目并各发一个任务；也可传 video_project_id 使用已有项目。AI 选片同时回写 clips1 与短视频标题/描述/话题。立即返回 {list,total}，请轮询 GET /v1/tasks/:id
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json
@@ -290,7 +290,7 @@ func (h *TaskHandler) CreateDraftTask(c *gin.Context) {
 
 // CreateAISliceDraftTask 创建一键成片任务
 // @Summary      创建一键成片任务
-// @Description  异步：推荐传 live_id + clips0，由后端创建项目（超 30 分钟拆成多个）并各发一个一键成片任务；也可传 video_project_id。立即返回 {list,total}
+// @Description  异步：推荐传 live_id + clips0，由后端创建项目（超 30 分钟拆成多个）并各发一个一键成片任务；也可传 video_project_id。AI 选片阶段同时回写 clips1 与短视频标题/描述/话题。立即返回 {list,total}
 // @Tags         异步任务
 // @Accept       json
 // @Produce      json

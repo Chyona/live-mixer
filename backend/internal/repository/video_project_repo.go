@@ -12,8 +12,8 @@ import (
 
 // VideoProjectListFilter 剪辑项目列表查询筛选条件。
 type VideoProjectListFilter struct {
-	StartAt  *time.Time // 开始日期（含），按 created_at 筛选
-	EndAt    *time.Time // 结束日期次日零点（不含），按 created_at 筛选
+	StartAt  *time.Time    // 开始日期（含），按 created_at 筛选
+	EndAt    *time.Time    // 结束日期次日零点（不含），按 created_at 筛选
 	Keywords KeywordGroups // 关键词表达式：组内 AND、组间 OR；匹配 name/remark/live_name
 	LiveID   *uint         // 按关联直播素材 ID 精确筛选
 }
@@ -57,7 +57,7 @@ func (r *videoProjectRepository) GetByID(ctx context.Context, id uint) (*model.V
 func (r *videoProjectRepository) Update(ctx context.Context, project *model.VideoProject) error {
 	return r.db.WithContext(ctx).
 		Model(project).
-		Select("name", "remark", "prompt_id", "clips0", "clips1", "width", "height", "project_source", "enable_captions").
+		Select("name", "remark", "prompt_id", "clips0", "clips1", "width", "height", "project_source", "enable_captions", "title", "description", "topics").
 		Updates(project).Error
 }
 
@@ -112,8 +112,8 @@ func applyVideoProjectListFilter(query *gorm.DB, filter VideoProjectListFilter) 
 	query = applyKeywordGroups(
 		query,
 		filter.Keywords,
-		"LOWER("+table+".name) LIKE ? OR LOWER("+table+".remark) LIKE ? OR LOWER(live_material.name) LIKE ?",
-		3,
+		"LOWER("+table+".name) LIKE ? OR LOWER("+table+".remark) LIKE ? OR LOWER("+table+".title) LIKE ? OR LOWER("+table+".description) LIKE ? OR LOWER(live_material.name) LIKE ?",
+		5,
 	)
 	return query
 }

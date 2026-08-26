@@ -85,6 +85,9 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	project.PromptID = 8
 	project.ProjectSource = "manual"
 	project.EnableCaptions = model.EnableCaptionsOff
+	project.Title = "利率上行的真相"
+	project.Description = "用数据拆解加息传导。"
+	project.Topics = []string{"宏观经济", "利率周期"}
 	project.LiveID = 999
 	project.CreatedBy = 99
 	if err := repo.Update(ctx, project); err != nil {
@@ -103,6 +106,12 @@ func TestVideoProjectRepository_Update_OnlyUpdatesAllowedFields(t *testing.T) {
 	}
 	if got.EnableCaptions != model.EnableCaptionsOff {
 		t.Errorf("EnableCaptions = %d, want 0", got.EnableCaptions)
+	}
+	if got.Title != "利率上行的真相" || got.Description != "用数据拆解加息传导。" {
+		t.Errorf("title/description = %q/%q", got.Title, got.Description)
+	}
+	if len(got.Topics) != 2 || got.Topics[0] != "宏观经济" {
+		t.Errorf("topics = %#v", got.Topics)
 	}
 	if got.LiveID != material.ID || got.CreatedBy != 1 {
 		t.Errorf("live_id/created_by should remain unchanged: %+v", got)
@@ -153,6 +162,38 @@ func TestVideoProjectRepository_List_KeywordAndDateFilter(t *testing.T) {
 	}
 	if projects[0].TaskCount != 0 {
 		t.Errorf("TaskCount = %d, want 0 when no task", projects[0].TaskCount)
+	}
+}
+
+// TestVideoProjectRepository_List_KeywordMatchesTitle 验证 keywords 可匹配短视频标题。
+func TestVideoProjectRepository_List_KeywordMatchesTitle(t *testing.T) {
+	db := setupVideoProjectTestDB(t)
+	repo := NewVideoProjectRepository(db)
+	ctx := context.Background()
+	material := seedLiveMaterialForProject(t, db)
+
+	hit := &model.VideoProject{
+		Name: "项目A", Remark: "无关", Title: "利率上行的真相", LiveID: material.ID,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
+	}
+	miss := &model.VideoProject{
+		Name: "项目B", Remark: "无关", Title: "穿搭分享", LiveID: material.ID,
+		Clips0: []model.ClipRange{}, Clips1: []model.ClipWithText{}, CreatedBy: 1,
+	}
+	for _, p := range []*model.VideoProject{hit, miss} {
+		if err := repo.Create(ctx, p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	projects, total, err := repo.List(ctx, VideoProjectListFilter{
+		Keywords: KeywordGroups{{"利率"}},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(projects) != 1 || projects[0].Name != "项目A" {
+		t.Fatalf("total=%d projects=%+v", total, projects)
 	}
 }
 

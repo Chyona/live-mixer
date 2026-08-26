@@ -4,7 +4,7 @@ import { Button, Space, Tooltip } from 'antd';
 import { LuDownload } from 'react-icons/lu';
 import SliceVideoPlayer from '~/components/SliceVideoPlayer';
 import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
-import SlicePageHeader from '~/components/SlicePageHeader';
+import SlicePageHeader, { SliceProjectMetaBar } from '~/components/SlicePageHeader';
 import SlicePageEmptyState from '~/components/SlicePageEmptyState';
 import ManualVideoSlicePageSkeleton from './ManualVideoSlicePageSkeleton';
 import { useAppSEO } from '~/hooks/useAppSEO';
@@ -119,6 +119,9 @@ const ManualVideoSlicePage = () => {
   const [enableCaptions, setEnableCaptions] = useState(false);
   const [draftName, setDraftName] = useState(() => localStorage.getItem(DRAFT_STORAGE_KEY) ?? '');
   const [projectRemark, setProjectRemark] = useState('');
+  const [projectTitle, setProjectTitle] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [projectTopics, setProjectTopics] = useState<string[]>([]);
   const savedSnapshotRef = useRef('');
   const baselineSyncedRef = useRef(false);
 
@@ -278,6 +281,9 @@ const ManualVideoSlicePage = () => {
       if (!projectIdFromQuery) {
         setProjectId(null);
         setProjectRemark('');
+        setProjectTitle('');
+        setProjectDescription('');
+        setProjectTopics([]);
         const nextSegments = hasAiSegments ? (locationState?.aiSelectedSegments ?? []) : [];
         if (!hasAiSegments) {
           setSelectedSegments([]);
@@ -293,6 +299,9 @@ const ManualVideoSlicePage = () => {
         const loadedEnableCaptions = Boolean(projectRes.data.enable_captions);
         const loadedDraftName = projectRes.data.name;
         setProjectRemark(loadedRemark);
+        setProjectTitle(projectRes.data.title || '');
+        setProjectDescription(projectRes.data.description || '');
+        setProjectTopics(projectRes.data.topics ?? []);
         setEnableCaptions(loadedEnableCaptions);
         let loadedSegments: SelectedCopySegment[] = [];
         if (!hasAiSegments && projectRes.data.segments.length > 0) {
@@ -306,6 +315,9 @@ const ManualVideoSlicePage = () => {
           setDraftName(loadedDraftName);
         }
       } else {
+        setProjectTitle('');
+        setProjectDescription('');
+        setProjectTopics([]);
         toast.notify.warning(projectRes?.message || '剪辑项目加载失败');
       }
     } catch (error) {
@@ -641,6 +653,9 @@ const ManualVideoSlicePage = () => {
         }
         setDraftName(response.data.name);
         setProjectRemark(response.data.remark || nextRemark);
+        setProjectTitle(response.data.title || '');
+        setProjectDescription(response.data.description || '');
+        setProjectTopics(response.data.topics ?? []);
         resetDirtyBaseline({
           segments: selectedSegments,
           enableCaptions,
@@ -716,6 +731,9 @@ const ManualVideoSlicePage = () => {
           remark,
           project_source: 'manual',
           enable_captions: enableCaptions,
+          title: projectTitle,
+          description: projectDescription,
+          topics: projectTopics,
           clips0: [],
           clips1: toSliceProjectClips(selectedSegments),
         });
@@ -731,6 +749,9 @@ const ManualVideoSlicePage = () => {
         localStorage.setItem(DRAFT_STORAGE_KEY, response.data.name);
         setDraftName(response.data.name);
         setProjectRemark(response.data.remark || remark);
+        setProjectTitle(response.data.title || projectTitle);
+        setProjectDescription(response.data.description || projectDescription);
+        setProjectTopics(response.data.topics ?? projectTopics);
         resetDirtyBaseline({
           segments: selectedSegments,
           enableCaptions,
@@ -753,6 +774,9 @@ const ManualVideoSlicePage = () => {
       handleSaveProject,
       enableCaptions,
       projectId,
+      projectDescription,
+      projectTitle,
+      projectTopics,
       resetDirtyBaseline,
       saveModalMode,
       selectedSegments,
@@ -904,7 +928,15 @@ const ManualVideoSlicePage = () => {
       <SlicePageHeader
         breadcrumbItems={breadcrumbItems}
         title={pageTitle}
-        // description="通过文案选择片段，支持关键词定位、音视频同步、拖拽排序与连续预览。"
+        extra={
+          projectTitle.trim() || projectDescription.trim() || projectTopics.length > 0 ? (
+            <SliceProjectMetaBar
+              title={projectTitle}
+              description={projectDescription}
+              topics={projectTopics}
+            />
+          ) : undefined
+        }
         actions={
           <Space size={12} align="center">
             <Button

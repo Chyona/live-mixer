@@ -5,7 +5,7 @@ import { LuX } from 'react-icons/lu';
 import VideoTimeline, { type TimeRange } from '~/components/VideoTimeline';
 import SliceVideoPlayer from '~/components/SliceVideoPlayer';
 import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
-import SlicePageHeader from '~/components/SlicePageHeader';
+import SlicePageHeader, { SliceProjectMetaBar } from '~/components/SlicePageHeader';
 import SlicePageEmptyState from '~/components/SlicePageEmptyState';
 import CopyableText from '~/components/CopyableText';
 import { useAppSEO } from '~/hooks/useAppSEO';
@@ -108,6 +108,9 @@ const SourceVideoSlicePage = () => {
   const [loading, setLoading] = useState(true);
   const [video, setVideo] = useState<SourceVideo | null>(null);
   const [projectName, setProjectName] = useState('');
+  const [projectTitle, setProjectTitle] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [projectTopics, setProjectTopics] = useState<string[]>([]);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -230,7 +233,12 @@ const SourceVideoSlicePage = () => {
     setPreferredPromptId(null);
     setSelectedPrompt(null);
     setPromptSelectionReady(false);
-    if (!projectId) setProjectName('');
+    if (!projectId) {
+      setProjectName('');
+      setProjectTitle('');
+      setProjectDescription('');
+      setProjectTopics([]);
+    }
 
     try {
       // 无 projectId：源视频入口只拉详情；有 projectId：再拉项目并回填 clips0 / prompt_id
@@ -272,6 +280,9 @@ const SourceVideoSlicePage = () => {
         const promptId = Number(projectRes.data.prompt_id ?? 0);
         const loadedPromptId = promptId > 0 ? promptId : null;
         setProjectName(loadedProjectName);
+        setProjectTitle(projectRes.data.title || '');
+        setProjectDescription(projectRes.data.description || '');
+        setProjectTopics(projectRes.data.topics ?? []);
         setPreferredPromptId(loadedPromptId);
       } else if (projectId) {
         toast.notify.warning(projectRes?.message || '剪辑项目加载失败');
@@ -604,6 +615,15 @@ const SourceVideoSlicePage = () => {
     <SlicePageHeader
       breadcrumbItems={breadcrumbItems}
       title={pageTitle}
+      extra={
+        projectTitle.trim() || projectDescription.trim() || projectTopics.length > 0 ? (
+          <SliceProjectMetaBar
+            title={projectTitle}
+            description={projectDescription}
+            topics={projectTopics}
+          />
+        ) : undefined
+      }
       actions={
         <>
           <Button onClick={() => setSourceModalVisible(true)}>查看播放源</Button>
