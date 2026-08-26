@@ -40,7 +40,7 @@ const SLICES_LIST_ERROR_SCOPE = 'slices-list';
 const SLICES_COLUMN_STORAGE_KEY = 'slices-table-columns-v1';
 const SLICES_LOCKED_COLUMN_KEYS = ['name', 'actions'];
 /** 默认隐藏：描述、话题（AI 选片后才有，列较宽） */
-const SLICES_DEFAULT_HIDDEN_COLUMN_KEYS = ['description', 'topics', 'updated_at'];
+const SLICES_DEFAULT_HIDDEN_COLUMN_KEYS = ['title', 'description', 'topics'];
 
 const SLICES_COLUMN_SETTINGS: TableColumnSettingItem[] = [
   { key: 'name', label: '项目名称', locked: true },
