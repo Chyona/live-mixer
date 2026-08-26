@@ -129,7 +129,6 @@ const SourceVideoSlicePage = () => {
   const pendingRangesRef = useRef<TimeRange[] | null>(null);
   const streamUrlRef = useRef('');
   const savedSnapshotRef = useRef('');
-  const loadedSnapshotRef = useRef('');
   const baselineSyncedRef = useRef(false);
   const [promptSelectionReady, setPromptSelectionReady] = useState(false);
 
@@ -158,26 +157,21 @@ const SourceVideoSlicePage = () => {
     }) => {
       const snapshot = serializeTimelineSliceProjectState(baseline);
       savedSnapshotRef.current = snapshot;
-      loadedSnapshotRef.current = snapshot;
       baselineSyncedRef.current = true;
     },
     []
   );
 
   const getIsDirty = useCallback(() => {
-    if (loading || !video) return false;
+    if (loading || !video || !baselineSyncedRef.current) return false;
 
-    const current = serializeTimelineSliceProjectState({
-      ranges: selectedRanges,
-      promptId: selectedPrompt?.id ?? preferredPromptId,
-      projectName,
-    });
-
-    if (!baselineSyncedRef.current) {
-      return Boolean(loadedSnapshotRef.current) && current !== loadedSnapshotRef.current;
-    }
-
-    return current !== savedSnapshotRef.current;
+    return (
+      serializeTimelineSliceProjectState({
+        ranges: selectedRanges,
+        promptId: selectedPrompt?.id ?? preferredPromptId,
+        projectName,
+      }) !== savedSnapshotRef.current
+    );
   }, [loading, preferredPromptId, projectName, selectedPrompt?.id, selectedRanges, video]);
 
   const { confirmLeave } = useSliceProjectLeaveGuard(getIsDirty);
@@ -185,7 +179,6 @@ const SourceVideoSlicePage = () => {
   useEffect(() => {
     baselineSyncedRef.current = false;
     savedSnapshotRef.current = '';
-    loadedSnapshotRef.current = '';
     setPromptSelectionReady(false);
   }, [projectId, sourceVideoId]);
 
@@ -228,6 +221,26 @@ const SourceVideoSlicePage = () => {
     selectedRanges,
     video,
   ]);
+
+  // 基线建立时提示词尚未选中（promptId=0），默认提示词就绪后仅对齐 prompt，不吸收后续选区编辑
+  useEffect(() => {
+    if (loading || !video || !baselineSyncedRef.current || !selectedPrompt) return;
+
+    let baselinePromptId = 0;
+    try {
+      baselinePromptId = JSON.parse(savedSnapshotRef.current).promptId ?? 0;
+    } catch {
+      return;
+    }
+
+    if (baselinePromptId !== 0 || selectedPrompt.id === 0) return;
+
+    resetDirtyBaseline({
+      ranges: selectedRanges,
+      promptId: selectedPrompt.id,
+      projectName,
+    });
+  }, [loading, projectName, resetDirtyBaseline, selectedPrompt, selectedRanges, video]);
 
   const loadPageData = useCallback(async () => {
     if (!sourceVideoId) return;
@@ -277,12 +290,6 @@ const SourceVideoSlicePage = () => {
           ? Number(projectRes.data.prompt_id ?? 0)
           : 0;
       const loadedPromptId = promptId > 0 ? promptId : null;
-
-      loadedSnapshotRef.current = serializeTimelineSliceProjectState({
-        ranges,
-        promptId: loadedPromptId,
-        projectName: loadedProjectName,
-      });
 
       // streamUrl 不变时不会触发清理 effect，需直接回填
       if (sameStream) {
