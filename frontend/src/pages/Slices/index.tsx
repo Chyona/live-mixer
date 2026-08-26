@@ -10,8 +10,12 @@ import ListPageLayout from '~/components/ListPageLayout';
 import ListPageTable from '~/components/ListPageTable';
 import ListSearchToolbar from '~/components/ListSearchToolbar';
 import RemarkEditor from '~/components/RemarkEditor';
+import TableColumnSetting, {
+  type TableColumnSettingItem,
+} from '~/components/TableColumnSetting';
 import { useAppSEO } from '~/hooks/useAppSEO';
 import { useListFilters } from '~/hooks/useListFilters';
+import { useTableColumnVisibility } from '~/hooks/useTableColumnVisibility';
 import { buildSliceProjectEditLink, buildTasksListLink } from '~/routes/links';
 import { AppError } from '~/services/http';
 import {
@@ -32,6 +36,26 @@ import { showAppError, showScopedError, handleRequestError, toast } from '~/util
 import './index.css';
 
 const SLICES_LIST_ERROR_SCOPE = 'slices-list';
+
+const SLICES_COLUMN_STORAGE_KEY = 'slices-table-columns-v1';
+const SLICES_LOCKED_COLUMN_KEYS = ['name', 'actions'];
+/** 默认隐藏：描述、话题（AI 选片后才有，列较宽） */
+const SLICES_DEFAULT_HIDDEN_COLUMN_KEYS = ['title', 'description', 'topics'];
+
+const SLICES_COLUMN_SETTINGS: TableColumnSettingItem[] = [
+  { key: 'name', label: '项目名称', locked: true },
+  { key: 'title', label: '短视频标题' },
+  { key: 'description', label: '描述' },
+  { key: 'topics', label: '话题' },
+  { key: 'live_name', label: '源视频名称' },
+  { key: 'remark', label: '备注' },
+  { key: 'created_by', label: '创建者' },
+  { key: 'segment_count', label: '片段数' },
+  { key: 'task_count', label: '关联任务' },
+  { key: 'aspect_ratio', label: '视频比例' },
+  { key: 'updated_at', label: '更新时间' },
+  { key: 'actions', label: '操作', locked: true },
+];
 
 function SliceProjectDeleteButton({
   record,
@@ -148,6 +172,15 @@ const SlicesPage = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const columnKeys = useMemo(() => SLICES_COLUMN_SETTINGS.map((item) => item.key), []);
+  const { visibleKeySet, setVisibleKeys, visibleKeys, defaultVisibleKeys } =
+    useTableColumnVisibility({
+      storageKey: SLICES_COLUMN_STORAGE_KEY,
+      columnKeys,
+      lockedKeys: SLICES_LOCKED_COLUMN_KEYS,
+      defaultHiddenKeys: SLICES_DEFAULT_HIDDEN_COLUMN_KEYS,
+    });
 
   const loadList = useCallback(async (options?: { silent?: boolean; refresh?: boolean }) => {
     const silent = options?.silent ?? false;
@@ -310,8 +343,8 @@ const SlicesPage = () => {
 
   const hasActiveFilters = Boolean(appliedKeyword || dateRange?.[0]);
 
-  const columns = useMemo<ColumnsType<SliceProject>>(
-    () => [
+  const columns = useMemo<ColumnsType<SliceProject>>(() => {
+    const allColumns: ColumnsType<SliceProject> = [
       {
         title: '项目名称',
         dataIndex: 'name',
@@ -329,7 +362,6 @@ const SlicesPage = () => {
         title: '短视频标题',
         dataIndex: 'title',
         key: 'title',
-        width: 160,
         render: (title: string, record) => (
           <RemarkEditor
             value={title}
@@ -441,7 +473,7 @@ const SlicesPage = () => {
       {
         title: '操作',
         key: 'actions',
-        width: 150,
+        width: 140,
         fixed: 'right',
         render: (_, record) => (
           <Space size={8}>
@@ -473,9 +505,41 @@ const SlicesPage = () => {
           </Space>
         ),
       },
-    ],
-    [deletingId, handleDelete, navigate]
-  );
+    ];
+
+    const visibleColumns = allColumns.filter((column) => {
+      const key = String(column.key ?? '');
+      return visibleKeySet.has(key);
+    });
+
+    return [
+      ...visibleColumns,
+      {
+        key: '__column_setting__',
+        width: 44,
+        fixed: 'right',
+        align: 'center',
+        className: 'table-column-setting-col',
+        title: (
+          <TableColumnSetting
+            items={SLICES_COLUMN_SETTINGS}
+            value={visibleKeys}
+            defaultValue={defaultVisibleKeys}
+            onChange={setVisibleKeys}
+          />
+        ),
+        render: () => null,
+      },
+    ];
+  }, [
+    defaultVisibleKeys,
+    deletingId,
+    handleDelete,
+    navigate,
+    setVisibleKeys,
+    visibleKeySet,
+    visibleKeys,
+  ]);
 
   return (
     <ListPageLayout

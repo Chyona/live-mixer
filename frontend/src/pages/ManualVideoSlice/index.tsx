@@ -78,6 +78,9 @@ function buildManualProjectAutoName() {
   return `人工切片_${formatToDateTime(Date.now(), 'YYYY-MM-DD_HH:mm:ss')}`;
 }
 
+const MANUAL_SLICE_SAVE_NOTIFY_DESC =
+  '您可以继续调整内容，或直接提交成片。提交后将创建任务并跳转至任务列表。';
+
 const ManualVideoSlicePage = () => {
   const { id: sourceVideoId = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -615,6 +618,49 @@ const ManualVideoSlicePage = () => {
     [paragraphs, selectedSegments, videoDuration]
   );
 
+  const submitProjectDraft = useCallback(async () => {
+      if (projectTaskReadOnly) {
+        toast.notify.warning('项目有进行中任务，当前仅可查看');
+        return;
+      }
+      if (!video || selectedSegments.length === 0) return;
+
+      if (!projectId) {
+        toast.notify.warning('请先保存剪辑项目后再提交');
+        return;
+      }
+
+      setSubmitting(true);
+      try {
+        const response = await submitDraft({
+          video_project_id: projectId,
+          enable_captions: enableCaptions,
+        });
+
+        if (response.code !== 0) {
+          toast.notify.error(response.message || '提交失败');
+          return;
+        }
+
+        toast.notify.success('任务已提交，正在跳转到任务管理');
+        navigate(buildTasksListLink());
+      } catch (error) {
+        if (error instanceof AppError) {
+          showAppError(error);
+        } else {
+          toast.notify.error('提交失败');
+        }
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [enableCaptions, navigate, projectId, projectTaskReadOnly, selectedSegments.length, video]
+  );
+
+  const handleSubmit = useCallback(() => {
+    void submitProjectDraft();
+  }, [submitProjectDraft]);
+
   const handleSaveProject = useCallback(
     async (options?: { name?: string; remark?: string }) => {
       if (!sourceVideoId || !video) return;
@@ -664,7 +710,7 @@ const ManualVideoSlicePage = () => {
         });
         localStorage.setItem(DRAFT_STORAGE_KEY, response.data.name);
         setSaveModalOpen(false);
-        toast.notify.success('已保存为剪辑项目，可在项目管理中查看');
+        toast.notify.success('已保存为剪辑项目', MANUAL_SLICE_SAVE_NOTIFY_DESC);
       } catch (error) {
         if (error instanceof AppError) {
           showAppError(error);
@@ -675,7 +721,16 @@ const ManualVideoSlicePage = () => {
         setSavingProject(false);
       }
     },
-    [draftName, enableCaptions, projectId, projectRemark, resetDirtyBaseline, selectedSegments, syncProjectIdInUrl, video]
+    [
+      draftName,
+      enableCaptions,
+      projectId,
+      projectRemark,
+      resetDirtyBaseline,
+      selectedSegments,
+      syncProjectIdInUrl,
+      video,
+    ]
   );
 
   const handleSaveDraft = useCallback(
@@ -759,7 +814,7 @@ const ManualVideoSlicePage = () => {
           projectRemark: response.data.remark || remark,
         });
         setSaveModalOpen(false);
-        toast.notify.success('已另存为新的剪辑项目，可在项目管理中查看');
+        toast.notify.success('已另存为新的剪辑项目', MANUAL_SLICE_SAVE_NOTIFY_DESC);
       } catch (error) {
         if (error instanceof AppError) {
           showAppError(error);
@@ -775,6 +830,7 @@ const ManualVideoSlicePage = () => {
       enableCaptions,
       projectId,
       projectDescription,
+      projectRemark,
       projectTitle,
       projectTopics,
       resetDirtyBaseline,
@@ -785,43 +841,6 @@ const ManualVideoSlicePage = () => {
       video,
     ]
   );
-
-  const handleSubmit = useCallback(async () => {
-    if (projectTaskReadOnly) {
-      toast.notify.warning('项目有进行中任务，当前仅可查看');
-      return;
-    }
-    if (!video || selectedSegments.length === 0) return;
-
-    if (!projectId) {
-      toast.notify.warning('请先保存剪辑项目后再提交');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const response = await submitDraft({
-        video_project_id: projectId,
-        enable_captions: enableCaptions,
-      });
-
-      if (response.code !== 0) {
-        toast.notify.error(response.message || '提交失败');
-        return;
-      }
-
-      toast.notify.success('任务已提交，正在跳转到任务管理');
-      navigate(buildTasksListLink());
-    } catch (error) {
-      if (error instanceof AppError) {
-        showAppError(error);
-      } else {
-        toast.notify.error('提交失败');
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  }, [navigate, enableCaptions, projectId, projectTaskReadOnly, selectedSegments.length, video]);
 
   const openSaveModal = (nextMode: 'create' | 'saveAs' | 'export') => {
     setSaveModalMode(nextMode);
