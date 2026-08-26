@@ -198,6 +198,7 @@ func (m *mockAISliceDraftWorkerEnqueue) Start(ctx context.Context) {}
 func TestTaskService_CreateAISlice_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, Name: "春季发布会", LiveURL: "https://live.example/a.mp4", ASRStatus: model.ASRStatusCompleted,
+		LiveASR: buildLiveASRJSON(1, 1000),
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 5, Name: "slice-project-A", LiveID: 1, PromptID: 1,
@@ -388,6 +389,7 @@ func TestTaskService_CreateDraft_EmptyClips(t *testing.T) {
 func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, Name: "一键源视频", LiveURL: "https://live.example/one.mp4", ASRStatus: model.ASRStatusCompleted,
+		LiveASR: buildLiveASRJSON(1, 2000),
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
@@ -438,6 +440,7 @@ func TestTaskService_CreateAISliceDraft_EnqueuesWorker(t *testing.T) {
 func TestTaskService_CreateAISliceDraft_UsesProjectCanvasSize(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 1, LiveURL: "https://live.example/one.mp4", ASRStatus: model.ASRStatusCompleted,
+		LiveASR: buildLiveASRJSON(1, 2000),
 	}}
 	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
 		ID: 8, Name: "one-click-project", LiveID: 1, PromptID: 1,
@@ -561,6 +564,25 @@ func TestTaskService_CreateAISlice_FromLiveID_SplitsOver30Min(t *testing.T) {
 	}
 }
 
+func TestTaskService_CreateAISlice_FromLiveID_RejectsSilentClips0(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID: 3, Name: "片头静音", LiveURL: "https://live.example/s.mp4",
+		ASRStatus: model.ASRStatusCompleted, Width: 1920, Height: 1080,
+		LiveASR: buildLiveASRJSONFrom(30*60*1000, 5, 60*1000),
+	}}
+	svc := NewTaskService(&mockTaskRepo{}, live, &mockVideoProjectRepoForDraft{},
+		&mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys-prompt"}},
+		&mockAISliceWorkerEnqueue{}, nil, nil)
+
+	_, err := svc.CreateAISlice(context.Background(), 7, CreateAISliceInput{
+		LiveID: 3,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 20 * 60 * 1000}},
+	})
+	if !errors.Is(err, ErrTaskClips0NoASR) {
+		t.Fatalf("error = %v, want ErrTaskClips0NoASR", err)
+	}
+}
+
 func TestTaskService_CreateAISliceDraft_FromLiveID(t *testing.T) {
 	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
 		ID: 4, Name: "成片源", LiveURL: "https://live.example/c.mp4",
@@ -597,13 +619,17 @@ func TestTaskService_CreateAISliceDraft_FromLiveID(t *testing.T) {
 }
 
 func buildLiveASRJSON(count int, stepMS int64) string {
+	return buildLiveASRJSONFrom(0, count, stepMS)
+}
+
+func buildLiveASRJSONFrom(offsetMS int64, count int, stepMS int64) string {
 	var b strings.Builder
 	b.WriteString(`{"result":{"utterances":[`)
 	for i := 0; i < count; i++ {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		start := int64(i) * stepMS
+		start := offsetMS + int64(i)*stepMS
 		end := start + stepMS
 		fmt.Fprintf(&b, `{"additions":{"speaker":"1"},"start_time":%d,"end_time":%d,"text":"x","words":[]}`, start, end)
 	}

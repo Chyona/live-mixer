@@ -23,6 +23,9 @@ var ErrTaskNotFound = errors.New("任务不存在")
 // ErrTaskASRNotReady 直播素材 ASR 尚未完成，无法创建依赖 ASR 的任务。
 var ErrTaskASRNotReady = errors.New("直播素材 ASR 尚未完成")
 
+// ErrTaskClips0NoASR 选区（或拆分后的某一段）与 live_asr 无重叠分句，无法创建 AI 选片/一键成片任务。
+var ErrTaskClips0NoASR = errors.New("选区时间段内无可用 ASR 分句")
+
 // ErrTaskInvalidType 任务类型无效。
 var ErrTaskInvalidType = errors.New("任务类型无效")
 
@@ -289,6 +292,10 @@ func (s *taskService) createAISliceJobs(ctx context.Context, createdBy uint, in 
 	if len(groups) == 0 {
 		return nil, errors.New("clips0 不能为空，请先设置待分析时间段")
 	}
+	groups = finalizeAISliceGroups(groups, utterances)
+	if err := validateAISliceGroups(groups, utterances); err != nil {
+		return nil, err
+	}
 
 	width, height, err := resolveProjectCanvasSize(0, 0, material.Width, material.Height)
 	if err != nil {
@@ -402,6 +409,10 @@ func (s *taskService) createAISliceFromExistingProject(ctx context.Context, crea
 	}
 	if strings.TrimSpace(sysPrompt) == "" {
 		return nil, errors.New("系统提示词内容为空")
+	}
+	utterances := asr.FormatUtterancesForAPI(material.LiveASR)
+	if err := validateAISliceGroups([][]model.ClipRange{project.Clips0}, utterances); err != nil {
+		return nil, err
 	}
 
 	width, height := project.Width, project.Height

@@ -243,6 +243,53 @@ func TestSplitClips0IntoProjects_HalfSpeechKeepsNOver30(t *testing.T) {
 	assertGroupsASR(t, got, utterances)
 }
 
+func TestSplitClips0IntoProjects_LeadingSilenceMergesIntoFirstSpeech(t *testing.T) {
+	// 片头 30 分钟静音 + 后面 90 分钟口播：第 1 个项目必须带上静音且含 ≥10 分钟 ASR，不能单独成空任务。
+	const silenceMS int64 = 30 * 60 * 1000
+	const total int64 = 120 * 60 * 1000
+	merged := []model.ClipRange{{StartTime: 0, EndTime: total}}
+	utterances := makeUtterances(silenceMS, total, 10*1000)
+
+	got := splitClips0IntoProjects(merged, utterances, nil)
+	assertSplitCoversMerged(t, merged, got)
+	if len(got) < 2 {
+		t.Fatalf("groups = %d, want >= 2", len(got))
+	}
+	if got[0][0].StartTime != 0 {
+		t.Fatalf("first clips0 start = %d, want 0 (leading silence absorbed)", got[0][0].StartTime)
+	}
+	if len(filterUtterancesByClips0(utterances, got[0])) == 0 {
+		t.Fatal("first project has no ASR utterances")
+	}
+	assertGroupsASR(t, got, utterances)
+	for i, g := range got {
+		if len(filterUtterancesByClips0(utterances, g)) == 0 {
+			t.Errorf("group[%d] has no ASR utterances: %#v", i, g)
+		}
+	}
+}
+
+func TestSplitClips0IntoProjects_LeadingSilenceLongFirstUtterance(t *testing.T) {
+	// 片头静音后第一句超过 30 分钟：不得把静音单独切成一组。
+	const silenceMS int64 = 30 * 60 * 1000
+	const utterEnd int64 = silenceMS + 40*60*1000
+	const total int64 = 90 * 60 * 1000
+	merged := []model.ClipRange{{StartTime: 0, EndTime: total}}
+	utterances := []asr.Utterance{
+		{StartTime: silenceMS, EndTime: utterEnd, Text: "超长开场"},
+	}
+	utterances = append(utterances, makeUtterances(utterEnd, total, 60*1000)...)
+
+	got := splitClips0IntoProjects(merged, utterances, nil)
+	assertSplitCoversMerged(t, merged, got)
+	if len(filterUtterancesByClips0(utterances, got[0])) == 0 {
+		t.Fatalf("first project has no ASR, clips0=%#v", got[0])
+	}
+	if clipRangesDurationMS(got[0]) <= silenceMS {
+		t.Fatalf("first clips0 duration %d should include silence+speech", clipRangesDurationMS(got[0]))
+	}
+}
+
 func makeUtterances(start, end, step int64) []asr.Utterance {
 	if step <= 0 {
 		step = 1000
