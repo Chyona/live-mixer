@@ -51,8 +51,8 @@ type LiveMaterialRepository interface {
 
 // LiveMaterialListFilter 直播素材列表查询筛选条件。
 type LiveMaterialListFilter struct {
-	StartAt        *time.Time // 开始日期（含），按 created_at 筛选
-	EndAt          *time.Time // 结束日期次日零点（不含），按 created_at 筛选
+	StartAt     *time.Time    // 开始日期（含），按 created_at 筛选
+	EndAt       *time.Time    // 结束日期次日零点（不含），按 created_at 筛选
 	Keywords    KeywordGroups // 标题/备注关键词：组内 AND、组间 OR；单组内词匹配 name 或 remark
 	ASRKeywords KeywordGroups // ASR 段落关键词：组内 AND、组间 OR；匹配 asr_paragraphs 文本
 }
@@ -171,9 +171,9 @@ func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, 
 		Model(&model.LiveMaterial{}).
 		Where("asr_status = ? AND asr_updated_at IS NOT NULL AND asr_updated_at < ?", model.ASRStatusProcessing, cutoff).
 		Updates(map[string]interface{}{
-			"asr_status":       model.ASRStatusPending,
-			"asr_progress":     int16(0),
-			"asr_error_msg":    "ASR 处理超时，已自动重新排队",
+			"asr_status":    model.ASRStatusPending,
+			"asr_progress":  int16(0),
+			"asr_error_msg": "ASR 处理超时，已自动重新排队",
 			// 保留 asr_started_at：pending 窗口可继续展示上次开始时间；新一轮由 ClaimPendingASR 覆盖。
 			"asr_updated_at":   now,
 			"asr_completed_at": nil,
@@ -287,30 +287,36 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 	query := r.db.WithContext(ctx).Model(&model.LiveMaterialListItem{})
 	query = applyLiveMaterialListFilter(query, filter)
 
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
 	needParagraphs := !KeywordGroupsEmpty(filter.ASRKeywords)
 	const projectCountExpr = "(SELECT COUNT(*) FROM video_project WHERE video_project.live_id = live_material.id) AS project_count"
 	if needParagraphs {
-		// 带关键词时额外取出 asr_paragraphs，供内存侧筛出命中段落。
+		// CAST(asr_paragraphs AS TEXT) 只能做整份 JSON 粗筛：AND 词可能落在不同段落。
+		// 列表与 total 必须以「同一段落正文同时命中」为准，否则会出现有行无命中文案。
 		type listRow struct {
 			model.LiveMaterialListItem
 			ASRParagraphs []model.ASRParagraph `gorm:"column:asr_paragraphs;serializer:json"`
 		}
 		var rows []listRow
 		listSelect := "live_material.*, " + projectCountExpr
-		if err := query.Select(listSelect).Offset(offset).Limit(limit).Order("live_material.id DESC").Find(&rows).Error; err != nil {
+		if err := query.Select(listSelect).Order("live_material.id DESC").Find(&rows).Error; err != nil {
 			return nil, 0, err
 		}
 		materials := make([]model.LiveMaterialListItem, 0, len(rows))
 		for i := range rows {
+			hits := filterMatchedASRParagraphs(rows[i].ASRParagraphs, filter.ASRKeywords)
+			if len(hits) == 0 {
+				continue
+			}
 			item := rows[i].LiveMaterialListItem
-			item.MatchedParagraphs = filterMatchedASRParagraphs(rows[i].ASRParagraphs, filter.ASRKeywords)
+			item.MatchedParagraphs = hits
 			materials = append(materials, item)
 		}
-		return materials, total, nil
+		total = int64(len(materials))
+		return paginateLiveMaterialList(materials, offset, limit), total, nil
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 
 	var materials []model.LiveMaterialListItem
@@ -319,6 +325,20 @@ func (r *liveMaterialRepository) List(ctx context.Context, filter LiveMaterialLi
 		return nil, 0, err
 	}
 	return materials, total, nil
+}
+
+func paginateLiveMaterialList(items []model.LiveMaterialListItem, offset, limit int) []model.LiveMaterialListItem {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []model.LiveMaterialListItem{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
 }
 
 // applyLiveMaterialListFilter 将列表筛选条件应用到 GORM 查询。
@@ -331,7 +351,7 @@ func applyLiveMaterialListFilter(query *gorm.DB, filter LiveMaterialListFilter) 
 	}
 	// 单组内：词匹配 name 或 remark；组内 AND、组间 OR。
 	query = applyKeywordGroups(query, filter.Keywords, "LOWER(name) LIKE ? OR LOWER(remark) LIKE ?", 2)
-	// ASR：仅在 asr_paragraphs JSON 文本中匹配；组内 AND、组间 OR。
+	// ASR：CAST 整份 JSON 粗筛（组内 AND、组间 OR）；精确命中在 List 内按段落正文再过滤。
 	query = applyKeywordGroups(query, filter.ASRKeywords, "LOWER(CAST(asr_paragraphs AS TEXT)) LIKE ?", 1)
 	return query
 }

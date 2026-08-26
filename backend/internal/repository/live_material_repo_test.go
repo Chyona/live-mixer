@@ -471,7 +471,7 @@ func TestLiveMaterialRepository_ResetASRToPending_OnlyFailed(t *testing.T) {
 	failed := &model.LiveMaterial{
 		Name: "失败", LiveURL: "https://example.com/f.mp4",
 		LiveASR: `{"leftover":true}`, ASRStatus: model.ASRStatusFailed, ASRErrorMsg: "x", CreatedBy: 1,
-		ASRSummaries: []model.ASRSummarySegment{{Title: "旧题", StartTime: 0, EndTime: 100}},
+		ASRSummaries:  []model.ASRSummarySegment{{Title: "旧题", StartTime: 0, EndTime: 100}},
 		ASRParagraphs: []model.ASRParagraph{{Speaker: "1", Text: "旧段", StartTime: 0, EndTime: 100}},
 	}
 	completed := &model.LiveMaterial{
@@ -714,6 +714,48 @@ func TestLiveMaterialRepository_List_ASRKeywordFilter(t *testing.T) {
 	}
 	if materials[0].MatchedParagraphs[0].Words != nil {
 		t.Errorf("matched paragraph should omit words")
+	}
+}
+
+// TestLiveMaterialRepository_List_ASRKeywordAndRequiresSameParagraph
+// 验证 AND 必须落在同一段落：词分散在不同段时不计入列表（避免有行无命中文案）。
+func TestLiveMaterialRepository_List_ASRKeywordAndRequiresSameParagraph(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveMaterialRepository(db)
+	ctx := context.Background()
+
+	samePara := &model.LiveMaterial{
+		Name: "同段命中", LiveURL: "https://a.com/same.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
+		ASRParagraphs: []model.ASRParagraph{
+			{Speaker: "1", Text: "这个社会给人的感觉很复杂", StartTime: 0, EndTime: 2000},
+		},
+	}
+	splitPara := &model.LiveMaterial{
+		Name: "跨段命中", LiveURL: "https://a.com/split.mp4", LiveASR: "{}",
+		ASRStatus: model.ASRStatusCompleted, CreatedBy: 1,
+		ASRParagraphs: []model.ASRParagraph{
+			{Speaker: "1", Text: "讨论社会问题", StartTime: 0, EndTime: 1000},
+			{Speaker: "1", Text: "感觉还不错", StartTime: 1000, EndTime: 2000},
+		},
+	}
+	for _, m := range []*model.LiveMaterial{samePara, splitPara} {
+		if err := repo.Create(ctx, m); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	materials, total, err := repo.List(ctx, LiveMaterialListFilter{
+		ASRKeywords: KeywordGroups{{"社会", "感觉"}},
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if total != 1 || len(materials) != 1 || materials[0].Name != "同段命中" {
+		t.Fatalf("unexpected result: total=%d materials=%+v", total, materials)
+	}
+	if len(materials[0].MatchedParagraphs) != 1 {
+		t.Fatalf("MatchedParagraphs = %+v, want 1 hit", materials[0].MatchedParagraphs)
 	}
 }
 

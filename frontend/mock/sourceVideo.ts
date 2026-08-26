@@ -5,7 +5,6 @@ import {
   type SourceVideo,
 } from '../src/services/sourceVideo.model';
 import {
-  matchAnyListKeyword,
   matchListKeywords,
   parseListKeywords,
 } from '../src/utils/listKeywords';
@@ -198,7 +197,7 @@ function collectMatchedParagraphs(
   for (const segment of getTranscript(String(sourceVideoId))) {
     const text = segment.text.trim();
     if (!text || seen.has(text)) continue;
-    if (!matchAnyListKeyword(text, asrKeywords)) continue;
+    if (!matchListKeywords(text, asrKeywords)) continue;
     seen.add(text);
     hits.push({
       speaker: segment.speaker,
@@ -314,14 +313,14 @@ function filterList(query: Record<string, string | string[] | undefined>) {
     const titleText = `${item.name} ${item.remark}`;
     if (!matchListKeywords(titleText, keywords)) return false;
 
-    // asr_keywords：仅匹配 ASR 解析后的视频文案（未完成解析则无文案可命中）
-    const asrText =
-      item.asr_status === 'completed'
-        ? getTranscript(String(item.id))
-            .map((segment) => segment.text)
-            .join(' ')
-        : '';
-    if (!matchListKeywords(asrText, asrKeywords)) return false;
+    // asr_keywords：须在同一段文案中同时命中（与后端 asr_paragraphs 段落 AND 一致）
+    if (asrKeywords.length) {
+      if (item.asr_status !== 'completed') return false;
+      const hit = getTranscript(String(item.id)).some((segment) =>
+        matchListKeywords(segment.text, asrKeywords)
+      );
+      if (!hit) return false;
+    }
 
     return true;
   });
