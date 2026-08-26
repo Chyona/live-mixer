@@ -113,6 +113,47 @@ func TestSplitClips0IntoProjects_ScatteredClipsUnderMax(t *testing.T) {
 	}
 }
 
+func TestSplitClips0IntoProjects_ScatteredManySegmentsOver30Min(t *testing.T) {
+	// 模拟时间轴上分散选中多个 AI 总结片段（总时长 >30 分钟）。
+	const minMS int64 = 5 * 60 * 1000
+	var merged []model.ClipRange
+	var cursor int64
+	for cursor < 90*60*1000 {
+		end := cursor + minMS
+		merged = append(merged, model.ClipRange{StartTime: cursor, EndTime: end})
+		cursor += 10 * 60 * 1000 // 每段 5 分钟，间隔 5 分钟
+	}
+	if clipRangesDurationMS(merged) <= aiSliceProjectMaxDurationMS {
+		t.Fatalf("fixture total = %d, want > 30min", clipRangesDurationMS(merged))
+	}
+
+	utterances := makeUtterances(0, 90*60*1000, 30*1000)
+	paragraphs := []model.ASRParagraph{
+		{StartTime: 0, EndTime: 30 * 60 * 1000},
+		{StartTime: 30 * 60 * 1000, EndTime: 60 * 60 * 1000},
+		{StartTime: 60 * 60 * 1000, EndTime: 90 * 60 * 1000},
+	}
+	got := splitClips0IntoProjects(merged, utterances, paragraphs)
+	assertSplitCoversMerged(t, merged, got)
+	if len(got) < 2 {
+		t.Fatalf("expected multiple projects, got %d", len(got))
+	}
+	for i, g := range got {
+		d := clipRangesDurationMS(g)
+		if d > aiSliceProjectMaxDurationMS {
+			t.Errorf("group[%d] duration %d exceeds 30min", i, d)
+		}
+		if d < aiSliceProjectMinDurationMS {
+			t.Errorf("group[%d] duration %d below 5min", i, d)
+		}
+		for j := 1; j < len(g); j++ {
+			if g[j-1].EndTime > g[j].StartTime {
+				t.Errorf("group[%d] clip[%d] overlaps next: %#v vs %#v", i, j-1, g[j-1], g[j])
+			}
+		}
+	}
+}
+
 func TestSplitClips0IntoProjects_RebalanceShortTail(t *testing.T) {
 	// 32 分钟：先切 30，余 2；再把尾部补到 ≥5，且总和仍为 32。
 	const total int64 = 32 * 60 * 1000
