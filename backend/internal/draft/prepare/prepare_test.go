@@ -139,6 +139,34 @@ func TestPipeline_CutClips_PreciseWithin10Min(t *testing.T) {
 	}
 }
 
+func TestPipeline_Run_RemovesSourceAfterCut(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	s := &session.Session{
+		JobID:      "job",
+		Material:   &model.LiveMaterial{LiveURL: "https://example.com/live.mp4"},
+		StagingDir: staging,
+		RecordDir:  filepath.Join(root, "record"),
+		Clips:      []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+	}
+	p := NewPipeline(mockDownloader{}, &mockCutter{}, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "source.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("source.mp4 should be removed after cut, stat err = %v", err)
+	}
+	if len(s.ClipPaths) != 1 {
+		t.Fatalf("ClipPaths = %d, want 1", len(s.ClipPaths))
+	}
+	if _, err := os.Stat(s.ClipPaths[0]); err != nil {
+		t.Fatalf("clip file missing: %v", err)
+	}
+	if s.SourcePath != "" {
+		t.Errorf("SourcePath = %q, want empty after delete", s.SourcePath)
+	}
+}
+
 func TestPipeline_CutClips_FastWhenOver10Min(t *testing.T) {
 	cutter := &mockCutter{}
 	runCutPipeline(t, []model.ClipRange{

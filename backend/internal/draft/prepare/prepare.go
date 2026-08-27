@@ -79,8 +79,12 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 
 	s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
 	if _, err := p.Downloader.Download(ctx, s.Material.LiveURL, s.SourcePath); err != nil {
+		_ = os.Remove(s.SourcePath)
+		s.SourcePath = ""
 		return fmt.Errorf("下载直播视频失败: %w", err)
 	}
+	// 后续步骤只使用 clip_XXX.mp4；源文件往往数 GB，裁剪结束后立即删除以免占满磁盘。
+	defer p.removeDownloadedSource(s)
 
 	s.ReportProgress(25)
 
@@ -91,6 +95,29 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ClipPaths = paths
 	s.ReportProgress(50)
 	return nil
+}
+
+// removeDownloadedSource 删除 prepare 下载的全量直播源；文件不存在时忽略。
+func (p *Pipeline) removeDownloadedSource(s *session.Session) {
+	if s == nil || s.SourcePath == "" {
+		return
+	}
+	path := s.SourcePath
+	if err := os.Remove(path); err != nil {
+		if !os.IsNotExist(err) {
+			p.Logger.Warn("删除直播源文件失败",
+				zap.String("job_id", s.JobID),
+				zap.String("path", path),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	p.Logger.Info("已删除直播源文件",
+		zap.String("job_id", s.JobID),
+		zap.String("path", path),
+	)
+	s.SourcePath = ""
 }
 
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {

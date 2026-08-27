@@ -248,8 +248,11 @@ func TestDraftWorker_Process_Success(t *testing.T) {
 		t.Errorf("CreateDraft size = %dx%d", capcut.lastWidth, capcut.lastHeight)
 	}
 	staging := filepath.Join(webRoot, "staging", claimed.ID)
-	if _, err := os.Stat(filepath.Join(staging, "source.mp4")); err != nil {
-		t.Errorf("source.mp4 missing: %v", err)
+	if _, err := os.Stat(filepath.Join(staging, "source.mp4")); !os.IsNotExist(err) {
+		t.Errorf("source.mp4 should be removed after cut, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "clip_000.mp4")); err != nil {
+		t.Errorf("clip_000.mp4 missing: %v", err)
 	}
 }
 
