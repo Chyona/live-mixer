@@ -2,6 +2,8 @@ package utils
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDownloadFile_ToDirectory(t *testing.T) {
@@ -278,3 +281,40 @@ func parseRangeOffset(r *http.Request) int {
 	}
 	return start
 }
+
+func TestDownloadFileWithConfigContext_Canceled(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected flusher")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+		flusher.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(5 * time.Second):
+			_, _ = w.Write([]byte("-rest"))
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	dest := filepath.Join(t.TempDir(), "canceled.bin")
+	_, err := DownloadFileWithConfigContext(ctx, server.URL, dest, DownloadConfig{MaxRetries: 0})
+	if err == nil {
+		t.Fatal("expected cancel error")
+	}
+	if !errorsIsCanceled(ctx, err) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want canceled", err)
+	}
+}
+

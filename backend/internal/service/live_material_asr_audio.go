@@ -26,7 +26,7 @@ const (
 
 // FileDownloader 下载远程文件到本地的抽象，便于单元测试注入 mock。
 type FileDownloader interface {
-	Download(url, dest string) (string, error)
+	Download(ctx context.Context, url, dest string) (string, error)
 }
 
 // AudioConverter 将媒体文件转为 ASR 适用标准 MP3 的抽象（支持时间轴对齐）。
@@ -42,8 +42,10 @@ type ObjectUploader interface {
 // utilsFileDownloader 使用 internal/pkg/utils 的默认下载实现（无日志）。
 type utilsFileDownloader struct{}
 
-func (utilsFileDownloader) Download(url, dest string) (string, error) {
-	return utils.DownloadFile(url, dest)
+func (utilsFileDownloader) Download(ctx context.Context, url, dest string) (string, error) {
+	return utils.DownloadFileWithConfigContext(ctx, url, dest, utils.DownloadConfig{
+		MaxRetries: utils.DefaultDownloadMaxRetries,
+	})
 }
 
 // ASRAudioPrepareResult ASR 音频预处理结果（含可选分辨率探测）。
@@ -148,7 +150,7 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		zap.String("source_url", sourceURL),
 		zap.String("dest", sourcePath),
 	)
-	if _, err := p.downloader.Download(sourceURL, sourcePath); err != nil {
+	if _, err := p.downloader.Download(ctx, sourceURL, sourcePath); err != nil {
 		cleanup()
 		return empty, fmt.Errorf("下载直播素材失败: %w", err)
 	}

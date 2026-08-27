@@ -140,14 +140,18 @@ func applyTaskListFilter(query *gorm.DB, filter TaskListFilter) *gorm.DB {
 // 关键流程：
 //  1. 按 created_at ASC 取出一条 pending（不持有行锁，多实例可并发读到同一行）；
 //  2. UPDATE ... WHERE id=? AND status=pending AND version=?，成功则 version+1；
-//  3. RowsAffected=0 表示被其它 Worker 抢先，继续尝试下一条，避免误判队列为空。
+//  3. RowsAffected=0 表示被其它 Worker 抢先，将该 id 加入排除集后改抢下一条，
+//     避免反复撞同一行导致后面的 pending 饿死。
 func (r *taskRepository) ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error) {
+	tried := make(map[string]struct{})
 	for attempt := 0; attempt < claimOptimisticMaxAttempts; attempt++ {
 		var task model.Task
-		err := r.db.WithContext(ctx).
-			Where("status = ? AND type = ?", model.TaskStatusPending, taskType).
-			Order("created_at ASC, id ASC").
-			First(&task).Error
+		query := r.db.WithContext(ctx).
+			Where("status = ? AND type = ?", model.TaskStatusPending, taskType)
+		if len(tried) > 0 {
+			query = query.Where("id NOT IN ?", stringSetKeys(tried))
+		}
+		err := query.Order("created_at ASC, id ASC").First(&task).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -171,7 +175,8 @@ func (r *taskRepository) ClaimPendingByType(ctx context.Context, taskType string
 			return nil, result.Error
 		}
 		if result.RowsAffected == 0 {
-			// 乐观锁冲突：该任务已被其它实例抢走，继续抢下一条。
+			// 乐观锁冲突：跳过该行改抢下一条，避免反复撞同一条导致后面的 pending 饿死。
+			tried[task.ID] = struct{}{}
 			continue
 		}
 

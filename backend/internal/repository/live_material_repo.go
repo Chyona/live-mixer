@@ -112,12 +112,14 @@ func (r *liveMaterialRepository) UpdateNameRemark(ctx context.Context, material 
 //  2. UPDATE ... WHERE id=? AND asr_status=pending AND asr_version=?；
 //  3. 冲突则继续尝试下一条，避免误判队列为空。
 func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error) {
+	tried := make(map[uint]struct{})
 	for attempt := 0; attempt < claimOptimisticMaxAttempts; attempt++ {
 		var material model.LiveMaterial
-		err := r.db.WithContext(ctx).
-			Where("asr_status = ?", model.ASRStatusPending).
-			Order("created_at ASC, id ASC").
-			First(&material).Error
+		query := r.db.WithContext(ctx).Where("asr_status = ?", model.ASRStatusPending)
+		if len(tried) > 0 {
+			query = query.Where("id NOT IN ?", uintSetKeys(tried))
+		}
+		err := query.Order("created_at ASC, id ASC").First(&material).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -143,7 +145,8 @@ func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.Li
 			return nil, result.Error
 		}
 		if result.RowsAffected == 0 {
-			// 乐观锁冲突：已被其它实例抢走，继续抢下一条。
+			// 乐观锁冲突：跳过该行改抢下一条，避免反复撞同一条导致后面的 pending 饿死。
+			tried[material.ID] = struct{}{}
 			continue
 		}
 

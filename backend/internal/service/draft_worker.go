@@ -104,16 +104,13 @@ func NewDraftWorker(deps DraftWorkerDeps) DraftWorker {
 		concurrency:      concurrency,
 		pollInterval:     draftPollInterval,
 		staleTimeout:     staleTimeout,
-		wake:             make(chan struct{}, 1),
+		wake:             newWakeChan(concurrency),
 	}
 }
 
 // Enqueue 非阻塞唤醒调度器。
 func (w *draftWorker) Enqueue() {
-	select {
-	case w.wake <- struct{}{}:
-	default:
-	}
+	enqueueWake(w.wake, w.concurrency)
 }
 
 // Start 启动并发领取循环与定时 poll。
@@ -193,12 +190,14 @@ func (w *draftWorker) drain(ctx context.Context, workerID int) {
 			zap.String("task_id", task.ID),
 			zap.Int64("version", task.Version),
 		)
-		if err := w.Process(ctx, task); err != nil {
-			w.logger.Error("剪映草稿任务执行失败",
-				zap.String("task_id", task.ID),
-				zap.Error(err),
-			)
-		}
+		runClaimedWork(ctx, w.logger, "draft", workerID, task.ID, w.staleTimeout,
+			func(taskCtx context.Context) error {
+				return w.Process(taskCtx, task)
+			},
+			func(failCtx context.Context, failErr error) {
+				_ = w.taskRepo.MarkFailed(failCtx, task.ID, task.Progress, failErr.Error())
+			},
+		)
 	}
 }
 

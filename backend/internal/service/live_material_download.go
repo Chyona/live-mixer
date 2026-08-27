@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -37,7 +38,7 @@ func NewFileDownloader(logger *zap.Logger, rewriter *urlrewrite.Rewriter) FileDo
 	return newLoggingResumableDownloader(logger, rewriter)
 }
 
-func (d rewritingDownloader) Download(url, dest string) (string, error) {
+func (d rewritingDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	downloadURL := url
 	if rewritten, ok := d.rewriter.Rewrite(url); ok {
 		downloadURL = rewritten
@@ -46,16 +47,16 @@ func (d rewritingDownloader) Download(url, dest string) (string, error) {
 			zap.String("download_url", downloadURL),
 		)
 	}
-	return d.inner.Download(downloadURL, dest)
+	return d.inner.Download(ctx, downloadURL, dest)
 }
 
-func (d loggingResumableDownloader) Download(url, dest string) (string, error) {
+func (d loggingResumableDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	d.logger.Info("开始下载远程文件",
 		zap.String("url", url),
 		zap.String("dest", dest),
 	)
 
-	savedPath, err := utils.DownloadFileWithConfig(url, dest, utils.DownloadConfig{
+	savedPath, err := utils.DownloadFileWithConfigContext(ctx, url, dest, utils.DownloadConfig{
 		MaxRetries: utils.DefaultDownloadMaxRetries,
 		OnRetry: func(attempt, maxAttempts int, retryErr error, resumeOffset int64) {
 			d.logger.Warn("远程文件下载失败，将从断点重试",

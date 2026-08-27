@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,7 +24,7 @@ func TestLoggingResumableDownloader_Success(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	downloader := NewFileDownloader(logger, nil)
 
-	got, err := downloader.Download(server.URL, dest)
+	got, err := downloader.Download(context.Background(), server.URL, dest)
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
@@ -54,7 +55,7 @@ func TestLoggingResumableDownloader_RetryUsesResume(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "retry.bin")
 	downloader := NewFileDownloader(zap.NewNop(), nil)
 
-	_, err := downloader.Download(server.URL, dest)
+	_, err := downloader.Download(context.Background(), server.URL, dest)
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
@@ -75,7 +76,7 @@ type mockInnerDownloader struct {
 	lastURL string
 }
 
-func (m *mockInnerDownloader) Download(url, dest string) (string, error) {
+func (m *mockInnerDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	m.lastURL = url
 	return dest, nil
 }
@@ -91,7 +92,7 @@ func TestRewritingDownloader_RewritesURL(t *testing.T) {
 
 	raw := "https://arkclaw-wxbpd.tos-cn-shanghai.volces.com/live/source.mp4"
 	dest := filepath.Join(t.TempDir(), "source.mp4")
-	if _, err := d.Download(raw, dest); err != nil {
+	if _, err := d.Download(context.Background(), raw, dest); err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
 	want := "https://arkclaw-wxbpd.tos-cn-shanghai.ivolces.com/live/source.mp4"

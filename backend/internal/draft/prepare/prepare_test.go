@@ -103,7 +103,7 @@ func (m *mockCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputP
 
 type mockDownloader struct{}
 
-func (mockDownloader) Download(url, dest string) (string, error) {
+func (mockDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}

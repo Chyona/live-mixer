@@ -14,7 +14,7 @@ type mockFileDownloader struct {
 	downloadFn func(url, dest string) (string, error)
 }
 
-func (m *mockFileDownloader) Download(url, dest string) (string, error) {
+func (m *mockFileDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	return m.downloadFn(url, dest)
 }
 

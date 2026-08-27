@@ -75,16 +75,13 @@ func NewAISliceDraftWorker(
 		concurrency:      concurrency,
 		pollInterval:     aiSliceDraftPollInterval,
 		staleTimeout:     staleTimeout,
-		wake:             make(chan struct{}, 1),
+		wake:             newWakeChan(concurrency),
 	}
 }
 
-// Enqueue 非阻塞唤醒调度器。
+// Enqueue 非阻塞唤醒调度器（尽量唤醒全部空闲 Worker，避免批量创建后只有 1 个开始干活）。
 func (w *aiSliceDraftWorker) Enqueue() {
-	select {
-	case w.wake <- struct{}{}:
-	default:
-	}
+	enqueueWake(w.wake, w.concurrency)
 }
 
 // Start 启动并发领取循环与定时 poll，并在启动时立即回收孤儿 processing 任务。
@@ -167,12 +164,14 @@ func (w *aiSliceDraftWorker) drain(ctx context.Context, workerID int) {
 			zap.String("task_id", task.ID),
 			zap.Int64("version", task.Version),
 		)
-		if err := w.Process(ctx, task); err != nil {
-			w.logger.Error("一键成片任务执行失败",
-				zap.String("task_id", task.ID),
-				zap.Error(err),
-			)
-		}
+		runClaimedWork(ctx, w.logger, "ai_slice_draft", workerID, task.ID, w.staleTimeout,
+			func(taskCtx context.Context) error {
+				return w.Process(taskCtx, task)
+			},
+			func(failCtx context.Context, failErr error) {
+				_ = w.taskRepo.MarkFailed(failCtx, task.ID, task.Progress, failErr.Error())
+			},
+		)
 	}
 }
 

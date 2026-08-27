@@ -100,7 +100,7 @@ type mockDraftDownloader struct {
 	err error
 }
 
-func (m *mockDraftDownloader) Download(url, dest string) (string, error) {
+func (m *mockDraftDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	if m.err != nil {
 		return "", m.err
 	}

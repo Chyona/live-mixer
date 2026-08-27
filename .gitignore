@@ -55,3 +55,4 @@ frontend/.vite/
 # frontend/mock/_Live_URL.ts
 /backend/*.exe
 /backend/internal/config/config.yaml
+/docs

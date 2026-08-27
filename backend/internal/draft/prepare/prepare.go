@@ -24,7 +24,7 @@ const (
 
 // FileDownloader 下载远程文件到本地的抽象。
 type FileDownloader interface {
-	Download(url, dest string) (string, error)
+	Download(ctx context.Context, url, dest string) (string, error)
 }
 
 // VideoSegmentCutter 视频裁剪抽象：精确重编码或关键帧快速拷贝。
@@ -78,7 +78,7 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ReportProgress(15)
 
 	s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
-	if _, err := p.Downloader.Download(s.Material.LiveURL, s.SourcePath); err != nil {
+	if _, err := p.Downloader.Download(ctx, s.Material.LiveURL, s.SourcePath); err != nil {
 		return fmt.Errorf("下载直播视频失败: %w", err)
 	}
 

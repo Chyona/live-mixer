@@ -526,10 +526,13 @@ func TestLiveMaterialASRWorker_Process_FallbackWithoutPreparer(t *testing.T) {
 func TestLiveMaterialASRWorker_Enqueue_NonBlockingAndCoalesced(t *testing.T) {
 	w := NewLiveMaterialASRWorker(&workerMockRepo{materials: map[uint]*model.LiveMaterial{}}, &workerMockASR{}, nil, nil, nil, 0, 0, webroot.Config{}).(*liveMaterialASRWorker)
 	w.Enqueue()
+	if got := len(w.wake); got != w.concurrency {
+		t.Fatalf("wake queue len = %d, want %d", got, w.concurrency)
+	}
 	w.Enqueue()
 	w.Enqueue()
-	if got := len(w.wake); got != 1 {
-		t.Fatalf("wake queue len = %d, want 1", got)
+	if got := len(w.wake); got != w.concurrency {
+		t.Fatalf("wake queue still non-blocking, len = %d, want %d", got, w.concurrency)
 	}
 }
 

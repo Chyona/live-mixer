@@ -84,17 +84,13 @@ func NewLiveMaterialASRWorker(
 		concurrency:   concurrency,
 		pollInterval:  liveMaterialASRPollInterval,
 		staleTimeout:  staleTimeout,
-		wake:          make(chan struct{}, 1),
+		wake:          newWakeChan(concurrency),
 	}
 }
 
 // Enqueue 非阻塞唤醒调度器，创建/重试后调用以尽快领取。
 func (w *liveMaterialASRWorker) Enqueue() {
-	select {
-	case w.wake <- struct{}{}:
-	default:
-		// 已有唤醒信号在队列中，无需重复投递。
-	}
+	enqueueWake(w.wake, w.concurrency)
 }
 
 // Start 启动若干并发领取循环 + 定时 poll，并在启动时立即回收孤儿 processing 任务。
@@ -177,12 +173,16 @@ func (w *liveMaterialASRWorker) drain(ctx context.Context, workerID int) {
 			zap.Uint("material_id", material.ID),
 			zap.Int64("asr_version", material.ASRVersion),
 		)
-		if err := w.Process(ctx, material); err != nil {
-			w.logger.Error("直播素材 ASR 任务执行失败",
-				zap.Uint("material_id", material.ID),
-				zap.Error(err),
-			)
-		}
+		materialID := material.ID
+		asrVersion := material.ASRVersion
+		runClaimedWork(ctx, w.logger, "asr", workerID, fmt.Sprintf("%d", materialID), w.staleTimeout,
+			func(taskCtx context.Context) error {
+				return w.Process(taskCtx, material)
+			},
+			func(failCtx context.Context, failErr error) {
+				_ = w.repo.UpdateASRFailed(failCtx, materialID, asrVersion, 0, failErr.Error())
+			},
+		)
 	}
 }
 

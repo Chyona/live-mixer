@@ -2,8 +2,10 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -118,6 +120,15 @@ func DownloadFileWithRetry(urlStr, dest string, maxRetries int) (string, error) 
 
 // DownloadFileWithConfig 按配置下载文件；固定文件路径时支持断点续传，目录模式每次失败后全量重试。
 func DownloadFileWithConfig(urlStr, dest string, cfg DownloadConfig) (string, error) {
+	return DownloadFileWithConfigContext(context.Background(), urlStr, dest, cfg)
+}
+
+// DownloadFileWithConfigContext 按配置下载文件，并在 ctx 取消时中止传输。
+// 固定文件路径时支持断点续传，目录模式每次失败后全量重试。
+func DownloadFileWithConfigContext(ctx context.Context, urlStr, dest string, cfg DownloadConfig) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	maxRetries := cfg.MaxRetries
 	if maxRetries < 0 {
 		maxRetries = 0
@@ -125,13 +136,13 @@ func DownloadFileWithConfig(urlStr, dest string, cfg DownloadConfig) (string, er
 	maxAttempts := 1 + maxRetries
 
 	if isSaveDir(dest) {
-		return downloadToDirectoryWithRetry(urlStr, dest, maxAttempts, cfg)
+		return downloadToDirectoryWithRetry(ctx, urlStr, dest, maxAttempts, cfg)
 	}
-	return downloadToFileWithRetry(urlStr, dest, maxAttempts, cfg)
+	return downloadToFileWithRetry(ctx, urlStr, dest, maxAttempts, cfg)
 }
 
 // downloadToFileWithRetry 下载到固定文件路径，失败后保留局部文件并从断点续传。
-func downloadToFileWithRetry(urlStr, savePath string, maxAttempts int, cfg DownloadConfig) (string, error) {
+func downloadToFileWithRetry(ctx context.Context, urlStr, savePath string, maxAttempts int, cfg DownloadConfig) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(savePath), 0755); err != nil {
 		return "", fmt.Errorf("create directory failed: %v", err)
 	}
@@ -139,9 +150,12 @@ func downloadToFileWithRetry(urlStr, savePath string, maxAttempts int, cfg Downl
 	client := cfg.downloadClient()
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		lastErr = downloadOnceToFile(client, urlStr, savePath)
+		lastErr = downloadOnceToFile(ctx, client, urlStr, savePath)
 		if lastErr == nil {
 			return savePath, nil
+		}
+		if errorsIsCanceled(ctx, lastErr) {
+			return "", lastErr
 		}
 		if attempt < maxAttempts {
 			offset, _ := existingFileSize(savePath)
@@ -154,14 +168,14 @@ func downloadToFileWithRetry(urlStr, savePath string, maxAttempts int, cfg Downl
 }
 
 // downloadOnceToFile 执行一次下载尝试；若本地已有部分数据则通过 Range 请求续传。
-func downloadOnceToFile(client *http.Client, urlStr, savePath string) error {
+func downloadOnceToFile(ctx context.Context, client *http.Client, urlStr, savePath string) error {
 	offset, err := existingFileSize(savePath)
 	if err != nil {
 		return err
 	}
 
 	for restartFull := 0; restartFull < 2; restartFull++ {
-		req, err := http.NewRequest(http.MethodGet, urlStr, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 		if err != nil {
 			return fmt.Errorf("create request failed: %v", err)
 		}
@@ -260,7 +274,7 @@ func existingFileSize(path string) (int64, error) {
 }
 
 // downloadToDirectoryWithRetry 下载到目录；目录模式无法稳定断点续传，失败后删除半成品并全量重试。
-func downloadToDirectoryWithRetry(urlStr, dest string, maxAttempts int, cfg DownloadConfig) (string, error) {
+func downloadToDirectoryWithRetry(ctx context.Context, urlStr, dest string, maxAttempts int, cfg DownloadConfig) (string, error) {
 	var (
 		savePath string
 		lastErr  error
@@ -270,9 +284,12 @@ func downloadToDirectoryWithRetry(urlStr, dest string, maxAttempts int, cfg Down
 		if savePath != "" {
 			_ = os.Remove(savePath)
 		}
-		savePath, lastErr = downloadOnceToDirectory(client, urlStr, dest)
+		savePath, lastErr = downloadOnceToDirectory(ctx, client, urlStr, dest)
 		if lastErr == nil {
 			return savePath, nil
+		}
+		if errorsIsCanceled(ctx, lastErr) {
+			return "", lastErr
 		}
 		if attempt < maxAttempts && cfg.OnRetry != nil {
 			cfg.OnRetry(attempt, maxAttempts, lastErr, 0)
@@ -282,8 +299,8 @@ func downloadToDirectoryWithRetry(urlStr, dest string, maxAttempts int, cfg Down
 }
 
 // downloadOnceToDirectory 执行一次目录下载（非断点续传）。
-func downloadOnceToDirectory(client *http.Client, urlStr, dest string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, urlStr, nil)
+func downloadOnceToDirectory(ctx context.Context, client *http.Client, urlStr, dest string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return "", fmt.Errorf("create request failed: %v", err)
 	}
@@ -422,4 +439,14 @@ func getFileExtension(contentType, urlStr string, peekBytes []byte) (string, err
 	}
 
 	return ".bin", nil
+}
+
+func errorsIsCanceled(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
