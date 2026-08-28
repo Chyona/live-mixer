@@ -198,3 +198,57 @@ func TestCleanupASRStaging_RejectsInvalidArgs(t *testing.T) {
 		t.Fatal("non-positive keep should error")
 	}
 }
+
+func TestCleanupSourceCache_KeepsNewestDirs(t *testing.T) {
+	root := t.TempDir()
+	cacheRoot := filepath.Join(root, "staging", SourceCacheSubDir)
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Now().Add(-10 * time.Hour)
+	dirs := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		path := filepath.Join(cacheRoot, fmt.Sprintf("hash-%d", i))
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "source.mp4"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := base.Add(time.Duration(i) * time.Hour)
+		if err := os.Chtimes(path, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		dirs[i] = path
+	}
+
+	removed, err := CleanupSourceCache(root, 3)
+	if err != nil {
+		t.Fatalf("CleanupSourceCache error = %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	for i, path := range dirs {
+		_, statErr := os.Stat(path)
+		if i < 2 {
+			if !os.IsNotExist(statErr) {
+				t.Fatalf("old cache dir %s should be removed", path)
+			}
+			continue
+		}
+		if statErr != nil {
+			t.Fatalf("new cache dir %s missing: %v", path, statErr)
+		}
+	}
+}
+
+func TestCleanupSourceCache_RejectsInvalidArgs(t *testing.T) {
+	if _, err := CleanupSourceCache("", 3); err == nil {
+		t.Fatal("empty rootDir should error")
+	}
+	if _, err := CleanupSourceCache(t.TempDir(), 0); err == nil {
+		t.Fatal("non-positive keep should error")
+	}
+}

@@ -86,6 +86,8 @@ type WebConfig struct {
 	StagingMaxDirs int `mapstructure:"staging_max_dirs"`
 	// ASRStagingMaxDirs staging/asr 下最多保留的 ASR 调试子目录数（按 mtime 保留最新）；默认 20。
 	ASRStagingMaxDirs int `mapstructure:"asr_staging_max_dirs"`
+	// SourceCacheMaxDirs staging/source_cache 下最多保留的直播源缓存数（按 mtime 保留最近命中）；默认 3。
+	SourceCacheMaxDirs int `mapstructure:"source_cache_max_dirs"`
 	// StagingCleanupIntervalMin staging 清理任务执行间隔（分钟）；默认 60。
 	StagingCleanupIntervalMin int `mapstructure:"staging_cleanup_interval_min"`
 }
@@ -273,6 +275,9 @@ const DefaultStagingMaxDirs = 80
 // DefaultASRStagingMaxDirs staging/asr 下默认最多保留的 ASR 调试子目录数。
 const DefaultASRStagingMaxDirs = 20
 
+// DefaultSourceCacheMaxDirs staging/source_cache 下默认最多保留的直播源缓存数。
+const DefaultSourceCacheMaxDirs = 3
+
 // DefaultStagingCleanupIntervalMin staging 清理任务默认执行间隔（分钟）。
 const DefaultStagingCleanupIntervalMin = 60
 
@@ -385,6 +390,9 @@ func normalizeWebConfig(w *WebConfig) {
 	}
 	if w.ASRStagingMaxDirs <= 0 {
 		w.ASRStagingMaxDirs = DefaultASRStagingMaxDirs
+	}
+	if w.SourceCacheMaxDirs <= 0 {
+		w.SourceCacheMaxDirs = DefaultSourceCacheMaxDirs
 	}
 	if w.StagingCleanupIntervalMin <= 0 {
 		w.StagingCleanupIntervalMin = DefaultStagingCleanupIntervalMin
@@ -627,6 +635,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_WEB_ASR_STAGING_MAX_DIRS"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Web.ASRStagingMaxDirs = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WEB_SOURCE_CACHE_MAX_DIRS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Web.SourceCacheMaxDirs = n
 		}
 	}
 	if val, ok := os.LookupEnv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN"); ok {

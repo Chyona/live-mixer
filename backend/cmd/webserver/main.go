@@ -193,6 +193,20 @@ func main() {
 			}
 		},
 	})
+	sched.Register(scheduler.Job{
+		Name:     "cleanup-source-cache",
+		Interval: cfg.Web.StagingCleanupInterval(),
+		Run: func(context.Context) {
+			removed, cleanErr := webroot.CleanupSourceCache(cfg.Web.RootDir, cfg.Web.SourceCacheMaxDirs)
+			if cleanErr != nil {
+				logger.Warn("清理直播源缓存失败", zap.Error(cleanErr), zap.Int("removed", removed))
+				return
+			}
+			if removed > 0 {
+				logger.Info("已清理过期直播源缓存", zap.Int("removed", removed))
+			}
+		},
+	})
 	sched.Start(ctx)
 
 	gin.SetMode(cfg.Server.Mode)

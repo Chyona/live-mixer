@@ -80,12 +80,27 @@ func TestCachingDownloader_HitCacheSkipsDownload(t *testing.T) {
 	if _, err := d.Download(context.Background(), "https://example.com/a.mp4", dest1); err != nil {
 		t.Fatalf("first Download() error = %v", err)
 	}
+	// 人为把缓存目录改成更旧，命中后应刷新 mtime。
+	key := sourceCacheKey("https://example.com/a.mp4")
+	cacheEntry := filepath.Join(cacheDir, key)
+	old := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(cacheEntry, old, old); err != nil {
+		t.Fatal(err)
+	}
+
 	dest2 := filepath.Join(root, "t2", "source.mp4")
 	if _, err := d.Download(context.Background(), "https://example.com/a.mp4", dest2); err != nil {
 		t.Fatalf("second Download() error = %v", err)
 	}
 	if got := inner.calls.Load(); got != 1 {
 		t.Fatalf("inner downloads = %d, want 1", got)
+	}
+	info, err := os.Stat(cacheEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ModTime().Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("cache entry mtime should be refreshed on hit, got %v", info.ModTime())
 	}
 }
 

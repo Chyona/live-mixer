@@ -45,6 +45,18 @@ func CleanupASRStaging(rootDir string, keep int) (removed int, err error) {
 	return cleanupStagingChildren(filepath.Join(rootDir, "staging", ASRStagingSubDir), keep, nil)
 }
 
+// CleanupSourceCache 将 rootDir/staging/source_cache 下一级子目录按 mtime 降序保留最多 keep 个。
+// 命中缓存时会刷新目录 mtime，因此「最近使用」的源会留在保留集内；正在下载的目录因写入也会更新 mtime。
+func CleanupSourceCache(rootDir string, keep int) (removed int, err error) {
+	if rootDir == "" {
+		return 0, fmt.Errorf("rootDir 为空")
+	}
+	if keep <= 0 {
+		return 0, fmt.Errorf("keep 必须为正：%d", keep)
+	}
+	return cleanupStagingChildren(filepath.Join(rootDir, "staging", SourceCacheSubDir), keep, nil)
+}
+
 // cleanupStagingChildren 清理 parentDir 下一级子目录，按 mtime 保留最新 keep 个。
 // skipNames 中的一级子目录不计入配额、不删除。
 func cleanupStagingChildren(parentDir string, keep int, skipNames map[string]struct{}) (removed int, err error) {

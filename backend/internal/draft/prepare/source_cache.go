@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
@@ -61,6 +62,7 @@ func (d *CachingDownloader) ensureCached(ctx context.Context, url string) (strin
 	key := sourceCacheKey(url)
 	cachePath := filepath.Join(d.CacheDir, key, "source.mp4")
 	if st, err := os.Stat(cachePath); err == nil && st.Size() > 0 {
+		touchCacheEntry(cachePath)
 		d.Logger.Info("命中直播源缓存",
 			zap.String("url", url),
 			zap.String("cache_path", cachePath),
@@ -71,6 +73,7 @@ func (d *CachingDownloader) ensureCached(ctx context.Context, url string) (strin
 
 	v, err, _ := d.group.Do(key, func() (any, error) {
 		if st, err := os.Stat(cachePath); err == nil && st.Size() > 0 {
+			touchCacheEntry(cachePath)
 			return cachePath, nil
 		}
 		if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
@@ -91,6 +94,7 @@ func (d *CachingDownloader) ensureCached(ctx context.Context, url string) (strin
 			_ = os.Remove(tmpPath)
 			return "", fmt.Errorf("提交源缓存失败: %w", err)
 		}
+		touchCacheEntry(cachePath)
 		st, _ := os.Stat(cachePath)
 		size := int64(0)
 		if st != nil {
@@ -114,12 +118,21 @@ func (d *CachingDownloader) ensureCached(ctx context.Context, url string) (strin
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
+	// 等待方也刷新 mtime，避免「只下载、从未单独命中」的条目被误淘汰。
+	touchCacheEntry(path)
 	return path, nil
 }
 
 func sourceCacheKey(url string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(url)))
 	return hex.EncodeToString(sum[:16])
+}
+
+// touchCacheEntry 刷新缓存文件及其目录 mtime，供「保留最近 K 场」淘汰使用。
+func touchCacheEntry(cachePath string) {
+	now := time.Now()
+	_ = os.Chtimes(cachePath, now, now)
+	_ = os.Chtimes(filepath.Dir(cachePath), now, now)
 }
 
 // materializeCachedSource 优先硬链接，失败则拷贝到任务目录。
