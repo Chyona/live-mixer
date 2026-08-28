@@ -52,6 +52,9 @@ type ASRAlignOptions struct {
 
 // AlignOptions 根据探测结果计算 ASR MP3 对齐参数。
 // 参考起点取视频 start_time（无视频则为 0）；目标时长优先视频 duration，其次容器，再次音频。
+//
+// 异常音视频 start_time 差（常见于损坏/半成品 MP4、多路时间戳）会导致 LeadPad 接近整段时长，
+// 再叠加 -t 封口后输出几乎全是静音，豆包 ASR 会返回 20000003。过大偏移时放弃 pad/trim。
 func (t MediaTimeline) AlignOptions() ASRAlignOptions {
 	refStart := 0.0
 	if t.HasVideo {
@@ -74,10 +77,27 @@ func (t MediaTimeline) AlignOptions() ASRAlignOptions {
 	}
 
 	delta := t.AudioStartSec - refStart
+	const maxAlignSkewSec = 30.0
+	if math.Abs(delta) > maxAlignSkewSec {
+		// 偏移过大：宁可时间轴略偏，也不要产出「整段静音」MP3。
+		return opts
+	}
 	if delta > 0 {
 		opts.LeadPadMs = int64(math.Round(delta * 1000))
 	} else if delta < 0 {
 		opts.TrimStartSec = -delta
+	}
+
+	// LeadPad 若已覆盖目标时长，-t 截断后整段都是静音。
+	if opts.TargetDurSec > 0 && opts.LeadPadMs > 0 {
+		targetMS := int64(math.Round(opts.TargetDurSec * 1000))
+		if opts.LeadPadMs >= targetMS {
+			opts.LeadPadMs = 0
+		}
+	}
+	// Trim 超过音轨时长会抽空内容。
+	if opts.TrimStartSec > 0 && t.AudioDurationSec > 0 && opts.TrimStartSec >= t.AudioDurationSec {
+		opts.TrimStartSec = 0
 	}
 	return opts
 }

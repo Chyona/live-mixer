@@ -132,6 +132,85 @@ func (c *FFmpegConverter) resolvedMP3Bitrate() string {
 	return DefaultASRMP3Bitrate
 }
 
+// AudioLoudness 描述 volumedetect 测得的音量（单位 dB）。
+type AudioLoudness struct {
+	MeanVolumeDB float64
+	MaxVolumeDB  float64
+}
+
+// IsNearSilence 判断是否接近数字静音（ASR 会返回 20000003）。
+// 真实人声直播 max_volume 通常远高于 -40dB；纯静音约为 -91dB。
+func (l AudioLoudness) IsNearSilence() bool {
+	return l.MaxVolumeDB < -40
+}
+
+// ProbeAudioLoudness 使用 ffmpeg volumedetect 探测音频响度。
+func (c *FFmpegConverter) ProbeAudioLoudness(ctx context.Context, inputPath string) (AudioLoudness, error) {
+	binary := c.BinaryPath
+	if strings.TrimSpace(binary) == "" {
+		binary = DefaultFFmpegBinary
+	}
+	args := []string{
+		"-hide_banner",
+		"-i", inputPath,
+		"-af", "volumedetect",
+		"-f", "null",
+		"-",
+	}
+	cmd := exec.CommandContext(ctx, binary, args...)
+	output, err := cmd.CombinedOutput()
+	// volumedetect 写在 stderr；部分环境下退出码非 0 但仍有有效统计。
+	loud, parseErr := parseVolumeDetectOutput(string(output))
+	if parseErr != nil {
+		if err != nil {
+			return AudioLoudness{}, fmt.Errorf("探测音频响度失败: %w, output: %s", err, strings.TrimSpace(string(output)))
+		}
+		return AudioLoudness{}, parseErr
+	}
+	return loud, nil
+}
+
+func parseVolumeDetectOutput(raw string) (AudioLoudness, error) {
+	var (
+		mean, max float64
+		gotMean   bool
+		gotMax    bool
+	)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := parseVolumeDetectField(line, "mean_volume:"); ok {
+			mean = v
+			gotMean = true
+		}
+		if v, ok := parseVolumeDetectField(line, "max_volume:"); ok {
+			max = v
+			gotMax = true
+		}
+	}
+	if !gotMean || !gotMax {
+		return AudioLoudness{}, fmt.Errorf("未解析到 volumedetect 结果")
+	}
+	return AudioLoudness{MeanVolumeDB: mean, MaxVolumeDB: max}, nil
+}
+
+func parseVolumeDetectField(line, key string) (float64, bool) {
+	idx := strings.Index(strings.ToLower(line), key)
+	if idx < 0 {
+		return 0, false
+	}
+	rest := strings.TrimSpace(line[idx+len(key):])
+	rest = strings.TrimSpace(strings.TrimSuffix(rest, "dB"))
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 // CutVideoSegment 按起止秒裁剪视频片段（重编码，帧级精确）。
 // 参考命令：
 //

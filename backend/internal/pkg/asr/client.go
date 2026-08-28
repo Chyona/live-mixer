@@ -25,9 +25,11 @@ const (
 	headerStatusCode = "X-Api-Status-Code"
 	headerMessage    = "X-Api-Message"
 
-	statusSuccess      = "20000000"
-	statusProcessing1  = "20000001"
-	statusProcessing2  = "20000002"
+	statusSuccess     = "20000000"
+	statusProcessing1 = "20000001"
+	statusProcessing2 = "20000002"
+	// statusSilenceAudio 豆包检测到无有效人声（常见于抽轨/对齐产出静音 MP3）。
+	statusSilenceAudio = "20000003"
 	defaultPollInterval = 10 * time.Second
 	defaultMaxPolls     = 360
 )
@@ -148,7 +150,7 @@ func (c *Client) submit(ctx context.Context, taskID, audioURL, format string) er
 
 	code := resp.Header.Get(headerStatusCode)
 	if code != statusSuccess {
-		return fmt.Errorf("ASR 提交失败: %s %s", code, resp.Header.Get(headerMessage))
+		return fmt.Errorf("%s", formatASRStatusError("ASR 提交失败", code, resp.Header.Get(headerMessage)))
 	}
 	return nil
 }
@@ -254,8 +256,24 @@ func (c *Client) queryOnce(ctx context.Context, taskID string) (json.RawMessage,
 	case statusProcessing1, statusProcessing2:
 		return nil, false, nil
 	default:
-		return nil, false, fmt.Errorf("ASR 查询失败: %s %s", code, resp.Header.Get(headerMessage))
+		return nil, false, fmt.Errorf("%s", formatASRStatusError("ASR 查询失败", code, resp.Header.Get(headerMessage)))
 	}
+}
+
+// formatASRStatusError 将豆包状态码转为可读错误；静音音频给出可操作的中文说明。
+func formatASRStatusError(prefix, code, message string) string {
+	msg := strings.TrimSpace(message)
+	if code == statusSilenceAudio {
+		detail := "源音频被识别为静音（无有效人声）"
+		if msg != "" {
+			detail = detail + ": " + msg
+		}
+		return fmt.Sprintf("%s: %s %s；请检查原片是否有人声，或点击重新解析", prefix, code, detail)
+	}
+	if msg == "" {
+		return fmt.Sprintf("%s: %s", prefix, code)
+	}
+	return fmt.Sprintf("%s: %s %s", prefix, code, msg)
 }
 
 func (c *Client) setCommonHeaders(header http.Header, taskID string) {

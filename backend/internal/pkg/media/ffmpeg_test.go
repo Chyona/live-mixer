@@ -10,6 +10,28 @@ import (
 	"testing"
 )
 
+func TestParseVolumeDetectOutput(t *testing.T) {
+	raw := `
+[Parsed_volumedetect_0 @ 0x0] n_samples: 1000
+[Parsed_volumedetect_0 @ 0x0] mean_volume: -18.5 dB
+[Parsed_volumedetect_0 @ 0x0] max_volume: -3.2 dB
+`
+	got, err := parseVolumeDetectOutput(raw)
+	if err != nil {
+		t.Fatalf("parseVolumeDetectOutput() error = %v", err)
+	}
+	if got.MeanVolumeDB != -18.5 || got.MaxVolumeDB != -3.2 {
+		t.Fatalf("got = %+v", got)
+	}
+	if got.IsNearSilence() {
+		t.Fatal("expected not near silence")
+	}
+	silent := AudioLoudness{MeanVolumeDB: -91, MaxVolumeDB: -91}
+	if !silent.IsNearSilence() {
+		t.Fatal("expected near silence")
+	}
+}
+
 func TestBuildASRMP3Args_NoAlign(t *testing.T) {
 	args := buildASRMP3Args(DefaultASRSampleRate, DefaultASRChannels, DefaultASRMP3Bitrate, "/in.mp4", "/out.mp3", ASRAlignOptions{})
 	wantAF := "asetpts=PTS-STARTPTS,aformat=sample_rates=16000:channel_layouts=mono"

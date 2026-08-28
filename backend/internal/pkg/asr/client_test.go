@@ -119,6 +119,34 @@ func TestClient_Transcribe_QueryFailed(t *testing.T) {
 	}
 }
 
+func TestClient_Transcribe_SilenceAudioError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/submit") {
+			w.Header().Set(headerStatusCode, statusSuccess)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set(headerStatusCode, statusSilenceAudio)
+		w.Header().Set(headerMessage, "[Normal silence audio] Handle response: no valid speech in audio")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PollInterval: time.Millisecond,
+		MaxPolls:     2,
+	})
+	_, err := client.Transcribe(context.Background(), "https://example.com/test.mp3")
+	if err == nil {
+		t.Fatal("expected silence error")
+	}
+	if !strings.Contains(err.Error(), "静音") || !strings.Contains(err.Error(), "重新解析") {
+		t.Fatalf("error = %v, want friendly silence message", err)
+	}
+}
+
 // TestClient_Transcribe_QueryTimeoutThenSuccess 单次 query 读超时后应继续轮询并最终成功。
 func TestClient_Transcribe_QueryTimeoutThenSuccess(t *testing.T) {
 	var queryCount atomic.Int32

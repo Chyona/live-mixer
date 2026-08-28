@@ -33,6 +33,7 @@ type FileDownloader interface {
 // AudioConverter 将媒体文件转为 ASR 适用标准 MP3 的抽象（支持时间轴对齐）。
 type AudioConverter interface {
 	ConvertToASRMP3Aligned(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error
+	ProbeAudioLoudness(ctx context.Context, inputPath string) (media.AudioLoudness, error)
 }
 
 // ObjectUploader 上传本地文件到对象存储的抽象。
@@ -178,6 +179,10 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 			)
 		} else {
 			width, height = tl.Width, tl.Height
+			if !tl.HasAudio {
+				cleanup()
+				return empty, fmt.Errorf("源视频未检测到音轨，无法进行 ASR")
+			}
 			align = tl.AlignOptions()
 			p.logger.Info("已探测直播素材时间轴",
 				zap.Uint("material_id", materialID),
@@ -209,9 +214,34 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		cleanup()
 		return empty, fmt.Errorf("转码 ASR MP3 失败: %w", err)
 	}
+	usedAlign := align
+	if silent, loudErr := p.mp3NearSilence(ctx, mp3Path); loudErr != nil {
+		p.logger.Warn("探测 ASR MP3 响度失败，继续提交",
+			zap.Uint("material_id", materialID),
+			zap.Error(loudErr),
+		)
+	} else if silent {
+		// 对齐参数异常时常见「整段片头静音」；放弃对齐重抽一次，避免豆包 20000003。
+		p.logger.Warn("对齐后 MP3 接近静音，放弃时间轴对齐后重试转码",
+			zap.Uint("material_id", materialID),
+			zap.Int64("lead_pad_ms", align.LeadPadMs),
+			zap.Float64("trim_start_sec", align.TrimStartSec),
+			zap.Float64("target_dur_sec", align.TargetDurSec),
+		)
+		_ = os.Remove(mp3Path)
+		if err := p.converter.ConvertToASRMP3Aligned(ctx, sourcePath, mp3Path, media.ASRAlignOptions{}); err != nil {
+			cleanup()
+			return empty, fmt.Errorf("无对齐重试转码 ASR MP3 失败: %w", err)
+		}
+		usedAlign = media.ASRAlignOptions{}
+		if silent2, loudErr2 := p.mp3NearSilence(ctx, mp3Path); loudErr2 == nil && silent2 {
+			cleanup()
+			return empty, fmt.Errorf("源视频音轨无明显语音（接近静音），无法进行 ASR；请检查原片是否有人声或音轨是否损坏")
+		}
+	}
 	report(35)
 
-	p.warnIfDurationMismatch(ctx, materialID, mp3Path, align.TargetDurSec)
+	p.warnIfDurationMismatch(ctx, materialID, mp3Path, usedAlign.TargetDurSec)
 
 	objectKey := buildASRObjectKey(p.objectKeyPrefix, sessionID)
 	p.logger.Info("开始上传 ASR 临时媒体",
@@ -232,9 +262,9 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		zap.String("audio_url", audioURL),
 		zap.Int("width", width),
 		zap.Int("height", height),
-		zap.Int64("lead_pad_ms", align.LeadPadMs),
-		zap.Float64("trim_start_sec", align.TrimStartSec),
-		zap.Float64("target_dur_sec", align.TargetDurSec),
+		zap.Int64("lead_pad_ms", usedAlign.LeadPadMs),
+		zap.Float64("trim_start_sec", usedAlign.TrimStartSec),
+		zap.Float64("target_dur_sec", usedAlign.TargetDurSec),
 	)
 
 	return ASRAudioPrepareResult{
@@ -243,6 +273,22 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		Height:   height,
 		Cleanup:  cleanup,
 	}, nil
+}
+
+func (p *liveMaterialASRAudioPreparer) mp3NearSilence(ctx context.Context, mp3Path string) (bool, error) {
+	if p.converter == nil {
+		return false, nil
+	}
+	loud, err := p.converter.ProbeAudioLoudness(ctx, mp3Path)
+	if err != nil {
+		return false, err
+	}
+	p.logger.Info("ASR MP3 响度探测",
+		zap.String("mp3_path", mp3Path),
+		zap.Float64("mean_volume_db", loud.MeanVolumeDB),
+		zap.Float64("max_volume_db", loud.MaxVolumeDB),
+	)
+	return loud.IsNearSilence(), nil
 }
 
 func (p *liveMaterialASRAudioPreparer) warnIfDurationMismatch(ctx context.Context, materialID uint, mp3Path string, targetDurSec float64) {

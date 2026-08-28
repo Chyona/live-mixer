@@ -219,6 +219,37 @@ func TestMediaTimeline_AlignOptions(t *testing.T) {
 			t.Errorf("TargetDurSec = %v, want 3.2", opts.TargetDurSec)
 		}
 	})
+	t.Run("absurd skew skips pad to avoid silence mp3", func(t *testing.T) {
+		opts := MediaTimeline{
+			HasVideo: true, VideoStartSec: 0, VideoDurationSec: 3600,
+			HasAudio: true, AudioStartSec: 3500, AudioDurationSec: 100,
+		}.AlignOptions()
+		if opts.LeadPadMs != 0 {
+			t.Errorf("LeadPadMs = %d, want 0 when skew > 30s", opts.LeadPadMs)
+		}
+		if opts.TargetDurSec != 3600 {
+			t.Errorf("TargetDurSec = %v, want 3600", opts.TargetDurSec)
+		}
+	})
+	t.Run("lead pad covering whole target is cleared", func(t *testing.T) {
+		opts := MediaTimeline{
+			HasVideo: true, VideoStartSec: 0, VideoDurationSec: 10,
+			HasAudio: true, AudioStartSec: 10, AudioDurationSec: 5,
+		}.AlignOptions()
+		// delta=10s == target → 会整段静音，应清除 pad。
+		if opts.LeadPadMs != 0 {
+			t.Errorf("LeadPadMs = %d, want 0 when pad covers target", opts.LeadPadMs)
+		}
+	})
+	t.Run("trim beyond audio duration is cleared", func(t *testing.T) {
+		opts := MediaTimeline{
+			HasVideo: true, VideoStartSec: 5, VideoDurationSec: 10,
+			HasAudio: true, AudioStartSec: 0, AudioDurationSec: 3,
+		}.AlignOptions()
+		if opts.TrimStartSec != 0 {
+			t.Errorf("TrimStartSec = %v, want 0 when trim >= audio dur", opts.TrimStartSec)
+		}
+	})
 }
 
 func TestFFprobeProber_ProbeMediaTimeline_Success(t *testing.T) {

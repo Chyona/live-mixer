@@ -19,11 +19,20 @@ func (m *mockFileDownloader) Download(ctx context.Context, url, dest string) (st
 }
 
 type mockAudioConverter struct {
-	convertFn func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error
+	convertFn  func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error
+	loudnessFn func(ctx context.Context, inputPath string) (media.AudioLoudness, error)
 }
 
 func (m *mockAudioConverter) ConvertToASRMP3Aligned(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error {
 	return m.convertFn(ctx, inputPath, outputPath, align)
+}
+
+func (m *mockAudioConverter) ProbeAudioLoudness(ctx context.Context, inputPath string) (media.AudioLoudness, error) {
+	if m.loudnessFn != nil {
+		return m.loudnessFn(ctx, inputPath)
+	}
+	// 默认视为有人声，避免单测误走静音重试分支。
+	return media.AudioLoudness{MeanVolumeDB: -20, MaxVolumeDB: -5}, nil
 }
 
 type mockObjectUploader struct {
@@ -238,6 +247,66 @@ func TestLiveMaterialASRAudioPreparer_Prepare_ConvertFailed(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "转码 ASR MP3 失败") {
 		t.Fatalf("Prepare() error = %v, want convert failure", err)
+	}
+}
+
+func TestLiveMaterialASRAudioPreparer_Prepare_RetryWithoutAlignOnSilence(t *testing.T) {
+	convertCalls := 0
+	loudnessCalls := 0
+	preparer := NewLiveMaterialASRAudioPreparer(
+		&mockFileDownloader{
+			downloadFn: func(url, dest string) (string, error) {
+				return dest, os.WriteFile(dest, []byte("src"), 0644)
+			},
+		},
+		&mockAudioConverter{
+			convertFn: func(ctx context.Context, inputPath, outputPath string, align media.ASRAlignOptions) error {
+				convertCalls++
+				if convertCalls == 1 && align.LeadPadMs == 0 && align.TargetDurSec == 0 {
+					t.Fatalf("first convert should use probed align, got %+v", align)
+				}
+				if convertCalls == 2 && (align.LeadPadMs != 0 || align.TrimStartSec != 0 || align.TargetDurSec != 0) {
+					t.Fatalf("second convert should clear align, got %+v", align)
+				}
+				return os.WriteFile(outputPath, []byte("mp3"), 0644)
+			},
+			loudnessFn: func(ctx context.Context, inputPath string) (media.AudioLoudness, error) {
+				loudnessCalls++
+				if loudnessCalls == 1 {
+					return media.AudioLoudness{MeanVolumeDB: -91, MaxVolumeDB: -91}, nil
+				}
+				return media.AudioLoudness{MeanVolumeDB: -18, MaxVolumeDB: -5}, nil
+			},
+		},
+		&mockObjectUploader{
+			uploadFn: func(ctx context.Context, localPath, objectKey string) (string, error) {
+				return "https://cdn.example.com/" + objectKey, nil
+			},
+		},
+		t.TempDir(),
+		nil,
+		&mockMediaProber{
+			probeTimelineFn: func(ctx context.Context, inputPath string) (media.MediaTimeline, error) {
+				return media.MediaTimeline{
+					HasVideo: true, VideoStartSec: 0, VideoDurationSec: 5,
+					HasAudio: true, AudioStartSec: 1, AudioDurationSec: 4,
+					Width: 1280, Height: 720,
+				}, nil
+			},
+		},
+	)
+	result, err := preparer.Prepare(context.Background(), 9, "https://example.com/a.mp4", nil)
+	if result.Cleanup != nil {
+		defer result.Cleanup()
+	}
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if convertCalls != 2 {
+		t.Fatalf("convertCalls = %d, want 2", convertCalls)
+	}
+	if loudnessCalls != 2 {
+		t.Fatalf("loudnessCalls = %d, want 2", loudnessCalls)
 	}
 }
 
