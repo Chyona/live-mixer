@@ -14,7 +14,7 @@ type stagingDir struct {
 }
 
 // CleanupStaging 将 rootDir/staging 下一级子目录按 mtime 降序保留最多 keep 个，删除更早的。
-// 跳过名为 ASRStagingSubDir（"asr"）的目录，避免把整棵 ASR 调试树当成一个 draft 槽位。
+// 跳过 ASR 调试树与直播源共享缓存目录，避免误删长期复用数据。
 // staging 目录不存在时视为成功（removed=0）；单个子目录删除失败时跳过并继续，最终返回聚合错误。
 func CleanupStaging(rootDir string, keep int) (removed int, err error) {
 	if rootDir == "" {
@@ -23,7 +23,14 @@ func CleanupStaging(rootDir string, keep int) (removed int, err error) {
 	if keep <= 0 {
 		return 0, fmt.Errorf("keep 必须为正：%d", keep)
 	}
-	return cleanupStagingChildren(filepath.Join(rootDir, "staging"), keep, ASRStagingSubDir)
+	return cleanupStagingChildren(
+		filepath.Join(rootDir, "staging"),
+		keep,
+		map[string]struct{}{
+			ASRStagingSubDir:   {},
+			SourceCacheSubDir:  {},
+		},
+	)
 }
 
 // CleanupASRStaging 将 rootDir/staging/asr 下一级子目录按 mtime 降序保留最多 keep 个，删除更早的。
@@ -35,12 +42,12 @@ func CleanupASRStaging(rootDir string, keep int) (removed int, err error) {
 	if keep <= 0 {
 		return 0, fmt.Errorf("keep 必须为正：%d", keep)
 	}
-	return cleanupStagingChildren(filepath.Join(rootDir, "staging", ASRStagingSubDir), keep, "")
+	return cleanupStagingChildren(filepath.Join(rootDir, "staging", ASRStagingSubDir), keep, nil)
 }
 
 // cleanupStagingChildren 清理 parentDir 下一级子目录，按 mtime 保留最新 keep 个。
-// skipName 非空时跳过该名称的一级子目录（不计入配额、不删除）。
-func cleanupStagingChildren(parentDir string, keep int, skipName string) (removed int, err error) {
+// skipNames 中的一级子目录不计入配额、不删除。
+func cleanupStagingChildren(parentDir string, keep int, skipNames map[string]struct{}) (removed int, err error) {
 	entries, readErr := os.ReadDir(parentDir)
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
@@ -55,7 +62,7 @@ func cleanupStagingChildren(parentDir string, keep int, skipName string) (remove
 		if !entry.IsDir() {
 			continue
 		}
-		if skipName != "" && entry.Name() == skipName {
+		if _, skip := skipNames[entry.Name()]; skip {
 			continue
 		}
 		info, infoErr := entry.Info()

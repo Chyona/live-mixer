@@ -334,7 +334,7 @@ func (w *liveMaterialASRWorker) failASR(ctx context.Context, materialID uint, as
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)
-	if failErr := w.repo.UpdateASRFailed(ctx, materialID, asrVersion, progress, err.Error()); failErr != nil {
+	if failErr := w.repo.UpdateASRFailed(dbWriteCtx(ctx), materialID, asrVersion, progress, err.Error()); failErr != nil {
 		return fmt.Errorf("ASR 失败且写入失败状态异常: asr=%w, db=%v", err, failErr)
 	}
 	return err

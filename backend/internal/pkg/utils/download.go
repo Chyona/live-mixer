@@ -233,7 +233,7 @@ func writeDownloadResponse(resp *http.Response, savePath string, offset int64) e
 	defer file.Close()
 
 	if _, err = io.Copy(file, resp.Body); err != nil {
-		return fmt.Errorf("write file %s failed: %v", savePath, err)
+		return fmt.Errorf("write file %s failed: %w", savePath, err)
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync file %s failed: %v", savePath, err)
@@ -338,7 +338,7 @@ func downloadOnceToDirectory(ctx context.Context, client *http.Client, urlStr, d
 
 	if _, err = io.Copy(file, respBody); err != nil {
 		os.Remove(savePath)
-		return "", fmt.Errorf("write file %s failed: %v", savePath, err)
+		return "", fmt.Errorf("write file %s failed: %w", savePath, err)
 	}
 
 	if err := file.Sync(); err != nil {

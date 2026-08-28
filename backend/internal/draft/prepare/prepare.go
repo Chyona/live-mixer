@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
@@ -78,7 +79,10 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ReportProgress(15)
 
 	s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
-	if _, err := p.Downloader.Download(ctx, s.Material.LiveURL, s.SourcePath); err != nil {
+	stopHeartbeat := startDownloadHeartbeat(ctx, s)
+	_, err := p.Downloader.Download(ctx, s.Material.LiveURL, s.SourcePath)
+	stopHeartbeat()
+	if err != nil {
 		_ = os.Remove(s.SourcePath)
 		s.SourcePath = ""
 		return fmt.Errorf("下载直播视频失败: %w", err)
@@ -118,6 +122,28 @@ func (p *Pipeline) removeDownloadedSource(s *session.Session) {
 		zap.String("path", path),
 	)
 	s.SourcePath = ""
+}
+
+// startDownloadHeartbeat 在大文件下载期间周期性回写进度，刷新 task.updated_at，
+// 避免「下载仍在进行但心跳停住」被 RequeueStale 误回收。
+func startDownloadHeartbeat(ctx context.Context, s *session.Session) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// 保持下载阶段进度，仅用于刷新心跳。
+				s.ReportProgress(15)
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {

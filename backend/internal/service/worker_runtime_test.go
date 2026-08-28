@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,23 @@ func TestRunClaimedWork_TimeoutMarksFailed(t *testing.T) {
 	}
 	if !errors.Is(failed, context.DeadlineExceeded) && !strings.Contains(failed.Error(), "超时") {
 		t.Fatalf("markFailed = %v, want timeout", failed)
+	}
+}
+
+func TestRunClaimedWork_TimeoutMarksFailedEvenIfErrorNotWrapped(t *testing.T) {
+	var failed error
+	runClaimedWork(context.Background(), zap.NewNop(), "test", 0, "t1", 20*time.Millisecond,
+		func(ctx context.Context) error {
+			<-ctx.Done()
+			// 模拟下载层用 %v 丢掉了 context 包装。
+			return fmt.Errorf("write file failed: %v", ctx.Err())
+		},
+		func(_ context.Context, err error) {
+			failed = err
+		},
+	)
+	if failed == nil {
+		t.Fatal("expected timeout markFailed even when error is not wrapped")
 	}
 }
 

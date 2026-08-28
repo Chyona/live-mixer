@@ -13,6 +13,7 @@ import (
 	"live-mixer/internal/bootstrap"
 	"live-mixer/internal/config"
 	"live-mixer/internal/draft"
+	"live-mixer/internal/draft/prepare"
 	v1handler "live-mixer/internal/handler/v1"
 	v2handler "live-mixer/internal/handler/v2"
 	"live-mixer/internal/middleware"
@@ -67,8 +68,12 @@ func main() {
 	taskRepo := repository.NewTaskRepository(db)
 
 	rewriter := cfg.Download.URLRewriter()
-	downloader := service.NewFileDownloader(logger, rewriter)
 	web := webroot.Config{RootDir: cfg.Web.RootDir}
+	downloader := prepare.NewCachingDownloader(
+		service.NewFileDownloader(logger, rewriter),
+		web.SourceCacheDir(),
+		logger,
+	)
 
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
 	asrLLM := llm.NewClient(cfg.LLM.LLMClientConfigForASR())

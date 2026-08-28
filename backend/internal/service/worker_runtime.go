@@ -54,6 +54,9 @@ func runClaimedWork(
 		logger = zap.NewNop()
 	}
 
+	// 写库必须用未取消的 context：taskCtx 超时后 GORM 写入会立刻失败，任务会卡在 processing。
+	writeCtx := context.WithoutCancel(ctx)
+
 	defer func() {
 		if rec := recover(); rec != nil {
 			logger.Error("Worker 执行 panic，已恢复以免槽位泄漏",
@@ -64,7 +67,7 @@ func runClaimedWork(
 				zap.Stack("stack"),
 			)
 			if markFailed != nil && ctx.Err() == nil {
-				markFailed(ctx, fmt.Errorf("任务执行异常: %v", rec))
+				markFailed(writeCtx, fmt.Errorf("任务执行异常: %v", rec))
 			}
 		}
 	}()
@@ -89,7 +92,16 @@ func runClaimedWork(
 	if ctx.Err() != nil || markFailed == nil {
 		return
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		markFailed(ctx, fmt.Errorf("任务执行超时: %w", err))
+	// 任务级超时/取消时，无论错误是否用 %w 包装了 context，都要落库失败状态。
+	if taskCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		markFailed(writeCtx, fmt.Errorf("任务执行超时: %w", err))
 	}
+}
+
+// dbWriteCtx 返回可安全写库的 context：剥离取消信号，避免超时后 MarkFailed 写不进 DB。
+func dbWriteCtx(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }

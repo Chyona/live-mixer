@@ -391,7 +391,7 @@ func (w *aiSliceWorker) fail(ctx context.Context, taskID string, progress int16,
 		zap.Int16("progress", progress),
 		zap.Error(err),
 	)
-	if failErr := w.taskRepo.MarkFailed(ctx, taskID, progress, err.Error()); failErr != nil {
+	if failErr := w.taskRepo.MarkFailed(dbWriteCtx(ctx), taskID, progress, err.Error()); failErr != nil {
 		return fmt.Errorf("AI 切片失败且写入失败状态异常: task=%w, db=%v", err, failErr)
 	}
 	return err

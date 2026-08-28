@@ -96,11 +96,15 @@ func TestCleanupStaging_RejectsInvalidArgs(t *testing.T) {
 	}
 }
 
-func TestCleanupStaging_SkipsASRSubDir(t *testing.T) {
+func TestCleanupStaging_SkipsASRAndSourceCache(t *testing.T) {
 	root := t.TempDir()
 	staging := filepath.Join(root, "staging")
 	asrChild := filepath.Join(staging, ASRStagingSubDir, "1-v1")
+	cacheChild := filepath.Join(staging, SourceCacheSubDir, "abc")
 	if err := os.MkdirAll(asrChild, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cacheChild, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	base := time.Now().Add(-5 * time.Hour)
@@ -125,8 +129,8 @@ func TestCleanupStaging_SkipsASRSubDir(t *testing.T) {
 	if _, err := os.Stat(asrChild); err != nil {
 		t.Fatalf("asr child should remain: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(staging, ASRStagingSubDir)); err != nil {
-		t.Fatalf("asr root should remain: %v", err)
+	if _, err := os.Stat(cacheChild); err != nil {
+		t.Fatalf("source cache should remain: %v", err)
 	}
 }
 
