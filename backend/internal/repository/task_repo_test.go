@@ -273,6 +273,42 @@ func TestTaskRepository_ClaimPendingByType(t *testing.T) {
 	}
 }
 
+// TestTaskRepository_ClaimPendingByType_ClearsErrorMessage 验证重新抢占时清空超时重排残留文案。
+func TestTaskRepository_ClaimPendingByType_ClearsErrorMessage(t *testing.T) {
+	repo := NewTaskRepository(setupTaskTestDB(t))
+	ctx := context.Background()
+	task := &model.Task{
+		Type:         model.TaskTypeAISliceDraft,
+		Status:       model.TaskStatusPending,
+		CreatedBy:    1,
+		ErrorMessage: "任务处理超时，已自动重新排队",
+		Progress:     57,
+	}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	claimed, err := repo.ClaimPendingByType(ctx, model.TaskTypeAISliceDraft)
+	if err != nil {
+		t.Fatalf("ClaimPendingByType() error = %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("claimed is nil")
+	}
+	if claimed.ErrorMessage != "" {
+		t.Fatalf("ErrorMessage = %q, want empty", claimed.ErrorMessage)
+	}
+	if claimed.Progress != 0 {
+		t.Fatalf("Progress = %d, want 0", claimed.Progress)
+	}
+	got, err := repo.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.ErrorMessage != "" {
+		t.Fatalf("persisted ErrorMessage = %q, want empty", got.ErrorMessage)
+	}
+}
+
 // TestTaskRepository_ClaimPendingByType_OptimisticLockConcurrent 验证多 goroutine 乐观锁互斥抢占。
 func TestTaskRepository_ClaimPendingByType_OptimisticLockConcurrent(t *testing.T) {
 	// SQLite :memory: 每连接独立库；共享 cache 才能在并发下看到同一张表。

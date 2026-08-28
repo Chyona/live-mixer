@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/storage"
@@ -150,10 +151,18 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 		zap.String("source_url", sourceURL),
 		zap.String("dest", sourcePath),
 	)
-	if _, err := p.downloader.Download(ctx, sourceURL, sourcePath); err != nil {
+	stopHeartbeat := startASRDownloadHeartbeat(ctx, materialID, sourceURL, sourcePath, report, p.logger)
+	_, err = p.downloader.Download(ctx, sourceURL, sourcePath)
+	stopHeartbeat()
+	if err != nil {
 		cleanup()
 		return empty, fmt.Errorf("下载直播素材失败: %w", err)
 	}
+	p.logger.Info("直播素材下载完成",
+		zap.Uint("material_id", materialID),
+		zap.String("source_url", sourceURL),
+		zap.String("dest", sourcePath),
+	)
 	report(20)
 
 	// 下载完成后探测时间轴与分辨率；失败不阻断后续 ASR（纯音频无视频轨属正常）。
@@ -270,6 +279,60 @@ func (p *liveMaterialASRAudioPreparer) warnIfDurationMismatch(ctx context.Contex
 		zap.Float64("delta_sec", delta),
 		zap.Float64("warn_threshold_sec", asrDurationMismatchWarnSec),
 	)
+}
+
+// startASRDownloadHeartbeat 在大文件下载期间周期性回写进度并打日志。
+// 仅当本地文件字节数增长时才心跳，避免连接假死时仍刷 asr_updated_at。
+func startASRDownloadHeartbeat(
+	ctx context.Context,
+	materialID uint,
+	sourceURL string,
+	destPath string,
+	report func(progress int16),
+	logger *zap.Logger,
+) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		var lastSize int64 = -1
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				size := int64(0)
+				if st, err := os.Stat(destPath); err == nil {
+					size = st.Size()
+				}
+				if size <= lastSize {
+					if logger != nil {
+						logger.Warn("ASR 素材下载无字节增长，可能已停滞",
+							zap.Uint("material_id", materialID),
+							zap.String("source_url", sourceURL),
+							zap.String("dest", destPath),
+							zap.Int64("size", size),
+						)
+					}
+					continue
+				}
+				lastSize = size
+				if report != nil {
+					report(10)
+				}
+				if logger != nil {
+					logger.Info("ASR 素材下载仍在进行",
+						zap.Uint("material_id", materialID),
+						zap.String("source_url", sourceURL),
+						zap.Int64("bytes", size),
+					)
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 func (p *liveMaterialASRAudioPreparer) resolveTempDir() (string, error) {

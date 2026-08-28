@@ -55,7 +55,7 @@ func runClaimedWork(
 	}
 
 	// 写库必须用未取消的 context：taskCtx 超时后 GORM 写入会立刻失败，任务会卡在 processing。
-	writeCtx := context.WithoutCancel(ctx)
+	writeCtx := dbWriteCtx(ctx)
 
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -75,7 +75,10 @@ func runClaimedWork(
 	taskCtx := ctx
 	cancel := func() {}
 	if staleTimeout > 0 {
-		taskCtx, cancel = context.WithTimeout(ctx, staleTimeout)
+		// staleTimeout 用于 RequeueStale（无心跳孤儿回收）。
+		// 硬超时需远大于 stale：19GB 直播源在带宽争抢下经常超过 90 分钟；
+		// 若硬超时=stale，会误杀仍在下载的任务；若此时 MarkFailed 写库失败，就会永久卡在 processing。
+		taskCtx, cancel = context.WithTimeout(ctx, processHardTimeout(staleTimeout))
 	}
 	defer cancel()
 
@@ -98,10 +101,22 @@ func runClaimedWork(
 	}
 }
 
-// dbWriteCtx 返回可安全写库的 context：剥离取消信号，避免超时后 MarkFailed 写不进 DB。
-func dbWriteCtx(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
+// processHardTimeout 将「孤儿回收阈值」映射为单任务硬超时。
+// 短于 1 分钟的值原样返回（单测）；生产路径至少 6 小时，避免大文件下载被误杀。
+func processHardTimeout(staleTimeout time.Duration) time.Duration {
+	if staleTimeout < time.Minute {
+		return staleTimeout
 	}
-	return context.WithoutCancel(ctx)
+	hard := 6 * time.Hour
+	if 4*staleTimeout > hard {
+		hard = 4 * staleTimeout
+	}
+	return hard
+}
+
+// dbWriteCtx 返回可安全写库的 context：使用 Background，彻底脱离 taskCtx 的取消/超时，
+// 避免「下载超时后 MarkFailed 也因 context deadline exceeded 写不进库 → 任务永久卡在 processing」。
+func dbWriteCtx(ctx context.Context) context.Context {
+	_ = ctx
+	return context.Background()
 }

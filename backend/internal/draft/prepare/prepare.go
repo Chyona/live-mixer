@@ -124,13 +124,14 @@ func (p *Pipeline) removeDownloadedSource(s *session.Session) {
 	s.SourcePath = ""
 }
 
-// startDownloadHeartbeat 在大文件下载期间周期性回写进度，刷新 task.updated_at，
-// 避免「下载仍在进行但心跳停住」被 RequeueStale 误回收。
+// startDownloadHeartbeat 在大文件下载期间周期性回写进度，刷新 task.updated_at。
+// 仅当本地文件字节数增长时才心跳，避免「连接假死但心跳仍刷」导致 RequeueStale 永不回收。
 func startDownloadHeartbeat(ctx context.Context, s *session.Session) func() {
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
+		var lastSize int64 = -1
 		for {
 			select {
 			case <-done:
@@ -138,12 +139,31 @@ func startDownloadHeartbeat(ctx context.Context, s *session.Session) func() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				// 保持下载阶段进度，仅用于刷新心跳。
+				path := ""
+				if s != nil {
+					path = s.SourcePath
+				}
+				size := fileSizeOrZero(path)
+				if size <= lastSize {
+					continue
+				}
+				lastSize = size
 				s.ReportProgress(15)
 			}
 		}
 	}()
 	return func() { close(done) }
+}
+
+func fileSizeOrZero(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return st.Size()
 }
 
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {

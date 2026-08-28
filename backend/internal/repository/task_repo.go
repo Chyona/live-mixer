@@ -162,14 +162,17 @@ func (r *taskRepository) ClaimPendingByType(ctx context.Context, taskType string
 		now := time.Now()
 		newVersion := task.Version + 1
 		// CAS：仅当 status 仍为 pending 且 version 未被他人改写时抢占成功。
+		// 清空 error_message / completed_at，避免「超时重排」提示残留在新一轮 processing 上造成「卡住又不失败」的错觉。
 		result := r.db.WithContext(ctx).Model(&model.Task{}).
 			Where("id = ? AND status = ? AND version = ?", task.ID, model.TaskStatusPending, task.Version).
 			Updates(map[string]interface{}{
-				"status":     model.TaskStatusProcessing,
-				"progress":   int16(0),
-				"started_at": now,
-				"updated_at": now,
-				"version":    newVersion,
+				"status":        model.TaskStatusProcessing,
+				"progress":      int16(0),
+				"error_message": "",
+				"completed_at":  nil,
+				"started_at":    now,
+				"updated_at":    now,
+				"version":       newVersion,
 			})
 		if result.Error != nil {
 			return nil, result.Error
@@ -182,6 +185,8 @@ func (r *taskRepository) ClaimPendingByType(ctx context.Context, taskType string
 
 		task.Status = model.TaskStatusProcessing
 		task.Progress = 0
+		task.ErrorMessage = ""
+		task.CompletedAt = nil
 		task.StartedAt = &now
 		task.UpdatedAt = now
 		task.Version = newVersion

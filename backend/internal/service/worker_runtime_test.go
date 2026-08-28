@@ -73,6 +73,27 @@ func TestRunClaimedWork_SuccessDoesNotMarkFailed(t *testing.T) {
 	}
 }
 
+func TestProcessHardTimeout(t *testing.T) {
+	if got := processHardTimeout(20 * time.Millisecond); got != 20*time.Millisecond {
+		t.Fatalf("short timeout = %v, want passthrough", got)
+	}
+	if got := processHardTimeout(90 * time.Minute); got != 6*time.Hour {
+		t.Fatalf("90m stale → hard = %v, want 6h", got)
+	}
+	if got := processHardTimeout(2 * time.Hour); got != 8*time.Hour {
+		t.Fatalf("2h stale → hard = %v, want 8h", got)
+	}
+}
+
+func TestDbWriteCtxIgnoresParentCancel(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	write := dbWriteCtx(parent)
+	if write.Err() != nil {
+		t.Fatalf("dbWriteCtx should not be canceled, err=%v", write.Err())
+	}
+}
+
 func TestEnqueueWake_FillsUpToCapacity(t *testing.T) {
 	ch := newWakeChan(3)
 	enqueueWake(ch, 3)

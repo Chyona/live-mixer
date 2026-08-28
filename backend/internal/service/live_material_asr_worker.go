@@ -210,10 +210,13 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 
 	var lastProgress int16 = 5
 	updateProgress := func(progress int16) {
-		if progress <= lastProgress {
+		// 允许同进度回写：大文件下载期间用心跳刷新 asr_updated_at，避免被 RequeueStale 误回收。
+		if progress < lastProgress {
 			return
 		}
-		lastProgress = progress
+		if progress > lastProgress {
+			lastProgress = progress
+		}
 		if updateErr := w.repo.UpdateASRProgress(ctx, materialID, asrVersion, progress); updateErr != nil {
 			w.logger.Warn("更新 ASR 进度失败",
 				zap.Uint("material_id", materialID),

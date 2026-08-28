@@ -69,11 +69,20 @@ func main() {
 
 	rewriter := cfg.Download.URLRewriter()
 	web := webroot.Config{RootDir: cfg.Web.RootDir}
+	sourceCacheDir := web.SourceCacheDir()
 	downloader := prepare.NewCachingDownloader(
 		service.NewFileDownloader(logger, rewriter),
-		web.SourceCacheDir(),
+		sourceCacheDir,
 		logger,
 	)
+	if sourceCacheDir == "" {
+		logger.Warn("直播源共享缓存未启用（web.root_dir 为空），同源大文件将按任务重复下载，易触发超时卡死")
+	} else {
+		logger.Info("直播源共享缓存已启用",
+			zap.String("cache_dir", sourceCacheDir),
+			zap.Int("max_dirs", cfg.Web.SourceCacheMaxDirs),
+		)
+	}
 
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
 	asrLLM := llm.NewClient(cfg.LLM.LLMClientConfigForASR())
