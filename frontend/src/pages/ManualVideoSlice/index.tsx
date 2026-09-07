@@ -618,56 +618,18 @@ const ManualVideoSlicePage = () => {
     [paragraphs, selectedSegments, videoDuration]
   );
 
-  const submitProjectDraft = useCallback(async () => {
-      if (projectTaskReadOnly) {
-        toast.notify.warning('项目有进行中任务，当前仅可查看');
-        return;
-      }
-      if (!video || selectedSegments.length === 0) return;
-
-      if (!projectId) {
-        toast.notify.warning('请先保存剪辑项目后再提交');
-        return;
-      }
-
-      setSubmitting(true);
-      try {
-        const response = await submitDraft({
-          video_project_id: projectId,
-          enable_captions: enableCaptions,
-        });
-
-        if (response.code !== 0) {
-          toast.notify.error(response.message || '提交失败');
-          return;
-        }
-
-        toast.notify.success('任务已提交，正在跳转到任务管理');
-        navigate(buildTasksListLink());
-      } catch (error) {
-        if (error instanceof AppError) {
-          showAppError(error);
-        } else {
-          toast.notify.error('提交失败');
-        }
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [enableCaptions, navigate, projectId, projectTaskReadOnly, selectedSegments.length, video]
-  );
-
-  const handleSubmit = useCallback(() => {
-    void submitProjectDraft();
-  }, [submitProjectDraft]);
-
   const handleSaveProject = useCallback(
-    async (options?: { name?: string; remark?: string }) => {
-      if (!sourceVideoId || !video) return;
+    async (options?: {
+      name?: string;
+      remark?: string;
+      /** 提交成片前自动保存时不弹成功提示 */
+      silent?: boolean;
+    }): Promise<boolean> => {
+      if (!sourceVideoId || !video) return false;
 
       if (selectedSegments.length === 0) {
         toast.notify.warning('请先选择至少一个片段');
-        return;
+        return false;
       }
 
       const nextName = options?.name?.trim() || draftName || buildManualProjectAutoName();
@@ -691,7 +653,7 @@ const ManualVideoSlicePage = () => {
 
         if (response.code !== 0) {
           toast.notify.error(response.message || '保存失败');
-          return;
+          return false;
         }
 
         if (response.data.id) {
@@ -710,13 +672,17 @@ const ManualVideoSlicePage = () => {
         });
         localStorage.setItem(DRAFT_STORAGE_KEY, response.data.name);
         setSaveModalOpen(false);
-        toast.notify.success('已保存为剪辑项目', MANUAL_SLICE_SAVE_NOTIFY_DESC);
+        if (!options?.silent) {
+          toast.notify.success('已保存为剪辑项目', MANUAL_SLICE_SAVE_NOTIFY_DESC);
+        }
+        return true;
       } catch (error) {
         if (error instanceof AppError) {
           showAppError(error);
         } else {
           toast.notify.error('保存失败');
         }
+        return false;
       } finally {
         setSavingProject(false);
       }
@@ -728,10 +694,64 @@ const ManualVideoSlicePage = () => {
       projectRemark,
       resetDirtyBaseline,
       selectedSegments,
+      sourceVideoId,
       syncProjectIdInUrl,
       video,
     ]
   );
+
+  const submitProjectDraft = useCallback(async () => {
+    if (projectTaskReadOnly) {
+      toast.notify.warning('项目有进行中任务，当前仅可查看');
+      return;
+    }
+    if (!video || selectedSegments.length === 0) return;
+
+    if (!projectId) {
+      toast.notify.warning('请先保存剪辑项目后再提交');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // 成片任务按已保存项目生成；提交前先持久化当前编辑，避免草稿仍是旧内容
+      const saved = await handleSaveProject({ silent: true });
+      if (!saved) return;
+
+      const response = await submitDraft({
+        video_project_id: projectId,
+        enable_captions: enableCaptions,
+      });
+
+      if (response.code !== 0) {
+        toast.notify.error(response.message || '提交失败');
+        return;
+      }
+
+      toast.notify.success('任务已提交，正在跳转到任务管理');
+      navigate(buildTasksListLink());
+    } catch (error) {
+      if (error instanceof AppError) {
+        showAppError(error);
+      } else {
+        toast.notify.error('提交失败');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }, [
+    enableCaptions,
+    handleSaveProject,
+    navigate,
+    projectId,
+    projectTaskReadOnly,
+    selectedSegments.length,
+    video,
+  ]);
+
+  const handleSubmit = useCallback(() => {
+    void submitProjectDraft();
+  }, [submitProjectDraft]);
 
   const handleSaveDraft = useCallback(
     async (values: { name: string; remark: string }) => {
