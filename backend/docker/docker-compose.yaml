@@ -67,8 +67,6 @@ services:
     volumes:
       - ./html/output:/app/output  # 挂载配置文件目录
       - ./logs:/app/logs  # 挂载配置文件目录
-      #- /etc/localtime:/etc/localtime:ro
-      #- /etc/timezone:/etc/timezone:ro
     environment:
       # 草稿下载URL
       - DRAFT_URL=http://192.168.3.219/openapi/capcut-mate/v1/get_draft
