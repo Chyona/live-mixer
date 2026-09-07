@@ -78,6 +78,10 @@ services:
       - TIP_URL=https://docs.jcaigc.cn
       # 文件下载大小限制（字节），默认1GB（1073741824）
       - DOWNLOAD_FILE_SIZE_LIMIT=1073741824
+      # 草稿清理策略（本模块内定义；保留数量可由环境变量 DRAFT_CLEANUP_MAX_DRAFT_COUNT 覆盖，默认 1000）
+      - DRAFT_CLEANUP_MAX_DRAFT_COUNT=6000
+      # 远程媒体 URL 直写模式：false=下载到本地（默认）；true=草稿仅写入 URL，不下载
+      - USE_REMOTE_MEDIA_URL=true
     networks:
       - live-mixer-network    
 
