@@ -23,7 +23,12 @@ func BuildEventPlaylist(items []PlaylistItem, targetDuration int, ended bool) st
 	b.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", targetDuration))
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:EVENT\n")
-	for _, it := range items {
+	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
+	for i, it := range items {
+		if i > 0 {
+			// 每片可能独立从 PTS 0 开始（历史 reset_timestamps / 续录），无此标记浏览器会解码失败。
+			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
 		dur := it.DurationSec
 		if dur <= 0 {
 			dur = float64(targetDuration)
@@ -36,6 +41,14 @@ func BuildEventPlaylist(items []PlaylistItem, targetDuration int, ended bool) st
 		b.WriteString("#EXT-X-ENDLIST\n")
 	}
 	return b.String()
+}
+
+// PreferStablePlaylistURL 播放列表对象会被反复覆盖，复用首次签名地址，避免前端每次轮询都换 URL 重建播放器。
+func PreferStablePlaylistURL(existing, uploaded string) string {
+	if u := strings.TrimSpace(existing); u != "" {
+		return u
+	}
+	return strings.TrimSpace(uploaded)
 }
 
 // WindowStartIndex 计算窗口 ASR 对应的起始分片（含）。

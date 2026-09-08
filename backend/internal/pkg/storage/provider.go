@@ -28,6 +28,8 @@ type storageProvider interface {
 	Type() ProviderType
 	// PublicURL 返回对象的未签名直链（用于预分配且不可变的 live_url）。
 	PublicURL(objectKey string) string
+	// AccessURL 返回对象的访问链接（签名策略与 UploadFile 完成后一致，不重新上传）。
+	AccessURL(ctx context.Context, objectKey string) (string, error)
 }
 
 // selectProvider 根据配置选择对象存储后端，优先级为 COS > OSS > TOS。

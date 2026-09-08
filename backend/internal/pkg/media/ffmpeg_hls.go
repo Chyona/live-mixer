@@ -149,18 +149,7 @@ func (c *FFmpegConverter) RecordHLSSegments(
 		return fmt.Errorf("创建录像目录失败: %w", err)
 	}
 	pattern := filepath.Join(outDir, "seg_%05d.ts")
-	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
-	args = append(args, HLSInputArgs(inputURL)...)
-	args = append(args,
-		"-i", inputURL,
-		"-c", "copy",
-		"-f", "segment",
-		"-segment_time", strconv.Itoa(segmentSec),
-		"-segment_format", "mpegts",
-		"-segment_start_number", strconv.Itoa(startIndex),
-		"-reset_timestamps", "1",
-		pattern,
-	)
+	args := buildRecordHLSSegmentArgs(inputURL, pattern, startIndex, segmentSec)
 
 	cmd := exec.CommandContext(ctx, c.ffmpegBinary(), args...)
 	stderr, err := cmd.StderrPipe()
@@ -211,6 +200,33 @@ func (c *FFmpegConverter) RecordHLSSegments(
 		return fmt.Errorf("ffmpeg 录像退出: %w %s", waitErr, msg)
 	}
 	return nil
+}
+
+// buildRecordHLSSegmentArgs 生成边录边播用的 TS 分片参数。
+// 不重置每片 PTS，避免浏览器 MSE 因时间戳回绕解码失败；续录时用 output_ts_offset 接上一段。
+func buildRecordHLSSegmentArgs(inputURL, pattern string, startIndex, segmentSec int) []string {
+	if segmentSec <= 0 {
+		segmentSec = 6
+	}
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	args = append(args, HLSInputArgs(inputURL)...)
+	args = append(args,
+		"-i", inputURL,
+		"-c", "copy",
+		"-muxdelay", "0",
+		"-muxpreload", "0",
+		"-f", "segment",
+		"-segment_time", strconv.Itoa(segmentSec),
+		"-segment_format", "mpegts",
+		"-segment_start_number", strconv.Itoa(startIndex),
+	)
+	if startIndex > 0 {
+		args = append(args, "-output_ts_offset", strconv.Itoa(startIndex*segmentSec))
+	}
+	return append(args, pattern)
 }
 
 func (c *FFmpegConverter) emitCompletedSegments(outDir string, startIndex int, reported map[int]struct{}, onComplete func(int, string), includeLast bool) {

@@ -16,9 +16,26 @@ func TestBuildEventPlaylist(t *testing.T) {
 	if strings.Contains(body, "#EXT-X-ENDLIST") {
 		t.Fatal("live playlist should not have ENDLIST")
 	}
+	if !strings.Contains(body, "#EXT-X-INDEPENDENT-SEGMENTS") {
+		t.Fatal("missing INDEPENDENT-SEGMENTS")
+	}
+	if strings.Count(body, "#EXT-X-DISCONTINUITY") != 1 {
+		t.Fatalf("want 1 discontinuity between 2 items, got %s", body)
+	}
 	ended := BuildEventPlaylist([]PlaylistItem{{URL: "https://cdn.example/seg_00000.ts"}}, 6, true)
 	if !strings.Contains(ended, "#EXT-X-ENDLIST") {
 		t.Fatal("ended playlist should have ENDLIST")
+	}
+}
+
+func TestPreferStablePlaylistURL(t *testing.T) {
+	existing := "https://cdn.example/live.m3u8?sig=old"
+	uploaded := "https://cdn.example/live.m3u8?sig=new"
+	if got := PreferStablePlaylistURL(existing, uploaded); got != existing {
+		t.Errorf("got %s, want existing", got)
+	}
+	if got := PreferStablePlaylistURL("  ", uploaded); got != uploaded {
+		t.Errorf("got %s, want uploaded", got)
 	}
 }
 

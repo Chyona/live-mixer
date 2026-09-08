@@ -16,6 +16,7 @@ import { AppError } from '~/services/http';
 import {
   downloadSourceVideoAsrSubtitle,
   fetchSourceVideoDetail,
+  hlsStartPositionForSourceVideo,
   isLiveIngesting,
   sourceVideoPlayUrl,
   type SourceVideo,
@@ -29,7 +30,7 @@ import {
 import { submitDraft } from '~/services/slice';
 import { formatToDateTime } from '~/utils/date';
 import { showAppError, toast } from '~/utils/toast';
-import { isPlayableVideoUrl } from '~/utils/videoUrl';
+import { isPlayableVideoUrl, mediaResourceKey } from '~/utils/videoUrl';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import type { SliceEditorEntryFrom } from '~/routes/links';
@@ -146,6 +147,7 @@ const ManualVideoSlicePage = () => {
   });
 
   const streamUrl = video ? sourceVideoPlayUrl(video) : '';
+  const streamResourceKey = useMemo(() => mediaResourceKey(streamUrl), [streamUrl]);
   const canPreview = Boolean(streamUrl) && isPlayableVideoUrl(streamUrl);
 
   const getIsDirty = useCallback(() => {
@@ -389,7 +391,7 @@ const ManualVideoSlicePage = () => {
     setCurrentTime(0);
     setIsVideoPlaying(false);
     setActiveSegmentId(null);
-  }, [streamUrl]);
+  }, [streamResourceKey]);
 
   useEffect(() => {
     // 切换源视频时清空文案预览；同视频加载播放地址时不要清，避免盖掉项目回填
@@ -460,7 +462,7 @@ const ManualVideoSlicePage = () => {
       videoEl.removeEventListener('timeupdate', syncCurrentTime);
       videoEl.removeEventListener('seeked', syncCurrentTime);
     };
-  }, [videoDuration, streamUrl]);
+  }, [videoDuration, streamResourceKey]);
 
   useEffect(() => {
     const videoEl = playerRef.current?.video;
@@ -484,7 +486,7 @@ const ManualVideoSlicePage = () => {
       videoEl.removeEventListener('pause', syncPlayingState);
       videoEl.removeEventListener('ended', syncPlayingState);
     };
-  }, [videoDuration, streamUrl]);
+  }, [videoDuration, streamResourceKey]);
 
   const handleSeek = useCallback((time: number) => {
     const videoEl = playerRef.current?.video;
@@ -1056,6 +1058,7 @@ const ManualVideoSlicePage = () => {
                     onSeek={handleSeek}
                     screenshotBaseName={video?.name ?? 'video-screenshot'}
                     onDurationChange={handleDurationChange}
+                    hlsStartPosition={hlsStartPositionForSourceVideo(video)}
                   />
                 </div>
               </div>

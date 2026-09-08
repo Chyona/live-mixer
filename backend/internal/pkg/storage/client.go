@@ -61,6 +61,17 @@ func (c *Client) PublicURL(objectKey string) string {
 	return c.provider.PublicURL(c.ObjectKey(objectKey))
 }
 
+// AccessURL 返回相对对象键的访问链接（签名策略与 UploadFile 完成后一致，不重新上传）。
+func (c *Client) AccessURL(ctx context.Context, objectKey string) (string, error) {
+	if c == nil || c.provider == nil {
+		return "", fmt.Errorf("对象存储未配置")
+	}
+	if objectKey == "" {
+		return "", fmt.Errorf("对象键名不能为空")
+	}
+	return c.provider.AccessURL(ctx, c.ObjectKey(objectKey))
+}
+
 // TempObjectKey 生成临时文件对象键，位于 base_path/temp/ 下。
 func (c *Client) TempObjectKey(parts ...string) string {
 	return c.ObjectKey(append([]string{SubDirTemp}, parts...)...)

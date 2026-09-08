@@ -37,6 +37,24 @@ export function getVideoFormatLabel(url: string): string {
   return match?.[1]?.toUpperCase() ?? '视频文件';
 }
 
+/** 去掉签名 query 后的资源身份，用于判断播放地址是否仍指向同一对象。 */
+export function mediaResourceKey(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+
+  try {
+    const parsed = new URL(trimmed, 'http://localhost');
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+export function isSameMediaResource(a: string, b: string): boolean {
+  const key = mediaResourceKey(a);
+  return Boolean(key) && key === mediaResourceKey(b);
+}
+
 export function resolveVideoPlayUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return '';

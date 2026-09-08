@@ -10,6 +10,36 @@ import (
 	"testing"
 )
 
+func TestBuildRecordHLSSegmentArgs_NoResetTimestamps(t *testing.T) {
+	args := buildRecordHLSSegmentArgs("https://ex.example/live.m3u8", "seg_%05d.ts", 0, 6)
+	for i, a := range args {
+		if a == "-reset_timestamps" {
+			t.Fatalf("reset_timestamps should not be set at %d: %v", i, args)
+		}
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-segment_format mpegts") {
+		t.Fatalf("missing mpegts segment format: %v", args)
+	}
+	if strings.Contains(joined, "-output_ts_offset") {
+		t.Fatalf("first session should not offset timestamps: %v", args)
+	}
+}
+
+func TestBuildRecordHLSSegmentArgs_ResumeOffset(t *testing.T) {
+	args := buildRecordHLSSegmentArgs("https://ex.example/live.m3u8", "seg_%05d.ts", 10, 6)
+	found := false
+	for i, a := range args {
+		if a == "-output_ts_offset" && i+1 < len(args) && args[i+1] == "60" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing output_ts_offset 60 in %v", args)
+	}
+}
+
 func TestParseVolumeDetectOutput(t *testing.T) {
 	raw := `
 [Parsed_volumedetect_0 @ 0x0] n_samples: 1000

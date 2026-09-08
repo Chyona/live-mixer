@@ -14,7 +14,7 @@ import {
   SliceProjectTaskReadOnlyAlert,
 } from '~/components/SliceProjectTaskStatus';
 import { AppError } from '~/services/http';
-import { fetchSourceVideoDetail, isLiveIngesting, sourceVideoPlayUrl, type SourceVideo } from '~/services/sourceVideo';
+import { fetchSourceVideoDetail, hlsStartPositionForSourceVideo, isLiveIngesting, sourceVideoPlayUrl, type SourceVideo } from '~/services/sourceVideo';
 import { submitClip } from '~/services/slice';
 import { submitAiSliceSelection } from '~/services/aiSlice';
 import { type AiPrompt } from '~/services/aiPrompt';
@@ -35,7 +35,7 @@ import {
 } from '~/routes/links';
 import { buildSliceBreadcrumbItems, resolveSlicePageTitle } from '~/utils/sliceBreadcrumbs';
 import { serializeTimelineSliceProjectState } from '~/utils/sliceProjectDirty';
-import { getVideoFormatLabel, isPlayableVideoUrl } from '~/utils/videoUrl';
+import { getVideoFormatLabel, isPlayableVideoUrl, isSameMediaResource, mediaResourceKey } from '~/utils/videoUrl';
 import SelectedSegmentsPanel from './SelectedSegmentsPanel';
 import SourceVideoSlicePageSkeleton from './SourceVideoSlicePageSkeleton';
 import TimelineLoadingSkeleton from './TimelineLoadingSkeleton';
@@ -145,6 +145,7 @@ const SourceVideoSlicePage = () => {
 
   const streamUrl = video ? sourceVideoPlayUrl(video) : '';
   streamUrlRef.current = streamUrl;
+  const streamResourceKey = useMemo(() => mediaResourceKey(streamUrl), [streamUrl]);
   const hasVideoUrl = Boolean(streamUrl);
   const canPreview = hasVideoUrl && isPlayableVideoUrl(streamUrl);
   const videoFormatLabel = useMemo(() => getVideoFormatLabel(streamUrl), [streamUrl]);
@@ -195,7 +196,7 @@ const SourceVideoSlicePage = () => {
     } else {
       setSelectedRanges([]);
     }
-  }, [streamUrl]);
+  }, [streamResourceKey]);
 
   useEffect(() => {
     if (loading || !video || baselineSyncedRef.current) return;
@@ -272,7 +273,7 @@ const SourceVideoSlicePage = () => {
       }
 
       const nextStreamUrl = sourceVideoPlayUrl(videoRes.data);
-      const sameStream = streamUrlRef.current === nextStreamUrl;
+      const sameStream = isSameMediaResource(streamUrlRef.current, nextStreamUrl);
 
       setVideo(videoRes.data);
       setParagraphs(
@@ -381,7 +382,7 @@ const SourceVideoSlicePage = () => {
       video.removeEventListener('timeupdate', syncCurrentTime);
       video.removeEventListener('seeked', syncCurrentTime);
     };
-  }, [isTimelineReady, streamUrl]);
+  }, [isTimelineReady, streamResourceKey]);
 
   // 选中片段播放到结尾后自动取消选中并暂停
   useEffect(() => {
@@ -707,6 +708,7 @@ const SourceVideoSlicePage = () => {
                 screenshotBaseName={video?.name ?? 'video-screenshot'}
                 onDurationChange={handleDurationChange}
                 onPlaybackError={handlePlaybackError}
+                hlsStartPosition={hlsStartPositionForSourceVideo(video)}
               />
             </div>
 

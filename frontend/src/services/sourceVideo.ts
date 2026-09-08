@@ -19,6 +19,7 @@ export type {
 } from './sourceVideo.model';
 export {
   createInitialAsrState,
+  hlsStartPositionForSourceVideo,
   isSourceVideoUrlDuplicateError,
   isLiveIngesting,
   sourceVideoPlayUrl,

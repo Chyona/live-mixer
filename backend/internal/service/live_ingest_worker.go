@@ -305,8 +305,11 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 		}()
 	}
 
+	segURLs := map[int64]string{}
+	if material.NextSeg > 0 {
+		segURLs = w.completeSegmentURLs(ctx, material, nil)
+	}
 	for {
-		segURLs := map[int64]string{}
 		startIndex := int(material.NextSeg)
 		windowDue := time.Now().Add(model.LiveASRWindowDuration)
 
@@ -325,6 +328,9 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, false)
 			if plErr != nil {
 				w.logger.Warn("发布播放列表失败", zap.Error(plErr))
+			}
+			if playlistURL != "" {
+				material.RecordPlaylistURL = playlistURL
 			}
 			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, dur, playlistURL)
 			material.NextSeg = next
@@ -490,6 +496,7 @@ func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.
 	if w.storage == nil {
 		return "", fmt.Errorf("对象存储未配置")
 	}
+	segURLs = w.completeSegmentURLs(ctx, material, segURLs)
 	keys := make([]int64, 0, len(segURLs))
 	for k := range segURLs {
 		keys = append(keys, k)
@@ -508,7 +515,40 @@ func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.
 		return "", err
 	}
 	defer os.Remove(tmp)
-	return w.storage.UploadFile(ctx, tmp, liveingest.PlaylistObjectKey(material.RecordUUID))
+	uploaded, err := w.storage.UploadFile(ctx, tmp, liveingest.PlaylistObjectKey(material.RecordUUID))
+	if err != nil {
+		return "", err
+	}
+	return liveingest.PreferStablePlaylistURL(material.RecordPlaylistURL, uploaded), nil
+}
+
+func (w *liveIngestWorker) completeSegmentURLs(ctx context.Context, material *model.LiveMaterial, uploaded map[int64]string) map[int64]string {
+	out := make(map[int64]string, len(uploaded)+int(material.NextSeg))
+	for k, v := range uploaded {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	max := material.NextSeg - 1
+	for k := range out {
+		if k > max {
+			max = k
+		}
+	}
+	if w.storage == nil || max < 0 {
+		return out
+	}
+	for i := int64(0); i <= max; i++ {
+		if out[i] != "" {
+			continue
+		}
+		url, err := w.storage.AccessURL(ctx, liveingest.SegmentObjectKey(material.RecordUUID, material.IngestEpoch, i))
+		if err != nil || url == "" {
+			continue
+		}
+		out[i] = url
+	}
+	return out
 }
 
 func (w *liveIngestWorker) segmentDir(material *model.LiveMaterial) string {

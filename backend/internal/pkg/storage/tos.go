@@ -63,6 +63,13 @@ func (p *tosProvider) PublicURL(objectKey string) string {
 	return p.objectURL(objectKey)
 }
 
+func (p *tosProvider) AccessURL(ctx context.Context, objectKey string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return p.accessURL(objectKey)
+}
+
 // objectURL 拼接对象的公开访问地址（未签名，虚拟主机风格）。
 func (p *tosProvider) objectURL(objectKey string) string {
 	return fmt.Sprintf("https://%s.%s/%s", p.bucketName, p.endpoint, objectKey)

@@ -62,6 +62,10 @@ func (p *cosProvider) PublicURL(objectKey string) string {
 	return p.objectURL(objectKey)
 }
 
+func (p *cosProvider) AccessURL(ctx context.Context, objectKey string) (string, error) {
+	return p.accessURL(ctx, objectKey)
+}
+
 // objectURL 拼接对象的公开访问地址（未签名）。
 func (p *cosProvider) objectURL(objectKey string) string {
 	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", p.bucketName, p.region, objectKey)

@@ -114,3 +114,13 @@ export function sourceVideoPlayUrl(
 export function isLiveIngesting(status: string | undefined): boolean {
   return status === 'waiting' || status === 'connecting' || status === 'live' || status === 'ending';
 }
+
+/** 跟播自有 EVENT 列表从开头起播，便于切片时间轴；源站滑动直播窗仍走直播边沿。 */
+export function hlsStartPositionForSourceVideo(
+  video: Pick<SourceVideo, 'live_status' | 'record_playlist_url'> | null | undefined
+): number | undefined {
+  if (!video) return undefined;
+  if (video.live_status !== 'live' && video.live_status !== 'ending') return undefined;
+  if (!video.record_playlist_url?.trim()) return undefined;
+  return 0;
+}
