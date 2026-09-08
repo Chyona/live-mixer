@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	liveIngestDefaultConcurrency = 2
+	liveIngestDefaultConcurrency = 6
 	liveIngestPollInterval       = 3 * time.Second
 	liveIngestHeartbeat          = 20 * time.Second
 	liveIngestProbeInterval      = 12 * time.Second
