@@ -14,7 +14,7 @@ import {
   SliceProjectTaskReadOnlyAlert,
 } from '~/components/SliceProjectTaskStatus';
 import { AppError } from '~/services/http';
-import { fetchSourceVideoDetail, type SourceVideo } from '~/services/sourceVideo';
+import { fetchSourceVideoDetail, isLiveIngesting, sourceVideoPlayUrl, type SourceVideo } from '~/services/sourceVideo';
 import { submitClip } from '~/services/slice';
 import { submitAiSliceSelection } from '~/services/aiSlice';
 import { type AiPrompt } from '~/services/aiPrompt';
@@ -143,7 +143,7 @@ const SourceVideoSlicePage = () => {
     robots: 'noindex, nofollow',
   });
 
-  const streamUrl = video?.live_url?.trim() ?? '';
+  const streamUrl = video ? sourceVideoPlayUrl(video) : '';
   streamUrlRef.current = streamUrl;
   const hasVideoUrl = Boolean(streamUrl);
   const canPreview = hasVideoUrl && isPlayableVideoUrl(streamUrl);
@@ -271,7 +271,7 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
-      const nextStreamUrl = videoRes.data.live_url?.trim() ?? '';
+      const nextStreamUrl = sourceVideoPlayUrl(videoRes.data);
       const sameStream = streamUrlRef.current === nextStreamUrl;
 
       setVideo(videoRes.data);
@@ -325,6 +325,23 @@ const SourceVideoSlicePage = () => {
     void loadPageData();
   }, [loadPageData]);
 
+  useEffect(() => {
+    if (!video || !isLiveIngesting(video.live_status) || !sourceVideoId) return;
+    const timer = window.setInterval(() => {
+      void fetchSourceVideoDetail(sourceVideoId).then((res) => {
+        if (res.code === 0) {
+          setVideo(res.data);
+          setParagraphs(
+            normalizeTranscriptParagraphs(
+              asrParagraphsToTranscriptParagraphs(res.data.asr_paragraphs)
+            )
+          );
+        }
+      });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [sourceVideoId, video?.id, video?.live_status]);
+
   const isTimelineReady = videoDuration > 0 && !videoError;
   const isTimelineLoading = canPreview && !videoError && videoDuration === 0;
 
@@ -334,8 +351,15 @@ const SourceVideoSlicePage = () => {
   );
 
   const handleDurationChange = useCallback((duration: number) => {
-    setVideoDuration(duration);
-  }, []);
+    if (Number.isFinite(duration) && duration > 0) {
+      setVideoDuration(duration);
+      return;
+    }
+    const backendSec = Number(video?.duration) / 1000;
+    if (Number.isFinite(backendSec) && backendSec > 0) {
+      setVideoDuration(backendSec);
+    }
+  }, [video?.duration]);
 
   const handlePlaybackError = useCallback((message: string) => {
     setVideoError(message);
@@ -769,7 +793,7 @@ const SourceVideoSlicePage = () => {
               <Descriptions.Item label="备注">{video.remark || '-'}</Descriptions.Item>
               <Descriptions.Item label="直播地址">
                 <CopyableText
-                  text={video.live_url}
+                  text={sourceVideoPlayUrl(video)}
                   layout="paragraph"
                   className="slice-source-url"
                   emptyFallback="-"

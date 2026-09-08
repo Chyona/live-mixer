@@ -8,6 +8,8 @@ const (
 
 	// SubDirTemp 临时文件目录（相对 base_path），如 ASR 前上传获取公网 URL。
 	SubDirTemp = "temp"
+	// SubDirLiveRecord 直播跟播分片与最终 mp4 目录（相对 base_path）。
+	SubDirLiveRecord = "live-record"
 	// SubDirTest cmd/test 进程产生的测试上传目录（相对 base_path）；单元测试不受此约定约束。
 	SubDirTest = "test"
 )

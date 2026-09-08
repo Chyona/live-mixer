@@ -60,6 +60,12 @@ func (m *mockLiveRepoForTask) GetByName(ctx context.Context, name string) (*mode
 func (m *mockLiveRepoForTask) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
 	return nil, gorm.ErrRecordNotFound
 }
+func (m *mockLiveRepoForTask) GetByM3U8URL(ctx context.Context, m3u8URL string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+func (m *mockLiveRepoForTask) UpdateM3U8URL(ctx context.Context, id uint, m3u8URL string) error {
+	return nil
+}
 func (m *mockLiveRepoForTask) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }

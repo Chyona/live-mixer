@@ -1,5 +1,16 @@
 export type AsrStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+export type SourceMode = 'upcoming' | 'live' | 'replay';
+
+export type LiveStatus =
+  | 'none'
+  | 'waiting'
+  | 'connecting'
+  | 'live'
+  | 'ending'
+  | 'ended'
+  | 'failed';
+
 /** ASR 词级结果，时间单位为毫秒 */
 export interface LiveAsrWord {
   start_time: number;
@@ -30,6 +41,17 @@ export interface SourceVideo {
   id: number;
   name: string;
   live_url: string;
+  m3u8_url: string;
+  play_url: string;
+  record_playlist_url: string;
+  url_type: 'file' | 'm3u8' | string;
+  source_mode: SourceMode | string;
+  live_status: LiveStatus | string;
+  scheduled_at: string;
+  wait_deadline_at: string;
+  connect_deadline_at: string;
+  asr_cursor_ms: number;
+  ingest_error_msg: string;
   remark: string;
   /** 时长，单位毫秒 */
   duration: number;
@@ -75,4 +97,20 @@ export const SOURCE_VIDEO_URL_DUPLICATE_CODE = 40901;
 
 export function isSourceVideoUrlDuplicateError(payload: { code?: number }): boolean {
   return Number(payload.code) === SOURCE_VIDEO_URL_DUPLICATE_CODE;
+}
+
+export function sourceVideoPlayUrl(
+  video: Pick<SourceVideo, 'play_url' | 'record_playlist_url' | 'm3u8_url' | 'live_url'>
+): string {
+  return (
+    video.play_url?.trim() ||
+    video.record_playlist_url?.trim() ||
+    video.m3u8_url?.trim() ||
+    video.live_url?.trim() ||
+    ''
+  );
+}
+
+export function isLiveIngesting(status: string | undefined): boolean {
+  return status === 'waiting' || status === 'connecting' || status === 'live' || status === 'ending';
 }

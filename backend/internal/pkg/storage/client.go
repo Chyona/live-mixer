@@ -53,6 +53,14 @@ func (c *Client) ObjectKey(parts ...string) string {
 	return JoinObjectKey(c.basePath, key)
 }
 
+// PublicURL 返回相对对象键的未签名直链（自动附加 BasePath）。
+func (c *Client) PublicURL(objectKey string) string {
+	if c == nil || c.provider == nil {
+		return ""
+	}
+	return c.provider.PublicURL(c.ObjectKey(objectKey))
+}
+
 // TempObjectKey 生成临时文件对象键，位于 base_path/temp/ 下。
 func (c *Client) TempObjectKey(parts ...string) string {
 	return c.ObjectKey(append([]string{SubDirTemp}, parts...)...)

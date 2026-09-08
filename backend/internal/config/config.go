@@ -36,6 +36,8 @@ type WorkerConfig struct {
 	AISliceConcurrency int `mapstructure:"ai_slice_concurrency"`
 	// ASRConcurrency 单实例内并行执行直播素材 ASR 的 Worker 数；默认 6。
 	ASRConcurrency int `mapstructure:"asr_concurrency"`
+	// IngestConcurrency 单实例内并行跟播（录像）Worker 数；默认 2。
+	IngestConcurrency int `mapstructure:"ingest_concurrency"`
 	// DraftConcurrency 单实例内并行执行剪映草稿任务的 Worker 数；默认 3。
 	DraftConcurrency int `mapstructure:"draft_concurrency"`
 	// AISliceDraftConcurrency 单实例内并行执行一键成片任务的 Worker 数；默认 3。
@@ -251,6 +253,9 @@ const DefaultAISliceConcurrency = 6
 // DefaultASRConcurrency 直播素材 ASR Worker 默认并发数。
 const DefaultASRConcurrency = 6
 
+// DefaultIngestConcurrency 跟播 Worker 默认并发数。
+const DefaultIngestConcurrency = 2
+
 // DefaultDraftConcurrency 剪映草稿 Worker 默认并发数。
 const DefaultDraftConcurrency = 3
 
@@ -295,6 +300,9 @@ func normalizeWorkerConfig(w *WorkerConfig) {
 	if w.ASRConcurrency <= 0 {
 		w.ASRConcurrency = DefaultASRConcurrency
 	}
+	if w.IngestConcurrency <= 0 {
+		w.IngestConcurrency = DefaultIngestConcurrency
+	}
 	if w.DraftConcurrency <= 0 {
 		w.DraftConcurrency = DefaultDraftConcurrency
 	}
@@ -329,6 +337,14 @@ func (w WorkerConfig) ASRConcurrencyOrDefault() int {
 		return DefaultASRConcurrency
 	}
 	return w.ASRConcurrency
+}
+
+// IngestConcurrencyOrDefault 返回跟播并发（<=0 时回落默认 2）。
+func (w WorkerConfig) IngestConcurrencyOrDefault() int {
+	if w.IngestConcurrency <= 0 {
+		return DefaultIngestConcurrency
+	}
+	return w.IngestConcurrency
 }
 
 // DraftConcurrencyOrDefault 返回可用的草稿并发（<=0 时回落默认 3）。
@@ -566,6 +582,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_WORKER_ASR_CONCURRENCY"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Worker.ASRConcurrency = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_WORKER_INGEST_CONCURRENCY"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.IngestConcurrency = n
 		}
 	}
 	if val, ok := os.LookupEnv("APP_WORKER_DRAFT_CONCURRENCY"); ok {

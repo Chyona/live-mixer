@@ -24,7 +24,10 @@ import {
   fetchSourceVideoList,
   fetchSourceVideoRelatedProjects,
   retrySourceVideoAsr,
+  retrySourceVideoIngest,
   updateSourceVideo,
+  isLiveIngesting,
+  sourceVideoPlayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
 import { formatToDateTime } from '~/utils/date';
@@ -38,7 +41,7 @@ const SOURCE_VIDEOS_LIST_ERROR_SCOPE = 'source-videos-list';
 /** ASR 进行中时列表静默刷新间隔（秒） */
 const ASR_POLL_INTERVAL_MS = 2 * 1000;
 /** v4：默认展示创建时间（旧缓存可能不含该列） */
-const SOURCE_VIDEOS_COLUMN_STORAGE_KEY = 'source-videos-table-columns-v4';
+const SOURCE_VIDEOS_COLUMN_STORAGE_KEY = 'source-videos-table-columns-v5';
 const SOURCE_VIDEOS_LOCKED_COLUMN_KEYS = ['name', 'actions'];
 /** 默认隐藏：ASR 开始/完成时间；创建时间默认展示 */
 const SOURCE_VIDEOS_DEFAULT_HIDDEN_COLUMN_KEYS = ['asr_started_at', 'asr_updated_at'];
@@ -47,6 +50,7 @@ const SOURCE_VIDEOS_COLUMN_SETTINGS: TableColumnSettingItem[] = [
   { key: 'name', label: '源视频名称', locked: true },
   { key: 'remark', label: '备注' },
   { key: 'live_url', label: '视频URL' },
+  { key: 'live_status', label: '跟播状态' },
   { key: 'duration', label: '时长' },
   { key: 'asr_progress', label: 'ASR解析进度' },
   { key: 'asr_started_at', label: 'ASR开始时间' },
@@ -60,7 +64,7 @@ const SOURCE_VIDEOS_COLUMN_SETTINGS: TableColumnSettingItem[] = [
 import AddSourceVideoModal from './AddSourceVideoModal';
 import AsrHitsPanel from './AsrHitsPanel';
 import AsrProgressCell from './AsrProgressCell';
-import { getAsrActionDisabledReason } from './asrUtils';
+import { getAsrActionDisabledReason, LIVE_STATUS_LABEL } from './asrUtils';
 import './index.css';
 
 function renderSliceAction(options: {
@@ -276,7 +280,13 @@ const SourceVideosPage = () => {
   }, [loadList]);
 
   const hasProcessingAsr = useMemo(
-    () => list.some((item) => item.asr_status === 'pending' || item.asr_status === 'processing'),
+    () =>
+      list.some(
+        (item) =>
+          item.asr_status === 'pending' ||
+          item.asr_status === 'processing' ||
+          isLiveIngesting(item.live_status)
+      ),
     [list]
   );
 
@@ -382,6 +392,27 @@ const SourceVideosPage = () => {
     }
   };
 
+  const handleRetryIngest = async (id: number) => {
+    setRetryingAsrId(id);
+    try {
+      const response = await retrySourceVideoIngest(id);
+      if (response.code !== 0) {
+        toast.notify.error(response.message || '重新跟播失败');
+        return;
+      }
+      setList((prev) => prev.map((item) => (item.id === id ? response.data : item)));
+      toast.notify.success('已重新开始跟播');
+    } catch (error) {
+      if (error instanceof AppError) {
+        showAppError(error);
+      } else {
+        toast.notify.error('重新跟播失败');
+      }
+    } finally {
+      setRetryingAsrId(null);
+    }
+  };
+
   const handleDelete = useCallback(async (id: number) => {
     setDeletingId(id);
     try {
@@ -442,14 +473,32 @@ const SourceVideosPage = () => {
         dataIndex: 'live_url',
         key: 'live_url',
         ellipsis: true,
-        render: (url: string) => (
+        render: (_url: string, record) => (
           <CopyableText
-            text={url}
+            text={sourceVideoPlayUrl(record)}
             layout="row"
             className="source-videos-url-cell"
             emptyFallback="-"
           />
         ),
+      },
+      {
+        title: '跟播状态',
+        dataIndex: 'live_status',
+        key: 'live_status',
+        width: 110,
+        render: (status: string, record) => {
+          const label = LIVE_STATUS_LABEL[status] || status || '-';
+          if (status === 'failed') {
+            const msg = record.ingest_error_msg?.trim();
+            return (
+              <span title={msg || label} className="source-videos-live-status is-failed">
+                {label}
+              </span>
+            );
+          }
+          return <span className="source-videos-live-status">{label}</span>;
+        },
       },
       {
         title: '时长',
@@ -467,12 +516,19 @@ const SourceVideosPage = () => {
           <AsrProgressCell
             status={record.asr_status}
             progress={record.asr_progress}
-            errorMessage={record.asr_error_msg}
+            errorMessage={
+              record.live_status === 'failed'
+                ? record.ingest_error_msg || record.asr_error_msg
+                : record.asr_error_msg
+            }
             retrying={retryingAsrId === record.id}
+            retryLabel={record.live_status === 'failed' ? '重新跟播' : '重新解析'}
             onRetry={
-              record.asr_status === 'failed'
-                ? () => void handleRetryAsr(record.id)
-                : undefined
+              record.live_status === 'failed'
+                ? () => void handleRetryIngest(record.id)
+                : record.asr_status === 'failed'
+                  ? () => void handleRetryAsr(record.id)
+                  : undefined
             }
           />
         ),
@@ -544,10 +600,7 @@ const SourceVideosPage = () => {
         width: 245,
         fixed: 'right',
         render: (_, record) => {
-          const asrDisabledReason = getAsrActionDisabledReason(
-            record.asr_status,
-            record.asr_error_msg
-          );
+          const asrDisabledReason = getAsrActionDisabledReason(record);
           const projectCount = getSourceVideoProjectCount(record);
 
           return (
@@ -607,6 +660,7 @@ const SourceVideosPage = () => {
     handleDelete,
     navigate,
     retryingAsrId,
+    handleRetryIngest,
     setVisibleKeys,
     visibleKeySet,
     visibleKeys,

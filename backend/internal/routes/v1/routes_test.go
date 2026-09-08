@@ -322,6 +322,23 @@ func TestRegisterRoutes_ASRRetryProtected(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_IngestRetryProtected(t *testing.T) {
+	secret := "route-test-secret"
+	liveMaterialHandler := v1handler.NewLiveMaterialHandler(nil, nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/v1"), nil, nil, nil, liveMaterialHandler, nil, nil, nil, nil, secret)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/live-materials/1/ingest/retry", nil)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("POST /v1/live-materials/1/ingest/retry without token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
 // TestRegisterRoutes_ASRSubtitleProtected 验证 ASR 字幕下载接口需要 JWT 鉴权。
 func TestRegisterRoutes_ASRSubtitleProtected(t *testing.T) {
 	secret := "route-test-secret"

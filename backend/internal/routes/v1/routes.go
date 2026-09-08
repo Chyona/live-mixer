@@ -48,6 +48,7 @@ func RegisterRoutes(
 		liveMaterials.PUT("/:id", liveMaterialHandler.UpdateLiveMaterial)
 		liveMaterials.DELETE("/:id", liveMaterialHandler.DeleteLiveMaterial)
 		liveMaterials.POST("/:id/asr/retry", liveMaterialHandler.RetryASR)
+		liveMaterials.POST("/:id/ingest/retry", liveMaterialHandler.RetryIngest)
 		liveMaterials.GET("/:id/asr/subtitle", liveMaterialHandler.DownloadASRSubtitle)
 		liveMaterials.GET("/:id/video-projects", videoProjectHandler.ListVideoProjectsByLiveMaterial)
 	}

@@ -229,9 +229,9 @@ func (w *liveMaterialASRWorker) Process(ctx context.Context, material *model.Liv
 	// 下载源媒体 → 探测分辨率 → 转标准 MP3 → 上传对象存储，得到 ASR 可用的公网音频 URL。
 	w.logger.Info("开始音频预处理",
 		zap.Uint("material_id", materialID),
-		zap.String("source_url", material.LiveURL),
+		zap.String("source_url", material.ProcessMediaURL()),
 	)
-	prep, err := w.prepareAudio(ctx, materialID, material.LiveURL, updateProgress)
+	prep, err := w.prepareAudio(ctx, materialID, material.ProcessMediaURL(), updateProgress)
 	if prep.Cleanup != nil {
 		defer prep.Cleanup()
 	}

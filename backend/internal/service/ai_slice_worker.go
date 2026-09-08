@@ -262,8 +262,8 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询直播素材失败: %w", err))
 	}
-	if material.ASRStatus != model.ASRStatusCompleted {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材 ASR 尚未完成"))
+	if material.ASRStatus != model.ASRStatusCompleted && !material.ASRCoversClips(project.Clips0) {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材 ASR 尚未覆盖所选时间段"))
 	}
 
 	progress = setProgress(20)

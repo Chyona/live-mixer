@@ -36,6 +36,36 @@ function withAsrParagraphsField(paragraphs: SourceVideo['asr_paragraphs']) {
   return { asr_paragraphs: paragraphs };
 }
 
+function defaultLiveFields(url = ''): Pick<
+  SourceVideo,
+  | 'm3u8_url'
+  | 'play_url'
+  | 'record_playlist_url'
+  | 'url_type'
+  | 'source_mode'
+  | 'live_status'
+  | 'scheduled_at'
+  | 'wait_deadline_at'
+  | 'connect_deadline_at'
+  | 'asr_cursor_ms'
+  | 'ingest_error_msg'
+> {
+  const isM3u8 = /\.m3u8(\?|$)/i.test(url);
+  return {
+    m3u8_url: isM3u8 ? url : '',
+    play_url: url,
+    record_playlist_url: '',
+    url_type: isM3u8 ? 'm3u8' : 'file',
+    source_mode: 'replay',
+    live_status: 'none',
+    scheduled_at: '',
+    wait_deadline_at: '',
+    connect_deadline_at: '',
+    asr_cursor_ms: 0,
+    ingest_error_msg: '',
+  };
+}
+
 const MOCK_LIVE_TEMPLATES = [
   { name: '周末游戏直播回放', remark: '游戏专场素材' },
   { name: '新品发布会直播', remark: '发布会实录' },
@@ -136,6 +166,7 @@ function buildMockSourceVideos(): MockSourceVideo[] {
       id,
       name: item.name,
       live_url: DEMO_VIDEO_URLS[index % DEMO_VIDEO_URLS.length],
+      ...defaultLiveFields(DEMO_VIDEO_URLS[index % DEMO_VIDEO_URLS.length]),
       remark: item.remark,
       ext: '',
       created_at,
@@ -153,6 +184,7 @@ const sourceVideos: MockSourceVideo[] = [
     id: 999,
     name: '其他用户直播素材',
     live_url: 'rtmp://live.example.com/stream/other',
+    ...defaultLiveFields('rtmp://live.example.com/stream/other'),
     remark: '不应展示',
     duration: 1200 * 1000,
     ext: '',
@@ -378,7 +410,14 @@ export default [
         req.on('end', () => resolve());
       });
 
-      let body: { name?: string; live_url?: string; remark?: string } = {};
+      let body: {
+        name?: string;
+        live_url?: string;
+        m3u8_url?: string;
+        source_mode?: string;
+        scheduled_at?: string;
+        remark?: string;
+      } = {};
       try {
         body = JSON.parse(raw || '{}') as typeof body;
       } catch {
@@ -386,7 +425,7 @@ export default [
       }
 
       const name = body?.name?.trim();
-      const live_url = body?.live_url?.trim();
+      const live_url = (body?.m3u8_url || body?.live_url || '').trim();
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
       if (!name || !live_url) {
@@ -396,7 +435,9 @@ export default [
       }
 
       const duplicatedByUrl = sourceVideos.find(
-        (video) => video.ownerId === CURRENT_USER_ID && video.live_url === live_url
+        (video) =>
+          video.ownerId === CURRENT_USER_ID &&
+          (video.live_url === live_url || video.m3u8_url === live_url)
       );
       if (duplicatedByUrl) {
         res.statusCode = 409;
@@ -414,7 +455,16 @@ export default [
       const item: MockSourceVideo = {
         id: Date.now(),
         name,
-        live_url,
+        live_url: /\.m3u8(\?|$)/i.test(live_url) ? '' : live_url,
+        ...defaultLiveFields(live_url),
+        source_mode: (body.source_mode as SourceVideo['source_mode']) || 'replay',
+        live_status:
+          body.source_mode === 'upcoming'
+            ? 'waiting'
+            : body.source_mode === 'live'
+              ? 'connecting'
+              : 'none',
+        scheduled_at: body.scheduled_at || '',
         remark: body.remark?.trim() || '',
         duration: 0,
         ext: '',
@@ -539,6 +589,36 @@ export default [
       Object.assign(item, createInitialAsrState());
       item.updated_at = nowIso();
 
+      return { code: 0, message: '', data: toPublicItem(item) };
+    },
+  },
+  {
+    url: `${API_PREFIX}/v1/live-materials/:id/ingest/retry`,
+    method: 'post',
+    response: ({
+      body,
+      query,
+    }: {
+      body?: { m3u8_url?: string };
+      query: { id: string };
+    }) => {
+      const item = sourceVideos.find(
+        (video) => String(video.id) === query.id && video.ownerId === CURRENT_USER_ID
+      );
+      if (!item) {
+        return { code: 404, message: '源视频不存在', data: null };
+      }
+      if (item.live_status !== 'failed') {
+        return { code: 400, message: '仅跟播失败的素材可重试', data: null };
+      }
+      if (body?.m3u8_url?.trim()) {
+        item.m3u8_url = body.m3u8_url.trim();
+        item.play_url = item.m3u8_url;
+      }
+      item.live_status = item.source_mode === 'upcoming' ? 'waiting' : 'connecting';
+      item.ingest_error_msg = '';
+      Object.assign(item, createInitialAsrState());
+      item.updated_at = nowIso();
       return { code: 0, message: '', data: toPublicItem(item) };
     },
   },

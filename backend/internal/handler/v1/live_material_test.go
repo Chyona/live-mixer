@@ -19,25 +19,26 @@ import (
 
 // mockLiveMaterialService 用于 handler 单元测试。
 type mockLiveMaterialService struct {
-	createFn               func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
-	updateFn               func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
+	createFn               func(ctx context.Context, createdBy uint, in service.CreateLiveMaterialInput) (*model.LiveMaterial, error)
+	updateFn               func(ctx context.Context, id uint, name, remark, m3u8URL string) (*model.LiveMaterial, error)
 	deleteFn               func(ctx context.Context, id uint) error
 	listFn                 func(ctx context.Context, page, pageSize int, opts service.LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
 	getFn                  func(ctx context.Context, id uint) (*model.LiveMaterial, error)
 	downloadASRSubtitleFn  func(ctx context.Context, id uint) ([]byte, string, error)
 	retryASRFn             func(ctx context.Context, id uint) (*model.LiveMaterial, error)
+	retryIngestFn          func(ctx context.Context, id uint, m3u8URL string) (*model.LiveMaterial, error)
 }
 
-func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
+func (m *mockLiveMaterialService) Create(ctx context.Context, createdBy uint, in service.CreateLiveMaterialInput) (*model.LiveMaterial, error) {
 	if m.createFn != nil {
-		return m.createFn(ctx, createdBy, name, liveURL, remark, ext)
+		return m.createFn(ctx, createdBy, in)
 	}
 	return nil, nil
 }
 
-func (m *mockLiveMaterialService) Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {
+func (m *mockLiveMaterialService) Update(ctx context.Context, id uint, name, remark, m3u8URL string) (*model.LiveMaterial, error) {
 	if m.updateFn != nil {
-		return m.updateFn(ctx, id, name, remark)
+		return m.updateFn(ctx, id, name, remark, m3u8URL)
 	}
 	return nil, nil
 }
@@ -66,6 +67,13 @@ func (m *mockLiveMaterialService) Delete(ctx context.Context, id uint) error {
 func (m *mockLiveMaterialService) RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error) {
 	if m.retryASRFn != nil {
 		return m.retryASRFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockLiveMaterialService) RetryIngest(ctx context.Context, id uint, m3u8URL string) (*model.LiveMaterial, error) {
+	if m.retryIngestFn != nil {
+		return m.retryIngestFn(ctx, id, m3u8URL)
 	}
 	return nil, nil
 }
@@ -265,16 +273,16 @@ func TestLiveMaterialHandler_List_CustomPageSize(t *testing.T) {
 func TestLiveMaterialHandler_Create_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		createFn: func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
+		createFn: func(ctx context.Context, createdBy uint, in service.CreateLiveMaterialInput) (*model.LiveMaterial, error) {
 			if createdBy != 5 {
 				t.Errorf("createdBy = %d, want 5", createdBy)
 			}
 			return &model.LiveMaterial{
 				ID:        1,
-				Name:      name,
-				LiveURL:   liveURL,
+				Name:      in.Name,
+				LiveURL:   in.SourceURL,
 				URLType:   model.URLTypeFile,
-				Remark:    remark,
+				Remark:    in.Remark,
 				CreatedBy: createdBy,
 				ASRStatus: model.ASRStatusPending,
 			}, nil
@@ -341,7 +349,7 @@ func TestLiveMaterialHandler_Create_MissingRequired(t *testing.T) {
 func TestLiveMaterialHandler_Create_ExistsReturns40901(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		createFn: func(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
+		createFn: func(ctx context.Context, createdBy uint, in service.CreateLiveMaterialInput) (*model.LiveMaterial, error) {
 			return nil, &service.LiveMaterialExistsError{
 				Material: &model.LiveMaterial{
 					ID: 9, Name: "已有素材", LiveURL: "https://example.com/exist.mp4",
@@ -405,7 +413,7 @@ func TestLiveMaterialHandler_Create_Unauthorized(t *testing.T) {
 func TestLiveMaterialHandler_Update_Success(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		updateFn: func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {
+		updateFn: func(ctx context.Context, id uint, name, remark, m3u8URL string) (*model.LiveMaterial, error) {
 			if id != 3 {
 				t.Errorf("id = %d, want 3", id)
 			}
@@ -455,7 +463,7 @@ func TestLiveMaterialHandler_Update_Success(t *testing.T) {
 func TestLiveMaterialHandler_Update_NotFound(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
-		updateFn: func(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {
+		updateFn: func(ctx context.Context, id uint, name, remark, m3u8URL string) (*model.LiveMaterial, error) {
 			return nil, service.ErrLiveMaterialNotFound
 		},
 	}, nil)

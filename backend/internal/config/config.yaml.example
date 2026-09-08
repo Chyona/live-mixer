@@ -89,6 +89,7 @@ web:
 worker:
   ai_slice_concurrency: 6      # 单实例同时执行的 AI 切片任务数
   asr_concurrency: 6           # 单实例同时执行的直播素材 ASR 任务数
+  ingest_concurrency: 2        # 单实例同时跟播（录像）的任务数
   draft_concurrency: 3         # 单实例同时执行的剪映草稿任务数
   ai_slice_draft_concurrency: 3 # 单实例同时执行的一键成片任务数
   # processing 孤儿回收阈值（分钟）：心跳字段超时未更新则改回 pending

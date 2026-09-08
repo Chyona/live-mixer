@@ -59,6 +59,10 @@ func (p *tosProvider) Type() ProviderType {
 	return ProviderTOS
 }
 
+func (p *tosProvider) PublicURL(objectKey string) string {
+	return p.objectURL(objectKey)
+}
+
 // objectURL 拼接对象的公开访问地址（未签名，虚拟主机风格）。
 func (p *tosProvider) objectURL(objectKey string) string {
 	return fmt.Sprintf("https://%s.%s/%s", p.bucketName, p.endpoint, objectKey)

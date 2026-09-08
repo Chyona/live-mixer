@@ -42,11 +42,25 @@ CREATE TABLE IF NOT EXISTS live_material (
     id           BIGSERIAL PRIMARY KEY,
     name         VARCHAR(64) NOT NULL,
     remark       VARCHAR(256),
-    live_url     VARCHAR(1024) NOT NULL,
-    -- live_url 类型：file=音视频文件，m3u8=HLS 流
+    live_url     VARCHAR(1024) NOT NULL DEFAULT '',
+    m3u8_url     VARCHAR(1024) NOT NULL DEFAULT '',
+    record_uuid  VARCHAR(64)   NOT NULL DEFAULT '',
+    record_playlist_url VARCHAR(2048) NOT NULL DEFAULT '',
+    -- 当前主地址：file=对象存储 mp4（live_url），m3u8=HLS（用户流或自有分片列表）
     url_type     VARCHAR(16)  NOT NULL DEFAULT 'file',
-    -- 推流直播生命周期：none=非推流；live=推流中可定时 ASR；ending=已关播再跑最后一轮；ended=终态不再调度
+    -- 创建模式：upcoming=将要直播 live=正在直播 replay=回放/文件
+    source_mode  VARCHAR(16)  NOT NULL DEFAULT 'replay',
+    -- 跟播生命周期
     live_status  VARCHAR(16)  NOT NULL DEFAULT 'none',
+    scheduled_at        TIMESTAMPTZ,
+    wait_deadline_at    TIMESTAMPTZ,
+    connect_deadline_at TIMESTAMPTZ,
+    stream_started_at   TIMESTAMPTZ,
+    asr_cursor_ms       BIGINT NOT NULL DEFAULT 0,
+    ingest_epoch        BIGINT NOT NULL DEFAULT 0,
+    next_seg            BIGINT NOT NULL DEFAULT 0,
+    last_heartbeat_at   TIMESTAMPTZ,
+    ingest_error_msg    TEXT,
     live_asr        JSONB         NOT NULL DEFAULT '{}',
     -- AI 总结分段：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟
     asr_summaries   JSONB         NOT NULL DEFAULT '[]',
@@ -71,7 +85,10 @@ CREATE TABLE IF NOT EXISTS live_material (
     CONSTRAINT chk_live_material_asr_progress CHECK (asr_progress BETWEEN 0 AND 100),
     CONSTRAINT chk_live_material_asr_status CHECK (asr_status IN ('pending', 'processing', 'completed', 'failed')),
     CONSTRAINT chk_live_material_url_type CHECK (url_type IN ('file', 'm3u8')),
-    CONSTRAINT chk_live_material_live_status CHECK (live_status IN ('none', 'live', 'ending', 'ended')),
+    CONSTRAINT chk_live_material_source_mode CHECK (source_mode IN ('upcoming', 'live', 'replay')),
+    CONSTRAINT chk_live_material_live_status CHECK (live_status IN ('none', 'waiting', 'connecting', 'live', 'ending', 'ended', 'failed')),
+    CONSTRAINT chk_live_material_asr_cursor CHECK (asr_cursor_ms >= 0),
+    CONSTRAINT chk_live_material_next_seg CHECK (next_seg >= 0),
     CONSTRAINT chk_live_material_width CHECK (width >= 0),
     CONSTRAINT chk_live_material_height CHECK (height >= 0)
 );
@@ -80,9 +97,13 @@ COMMENT ON TABLE live_material IS '直播素材表';
 COMMENT ON COLUMN live_material.id IS '主键';
 COMMENT ON COLUMN live_material.name IS '素材名称（唯一）';
 COMMENT ON COLUMN live_material.remark IS '备注';
-COMMENT ON COLUMN live_material.live_url IS '直播链接（唯一）';
-COMMENT ON COLUMN live_material.url_type IS '直播链接类型：file=音视频文件，m3u8=HLS 流媒体';
-COMMENT ON COLUMN live_material.live_status IS '推流直播状态：none=非推流默认；live=推流中允许定时 ASR；ending=已判定关播再跑最后一轮；ended=终态不再调度';
+COMMENT ON COLUMN live_material.live_url IS '对象存储最终 mp4 地址；直播类创建时预分配且不可改；回放 m3u8 可为空字符串';
+COMMENT ON COLUMN live_material.m3u8_url IS '用户 HLS 拉流地址';
+COMMENT ON COLUMN live_material.record_uuid IS '直播录像对象键 UUID，与 live_url 一同创建';
+COMMENT ON COLUMN live_material.record_playlist_url IS '自有分片 HLS 播放列表，跟播过程中更新';
+COMMENT ON COLUMN live_material.url_type IS '当前主地址：file=live_url mp4；m3u8=HLS';
+COMMENT ON COLUMN live_material.source_mode IS '创建模式：upcoming将要直播 live正在直播 replay回放';
+COMMENT ON COLUMN live_material.live_status IS '跟播状态：none/waiting/connecting/live/ending/ended/failed';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.asr_summaries IS 'AI 总结分段（JSON 数组），格式：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟，时间单位毫秒';
 COMMENT ON COLUMN live_material.asr_paragraphs IS '全文段落划分（JSON 数组），格式：[{"speaker":"1","text":"...","start_time":0,"end_time":100,"words":[{"text":"...","start_time":0,"end_time":0}]}]，时间单位毫秒';
@@ -107,7 +128,12 @@ CREATE INDEX IF NOT EXISTS idx_live_material_live_status ON live_material (live_
 -- 多实例 Worker 按创建时间 FIFO 抢占 pending ASR 时使用
 CREATE INDEX IF NOT EXISTS idx_live_material_asr_status_created_at ON live_material (asr_status, created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_name ON live_material (name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_live_url ON live_material (live_url);
+-- 失败记录不占用唯一，便于同一地址在原素材上重试
+CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_live_url ON live_material (live_url)
+    WHERE live_url <> '' AND live_status <> 'failed';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_m3u8_url ON live_material (m3u8_url)
+    WHERE m3u8_url <> '' AND live_status <> 'failed';
+CREATE INDEX IF NOT EXISTS idx_live_material_ingest_claim ON live_material (live_status, scheduled_at, last_heartbeat_at);
 
 -- 剪辑项目表
 CREATE TABLE IF NOT EXISTS video_project (

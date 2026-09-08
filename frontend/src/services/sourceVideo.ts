@@ -12,16 +12,21 @@ import { AppError, DEFAULT_REQUEST_TIMEOUT_MS, request } from './http';
 
 export type {
   AsrStatus,
+  LiveStatus,
+  SourceMode,
   SourceVideo,
   SourceVideoAsrFields,
 } from './sourceVideo.model';
 export {
   createInitialAsrState,
   isSourceVideoUrlDuplicateError,
+  isLiveIngesting,
+  sourceVideoPlayUrl,
   SOURCE_VIDEO_URL_DUPLICATE_CODE,
 } from './sourceVideo.model';
 
 import type { AsrParagraphs, SourceVideo } from './sourceVideo.model';
+import { sourceVideoPlayUrl } from './sourceVideo.model';
 
 function parseContentDispositionFilename(header?: string): string | null {
   if (!header) return null;
@@ -92,7 +97,10 @@ export interface SourceVideoListResult {
 
 export interface CreateSourceVideoParams {
   name: string;
-  live_url: string;
+  live_url?: string;
+  m3u8_url?: string;
+  source_mode?: string;
+  scheduled_at?: string;
   remark?: string;
 }
 
@@ -163,10 +171,21 @@ function normalizeAsrParagraphs(raw: Record<string, unknown>): AsrParagraphs | n
 export function normalizeSourceVideo(
   raw: Partial<SourceVideo> & Record<string, unknown>
 ): SourceVideo {
-  return {
+  const video: SourceVideo = {
     id: Number(raw.id ?? 0),
     name: String(raw.name ?? ''),
     live_url: String(raw.live_url ?? ''),
+    m3u8_url: String(raw.m3u8_url ?? ''),
+    play_url: String(raw.play_url ?? ''),
+    record_playlist_url: String(raw.record_playlist_url ?? ''),
+    url_type: String(raw.url_type ?? ''),
+    source_mode: String(raw.source_mode ?? 'replay'),
+    live_status: String(raw.live_status ?? 'none'),
+    scheduled_at: String(raw.scheduled_at ?? ''),
+    wait_deadline_at: String(raw.wait_deadline_at ?? ''),
+    connect_deadline_at: String(raw.connect_deadline_at ?? ''),
+    asr_cursor_ms: Number(raw.asr_cursor_ms ?? 0),
+    ingest_error_msg: String(raw.ingest_error_msg ?? ''),
     remark: String(raw.remark ?? ''),
     duration: Number(raw.duration ?? 0),
     ext: String(raw.ext ?? ''),
@@ -185,6 +204,10 @@ export function normalizeSourceVideo(
     asr_paragraphs: normalizeAsrParagraphs(raw),
     asr_summaries: normalizeAsrSummaries(raw.asr_summaries),
   };
+  if (!video.play_url.trim()) {
+    video.play_url = sourceVideoPlayUrl(video);
+  }
+  return video;
 }
 
 export async function fetchSourceVideoList(
@@ -317,6 +340,25 @@ export async function retrySourceVideoAsr(id: SourceVideoId): Promise<BaseRespon
   const response = await request<BaseResponse<SourceVideo>>(`/v1/live-materials/${id}/asr/retry`, {
     method: 'post',
   });
+  return {
+    ...response,
+    data: normalizeSourceVideo(
+      (response.data ?? {}) as Partial<SourceVideo> & Record<string, unknown>
+    ),
+  };
+}
+
+export async function retrySourceVideoIngest(
+  id: SourceVideoId,
+  m3u8Url?: string
+): Promise<BaseResponse<SourceVideo>> {
+  const response = await request<BaseResponse<SourceVideo>>(
+    `/v1/live-materials/${id}/ingest/retry`,
+    {
+      method: 'post',
+      data: m3u8Url ? { m3u8_url: m3u8Url } : {},
+    }
+  );
   return {
     ...response,
     data: normalizeSourceVideo(

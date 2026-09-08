@@ -23,8 +23,12 @@ type LiveMaterialRepository interface {
 	GetByName(ctx context.Context, name string) (*model.LiveMaterial, error)
 	// GetByLiveURL 根据直播链接精确查询。
 	GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error)
+	// GetByM3U8URL 根据 HLS 拉流地址精确查询。
+	GetByM3U8URL(ctx context.Context, m3u8URL string) (*model.LiveMaterial, error)
 	// UpdateNameRemark 仅更新素材名称与备注，防止误改其它字段。
 	UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error
+	// UpdateM3U8URL 仅在 waiting/connecting/failed 时更新拉流地址。
+	UpdateM3U8URL(ctx context.Context, id uint, m3u8URL string) error
 	// ClaimPendingASR 多实例安全地抢占一条 pending ASR 任务。
 	// 使用乐观锁（asr_version CAS）：将状态改为 processing 并返回；无待处理时返回 nil。
 	ClaimPendingASR(ctx context.Context) (*model.LiveMaterial, error)
@@ -115,7 +119,10 @@ func (r *liveMaterialRepository) ClaimPendingASR(ctx context.Context) (*model.Li
 	tried := make(map[uint]struct{})
 	for attempt := 0; attempt < claimOptimisticMaxAttempts; attempt++ {
 		var material model.LiveMaterial
-		query := r.db.WithContext(ctx).Where("asr_status = ?", model.ASRStatusPending)
+		query := r.db.WithContext(ctx).Where(
+			"asr_status = ? AND (live_status = ? OR live_status = '' OR live_status IS NULL)",
+			model.ASRStatusPending, model.LiveStatusNone,
+		)
 		if len(tried) > 0 {
 			query = query.Where("id NOT IN ?", uintSetKeys(tried))
 		}
@@ -172,7 +179,7 @@ func (r *liveMaterialRepository) RequeueStaleProcessingASR(ctx context.Context, 
 	now := time.Now()
 	result := r.db.WithContext(ctx).
 		Model(&model.LiveMaterial{}).
-		Where("asr_status = ? AND asr_updated_at IS NOT NULL AND asr_updated_at < ?", model.ASRStatusProcessing, cutoff).
+		Where("asr_status = ? AND (live_status = ? OR live_status = '' OR live_status IS NULL) AND asr_updated_at IS NOT NULL AND asr_updated_at < ?", model.ASRStatusProcessing, model.LiveStatusNone, cutoff).
 		Updates(map[string]interface{}{
 			"asr_status":    model.ASRStatusPending,
 			"asr_progress":  int16(0),

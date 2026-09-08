@@ -26,6 +26,8 @@ type storageProvider interface {
 	UploadReader(ctx context.Context, r io.Reader, objectKey string, size int64) (string, error)
 	// Type 返回当前后端类型。
 	Type() ProviderType
+	// PublicURL 返回对象的未签名直链（用于预分配且不可变的 live_url）。
+	PublicURL(objectKey string) string
 }
 
 // selectProvider 根据配置选择对象存储后端，优先级为 COS > OSS > TOS。

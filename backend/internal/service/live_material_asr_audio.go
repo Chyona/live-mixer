@@ -147,34 +147,44 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 	}
 
 	report(10)
-	p.logger.Info("开始下载直播素材",
-		zap.Uint("material_id", materialID),
-		zap.String("source_url", sourceURL),
-		zap.String("dest", sourcePath),
-	)
-	stopHeartbeat := startASRDownloadHeartbeat(ctx, materialID, sourceURL, sourcePath, report, p.logger)
-	_, err = p.downloader.Download(ctx, sourceURL, sourcePath)
-	stopHeartbeat()
-	if err != nil {
-		cleanup()
-		return empty, fmt.Errorf("下载直播素材失败: %w", err)
+	probeInput := sourcePath
+	if media.IsM3U8URL(sourceURL) {
+		p.logger.Info("HLS 源跳过整段下载，直接抽音频",
+			zap.Uint("material_id", materialID),
+			zap.String("source_url", sourceURL),
+		)
+		probeInput = sourceURL
+		report(20)
+	} else {
+		p.logger.Info("开始下载直播素材",
+			zap.Uint("material_id", materialID),
+			zap.String("source_url", sourceURL),
+			zap.String("dest", sourcePath),
+		)
+		stopHeartbeat := startASRDownloadHeartbeat(ctx, materialID, sourceURL, sourcePath, report, p.logger)
+		_, err = p.downloader.Download(ctx, sourceURL, sourcePath)
+		stopHeartbeat()
+		if err != nil {
+			cleanup()
+			return empty, fmt.Errorf("下载直播素材失败: %w", err)
+		}
+		p.logger.Info("直播素材下载完成",
+			zap.Uint("material_id", materialID),
+			zap.String("source_url", sourceURL),
+			zap.String("dest", sourcePath),
+		)
+		report(20)
 	}
-	p.logger.Info("直播素材下载完成",
-		zap.Uint("material_id", materialID),
-		zap.String("source_url", sourceURL),
-		zap.String("dest", sourcePath),
-	)
-	report(20)
 
 	// 下载完成后探测时间轴与分辨率；失败不阻断后续 ASR（纯音频无视频轨属正常）。
 	width, height := 0, 0
 	align := media.ASRAlignOptions{}
 	if p.prober != nil {
-		tl, probeErr := p.prober.ProbeMediaTimeline(ctx, sourcePath)
+		tl, probeErr := p.prober.ProbeMediaTimeline(ctx, probeInput)
 		if probeErr != nil {
 			p.logger.Warn("ffprobe 探测直播素材时间轴失败，将使用默认对齐参数",
 				zap.Uint("material_id", materialID),
-				zap.String("source_path", sourcePath),
+				zap.String("source_path", probeInput),
 				zap.Error(probeErr),
 			)
 		} else {
@@ -203,14 +213,14 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 
 	p.logger.Info("开始转码为对齐标准 MP3",
 		zap.Uint("material_id", materialID),
-		zap.String("input", sourcePath),
+		zap.String("input", probeInput),
 		zap.String("output", mp3Path),
 		zap.Int64("lead_pad_ms", align.LeadPadMs),
 		zap.Float64("trim_start_sec", align.TrimStartSec),
 		zap.Float64("target_dur_sec", align.TargetDurSec),
 	)
 	report(25)
-	if err := p.converter.ConvertToASRMP3Aligned(ctx, sourcePath, mp3Path, align); err != nil {
+	if err := p.converter.ConvertToASRMP3Aligned(ctx, probeInput, mp3Path, align); err != nil {
 		cleanup()
 		return empty, fmt.Errorf("转码 ASR MP3 失败: %w", err)
 	}
@@ -229,7 +239,7 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 			zap.Float64("target_dur_sec", align.TargetDurSec),
 		)
 		_ = os.Remove(mp3Path)
-		if err := p.converter.ConvertToASRMP3Aligned(ctx, sourcePath, mp3Path, media.ASRAlignOptions{}); err != nil {
+		if err := p.converter.ConvertToASRMP3Aligned(ctx, probeInput, mp3Path, media.ASRAlignOptions{}); err != nil {
 			cleanup()
 			return empty, fmt.Errorf("无对齐重试转码 ASR MP3 失败: %w", err)
 		}

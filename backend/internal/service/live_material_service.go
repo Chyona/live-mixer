@@ -10,6 +10,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
+	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/repository"
 
 	"gorm.io/gorm"
@@ -80,93 +81,65 @@ var ErrASRSubtitleEmpty = errors.New("ASR 字幕为空，无法导出")
 
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
-	// Create 创建直播素材，createdBy 来自 JWT 当前用户；分辨率由 ASR 预处理 ffprobe 回写。
-	// url_type 由后台根据 live_url 自动识别（含 .m3u8 → m3u8，否则 file），不由客户端传入。
-	Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error)
-	// Update 更新直播素材，仅允许修改 name、remark。
-	Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error)
-	// List 分页查询直播素材列表，不含 live_asr 字段。
+	Create(ctx context.Context, createdBy uint, in CreateLiveMaterialInput) (*model.LiveMaterial, error)
+	Update(ctx context.Context, id uint, name, remark, m3u8URL string) (*model.LiveMaterial, error)
 	List(ctx context.Context, page, pageSize int, opts LiveMaterialListOptions) ([]model.LiveMaterialListItem, int64, error)
-	// Get 根据 ID 获取直播素材完整信息（含 live_asr）。
 	Get(ctx context.Context, id uint) (*model.LiveMaterial, error)
-	// Delete 删除直播素材，并级联删除关联剪辑项目。
 	Delete(ctx context.Context, id uint) error
-	// RetryASR 将失败的 ASR 重置为 pending，由后台 Worker 扫库重试。
 	RetryASR(ctx context.Context, id uint) (*model.LiveMaterial, error)
-	// DownloadASRSubtitle 返回可用于直接下载的 ASR 字幕 TXT 与建议文件名。
+	RetryIngest(ctx context.Context, id uint, m3u8URL string) (*model.LiveMaterial, error)
 	DownloadASRSubtitle(ctx context.Context, id uint) (content []byte, fileName string, err error)
 }
 
 type liveMaterialService struct {
 	liveMaterialRepo repository.LiveMaterialRepository
 	asrWorker        LiveMaterialASRWorker
+	ingestWorker     LiveIngestWorker
+	ingestRepo       repository.LiveIngestRepository
+	allocator        LiveRecordURLAllocator
 }
 
 // NewLiveMaterialService 创建直播素材业务服务实例。
 func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository, asrWorker LiveMaterialASRWorker) LiveMaterialService {
-	return &liveMaterialService{liveMaterialRepo: liveMaterialRepo, asrWorker: asrWorker}
+	return NewLiveMaterialServiceFull(liveMaterialRepo, asrWorker, nil, nil, nil)
 }
 
-func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, name, liveURL, remark, ext string) (*model.LiveMaterial, error) {
-	// 去除首尾空格，避免仅空白字符通过校验。
-	name = strings.TrimSpace(name)
-	liveURL = strings.TrimSpace(liveURL)
-	if name == "" {
-		return nil, errors.New("素材名称不能为空")
+// NewLiveMaterialServiceFull 注入跟播 Worker 与对象存储预分配。
+func NewLiveMaterialServiceFull(
+	liveMaterialRepo repository.LiveMaterialRepository,
+	asrWorker LiveMaterialASRWorker,
+	ingestWorker LiveIngestWorker,
+	ingestRepo repository.LiveIngestRepository,
+	allocator LiveRecordURLAllocator,
+) LiveMaterialService {
+	return &liveMaterialService{
+		liveMaterialRepo: liveMaterialRepo,
+		asrWorker:        asrWorker,
+		ingestWorker:     ingestWorker,
+		ingestRepo:       ingestRepo,
+		allocator:        allocator,
 	}
-	if liveURL == "" {
-		return nil, errors.New("直播链接不能为空")
-	}
-	urlType := detectLiveURLType(liveURL)
-	// 文件类链接仍校验 ASR 支持的后缀；m3u8 流跳过文件格式检测。
-	if urlType == model.URLTypeFile {
-		if _, err := asr.DetectFormat(liveURL); err != nil {
-			if strings.Contains(err.Error(), "不支持的") {
-				return nil, ErrUnsupportedMediaFormat
-			}
-			return nil, err
-		}
-	}
+}
 
-	material := &model.LiveMaterial{
-		Name:          name,
-		Remark:        remark,
-		LiveURL:       liveURL,
-		URLType:       urlType,
-		// 创建时默认为非推流；后续由推流跟播逻辑写入 live/ending/ended。
-		LiveStatus:    model.LiveStatusNone,
-		Ext:           ext,
-		LiveASR:       "{}",
-		ASRSummaries:  []model.ASRSummarySegment{},
-		ASRParagraphs: []model.ASRParagraph{},
-		Duration:      0,
-		// 分辨率由 ASR Worker 下载源媒体后 ffprobe 回写，创建时固定为 0。
-		Width:       0,
-		Height:      0,
-		ASRStatus:   model.ASRStatusPending,
-		ASRProgress: 0,
-		ASRVersion:  0,
-		CreatedBy:   createdBy,
+func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, in CreateLiveMaterialInput) (*model.LiveMaterial, error) {
+	material, err := buildCreateMaterial(createdBy, in, s.allocator)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.liveMaterialRepo.Create(ctx, material); err != nil {
-		return nil, s.resolveCreateUniqueConflict(ctx, name, liveURL, err)
+		return nil, s.resolveCreateUniqueConflict(ctx, material.Name, material.LiveURL, material.M3U8URL, err)
 	}
-	// 仅写库为 pending；唤醒 Worker 尽快扫库抢占（即使无唤醒，定时 poll 也会兜底）。
-	if s.asrWorker != nil {
-		s.asrWorker.Enqueue()
+	if material.IsReplaySource() {
+		if s.asrWorker != nil {
+			s.asrWorker.Enqueue()
+		}
+	} else if s.ingestWorker != nil {
+		s.ingestWorker.Enqueue()
 	}
 	return material, nil
 }
 
-// detectLiveURLType 根据 live_url 识别类型：路径含 .m3u8 视为 HLS，否则为文件。
-func detectLiveURLType(liveURL string) string {
-	if strings.Contains(strings.ToLower(liveURL), ".m3u8") {
-		return model.URLTypeM3U8
-	}
-	return model.URLTypeFile
-}
-
-func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark string) (*model.LiveMaterial, error) {
+func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark, m3u8URL string) (*model.LiveMaterial, error) {
 	material, err := s.liveMaterialRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -180,14 +153,26 @@ func (s *liveMaterialService) Update(ctx context.Context, id uint, name, remark 
 		return nil, errors.New("素材名称不能为空")
 	}
 
-	// 仅修改允许编辑的字段，其它字段保持数据库原值。
 	material.Name = name
 	material.Remark = remark
-
 	if err := s.liveMaterialRepo.UpdateNameRemark(ctx, material); err != nil {
 		return nil, mapLiveMaterialUniqueError(err)
 	}
-	return material, nil
+
+	m3u8URL = strings.TrimSpace(m3u8URL)
+	if m3u8URL != "" && m3u8URL != material.M3U8URL {
+		if !material.CanUpdateM3U8() {
+			return nil, errors.New("当前状态不允许修改 m3u8 地址")
+		}
+		if !isValidHTTPURL(m3u8URL) || !media.IsM3U8URL(m3u8URL) {
+			return nil, ErrUpcomingRequiresM3U8
+		}
+		if err := s.liveMaterialRepo.UpdateM3U8URL(ctx, id, m3u8URL); err != nil {
+			return nil, mapLiveMaterialUniqueError(err)
+		}
+	}
+
+	return s.liveMaterialRepo.GetByID(ctx, id)
 }
 
 // mapLiveMaterialUniqueError 将 name / live_url 唯一约束冲突转为业务错误。
@@ -199,6 +184,9 @@ func mapLiveMaterialUniqueError(err error) error {
 	if !strings.Contains(msg, "unique") && !strings.Contains(msg, "duplicate") {
 		return err
 	}
+	if strings.Contains(msg, "m3u8_url") {
+		return ErrLiveMaterialURLExists
+	}
 	if strings.Contains(msg, "live_url") {
 		return ErrLiveMaterialURLExists
 	}
@@ -209,7 +197,7 @@ func mapLiveMaterialUniqueError(err error) error {
 }
 
 // resolveCreateUniqueConflict 创建唯一冲突时查出已有记录，包装为 LiveMaterialExistsError。
-func (s *liveMaterialService) resolveCreateUniqueConflict(ctx context.Context, name, liveURL string, createErr error) error {
+func (s *liveMaterialService) resolveCreateUniqueConflict(ctx context.Context, name, liveURL, m3u8URL string, createErr error) error {
 	mapped := mapLiveMaterialUniqueError(createErr)
 	if !isLiveMaterialUniqueConflict(mapped) {
 		return mapped
@@ -221,11 +209,19 @@ func (s *liveMaterialService) resolveCreateUniqueConflict(ctx context.Context, n
 	)
 	switch {
 	case errors.Is(mapped, ErrLiveMaterialURLExists):
-		existing, getErr = s.liveMaterialRepo.GetByLiveURL(ctx, liveURL)
+		if m3u8URL != "" {
+			existing, getErr = s.liveMaterialRepo.GetByM3U8URL(ctx, m3u8URL)
+		}
+		if existing == nil {
+			existing, getErr = s.liveMaterialRepo.GetByLiveURL(ctx, liveURL)
+		}
 	case errors.Is(mapped, ErrLiveMaterialNameExists):
 		existing, getErr = s.liveMaterialRepo.GetByName(ctx, name)
 	default:
 		existing, getErr = s.liveMaterialRepo.GetByLiveURL(ctx, liveURL)
+		if getErr != nil && m3u8URL != "" {
+			existing, getErr = s.liveMaterialRepo.GetByM3U8URL(ctx, m3u8URL)
+		}
 		if getErr != nil {
 			existing, getErr = s.liveMaterialRepo.GetByName(ctx, name)
 		}
@@ -330,6 +326,37 @@ func (s *liveMaterialService) RetryASR(ctx context.Context, id uint) (*model.Liv
 	}
 	if s.asrWorker != nil {
 		s.asrWorker.Enqueue()
+	}
+	return material, nil
+}
+
+func (s *liveMaterialService) RetryIngest(ctx context.Context, id uint, m3u8URL string) (*model.LiveMaterial, error) {
+	if s.ingestRepo == nil {
+		return nil, errors.New("跟播服务未配置")
+	}
+	material, err := s.liveMaterialRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLiveMaterialNotFound
+		}
+		return nil, err
+	}
+	if material.LiveStatus != model.LiveStatusFailed {
+		return nil, ErrIngestRetryOnlyFailed
+	}
+	m3u8URL = strings.TrimSpace(m3u8URL)
+	if err := s.ingestRepo.ResetFailedIngest(ctx, id, m3u8URL); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrIngestRetryOnlyFailed
+		}
+		return nil, err
+	}
+	material, err = s.liveMaterialRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.ingestWorker != nil {
+		s.ingestWorker.Enqueue()
 	}
 	return material, nil
 }

@@ -16,6 +16,8 @@ import { AppError } from '~/services/http';
 import {
   downloadSourceVideoAsrSubtitle,
   fetchSourceVideoDetail,
+  isLiveIngesting,
+  sourceVideoPlayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
 import {
@@ -143,7 +145,7 @@ const ManualVideoSlicePage = () => {
     robots: 'noindex, nofollow',
   });
 
-  const streamUrl = video?.live_url?.trim() ?? '';
+  const streamUrl = video ? sourceVideoPlayUrl(video) : '';
   const canPreview = Boolean(streamUrl) && isPlayableVideoUrl(streamUrl);
 
   const getIsDirty = useCallback(() => {
@@ -224,8 +226,15 @@ const ManualVideoSlicePage = () => {
   );
 
   const handleDurationChange = useCallback((duration: number) => {
-    setVideoDuration((prev) => (Math.abs(prev - duration) < 0.001 ? prev : duration));
-  }, []);
+    if (Number.isFinite(duration) && duration > 0) {
+      setVideoDuration((prev) => (Math.abs(prev - duration) < 0.001 ? prev : duration));
+      return;
+    }
+    const backendSec = Number(video?.duration) / 1000;
+    if (Number.isFinite(backendSec) && backendSec > 0) {
+      setVideoDuration((prev) => (Math.abs(prev - backendSec) < 0.001 ? prev : backendSec));
+    }
+  }, [video?.duration]);
 
   const syncProjectIdInUrl = useCallback(
     (nextProjectId: number, options?: { reload?: boolean }) => {
@@ -342,6 +351,20 @@ const ManualVideoSlicePage = () => {
     }
     void loadPageData();
   }, [loadPageData]);
+
+  useEffect(() => {
+    if (!video || !isLiveIngesting(video.live_status) || !sourceVideoId) return;
+    const timer = window.setInterval(() => {
+      void fetchSourceVideoDetail(sourceVideoId).then((res) => {
+        if (res.code !== 0) return;
+        setVideo(res.data);
+        setParagraphs(
+          normalizeTranscriptParagraphs(asrParagraphsToTranscriptParagraphs(res.data.asr_paragraphs))
+        );
+      });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [sourceVideoId, video?.id, video?.live_status]);
 
   useEffect(() => {
     const state = location.state as ManualSliceLocationState | null;

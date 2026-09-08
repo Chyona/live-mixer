@@ -93,6 +93,12 @@ func (m *mockLiveMaterialRepoForProject) GetByName(ctx context.Context, name str
 func (m *mockLiveMaterialRepoForProject) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
 	return nil, gorm.ErrRecordNotFound
 }
+func (m *mockLiveMaterialRepoForProject) GetByM3U8URL(ctx context.Context, m3u8URL string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+func (m *mockLiveMaterialRepoForProject) UpdateM3U8URL(ctx context.Context, id uint, m3u8URL string) error {
+	return nil
+}
 func (m *mockLiveMaterialRepoForProject) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }

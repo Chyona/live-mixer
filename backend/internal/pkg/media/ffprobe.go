@@ -147,23 +147,25 @@ func (p *FFprobeProber) ProbeMediaTimeline(ctx context.Context, inputPath string
 
 // buildProbeVideoSizeArgs 构建 ffprobe 探测视频宽高的参数列表，便于单元测试校验。
 func buildProbeVideoSizeArgs(inputPath string) []string {
-	return []string{
+	args := []string{
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height",
 		"-of", "json",
-		inputPath,
 	}
+	args = append(args, HLSInputArgs(inputPath)...)
+	return append(args, inputPath)
 }
 
 // buildProbeMediaTimelineArgs 构建一次探测音视频时间轴与分辨率的参数。
 func buildProbeMediaTimelineArgs(inputPath string) []string {
-	return []string{
+	args := []string{
 		"-v", "error",
 		"-show_entries", "stream=codec_type,width,height,start_time,duration:format=duration",
 		"-of", "json",
-		inputPath,
 	}
+	args = append(args, HLSInputArgs(inputPath)...)
+	return append(args, inputPath)
 }
 
 // ffprobeStreamJSON 对应 ffprobe -of json 中的单条 stream。

@@ -180,6 +180,9 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 		}
 		return nil, err
 	}
+	if err := requireLiveRecordReady(material); err != nil {
+		return nil, err
+	}
 
 	// 解析最终画布尺寸并写入 task 冗余字段，供列表展示与 Worker 直接使用。
 	width, height := draft.ResolveCanvasSize(input.CanvasWidth, input.CanvasHeight, project)
@@ -202,7 +205,7 @@ func (s *taskService) CreateDraft(ctx context.Context, createdBy uint, input Cre
 		VideoProjectName: project.Name,
 		Width:            width,
 		Height:           height,
-		LiveURL:          material.LiveURL,
+		LiveURL:          material.PlayURL(),
 		LiveName:         material.Name,
 		CreatedBy:        createdBy,
 		Ext:              ext,
@@ -266,9 +269,14 @@ func (s *taskService) createAISliceJobs(ctx context.Context, createdBy uint, in 
 		return nil, err
 	}
 
-	material, err := s.requireASRCompletedMaterial(ctx, in.LiveID)
+	material, err := s.requireASRReadyMaterial(ctx, in.LiveID, in.Clips0)
 	if err != nil {
 		return nil, err
+	}
+	if in.TaskType == model.TaskTypeAISliceDraft {
+		if err := requireLiveRecordReady(material); err != nil {
+			return nil, err
+		}
 	}
 
 	promptID := in.PromptID
@@ -349,7 +357,7 @@ func (s *taskService) createAISliceJobs(ctx context.Context, createdBy uint, in 
 			VideoProjectName: project.Name,
 			Width:            taskWidth,
 			Height:           taskHeight,
-			LiveURL:          material.LiveURL,
+			LiveURL:          material.PlayURL(),
 			LiveName:         material.Name,
 			CreatedBy:        createdBy,
 			Ext:              ext,
@@ -394,9 +402,14 @@ func (s *taskService) createAISliceFromExistingProject(ctx context.Context, crea
 	if err := prepare.ValidateClipRanges(project.Clips0); err != nil {
 		return nil, err
 	}
-	material, err := s.requireASRCompletedMaterial(ctx, project.LiveID)
+	material, err := s.requireASRReadyMaterial(ctx, project.LiveID, project.Clips0)
 	if err != nil {
 		return nil, err
+	}
+	if taskType == model.TaskTypeAISliceDraft {
+		if err := requireLiveRecordReady(material); err != nil {
+			return nil, err
+		}
 	}
 
 	promptID := project.PromptID
@@ -439,7 +452,7 @@ func (s *taskService) createAISliceFromExistingProject(ctx context.Context, crea
 		VideoProjectName: project.Name,
 		Width:            width,
 		Height:           height,
-		LiveURL:          material.LiveURL,
+		LiveURL:          material.PlayURL(),
 		LiveName:         material.Name,
 		CreatedBy:        createdBy,
 		Ext:              ext,
@@ -532,8 +545,8 @@ func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error
 	return filter, nil
 }
 
-// requireASRCompletedMaterial 校验直播素材 ASR 已完成，并返回素材实体供创建任务时写入 live_url / live_name 快照。
-func (s *taskService) requireASRCompletedMaterial(ctx context.Context, liveID uint) (*model.LiveMaterial, error) {
+// requireASRReadyMaterial 回放须 ASR 完成；跟播中只要选区已被窗口 ASR 覆盖即可。
+func (s *taskService) requireASRReadyMaterial(ctx context.Context, liveID uint, clips0 []model.ClipRange) (*model.LiveMaterial, error) {
 	material, err := s.liveMaterialRepo.GetByID(ctx, liveID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -541,10 +554,24 @@ func (s *taskService) requireASRCompletedMaterial(ctx context.Context, liveID ui
 		}
 		return nil, err
 	}
-	if material.ASRStatus != model.ASRStatusCompleted {
-		return nil, ErrTaskASRNotReady
+	if material.ASRStatus == model.ASRStatusCompleted {
+		return material, nil
 	}
-	return material, nil
+	if material.ASRCoversClips(clips0) {
+		return material, nil
+	}
+	return nil, ErrTaskASRNotReady
+}
+
+func requireLiveRecordReady(material *model.LiveMaterial) error {
+	if material.NeedsLiveIngest() && material.URLType != model.URLTypeFile && !material.HasRecordSegments() {
+		return errors.New("直播录像尚未产生可裁剪分片")
+	}
+	return nil
+}
+
+func (s *taskService) requireASRCompletedMaterial(ctx context.Context, liveID uint) (*model.LiveMaterial, error) {
+	return s.requireASRReadyMaterial(ctx, liveID, nil)
 }
 
 func (s *taskService) resolveSysPrompt(ctx context.Context, sysPromptID uint) (string, error) {

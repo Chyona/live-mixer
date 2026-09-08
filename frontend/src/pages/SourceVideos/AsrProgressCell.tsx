@@ -23,10 +23,11 @@ interface AsrProgressCellProps {
   progress: number;
   errorMessage?: string;
   retrying?: boolean;
+  retryLabel?: string;
   onRetry?: () => void;
 }
 
-const AsrProgressCell = ({ status, progress, errorMessage, retrying, onRetry }: AsrProgressCellProps) => {
+const AsrProgressCell = ({ status, progress, errorMessage, retrying, retryLabel, onRetry }: AsrProgressCellProps) => {
   const label = ASR_STATUS_LABEL[status];
 
   if (status === 'pending') {
@@ -59,7 +60,7 @@ const AsrProgressCell = ({ status, progress, errorMessage, retrying, onRetry }: 
             loading={retrying}
             onClick={onRetry}
           >
-            重新解析
+            {retryLabel || '重新解析'}
           </Button>
         ) : null}
       </div>

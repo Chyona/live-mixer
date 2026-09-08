@@ -19,6 +19,10 @@ func (m *mockStorageProvider) Type() ProviderType {
 	return m.providerType
 }
 
+func (m *mockStorageProvider) PublicURL(objectKey string) string {
+	return "https://mock.example.com/" + objectKey
+}
+
 func (m *mockStorageProvider) UploadFile(ctx context.Context, localPath, objectKey string) (string, error) {
 	if m.uploadFileFn != nil {
 		return m.uploadFileFn(ctx, localPath, objectKey)

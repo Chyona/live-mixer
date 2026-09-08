@@ -251,12 +251,11 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	if err != nil {
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("查询直播素材失败: %w", err))
 	}
-	// 优先使用创建任务时快照的 live_url，素材侧为空时仍可继续生成草稿。
-	if material.LiveURL == "" {
+	if material.LiveURL == "" && task.LiveURL != "" {
 		material.LiveURL = task.LiveURL
 	}
-	if material.LiveURL == "" {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材 live_url 为空"))
+	if material.PlayURL() == "" && material.ProcessMediaURL() == "" {
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("直播素材没有可裁剪的媒体地址"))
 	}
 
 	// 画布尺寸优先使用创建时写入 task 的快照；缺失时再按项目/默认值解析。

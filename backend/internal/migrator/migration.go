@@ -38,6 +38,12 @@ var videoProjectMetaColumns = []struct {
 func InitSchema(db *gorm.DB, logger *zap.Logger) error {
 	logger.Info("开始初始化数据库表结构...")
 	migrateErr := db.AutoMigrate(allModels()...)
+	if err := ensureLiveMaterialIngestSchema(db, logger); err != nil {
+		if migrateErr != nil {
+			return fmt.Errorf("数据库表初始化失败: %w; %v", migrateErr, err)
+		}
+		return fmt.Errorf("数据库表初始化失败: %w", err)
+	}
 	if err := ensureVideoProjectMetaColumns(db, logger); err != nil {
 		if migrateErr != nil {
 			return fmt.Errorf("数据库表初始化失败: %w; %v", migrateErr, err)
@@ -87,6 +93,82 @@ func ensureVideoProjectMetaColumns(db *gorm.DB, logger *zap.Logger) error {
 			return fmt.Errorf("补齐后 video_project 仍缺少列 %s（请确认 envinit 已用当前代码重新编译）", col.name)
 		}
 		logger.Info("已补齐 video_project 列", zap.String("column", col.name))
+	}
+	return nil
+}
+
+var liveMaterialIngestColumns = []struct {
+	name string
+	pg   string
+}{
+	{name: "m3u8_url", pg: "VARCHAR(1024) NOT NULL DEFAULT ''"},
+	{name: "record_uuid", pg: "VARCHAR(64) NOT NULL DEFAULT ''"},
+	{name: "record_playlist_url", pg: "VARCHAR(2048) NOT NULL DEFAULT ''"},
+	{name: "source_mode", pg: "VARCHAR(16) NOT NULL DEFAULT 'replay'"},
+	{name: "scheduled_at", pg: "TIMESTAMPTZ"},
+	{name: "wait_deadline_at", pg: "TIMESTAMPTZ"},
+	{name: "connect_deadline_at", pg: "TIMESTAMPTZ"},
+	{name: "stream_started_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_cursor_ms", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "ingest_epoch", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "next_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "last_heartbeat_at", pg: "TIMESTAMPTZ"},
+	{name: "ingest_error_msg", pg: "TEXT"},
+}
+
+// ensureLiveMaterialIngestSchema 补齐跟播列，并把 live_url/m3u8_url 改为部分唯一（失败记录可重试）。
+func ensureLiveMaterialIngestSchema(db *gorm.DB, logger *zap.Logger) error {
+	lm := &model.LiveMaterial{}
+	if !db.Migrator().HasTable(lm) {
+		return fmt.Errorf("live_material 表不存在，无法补齐跟播字段")
+	}
+
+	if db.Dialector.Name() == "postgres" {
+		for _, col := range liveMaterialIngestColumns {
+			if err := db.Exec(
+				"ALTER TABLE ? ADD COLUMN IF NOT EXISTS ? "+col.pg,
+				clause.Table{Name: "live_material"},
+				clause.Column{Name: col.name},
+			).Error; err != nil {
+				return fmt.Errorf("补齐 live_material.%s 失败: %w", col.name, err)
+			}
+		}
+		if err := db.Exec(`ALTER TABLE live_material ALTER COLUMN live_url SET DEFAULT ''`).Error; err != nil {
+			return fmt.Errorf("设置 live_url 默认值失败: %w", err)
+		}
+		_ = db.Exec(`ALTER TABLE live_material DROP CONSTRAINT IF EXISTS chk_live_material_live_status`).Error
+		if err := db.Exec(`ALTER TABLE live_material ADD CONSTRAINT chk_live_material_live_status CHECK (live_status IN ('none', 'waiting', 'connecting', 'live', 'ending', 'ended', 'failed'))`).Error; err != nil {
+			logger.Warn("更新 live_status 约束失败（可能已是新约束）", zap.Error(err))
+		}
+		_ = db.Exec(`ALTER TABLE live_material DROP CONSTRAINT IF EXISTS chk_live_material_source_mode`).Error
+		if err := db.Exec(`ALTER TABLE live_material ADD CONSTRAINT chk_live_material_source_mode CHECK (source_mode IN ('upcoming', 'live', 'replay'))`).Error; err != nil {
+			logger.Warn("更新 source_mode 约束失败（可能已是新约束）", zap.Error(err))
+		}
+		if err := db.Exec(`DROP INDEX IF EXISTS idx_live_material_live_url`).Error; err != nil {
+			return fmt.Errorf("删除旧 live_url 唯一索引失败: %w", err)
+		}
+		if err := db.Exec(`DROP INDEX IF EXISTS uni_live_material_live_url`).Error; err != nil {
+			return fmt.Errorf("删除 GORM live_url 唯一索引失败: %w", err)
+		}
+		if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_live_url ON live_material (live_url) WHERE live_url <> '' AND live_status <> 'failed'`).Error; err != nil {
+			return fmt.Errorf("创建 live_url 部分唯一索引失败: %w", err)
+		}
+		if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_live_material_m3u8_url ON live_material (m3u8_url) WHERE m3u8_url <> '' AND live_status <> 'failed'`).Error; err != nil {
+			return fmt.Errorf("创建 m3u8_url 部分唯一索引失败: %w", err)
+		}
+		if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_live_material_ingest_claim ON live_material (live_status, scheduled_at, last_heartbeat_at)`).Error; err != nil {
+			return fmt.Errorf("创建跟播抢占索引失败: %w", err)
+		}
+	}
+
+	for _, col := range liveMaterialIngestColumns {
+		if db.Migrator().HasColumn(lm, col.name) {
+			continue
+		}
+		if err := db.Migrator().AddColumn(lm, col.name); err != nil {
+			return fmt.Errorf("补齐 live_material.%s 失败: %w", col.name, err)
+		}
+		logger.Info("已补齐 live_material 列", zap.String("column", col.name))
 	}
 	return nil
 }

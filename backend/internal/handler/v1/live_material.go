@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"live-mixer/internal/middleware"
@@ -36,16 +37,24 @@ func NewLiveMaterialHandler(liveMaterialService service.LiveMaterialService, acc
 
 // CreateLiveMaterialRequest 创建直播素材请求体。
 type CreateLiveMaterialRequest struct {
-	Name    string `json:"name" binding:"required,max=64"`
-	LiveURL string `json:"live_url" binding:"required,url,max=1024"`
-	Remark  string `json:"remark" binding:"max=256"`
-	Ext     string `json:"ext" binding:"max=1024"`
+	Name        string     `json:"name" binding:"required,max=64"`
+	LiveURL     string     `json:"live_url" binding:"omitempty,max=1024"`
+	M3U8URL     string     `json:"m3u8_url" binding:"omitempty,max=1024"`
+	SourceMode  string     `json:"source_mode" binding:"omitempty,max=16"`
+	ScheduledAt *time.Time `json:"scheduled_at"`
+	Remark      string     `json:"remark" binding:"max=256"`
+	Ext         string     `json:"ext" binding:"max=1024"`
 }
 
-// UpdateLiveMaterialRequest 更新直播素材请求体（仅允许编辑 name、remark）。
+// UpdateLiveMaterialRequest 更新直播素材请求体（name/remark；waiting 等状态可改 m3u8_url）。
 type UpdateLiveMaterialRequest struct {
-	Name   string `json:"name" binding:"required,max=64"`
-	Remark string `json:"remark" binding:"max=256"`
+	Name    string `json:"name" binding:"required,max=64"`
+	Remark  string `json:"remark" binding:"max=256"`
+	M3U8URL string `json:"m3u8_url" binding:"omitempty,max=1024"`
+}
+
+type RetryIngestRequest struct {
+	M3U8URL string `json:"m3u8_url" binding:"omitempty,max=1024"`
 }
 
 // LiveMaterialDetailResponse 直播素材详情响应，live_asr 为分句数组格式。
@@ -54,9 +63,18 @@ type LiveMaterialDetailResponse struct {
 	ID           uint            `json:"id"`
 	Name         string          `json:"name"`
 	Remark       string          `json:"remark"`
-	LiveURL      string          `json:"live_url"`
-	URLType      string          `json:"url_type"`
-	LiveStatus   string          `json:"live_status"`
+	LiveURL           string          `json:"live_url"`
+	M3U8URL           string          `json:"m3u8_url"`
+	PlayURL           string          `json:"play_url"`
+	RecordPlaylistURL string          `json:"record_playlist_url"`
+	URLType           string          `json:"url_type"`
+	SourceMode        string          `json:"source_mode"`
+	LiveStatus        string          `json:"live_status"`
+	ScheduledAt       *time.Time      `json:"scheduled_at,omitempty"`
+	WaitDeadlineAt    *time.Time      `json:"wait_deadline_at,omitempty"`
+	ConnectDeadlineAt *time.Time      `json:"connect_deadline_at,omitempty"`
+	ASRCursorMS       int64           `json:"asr_cursor_ms"`
+	IngestErrorMsg    string          `json:"ingest_error_msg,omitempty"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
 	ASRSummaries  []model.ASRSummarySegment `json:"asr_summaries"`
 	ASRParagraphs []model.ASRParagraph      `json:"asr_paragraphs"`
@@ -88,9 +106,18 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		ID:             material.ID,
 		Name:           material.Name,
 		Remark:         material.Remark,
-		LiveURL:        material.LiveURL,
-		URLType:        material.URLType,
-		LiveStatus:     material.LiveStatus,
+		LiveURL:           material.LiveURL,
+		M3U8URL:           material.M3U8URL,
+		PlayURL:           material.PlayURL(),
+		RecordPlaylistURL: material.RecordPlaylistURL,
+		URLType:           material.URLType,
+		SourceMode:        material.SourceMode,
+		LiveStatus:        material.LiveStatus,
+		ScheduledAt:       material.ScheduledAt,
+		WaitDeadlineAt:    material.WaitDeadlineAt,
+		ConnectDeadlineAt: material.ConnectDeadlineAt,
+		ASRCursorMS:       material.ASRCursorMS,
+		IngestErrorMsg:    material.IngestErrorMsg,
 		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
 		ASRSummaries:   summaries,
 		ASRParagraphs:  paragraphs,
@@ -115,9 +142,18 @@ type LiveMaterialListResponse struct {
 	ID           uint       `json:"id"`
 	Name         string     `json:"name"`
 	Remark       string     `json:"remark"`
-	LiveURL      string     `json:"live_url"`
-	URLType      string     `json:"url_type"`
-	LiveStatus   string     `json:"live_status"`
+	LiveURL           string     `json:"live_url"`
+	M3U8URL           string     `json:"m3u8_url"`
+	PlayURL           string     `json:"play_url"`
+	RecordPlaylistURL string     `json:"record_playlist_url"`
+	URLType           string     `json:"url_type"`
+	SourceMode        string     `json:"source_mode"`
+	LiveStatus        string     `json:"live_status"`
+	ScheduledAt       *time.Time `json:"scheduled_at,omitempty"`
+	WaitDeadlineAt    *time.Time `json:"wait_deadline_at,omitempty"`
+	ConnectDeadlineAt *time.Time `json:"connect_deadline_at,omitempty"`
+	ASRCursorMS       int64      `json:"asr_cursor_ms"`
+	IngestErrorMsg    string     `json:"ingest_error_msg,omitempty"`
 	Duration     int64      `json:"duration"`
 	Width        int        `json:"width"`
 	Height       int        `json:"height"`
@@ -154,8 +190,17 @@ func (h *LiveMaterialHandler) toLiveMaterialListResponse(ctx context.Context, it
 			Name:              item.Name,
 			Remark:            item.Remark,
 			LiveURL:           item.LiveURL,
+			M3U8URL:           item.M3U8URL,
+			PlayURL:           item.PlayURL(),
+			RecordPlaylistURL: item.RecordPlaylistURL,
 			URLType:           item.URLType,
+			SourceMode:        item.SourceMode,
 			LiveStatus:        item.LiveStatus,
+			ScheduledAt:       item.ScheduledAt,
+			WaitDeadlineAt:    item.WaitDeadlineAt,
+			ConnectDeadlineAt: item.ConnectDeadlineAt,
+			ASRCursorMS:       item.ASRCursorMS,
+			IngestErrorMsg:    item.IngestErrorMsg,
 			Duration:          item.Duration,
 			Width:             item.Width,
 			Height:            item.Height,
@@ -230,7 +275,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 
 // CreateLiveMaterial 创建直播素材
 // @Summary      创建直播素材
-// @Description  添加一条直播素材，name、live_url 为必填；url_type 由后台按 live_url 自动识别写入
+// @Description  添加直播素材。source_mode=upcoming|live|replay；将要/正在直播填 m3u8_url（或 live_url 中的 m3u8）；回放可填 m3u8 或 mp4。live_url 在直播类创建时由服务端预分配且之后不可改。
 // @Tags         直播素材
 // @Accept       json
 // @Produce      json
@@ -255,8 +300,24 @@ func (h *LiveMaterialHandler) CreateLiveMaterial(c *gin.Context) {
 		return
 	}
 
+	sourceURL := strings.TrimSpace(req.M3U8URL)
+	if sourceURL == "" {
+		sourceURL = strings.TrimSpace(req.LiveURL)
+	}
+	if sourceURL == "" {
+		response.BadRequest(c, "直播链接不能为空")
+		return
+	}
+
 	material, err := h.liveMaterialService.Create(
-		c.Request.Context(), user.ID, req.Name, req.LiveURL, req.Remark, req.Ext,
+		c.Request.Context(), user.ID, service.CreateLiveMaterialInput{
+			Name:        req.Name,
+			SourceMode:  req.SourceMode,
+			SourceURL:   sourceURL,
+			ScheduledAt: req.ScheduledAt,
+			Remark:      req.Remark,
+			Ext:         req.Ext,
+		},
 	)
 	if err != nil {
 		var existsErr *service.LiveMaterialExistsError
@@ -331,7 +392,7 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 		return
 	}
 
-	material, err := h.liveMaterialService.Update(c.Request.Context(), uint(id), req.Name, req.Remark)
+	material, err := h.liveMaterialService.Update(c.Request.Context(), uint(id), req.Name, req.Remark, req.M3U8URL)
 	if err != nil {
 		if errors.Is(err, service.ErrLiveMaterialNotFound) {
 			response.NotFound(c, err.Error())
@@ -441,4 +502,42 @@ func (h *LiveMaterialHandler) DownloadASRSubtitle(c *gin.Context) {
 
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
+}
+
+// RetryIngest 重新跟播
+// @Summary      重新跟播
+// @Description  仅 live_status=failed 时可重试；可将 m3u8_url 一并更新后重新进入 waiting/connecting
+// @Tags         直播素材
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int                 true  "素材 ID"
+// @Param        body  body  RetryIngestRequest  false "可选新 m3u8 地址"
+// @Success      200   {object}  response.Body
+// @Failure      400   {object}  response.Body
+// @Failure      404   {object}  response.Body
+// @Security     BearerAuth
+// @Router       /v1/live-materials/{id}/ingest/retry [post]
+func (h *LiveMaterialHandler) RetryIngest(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "无效的素材 ID")
+		return
+	}
+	var req RetryIngestRequest
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+	}
+	material, err := h.liveMaterialService.RetryIngest(c.Request.Context(), id, req.M3U8URL)
+	if err != nil {
+		if errors.Is(err, service.ErrLiveMaterialNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, h.toLiveMaterialDetailResponse(c.Request.Context(), material))
 }

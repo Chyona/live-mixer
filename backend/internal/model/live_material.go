@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 )
 
@@ -12,19 +13,44 @@ const (
 	ASRStatusFailed     = "failed"     // 失败
 )
 
-// live_url 类型常量。
+// live_url / 当前主地址类型。
 const (
-	URLTypeFile = "file" // 音视频文件
-	URLTypeM3U8 = "m3u8" // HLS 流媒体
+	URLTypeFile = "file" // 使用 live_url（对象存储 mp4）
+	URLTypeM3U8 = "m3u8" // 使用 m3u8_url 或跟播分片播放列表
+)
+
+// 创建时用户选择的源模式。
+const (
+	SourceModeUpcoming = "upcoming" // 将要直播
+	SourceModeLive     = "live"     // 正在直播
+	SourceModeReplay   = "replay"   // 回放 / 点播文件
 )
 
 // 推流直播生命周期状态（live_status）。
 const (
-	LiveStatusNone   = "none"   // 默认：非推流直播（文件/点播等）
-	LiveStatusLive   = "live"   // 推流中，允许定时 ASR
-	LiveStatusEnding = "ending" // 已判定关播，再跑最后一轮后停
-	LiveStatusEnded  = "ended"  // 终态，不再调度
+	LiveStatusNone       = "none"       // 回放 / 文件，不跟播
+	LiveStatusWaiting    = "waiting"    // 将要直播，等待开播窗
+	LiveStatusConnecting = "connecting" // 正在直播，尚未读到媒体
+	LiveStatusLive       = "live"       // 已读到媒体，分片录像中
+	LiveStatusEnding     = "ending"     // 关播，正在合成 final.mp4
+	LiveStatusEnded      = "ended"      // 合成成功
+	LiveStatusFailed     = "failed"     // 截止前无流或不可恢复错误
 )
+
+// LiveWaitGrace 将要直播：计划开播后允许延迟开播的时长。
+const LiveWaitGrace = 2 * time.Hour
+
+// LiveConnectGrace 正在直播：创建后允许尚未读到媒体的时长。
+const LiveConnectGrace = 2 * time.Hour
+
+// LiveEarlyProbe 将要直播：计划时间前提前开始探测，减少早开丢片。
+const LiveEarlyProbe = 15 * time.Minute
+
+// LiveSegmentDurationSec 跟播分片时长（秒）。
+const LiveSegmentDurationSec = 6
+
+// LiveASRWindowDuration 窗口 ASR 覆盖的录像时长。
+const LiveASRWindowDuration = 3 * time.Minute
 
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
 // Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。
@@ -45,37 +71,145 @@ type ASRParagraph struct {
 
 // LiveMaterial 直播素材实体。
 type LiveMaterial struct {
-	ID           uint       `gorm:"primaryKey;comment:主键" json:"id"`
-	Name         string     `gorm:"size:64;not null;uniqueIndex;comment:素材名称" json:"name"`
-	Remark       string     `gorm:"size:256;comment:备注" json:"remark"`
-	LiveURL      string     `gorm:"size:1024;not null;uniqueIndex;comment:直播链接" json:"live_url"`
-	// URLType live_url 类型：file=音视频文件，m3u8=HLS 流。
-	URLType      string     `gorm:"column:url_type;size:16;not null;default:file;comment:直播链接类型file或m3u8" json:"url_type"`
-	// LiveStatus 推流直播生命周期：none/live/ending/ended。
-	LiveStatus   string     `gorm:"column:live_status;size:16;not null;default:none;index;comment:推流直播状态none/live/ending/ended" json:"live_status"`
-	LiveASR      string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
-	// ASRSummaries AI 主题分段（仅 title + 时间）；ASRParagraphs 全文段落划分。默认空数组。
-	ASRSummaries  []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
-	ASRParagraphs []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
-	Duration     int64      `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
-	// Width / Height 直播画面分辨率（像素）；0 表示未知。
-	Width        int        `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`
-	Height       int        `gorm:"not null;default:0;comment:直播画面高度像素" json:"height"`
-	ASRStatus    string     `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
-	ASRProgress  int16      `gorm:"column:asr_progress;not null;default:0;comment:ASR识别进度0到100" json:"asr_progress"`
-	ASRErrorMsg  string     `gorm:"column:asr_error_msg;type:text;comment:ASR识别失败原因" json:"asr_error_msg,omitempty"`
-	ASRStartedAt   *time.Time `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
-	ASRUpdatedAt   *time.Time `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
-	ASRCompletedAt *time.Time `gorm:"column:asr_completed_at;comment:ASR识别完成时间" json:"asr_completed_at,omitempty"`
-	// ASRVersion ASR 乐观锁版本号：抢占 pending→processing 时 CAS 递增。
-	ASRVersion int64 `gorm:"column:asr_version;not null;default:0;comment:ASR乐观锁版本号" json:"asr_version"`
-	CreatedBy    uint       `gorm:"not null;index;comment:添加人账号ID" json:"created_by"`
-	CreatedAt    time.Time  `gorm:"comment:添加时间" json:"created_at"`
-	UpdatedAt    time.Time  `gorm:"comment:最后更新时间" json:"updated_at"`
-	Ext          string     `gorm:"size:1024;comment:扩展字段" json:"ext"`
+	ID     uint   `gorm:"primaryKey;comment:主键" json:"id"`
+	Name   string `gorm:"size:64;not null;uniqueIndex;comment:素材名称" json:"name"`
+	Remark string `gorm:"size:256;comment:备注" json:"remark"`
+	// LiveURL 对象存储最终 mp4。直播类创建时预分配，INSERT 后禁止修改。回放 m3u8 可为空。
+	LiveURL string `gorm:"column:live_url;size:1024;not null;default:'';comment:对象存储mp4地址" json:"live_url"`
+	// M3U8URL 用户填写的 HLS 拉流地址。
+	M3U8URL string `gorm:"column:m3u8_url;size:1024;not null;default:'';comment:HLS拉流地址" json:"m3u8_url"`
+	// RecordUUID 直播录像对象键前缀，与 live_url 一同在创建时生成。
+	RecordUUID string `gorm:"column:record_uuid;size:64;not null;default:'';comment:录像对象键UUID" json:"record_uuid"`
+	// RecordPlaylistURL 自有分片播放列表（跟播过程中可更新）。
+	RecordPlaylistURL string `gorm:"column:record_playlist_url;size:2048;not null;default:'';comment:自有HLS播放列表" json:"record_playlist_url"`
+	// URLType 当前成片/点播主地址：m3u8 或 file。
+	URLType string `gorm:"column:url_type;size:16;not null;default:file;comment:当前主地址file或m3u8" json:"url_type"`
+	// SourceMode 创建模式：upcoming/live/replay。
+	SourceMode string `gorm:"column:source_mode;size:16;not null;default:replay;comment:upcoming/live/replay" json:"source_mode"`
+	// LiveStatus 跟播生命周期。
+	LiveStatus string `gorm:"column:live_status;size:16;not null;default:none;index;comment:跟播状态" json:"live_status"`
+	ScheduledAt      *time.Time `gorm:"column:scheduled_at;comment:计划开播时间" json:"scheduled_at,omitempty"`
+	WaitDeadlineAt   *time.Time `gorm:"column:wait_deadline_at;comment:将要直播开播截止" json:"wait_deadline_at,omitempty"`
+	ConnectDeadlineAt *time.Time `gorm:"column:connect_deadline_at;comment:正在直播连上截止" json:"connect_deadline_at,omitempty"`
+	StreamStartedAt  *time.Time `gorm:"column:stream_started_at;comment:第一次读到媒体的时间" json:"stream_started_at,omitempty"`
+	ASRCursorMS      int64      `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
+	IngestEpoch      int64      `gorm:"column:ingest_epoch;not null;default:0;comment:跟播抢占代数" json:"ingest_epoch"`
+	NextSeg          int64      `gorm:"column:next_seg;not null;default:0;comment:下一分片序号" json:"next_seg"`
+	LastHeartbeatAt  *time.Time `gorm:"column:last_heartbeat_at;comment:跟播心跳" json:"last_heartbeat_at,omitempty"`
+	IngestErrorMsg   string     `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
+	LiveASR          string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
+	ASRSummaries     []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
+	ASRParagraphs    []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
+	Duration         int64               `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
+	Width            int                 `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`
+	Height           int                 `gorm:"not null;default:0;comment:直播画面高度像素" json:"height"`
+	ASRStatus        string              `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
+	ASRProgress      int16               `gorm:"column:asr_progress;not null;default:0;comment:ASR识别进度0到100" json:"asr_progress"`
+	ASRErrorMsg      string              `gorm:"column:asr_error_msg;type:text;comment:ASR识别失败原因" json:"asr_error_msg,omitempty"`
+	ASRStartedAt     *time.Time          `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
+	ASRUpdatedAt     *time.Time          `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
+	ASRCompletedAt   *time.Time          `gorm:"column:asr_completed_at;comment:ASR识别完成时间" json:"asr_completed_at,omitempty"`
+	ASRVersion       int64               `gorm:"column:asr_version;not null;default:0;comment:ASR乐观锁版本号" json:"asr_version"`
+	CreatedBy        uint                `gorm:"not null;index;comment:添加人账号ID" json:"created_by"`
+	CreatedAt        time.Time           `gorm:"comment:添加时间" json:"created_at"`
+	UpdatedAt        time.Time           `gorm:"comment:最后更新时间" json:"updated_at"`
+	Ext              string              `gorm:"size:1024;comment:扩展字段" json:"ext"`
 }
 
 // TableName 指定直播素材表名。
 func (LiveMaterial) TableName() string {
 	return "live_material"
+}
+
+// IsReplaySource 回放 / 文件，不走跟播引擎。
+func (m *LiveMaterial) IsReplaySource() bool {
+	if m == nil {
+		return true
+	}
+	return m.SourceMode == SourceModeReplay || m.SourceMode == "" || m.LiveStatus == LiveStatusNone
+}
+
+// NeedsLiveIngest 将要直播或正在直播（含失败后可重试）。
+func (m *LiveMaterial) NeedsLiveIngest() bool {
+	if m == nil {
+		return false
+	}
+	return m.SourceMode == SourceModeUpcoming || m.SourceMode == SourceModeLive
+}
+
+// CanUpdateM3U8 等待/连接/失败阶段允许刷新拉流地址。
+func (m *LiveMaterial) CanUpdateM3U8() bool {
+	if m == nil {
+		return false
+	}
+	switch m.LiveStatus {
+	case LiveStatusWaiting, LiveStatusConnecting, LiveStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// PlayURL 前端播放地址：关播后用 mp4；跟播中用自有分片列表；否则用户 m3u8 或 live_url。
+func (m *LiveMaterial) PlayURL() string {
+	if m == nil {
+		return ""
+	}
+	if m.URLType == URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
+		return m.LiveURL
+	}
+	switch m.LiveStatus {
+	case LiveStatusLive, LiveStatusEnding:
+		if u := strings.TrimSpace(m.RecordPlaylistURL); u != "" {
+			return u
+		}
+	}
+	if u := strings.TrimSpace(m.M3U8URL); u != "" {
+		return u
+	}
+	return strings.TrimSpace(m.LiveURL)
+}
+
+// ProcessMediaURL ASR（回放）与成片在 url_type=file 或回放 m3u8 时使用的媒体地址。
+func (m *LiveMaterial) ProcessMediaURL() string {
+	if m == nil {
+		return ""
+	}
+	if m.URLType == URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
+		return m.LiveURL
+	}
+	if u := strings.TrimSpace(m.M3U8URL); u != "" {
+		return u
+	}
+	return strings.TrimSpace(m.LiveURL)
+}
+
+// HasRecordSegments 是否已有跟播分片（可用于直播中裁剪）。
+func (m *LiveMaterial) HasRecordSegments() bool {
+	return m != nil && m.NextSeg > 0 && strings.TrimSpace(m.RecordUUID) != ""
+}
+
+// ASRCoversClips 选区是否已落在已转写范围内（完成态或直播窗口 ASR）。
+func (m *LiveMaterial) ASRCoversClips(clips []ClipRange) bool {
+	if m == nil {
+		return false
+	}
+	if m.ASRStatus == ASRStatusCompleted {
+		return true
+	}
+	if !m.NeedsLiveIngest() {
+		return false
+	}
+	switch m.LiveStatus {
+	case LiveStatusLive, LiveStatusEnding, LiveStatusEnded:
+	default:
+		return false
+	}
+	var maxEnd int64
+	for _, c := range clips {
+		if c.EndTime > maxEnd {
+			maxEnd = c.EndTime
+		}
+	}
+	return maxEnd > 0 && maxEnd <= m.ASRCursorMS
 }

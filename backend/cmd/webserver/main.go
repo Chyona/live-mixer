@@ -63,6 +63,7 @@ func main() {
 
 	accountRepo := repository.NewAccountRepository(db)
 	liveMaterialRepo := repository.NewLiveMaterialRepository(db)
+	liveIngestRepo := repository.NewLiveIngestRepository(db)
 	videoProjectRepo := repository.NewVideoProjectRepository(db)
 	llmPromptRepo := repository.NewLLMSystemPromptRepository(db)
 	taskRepo := repository.NewTaskRepository(db)
@@ -149,9 +150,26 @@ func main() {
 		cfg.Worker.AISliceDraftStaleTimeout(),
 	)
 
+	ingestWorker := service.NewLiveIngestWorker(
+		liveIngestRepo,
+		asrService,
+		audioPreparer,
+		asrLLM,
+		storageClient,
+		web,
+		logger,
+		cfg.Worker.IngestConcurrencyOrDefault(),
+	)
+
 	accountService := service.NewAccountService(accountRepo)
 	authService := service.NewAuthService(accountRepo, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
-	liveMaterialService := service.NewLiveMaterialService(liveMaterialRepo, asrWorker)
+	liveMaterialService := service.NewLiveMaterialServiceFull(
+		liveMaterialRepo,
+		asrWorker,
+		ingestWorker,
+		liveIngestRepo,
+		service.NewStorageLiveURLAllocator(storageClient),
+	)
 	llmPromptService := service.NewLLMSystemPromptService(llmPromptRepo)
 	videoProjectService := service.NewVideoProjectServiceWithLogger(videoProjectRepo, liveMaterialRepo, logger)
 	taskService := service.NewTaskService(
@@ -169,6 +187,7 @@ func main() {
 	defer stop()
 
 	asrWorker.Start(ctx)
+	ingestWorker.Start(ctx)
 	aiSliceWorker.Start(ctx)
 	draftWorker.Start(ctx)
 	aiSliceDraftWorker.Start(ctx)

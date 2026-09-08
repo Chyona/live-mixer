@@ -66,6 +66,25 @@ func (m *mockLiveMaterialRepo) GetByLiveURL(ctx context.Context, liveURL string)
 	return nil, gorm.ErrRecordNotFound
 }
 
+func (m *mockLiveMaterialRepo) GetByM3U8URL(ctx context.Context, m3u8URL string) (*model.LiveMaterial, error) {
+	for _, material := range m.materials {
+		if material.M3U8URL == m3u8URL {
+			stored := *material
+			return &stored, nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (m *mockLiveMaterialRepo) UpdateM3U8URL(ctx context.Context, id uint, m3u8URL string) error {
+	existing, ok := m.materials[id]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	existing.M3U8URL = m3u8URL
+	return nil
+}
+
 func (m *mockLiveMaterialRepo) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	if m.updateFn != nil {
 		return m.updateFn(ctx, material)
@@ -134,7 +153,9 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, nil)
 
-	material, err := svc.Create(context.Background(), 2, "  测试素材  ", " https://example.com/live.mp4 ", "备注", "")
+	material, err := svc.Create(context.Background(), 2, CreateLiveMaterialInput{
+		Name: "  测试素材  ", SourceURL: " https://example.com/live.mp4 ", Remark: "备注",
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -177,7 +198,7 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 // TestLiveMaterialService_Create_EmptyName 验证名称为纯空格时拒绝创建。
 func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "   ", "https://example.com/live.mp4", "", "")
+	_, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "   ", SourceURL: "https://example.com/live.mp4"})
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -189,7 +210,7 @@ func TestLiveMaterialService_Create_EmptyName(t *testing.T) {
 // TestLiveMaterialService_Create_EmptyLiveURL 验证直播链接为空时拒绝创建。
 func TestLiveMaterialService_Create_EmptyLiveURL(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "  ", "", "")
+	_, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "素材", SourceURL: "  "})
 	if err == nil {
 		t.Fatal("expected error for empty live_url")
 	}
@@ -212,7 +233,7 @@ func TestLiveMaterialService_Update_Success(t *testing.T) {
 	}
 	svc := NewLiveMaterialService(repo, nil)
 
-	material, err := svc.Update(context.Background(), 1, "  新名称  ", "新备注")
+	material, err := svc.Update(context.Background(), 1, "  新名称  ", "新备注", "")
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
@@ -232,7 +253,7 @@ func TestLiveMaterialService_Update_Success(t *testing.T) {
 // TestLiveMaterialService_Update_NotFound 验证素材不存在时返回错误。
 func TestLiveMaterialService_Update_NotFound(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{materials: map[uint]*model.LiveMaterial{}}, nil)
-	_, err := svc.Update(context.Background(), 99, "名称", "备注")
+	_, err := svc.Update(context.Background(), 99, "名称", "备注", "")
 	if err == nil {
 		t.Fatal("expected error for not found")
 	}
@@ -250,7 +271,7 @@ func TestLiveMaterialService_Update_EmptyName(t *testing.T) {
 	}
 	svc := NewLiveMaterialService(repo, nil)
 
-	_, err := svc.Update(context.Background(), 1, "   ", "备注")
+	_, err := svc.Update(context.Background(), 1, "   ", "备注", "")
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -267,7 +288,7 @@ func TestLiveMaterialService_Create_RepoError(t *testing.T) {
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/a.mp4", "", "")
+	_, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "素材", SourceURL: "https://example.com/a.mp4"})
 	if err == nil || err.Error() != "db down" {
 		t.Errorf("error = %v, want db down", err)
 	}
@@ -286,7 +307,7 @@ func TestLiveMaterialService_Create_URLExistsReturnsExisting(t *testing.T) {
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)
-	got, err := svc.Create(context.Background(), 2, "新名称", "https://example.com/same.mp4", "", "")
+	got, err := svc.Create(context.Background(), 2, CreateLiveMaterialInput{Name: "新名称", SourceURL: "https://example.com/same.mp4"})
 	if got != nil {
 		t.Fatalf("material = %+v, want nil", got)
 	}
@@ -359,7 +380,7 @@ func TestLiveMaterialService_Get_Success(t *testing.T) {
 // TestLiveMaterialService_Create_UnsupportedFormat 验证不支持的媒体格式拒绝创建。
 func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	_, err := svc.Create(context.Background(), 1, "素材", "https://example.com/audio.flac", "", "")
+	_, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "素材", SourceURL: "https://example.com/audio.flac"})
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -371,7 +392,7 @@ func TestLiveMaterialService_Create_UnsupportedFormat(t *testing.T) {
 // TestLiveMaterialService_Create_MOV 验证 mov 视频链接可创建。
 func TestLiveMaterialService_Create_MOV(t *testing.T) {
 	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
-	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mov", "", "")
+	material, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "素材", SourceURL: "https://example.com/live.mov"})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -388,12 +409,24 @@ func TestLiveMaterialService_Create_M3U8(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, nil)
 
-	material, err := svc.Create(context.Background(), 1, "直播流", "https://example.com/live/index.m3u8", "", "")
+	material, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "直播流", SourceURL: "https://example.com/live/index.m3u8"})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if material.URLType != model.URLTypeM3U8 {
 		t.Errorf("URLType = %q, want %q", material.URLType, model.URLTypeM3U8)
+	}
+	if material.M3U8URL != "https://example.com/live/index.m3u8" {
+		t.Errorf("M3U8URL = %q, want playlist url", material.M3U8URL)
+	}
+	if material.LiveURL != "" {
+		t.Errorf("LiveURL = %q, want empty for replay m3u8", material.LiveURL)
+	}
+	if material.LiveStatus != model.LiveStatusNone {
+		t.Errorf("LiveStatus = %q, want none", material.LiveStatus)
+	}
+	if material.SourceMode != model.SourceModeReplay {
+		t.Errorf("SourceMode = %q, want replay", material.SourceMode)
 	}
 }
 
@@ -406,7 +439,7 @@ func TestLiveMaterialService_Create_WakesASRWorker(t *testing.T) {
 	repo := &mockLiveMaterialRepo{}
 	svc := NewLiveMaterialService(repo, worker)
 
-	material, err := svc.Create(context.Background(), 1, "素材", "https://example.com/live.mp4", "", "")
+	material, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{Name: "素材", SourceURL: "https://example.com/live.mp4"})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -647,5 +680,59 @@ func TestLiveMaterialService_DownloadASRSubtitle_NotFound(t *testing.T) {
 	_, _, err := svc.DownloadASRSubtitle(context.Background(), 99)
 	if !errors.Is(err, ErrLiveMaterialNotFound) {
 		t.Errorf("error = %v, want %v", err, ErrLiveMaterialNotFound)
+	}
+}
+
+func TestLiveMaterialService_Create_UpcomingAndLive(t *testing.T) {
+	svc := NewLiveMaterialService(&mockLiveMaterialRepo{}, nil)
+	scheduled := time.Now().UTC().Add(30 * time.Minute)
+	upcoming, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "将要直播", SourceMode: model.SourceModeUpcoming,
+		SourceURL: "https://example.com/up/index.m3u8", ScheduledAt: &scheduled,
+	})
+	if err != nil {
+		t.Fatalf("upcoming Create() error = %v", err)
+	}
+	if upcoming.LiveStatus != model.LiveStatusWaiting {
+		t.Errorf("upcoming LiveStatus = %q, want waiting", upcoming.LiveStatus)
+	}
+	if upcoming.LiveURL == "" || upcoming.RecordUUID == "" {
+		t.Fatal("upcoming should pre-allocate live_url and record_uuid")
+	}
+	if upcoming.M3U8URL != "https://example.com/up/index.m3u8" {
+		t.Errorf("upcoming M3U8URL = %q", upcoming.M3U8URL)
+	}
+	if upcoming.URLType != model.URLTypeM3U8 {
+		t.Errorf("upcoming URLType = %q", upcoming.URLType)
+	}
+
+	live, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "正在直播", SourceMode: model.SourceModeLive,
+		SourceURL: "https://example.com/now/index.m3u8",
+	})
+	if err != nil {
+		t.Fatalf("live Create() error = %v", err)
+	}
+	if live.LiveStatus != model.LiveStatusConnecting {
+		t.Errorf("live LiveStatus = %q, want connecting", live.LiveStatus)
+	}
+	if live.ConnectDeadlineAt == nil {
+		t.Fatal("live ConnectDeadlineAt should be set")
+	}
+
+	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "缺计划", SourceMode: model.SourceModeUpcoming,
+		SourceURL: "https://example.com/miss/index.m3u8",
+	})
+	if !errors.Is(err, ErrScheduledAtRequired) {
+		t.Errorf("missing scheduled_at error = %v", err)
+	}
+
+	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "非m3u8", SourceMode: model.SourceModeLive,
+		SourceURL: "https://example.com/a.mp4",
+	})
+	if !errors.Is(err, ErrUpcomingRequiresM3U8) {
+		t.Errorf("mp4 live error = %v", err)
 	}
 }

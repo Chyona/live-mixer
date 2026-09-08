@@ -55,6 +55,7 @@ func (c *FFmpegConverter) ConvertToASRMP3Aligned(ctx context.Context, inputPath,
 	}
 
 	args := buildASRMP3Args(c.resolvedSampleRate(), c.resolvedChannels(), c.resolvedMP3Bitrate(), inputPath, outputPath, align)
+	args = prependHLSInputArgs(args, inputPath)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -244,6 +245,7 @@ func (c *FFmpegConverter) runCutVideo(ctx context.Context, inputPath, outputPath
 	} else {
 		args = buildCutVideoArgs(inputPath, outputPath, startSec, endSec)
 	}
+	args = prependHLSInputArgs(args, inputPath)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

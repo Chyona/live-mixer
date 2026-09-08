@@ -11,6 +11,7 @@ import (
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/media"
 
 	"go.uber.org/zap"
 )
@@ -54,8 +55,12 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	if s == nil {
 		return fmt.Errorf("session 不能为空")
 	}
-	if s.Material == nil || s.Material.LiveURL == "" {
-		return fmt.Errorf("直播素材 live_url 为空")
+	if s.Material == nil {
+		return fmt.Errorf("直播素材为空")
+	}
+	sourceURL := resolveDraftSourceURL(s.Material)
+	if sourceURL == "" {
+		return fmt.Errorf("直播素材没有可裁剪的媒体地址")
 	}
 	if p.Downloader == nil {
 		return fmt.Errorf("下载器未配置")
@@ -71,24 +76,29 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 		return fmt.Errorf("创建 capcut-mate 录制目录失败: %w", err)
 	}
 
-	p.Logger.Info("开始下载直播视频",
+	skipDownload := media.IsM3U8URL(sourceURL)
+	p.Logger.Info("开始准备直播视频",
 		zap.String("job_id", s.JobID),
-		zap.String("live_url", s.Material.LiveURL),
+		zap.String("source_url", sourceURL),
+		zap.Bool("hls_direct", skipDownload),
 		zap.String("staging_dir", s.StagingDir),
 	)
 	s.ReportProgress(15)
 
-	s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
-	stopHeartbeat := startDownloadHeartbeat(ctx, s)
-	_, err := p.Downloader.Download(ctx, s.Material.LiveURL, s.SourcePath)
-	stopHeartbeat()
-	if err != nil {
-		_ = os.Remove(s.SourcePath)
-		s.SourcePath = ""
-		return fmt.Errorf("下载直播视频失败: %w", err)
+	if skipDownload {
+		s.SourcePath = sourceURL
+	} else {
+		s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
+		stopHeartbeat := startDownloadHeartbeat(ctx, s)
+		_, err := p.Downloader.Download(ctx, sourceURL, s.SourcePath)
+		stopHeartbeat()
+		if err != nil {
+			_ = os.Remove(s.SourcePath)
+			s.SourcePath = ""
+			return fmt.Errorf("下载直播视频失败: %w", err)
+		}
+		defer p.removeDownloadedSource(s)
 	}
-	// 后续步骤只使用 clip_XXX.mp4；源文件往往数 GB，裁剪结束后立即删除以免占满磁盘。
-	defer p.removeDownloadedSource(s)
 
 	s.ReportProgress(25)
 
@@ -99,6 +109,21 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ClipPaths = paths
 	s.ReportProgress(50)
 	return nil
+}
+
+func resolveDraftSourceURL(m *model.LiveMaterial) string {
+	if m == nil {
+		return ""
+	}
+	if m.URLType == model.URLTypeFile && m.LiveURL != "" {
+		return m.LiveURL
+	}
+	if m.LiveStatus == model.LiveStatusLive || m.LiveStatus == model.LiveStatusEnding {
+		if m.RecordPlaylistURL != "" {
+			return m.RecordPlaylistURL
+		}
+	}
+	return m.ProcessMediaURL()
 }
 
 // removeDownloadedSource 删除 prepare 下载的全量直播源；文件不存在时忽略。

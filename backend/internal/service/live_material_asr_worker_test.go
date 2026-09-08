@@ -101,6 +101,12 @@ func (m *workerMockRepo) GetByName(ctx context.Context, name string) (*model.Liv
 func (m *workerMockRepo) GetByLiveURL(ctx context.Context, liveURL string) (*model.LiveMaterial, error) {
 	return nil, gorm.ErrRecordNotFound
 }
+func (m *workerMockRepo) GetByM3U8URL(ctx context.Context, m3u8URL string) (*model.LiveMaterial, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+func (m *workerMockRepo) UpdateM3U8URL(ctx context.Context, id uint, m3u8URL string) error {
+	return nil
+}
 func (m *workerMockRepo) UpdateNameRemark(ctx context.Context, material *model.LiveMaterial) error {
 	return nil
 }
