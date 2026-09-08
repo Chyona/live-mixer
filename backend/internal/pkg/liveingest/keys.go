@@ -26,7 +26,22 @@ func PlaylistObjectKey(recordUUID string) string {
 
 // SegmentObjectKey 分片相对键。
 func SegmentObjectKey(recordUUID string, epoch, index int64) string {
+	if epoch < 0 {
+		epoch = 0
+	}
 	return path.Join(RecordPrefix(recordUUID), "seg", fmt.Sprintf("%d", epoch), fmt.Sprintf("seg_%05d.ts", index))
+}
+
+// SegmentStorageEpoch 抢占会增加 ingest_epoch，续录前已上传的分片仍在上一代数目录。
+func SegmentStorageEpoch(claimEpoch, resumeFrom, index int64) int64 {
+	epoch := claimEpoch
+	if epoch < 1 {
+		epoch = 1
+	}
+	if claimEpoch > 1 && resumeFrom > 0 && index < resumeFrom {
+		return claimEpoch - 1
+	}
+	return epoch
 }
 
 // SegmentFileName 本地分片文件名。

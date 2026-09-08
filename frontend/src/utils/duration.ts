@@ -39,3 +39,23 @@ export function formatMediaTime(seconds: number, withMs = false): string {
 
   return withMs ? `${base}.${String(ms).padStart(3, '0')}` : base;
 }
+
+/** 切片时间轴时长（秒）。跟播 HLS 常为 Infinity，需回退后端已录时长。 */
+export function resolveSliceTimelineDurationSec(input: {
+  playerDurationSec?: number;
+  backendDurationMs?: number;
+  asrCursorMs?: number;
+  liveIngesting?: boolean;
+}): number {
+  const player = Number(input.playerDurationSec);
+  const backend = Number(input.backendDurationMs) / 1000;
+  const cursor = Number(input.asrCursorMs) / 1000;
+  const finitePlayer = Number.isFinite(player) && player > 0 ? player : 0;
+  const finiteBackend = Number.isFinite(backend) && backend > 0 ? backend : 0;
+  const finiteCursor = Number.isFinite(cursor) && cursor > 0 ? cursor : 0;
+  const recorded = Math.max(finiteBackend, finiteCursor);
+  if (input.liveIngesting) {
+    return Math.max(finitePlayer, recorded);
+  }
+  return finitePlayer || recorded;
+}

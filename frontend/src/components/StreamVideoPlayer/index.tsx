@@ -52,6 +52,13 @@ function readDuration(video: HTMLVideoElement | null): number {
   return Number.isFinite(duration) && duration > 0 ? duration : 0;
 }
 
+function readHlsPlaylistDuration(hls: Hls | null): number {
+  if (!hls) return 0;
+  const details = hls.latestLevelDetails;
+  const total = Number(details?.totalduration);
+  return Number.isFinite(total) && total > 0 ? total : 0;
+}
+
 function getHlsErrorMessage(type: string): string {
   switch (type) {
     case Hls.ErrorTypes.NETWORK_ERROR:
@@ -260,9 +267,15 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
     }));
 
     const emitDuration = () => {
-      const duration = readDuration(videoRef.current);
-      if (duration <= 0) return;
-      if (Math.abs(duration - lastEmittedDurationRef.current) < 0.001) return;
+      let duration = readDuration(videoRef.current);
+      if (duration <= 0) {
+        duration = readHlsPlaylistDuration(hlsRef.current);
+      }
+      if (duration <= 0) {
+        onDurationChangeRef.current?.(0);
+        return;
+      }
+      if (Math.abs(duration - lastEmittedDurationRef.current) < 0.05) return;
       lastEmittedDurationRef.current = duration;
       onDurationChangeRef.current?.(duration);
     };
@@ -349,6 +362,9 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
           const onManifestParsed = () => {
             handleReady();
           };
+          const onLevelLoaded = () => {
+            emitDuration();
+          };
           const onHlsError = (_: string, data: { fatal?: boolean; type: string }) => {
             if (!data.fatal) return;
             if (recoveries < 2) {
@@ -365,10 +381,12 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
             emitError(getHlsErrorMessage(data.type));
           };
           hls.on(Hls.Events.MANIFEST_PARSED, onManifestParsed);
+          hls.on(Hls.Events.LEVEL_LOADED, onLevelLoaded);
           hls.on(Hls.Events.ERROR, onHlsError);
 
           return () => {
             hls.off(Hls.Events.MANIFEST_PARSED, onManifestParsed);
+            hls.off(Hls.Events.LEVEL_LOADED, onLevelLoaded);
             hls.off(Hls.Events.ERROR, onHlsError);
             detachFirstFrameHandler();
             destroyHls();

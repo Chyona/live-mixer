@@ -31,6 +31,7 @@ import { submitDraft } from '~/services/slice';
 import { formatToDateTime } from '~/utils/date';
 import { showAppError, toast } from '~/utils/toast';
 import { isPlayableVideoUrl, mediaResourceKey } from '~/utils/videoUrl';
+import { resolveSliceTimelineDurationSec } from '~/utils/duration';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import type { SliceEditorEntryFrom } from '~/routes/links';
@@ -227,16 +228,32 @@ const ManualVideoSlicePage = () => {
     [selectedSegments, paragraphs]
   );
 
-  const handleDurationChange = useCallback((duration: number) => {
-    if (Number.isFinite(duration) && duration > 0) {
-      setVideoDuration((prev) => (Math.abs(prev - duration) < 0.001 ? prev : duration));
-      return;
-    }
-    const backendSec = Number(video?.duration) / 1000;
-    if (Number.isFinite(backendSec) && backendSec > 0) {
-      setVideoDuration((prev) => (Math.abs(prev - backendSec) < 0.001 ? prev : backendSec));
-    }
-  }, [video?.duration]);
+  const applyTimelineDuration = useCallback(
+    (playerDurationSec = 0) => {
+      const next = resolveSliceTimelineDurationSec({
+        playerDurationSec,
+        backendDurationMs: video?.duration,
+        asrCursorMs: video?.asr_cursor_ms,
+        liveIngesting: isLiveIngesting(video?.live_status),
+      });
+      setVideoDuration((prev) => {
+        if (next <= 0) return prev === 0 ? prev : 0;
+        return Math.abs(prev - next) < 0.05 ? prev : next;
+      });
+    },
+    [video?.asr_cursor_ms, video?.duration, video?.live_status]
+  );
+
+  useEffect(() => {
+    applyTimelineDuration();
+  }, [applyTimelineDuration]);
+
+  const handleDurationChange = useCallback(
+    (duration: number) => {
+      applyTimelineDuration(duration);
+    },
+    [applyTimelineDuration]
+  );
 
   const syncProjectIdInUrl = useCallback(
     (nextProjectId: number, options?: { reload?: boolean }) => {
@@ -387,7 +404,6 @@ const ManualVideoSlicePage = () => {
 
   useEffect(() => {
     lastCurrentTimeRef.current = 0;
-    setVideoDuration(0);
     setCurrentTime(0);
     setIsVideoPlaying(false);
     setActiveSegmentId(null);

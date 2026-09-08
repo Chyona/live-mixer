@@ -25,7 +25,7 @@ import {
 } from '~/services/sliceProject';
 import { showAppError, toast } from '~/utils/toast';
 import { formatToDateTime } from '~/utils/date';
-import { formatVideoDurationMs } from '~/utils/duration';
+import { formatVideoDurationMs, resolveSliceTimelineDurationSec } from '~/utils/duration';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import {
@@ -184,7 +184,6 @@ const SourceVideoSlicePage = () => {
   }, [projectId, sourceVideoId]);
 
   useEffect(() => {
-    setVideoDuration(0);
     setCurrentTime(0);
     setActiveRangeId(null);
     setVideoError(null);
@@ -351,16 +350,32 @@ const SourceVideoSlicePage = () => {
     [video?.asr_summaries]
   );
 
-  const handleDurationChange = useCallback((duration: number) => {
-    if (Number.isFinite(duration) && duration > 0) {
-      setVideoDuration(duration);
-      return;
-    }
-    const backendSec = Number(video?.duration) / 1000;
-    if (Number.isFinite(backendSec) && backendSec > 0) {
-      setVideoDuration(backendSec);
-    }
-  }, [video?.duration]);
+  const applyTimelineDuration = useCallback(
+    (playerDurationSec = 0) => {
+      const next = resolveSliceTimelineDurationSec({
+        playerDurationSec,
+        backendDurationMs: video?.duration,
+        asrCursorMs: video?.asr_cursor_ms,
+        liveIngesting: isLiveIngesting(video?.live_status),
+      });
+      setVideoDuration((prev) => {
+        if (next <= 0) return prev === 0 ? prev : 0;
+        return Math.abs(prev - next) < 0.05 ? prev : next;
+      });
+    },
+    [video?.asr_cursor_ms, video?.duration, video?.live_status]
+  );
+
+  useEffect(() => {
+    applyTimelineDuration();
+  }, [applyTimelineDuration]);
+
+  const handleDurationChange = useCallback(
+    (duration: number) => {
+      applyTimelineDuration(duration);
+    },
+    [applyTimelineDuration]
+  );
 
   const handlePlaybackError = useCallback((message: string) => {
     setVideoError(message);

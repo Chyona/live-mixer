@@ -183,7 +183,7 @@ func (w *liveIngestWorker) Process(ctx context.Context, material *model.LiveMate
 	case model.LiveStatusLive:
 		return w.recordAndFinalize(ctx, material)
 	case model.LiveStatusEnding:
-		return w.finalizeRecording(ctx, material)
+		return w.finalizeRecording(ctx, material, material.NextSeg)
 	default:
 		return nil
 	}
@@ -283,7 +283,7 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return err
 	}
-	w.restoreUploadedSegments(ctx, material)
+	resumeFrom := material.NextSeg
 
 	var asrMu sync.Mutex
 	asrBusy := false
@@ -307,14 +307,14 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 
 	segURLs := map[int64]string{}
 	if material.NextSeg > 0 {
-		segURLs = w.completeSegmentURLs(ctx, material, nil)
+		segURLs = w.completeSegmentURLs(ctx, material, nil, resumeFrom)
 	}
 	for {
 		startIndex := int(material.NextSeg)
 		windowDue := time.Now().Add(model.LiveASRWindowDuration)
 
 		onSeg := func(index int, path string) {
-			url, err := w.uploadSegment(ctx, material, int64(index), path)
+			url, err := w.uploadSegment(ctx, material, int64(index), path, resumeFrom)
 			if err != nil {
 				w.logger.Warn("上传分片失败", zap.Int("index", index), zap.Error(err))
 				return
@@ -325,7 +325,7 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 				next = material.NextSeg
 			}
 			dur := next * int64(model.LiveSegmentDurationSec) * 1000
-			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, false)
+			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, false, resumeFrom)
 			if plErr != nil {
 				w.logger.Warn("发布播放列表失败", zap.Error(plErr))
 			}
@@ -370,15 +370,15 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 	}
 	_ = w.repo.MarkEnding(ctx, material.ID, material.IngestEpoch)
 	material.LiveStatus = model.LiveStatusEnding
-	return w.finalizeRecording(ctx, material)
+	return w.finalizeRecording(ctx, material, resumeFrom)
 }
 
-func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *model.LiveMaterial) error {
+func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *model.LiveMaterial, resumeFrom int64) error {
 	latest, err := w.repo.GetByID(ctx, material.ID)
 	if err == nil && latest != nil {
 		material = latest
 	}
-	files := w.collectLocalSegmentFiles(ctx, material)
+	files := w.collectLocalSegmentFiles(ctx, material, resumeFrom)
 	if len(files) == 0 {
 		files = globLocalSegments(w.segmentDir(material))
 	}
@@ -406,8 +406,8 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 			material.Width, material.Height = tl.Width, tl.Height
 		}
 	}
-	segURLs := w.collectSegmentURLs(material, files)
-	_, _ = w.publishPlaylist(ctx, material, segURLs, true)
+	segURLs := w.collectSegmentURLs(ctx, material, files, resumeFrom)
+	_, _ = w.publishPlaylist(ctx, material, segURLs, true, resumeFrom)
 
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {
 		return err
@@ -484,19 +484,23 @@ func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *m
 	return w.repo.FinalizeASR(ctx, latest.ID, latest.IngestEpoch, latest.LiveASR, duration, latest.Width, latest.Height, post.Summaries, post.Paragraphs)
 }
 
-func (w *liveIngestWorker) uploadSegment(ctx context.Context, material *model.LiveMaterial, index int64, localPath string) (string, error) {
-	if w.storage == nil {
-		return "", fmt.Errorf("对象存储未配置")
-	}
-	key := liveingest.SegmentObjectKey(material.RecordUUID, material.IngestEpoch, index)
-	return w.storage.UploadFile(ctx, localPath, key)
+func (w *liveIngestWorker) segmentObjectKey(material *model.LiveMaterial, resumeFrom, index int64) string {
+	epoch := liveingest.SegmentStorageEpoch(material.IngestEpoch, resumeFrom, index)
+	return liveingest.SegmentObjectKey(material.RecordUUID, epoch, index)
 }
 
-func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.LiveMaterial, segURLs map[int64]string, ended bool) (string, error) {
+func (w *liveIngestWorker) uploadSegment(ctx context.Context, material *model.LiveMaterial, index int64, localPath string, resumeFrom int64) (string, error) {
 	if w.storage == nil {
 		return "", fmt.Errorf("对象存储未配置")
 	}
-	segURLs = w.completeSegmentURLs(ctx, material, segURLs)
+	return w.storage.UploadFile(ctx, localPath, w.segmentObjectKey(material, resumeFrom, index))
+}
+
+func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.LiveMaterial, segURLs map[int64]string, ended bool, resumeFrom int64) (string, error) {
+	if w.storage == nil {
+		return "", fmt.Errorf("对象存储未配置")
+	}
+	segURLs = w.completeSegmentURLs(ctx, material, segURLs, resumeFrom)
 	keys := make([]int64, 0, len(segURLs))
 	for k := range segURLs {
 		keys = append(keys, k)
@@ -522,7 +526,7 @@ func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.
 	return liveingest.PreferStablePlaylistURL(material.RecordPlaylistURL, uploaded), nil
 }
 
-func (w *liveIngestWorker) completeSegmentURLs(ctx context.Context, material *model.LiveMaterial, uploaded map[int64]string) map[int64]string {
+func (w *liveIngestWorker) completeSegmentURLs(ctx context.Context, material *model.LiveMaterial, uploaded map[int64]string, resumeFrom int64) map[int64]string {
 	out := make(map[int64]string, len(uploaded)+int(material.NextSeg))
 	for k, v := range uploaded {
 		if v != "" {
@@ -542,7 +546,7 @@ func (w *liveIngestWorker) completeSegmentURLs(ctx context.Context, material *mo
 		if out[i] != "" {
 			continue
 		}
-		url, err := w.storage.AccessURL(ctx, liveingest.SegmentObjectKey(material.RecordUUID, material.IngestEpoch, i))
+		url, err := w.storage.AccessURL(ctx, w.segmentObjectKey(material, resumeFrom, i))
 		if err != nil || url == "" {
 			continue
 		}
@@ -559,21 +563,18 @@ func (w *liveIngestWorker) segmentDir(material *model.LiveMaterial) string {
 	return filepath.Join(root, "staging", "live_ingest", fmt.Sprintf("%d", material.ID), fmt.Sprintf("e%d", material.IngestEpoch))
 }
 
-func (w *liveIngestWorker) listUploadedSegmentFiles(ctx context.Context, material *model.LiveMaterial) []string {
-	return w.collectLocalSegmentFiles(ctx, material)
+func (w *liveIngestWorker) listUploadedSegmentFiles(ctx context.Context, material *model.LiveMaterial, resumeFrom int64) []string {
+	return w.collectLocalSegmentFiles(ctx, material, resumeFrom)
 }
 
-func (w *liveIngestWorker) restoreUploadedSegments(ctx context.Context, material *model.LiveMaterial) {
-	_ = w.collectLocalSegmentFiles(ctx, material)
-}
-
-func (w *liveIngestWorker) collectLocalSegmentFiles(ctx context.Context, material *model.LiveMaterial) []string {
+func (w *liveIngestWorker) collectLocalSegmentFiles(ctx context.Context, material *model.LiveMaterial, resumeFrom int64) []string {
 	dir := w.segmentDir(material)
 	_ = os.MkdirAll(dir, 0o755)
 	if material.NextSeg <= 0 {
 		return globLocalSegments(dir)
 	}
 	out := make([]string, 0, material.NextSeg)
+	missing := 0
 	for i := int64(0); i < material.NextSeg; i++ {
 		local := filepath.Join(dir, liveingest.SegmentFileName(int(i)))
 		if _, err := os.Stat(local); err == nil {
@@ -581,17 +582,27 @@ func (w *liveIngestWorker) collectLocalSegmentFiles(ctx context.Context, materia
 			continue
 		}
 		if w.storage == nil {
+			missing++
 			continue
 		}
-		url := w.storage.PublicURL(liveingest.SegmentObjectKey(material.RecordUUID, material.IngestEpoch, i))
-		if url == "" {
+		url, err := w.storage.AccessURL(ctx, w.segmentObjectKey(material, resumeFrom, i))
+		if err != nil || url == "" {
+			missing++
 			continue
 		}
 		if err := downloadHTTPFile(ctx, w.httpClient, url, local); err != nil {
-			w.logger.Warn("回拉分片失败", zap.Int64("index", i), zap.Error(err))
+			missing++
 			continue
 		}
 		out = append(out, local)
+	}
+	if missing > 0 {
+		w.logger.Warn("回拉分片有缺失",
+			zap.Uint("material_id", material.ID),
+			zap.Int("missing", missing),
+			zap.Int("restored", len(out)),
+			zap.Int64("next_seg", material.NextSeg),
+		)
 	}
 	if len(out) == 0 {
 		return globLocalSegments(dir)
@@ -624,7 +635,7 @@ func downloadHTTPFile(ctx context.Context, client *http.Client, url, dest string
 	return err
 }
 
-func (w *liveIngestWorker) collectSegmentURLs(material *model.LiveMaterial, files []string) map[int64]string {
+func (w *liveIngestWorker) collectSegmentURLs(ctx context.Context, material *model.LiveMaterial, files []string, resumeFrom int64) map[int64]string {
 	out := map[int64]string{}
 	if w.storage == nil {
 		return out
@@ -634,8 +645,11 @@ func (w *liveIngestWorker) collectSegmentURLs(material *model.LiveMaterial, file
 		if !ok {
 			continue
 		}
-		key := liveingest.SegmentObjectKey(material.RecordUUID, material.IngestEpoch, int64(idx))
-		out[int64(idx)] = w.storage.PublicURL(key)
+		url, err := w.storage.AccessURL(ctx, w.segmentObjectKey(material, resumeFrom, int64(idx)))
+		if err != nil || url == "" {
+			continue
+		}
+		out[int64(idx)] = url
 	}
 	return out
 }
