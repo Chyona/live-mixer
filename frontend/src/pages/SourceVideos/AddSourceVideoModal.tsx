@@ -1,6 +1,6 @@
 import { Button, DatePicker, Form, Input, Modal, Radio } from 'antd';
 import type { Dayjs } from 'dayjs';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { AppError } from '~/services/http';
 import type { BaseResponse } from '~/services/types';
@@ -43,6 +43,8 @@ function isM3u8Url(value: string): boolean {
   return /\.m3u8(\?|$)/i.test(value);
 }
 
+const DEFAULT_SOURCE_MODE: SourceMode = 'replay';
+
 const AddSourceVideoModal = ({
   open,
   onClose,
@@ -51,7 +53,12 @@ const AddSourceVideoModal = ({
 }: AddSourceVideoModalProps) => {
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
-  const sourceMode = Form.useWatch('sourceMode', form) || 'replay';
+  const sourceMode = Form.useWatch('sourceMode', form) ?? DEFAULT_SOURCE_MODE;
+
+  useEffect(() => {
+    if (!open) return;
+    form.setFieldsValue({ sourceMode: DEFAULT_SOURCE_MODE });
+  }, [open, form]);
 
   const handleClose = () => {
     form.resetFields();
@@ -82,7 +89,7 @@ const AddSourceVideoModal = ({
   const handleSubmit = async (values: FormValues) => {
     setSubmitting(true);
     const url = values.liveUrl.trim();
-    const mode = values.sourceMode;
+    const mode = values.sourceMode || DEFAULT_SOURCE_MODE;
 
     try {
       const response = await createSourceVideo({
@@ -149,7 +156,7 @@ const AddSourceVideoModal = ({
         form={form}
         layout="vertical"
         onFinish={handleSubmit}
-        initialValues={{ sourceMode: 'replay' }}
+        initialValues={{ sourceMode: DEFAULT_SOURCE_MODE }}
       >
         <Form.Item
           name="name"
@@ -160,11 +167,15 @@ const AddSourceVideoModal = ({
         </Form.Item>
 
         <Form.Item name="sourceMode" label="源类型" rules={[{ required: true, message: '请选择源类型' }]}>
-          <Radio.Group>
-            <Radio.Button value="upcoming">将要直播</Radio.Button>
-            <Radio.Button value="live">正在直播</Radio.Button>
-            <Radio.Button value="replay">回放</Radio.Button>
-          </Radio.Group>
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            options={[
+              { label: '回放', value: 'replay' },
+              { label: '正在直播', value: 'live' },
+              { label: '将要直播', value: 'upcoming' },
+            ]}
+          />
         </Form.Item>
 
         {sourceMode === 'upcoming' ? (
