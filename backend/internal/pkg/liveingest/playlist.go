@@ -2,6 +2,7 @@ package liveingest
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -12,7 +13,19 @@ type PlaylistItem struct {
 	URL         string
 }
 
+var playlistSegEpochRe = regexp.MustCompile(`/seg/(\d+)/`)
+
+// PlaylistSegmentEpoch 从分片 URL 取出跟播目录代数（.../seg/{epoch}/seg_00000.ts）。
+func PlaylistSegmentEpoch(rawURL string) string {
+	m := playlistSegEpochRe.FindStringSubmatch(rawURL)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
 // BuildEventPlaylist 生成可边录边播的 EVENT 列表；ended 时写入 ENDLIST。
+// 仅在分片目录代数变化（续录换 epoch）时写入 DISCONTINUITY；同一路连续分片不要逐片插入。
 func BuildEventPlaylist(items []PlaylistItem, targetDuration int, ended bool) string {
 	if targetDuration <= 0 {
 		targetDuration = 6
@@ -24,10 +37,14 @@ func BuildEventPlaylist(items []PlaylistItem, targetDuration int, ended bool) st
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:EVENT\n")
 	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
-	for i, it := range items {
-		if i > 0 {
-			// 每片可能独立从 PTS 0 开始（历史 reset_timestamps / 续录），无此标记浏览器会解码失败。
+	prevEpoch := ""
+	for _, it := range items {
+		epoch := PlaylistSegmentEpoch(it.URL)
+		if prevEpoch != "" && epoch != "" && epoch != prevEpoch {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
+		if epoch != "" {
+			prevEpoch = epoch
 		}
 		dur := it.DurationSec
 		if dur <= 0 {

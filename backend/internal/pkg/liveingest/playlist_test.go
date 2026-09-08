@@ -7,8 +7,8 @@ import (
 
 func TestBuildEventPlaylist(t *testing.T) {
 	body := BuildEventPlaylist([]PlaylistItem{
-		{DurationSec: 6, URL: "https://cdn.example/seg_00000.ts"},
-		{DurationSec: 6, URL: "https://cdn.example/seg_00001.ts"},
+		{DurationSec: 6, URL: "https://cdn.example/live-record/u/seg/1/seg_00000.ts"},
+		{DurationSec: 6, URL: "https://cdn.example/live-record/u/seg/1/seg_00001.ts"},
 	}, 6, false)
 	if !strings.Contains(body, "#EXT-X-PLAYLIST-TYPE:EVENT") {
 		t.Fatalf("missing EVENT type in %s", body)
@@ -19,12 +19,20 @@ func TestBuildEventPlaylist(t *testing.T) {
 	if !strings.Contains(body, "#EXT-X-INDEPENDENT-SEGMENTS") {
 		t.Fatal("missing INDEPENDENT-SEGMENTS")
 	}
-	if strings.Count(body, "#EXT-X-DISCONTINUITY") != 1 {
-		t.Fatalf("want 1 discontinuity between 2 items, got %s", body)
+	if strings.Contains(body, "#EXT-X-DISCONTINUITY") {
+		t.Fatalf("same-epoch segments should not have discontinuity: %s", body)
 	}
 	ended := BuildEventPlaylist([]PlaylistItem{{URL: "https://cdn.example/seg_00000.ts"}}, 6, true)
 	if !strings.Contains(ended, "#EXT-X-ENDLIST") {
 		t.Fatal("ended playlist should have ENDLIST")
+	}
+
+	resume := BuildEventPlaylist([]PlaylistItem{
+		{DurationSec: 6, URL: "https://cdn.example/live-record/u/seg/1/seg_00009.ts"},
+		{DurationSec: 6, URL: "https://cdn.example/live-record/u/seg/2/seg_00010.ts"},
+	}, 6, false)
+	if strings.Count(resume, "#EXT-X-DISCONTINUITY") != 1 {
+		t.Fatalf("want 1 discontinuity at epoch change, got %s", resume)
 	}
 }
 

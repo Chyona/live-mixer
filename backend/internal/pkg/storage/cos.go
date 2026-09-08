@@ -100,6 +100,13 @@ func (p *cosProvider) UploadFile(ctx context.Context, localPath, objectKey strin
 		ThreadPoolSize: p.opts.concurrency(),
 		CheckPoint:     !p.opts.DisableCheckpoint, // 启用断点续传，网络中断后可从已上传分片继续
 	}
+	if ct := objectContentType(objectKey); ct != "" {
+		uploadOpts.OptIni = &cos.InitiateMultipartUploadOptions{
+			ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{
+				ContentType: ct,
+			},
+		}
+	}
 
 	_, _, err := p.client.Object.Upload(ctx, objectKey, localPath, uploadOpts)
 	if err != nil {

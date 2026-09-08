@@ -8,6 +8,7 @@ import {
   type VideoHTMLAttributes,
 } from 'react';
 import Hls from 'hls.js';
+import { stripRedundantHlsDiscontinuities } from '~/utils/hlsPlaylist';
 import {
   detectVideoSourceType,
   getUnsupportedVideoMessage,
@@ -59,7 +60,10 @@ function readHlsPlaylistDuration(hls: Hls | null): number {
   return Number.isFinite(total) && total > 0 ? total : 0;
 }
 
-function getHlsErrorMessage(type: string): string {
+function getHlsErrorMessage(type: string, details?: string): string {
+  if (details && /parse|manifest_parsing/i.test(details)) {
+    return 'HLS 播放列表解析失败，请刷新后重试';
+  }
   switch (type) {
     case Hls.ErrorTypes.NETWORK_ERROR:
       return 'HLS 网络加载失败，请检查 m3u8 地址是否有效';
@@ -67,6 +71,27 @@ function getHlsErrorMessage(type: string): string {
       return 'HLS 媒体解析失败，请检查视频流是否可访问';
     default:
       return 'HLS 播放失败，请检查 m3u8 地址';
+  }
+}
+
+const DefaultHlsLoader = Hls.DefaultConfig.loader;
+
+/** 拦截 m3u8 响应，去掉同一录像代数内多余的 EXT-X-DISCONTINUITY。 */
+class LivePlaylistLoader extends DefaultHlsLoader {
+  load(context: { url?: string; type?: string }, config: unknown, callbacks: { onSuccess?: (...args: never[]) => void }) {
+    const url = String(context?.url ?? '');
+    const isPlaylist =
+      /\.m3u8(\?|$)/i.test(url) || context?.type === 'manifest' || context?.type === 'level';
+    if (isPlaylist && typeof callbacks?.onSuccess === 'function') {
+      const originalSuccess = callbacks.onSuccess;
+      callbacks.onSuccess = ((response: { data?: unknown }, ...rest: never[]) => {
+        if (typeof response?.data === 'string') {
+          response.data = stripRedundantHlsDiscontinuities(response.data);
+        }
+        originalSuccess(response as never, ...rest);
+      }) as typeof callbacks.onSuccess;
+    }
+    super.load(context as never, config as never, callbacks as never);
   }
 }
 
@@ -348,12 +373,16 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
           const startPosition =
             hlsStartPosition != null && Number.isFinite(hlsStartPosition) ? hlsStartPosition : -1;
           const hls = new Hls({
+            loader: LivePlaylistLoader,
             xhrSetup: (xhr) => {
               xhr.withCredentials = false;
             },
             startPosition,
             liveDurationInfinity: false,
-            maxBufferHole: 0.5,
+            maxBufferHole: 2,
+            manifestLoadingMaxRetry: 6,
+            levelLoadingMaxRetry: 6,
+            fragLoadingMaxRetry: 6,
           });
           hlsRef.current = hls;
           hls.loadSource(attachedUrl);
@@ -365,9 +394,12 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
           const onLevelLoaded = () => {
             emitDuration();
           };
-          const onHlsError = (_: string, data: { fatal?: boolean; type: string }) => {
+          const onHlsError = (
+            _: string,
+            data: { fatal?: boolean; type: string; details?: string }
+          ) => {
             if (!data.fatal) return;
-            if (recoveries < 2) {
+            if (recoveries < 4) {
               recoveries += 1;
               if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                 hls.recoverMediaError();
@@ -378,7 +410,7 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
                 return;
               }
             }
-            emitError(getHlsErrorMessage(data.type));
+            emitError(getHlsErrorMessage(data.type, data.details));
           };
           hls.on(Hls.Events.MANIFEST_PARSED, onManifestParsed);
           hls.on(Hls.Events.LEVEL_LOADED, onLevelLoaded);

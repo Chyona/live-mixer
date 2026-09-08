@@ -71,7 +71,7 @@ export interface SourceVideo {
    * 无文案搜索时通常为空或不返回。时间单位为 ms。
    */
   matched_paragraphs?: LiveAsrSegment[] | null;
-  /** 详情接口返回的 ASR 文案分段（normalize 后统一字段名）；时间单位为 ms */
+  /** 详情接口文案分段：优先 asr_paragraphs，跟播中为空时回退 live_asr；时间单位为 ms */
   asr_paragraphs?: AsrParagraphs | null;
   /** 详情接口返回的 ASR 摘要选区；无 clips0 时用于填充时间轴 */
   asr_summaries?: AsrSummary[] | null;

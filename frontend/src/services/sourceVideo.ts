@@ -4,6 +4,7 @@ import { apiPath } from '~/utils/api';
 import {
   getAsrParagraphsApiKey,
   isAsrParagraphsApiKeyOverridden,
+  type AsrParagraphsApiKey,
 } from '~/utils/asrParagraphsKey';
 import { verifyAsrParagraphsFieldsFromRaw } from '~/utils/asrParagraphsVerify';
 
@@ -154,18 +155,23 @@ function normalizeMatchedParagraphs(raw: unknown): SourceVideo['matched_paragrap
   return list.length ? list : [];
 }
 
+function asrListFromUnknown(value: unknown): AsrParagraphs | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value as AsrParagraphs;
+}
+
 function normalizeAsrParagraphs(raw: Record<string, unknown>): AsrParagraphs | null {
   try {
     const configuredKey = getAsrParagraphsApiKey();
-    const value = raw[configuredKey];
-    if (value != null) return value as AsrParagraphs;
-    if (configuredKey !== 'asr_paragraphs' && raw.asr_paragraphs != null) {
-      return raw.asr_paragraphs as AsrParagraphs;
+    const keys: AsrParagraphsApiKey[] =
+      configuredKey === 'live_asr' ? ['live_asr', 'asr_paragraphs'] : ['asr_paragraphs', 'live_asr'];
+    for (const key of keys) {
+      const list = asrListFromUnknown(raw[key]);
+      if (list) return list;
     }
     return null;
   } catch {
-    const fallback = raw.asr_paragraphs;
-    return fallback != null ? (fallback as AsrParagraphs) : null;
+    return asrListFromUnknown(raw.asr_paragraphs) ?? asrListFromUnknown(raw.live_asr);
   }
 }
 
