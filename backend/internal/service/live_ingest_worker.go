@@ -434,6 +434,8 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		return nil
 	}
 	startSeg := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
+	// 平移量必须与拼接音频起点一致（分片对齐），不能用裸 cursor，否则字幕相对音频偏移。
+	offsetMS := liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)
 	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
 	if len(files) == 0 {
 		return nil
@@ -460,7 +462,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		w.logger.Warn("窗口 ASR 失败，跳过本窗", zap.Error(err))
 		return nil
 	}
-	merged, _, err := asr.MergeWindowASR(material.LiveASR, raw, cursor)
+	merged, _, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
 	if err != nil {
 		return err
 	}

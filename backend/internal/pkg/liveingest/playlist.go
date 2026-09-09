@@ -68,14 +68,27 @@ func PreferStablePlaylistURL(existing, uploaded string) string {
 	return strings.TrimSpace(uploaded)
 }
 
-// WindowStartIndex 计算窗口 ASR 对应的起始分片（含）。
-func WindowStartIndex(cursorMS int64, segmentSec int) int64 {
+// segmentDurationMS 跟播分片时长（毫秒）。
+func segmentDurationMS(segmentSec int) int64 {
 	if segmentSec <= 0 {
 		segmentSec = 6
 	}
-	segMS := int64(segmentSec) * int64(time.Second/time.Millisecond)
-	if segMS <= 0 {
+	return int64(segmentSec) * int64(time.Second/time.Millisecond)
+}
+
+// WindowStartIndex 计算窗口 ASR 对应的起始分片（含）。
+// 与拼接音频起点一致：cursor 落在分片中间时向下取整到该分片开头。
+func WindowStartIndex(cursorMS int64, segmentSec int) int64 {
+	segMS := segmentDurationMS(segmentSec)
+	if segMS <= 0 || cursorMS <= 0 {
 		return 0
 	}
 	return cursorMS / segMS
+}
+
+// WindowOffsetMS 窗口 ASR 结果应平移的毫秒数。
+// 必须等于实际拼接音频的时间原点（startSeg×分片时长），不能直接用 asr_cursor_ms：
+// cursor 常落在分片中间，若用裸 cursor 平移会造成字幕相对音频整体偏移（最大接近一个分片）。
+func WindowOffsetMS(cursorMS int64, segmentSec int) int64 {
+	return WindowStartIndex(cursorMS, segmentSec) * segmentDurationMS(segmentSec)
 }

@@ -54,4 +54,23 @@ func TestWindowStartIndex(t *testing.T) {
 	if got := WindowStartIndex(18000, 6); got != 3 {
 		t.Errorf("got %d want 3", got)
 	}
+	if got := WindowStartIndex(185000, 6); got != 30 {
+		t.Errorf("got %d want 30", got)
+	}
+}
+
+func TestWindowOffsetMS(t *testing.T) {
+	if got := WindowOffsetMS(0, 6); got != 0 {
+		t.Errorf("aligned cursor 0: got %d", got)
+	}
+	if got := WindowOffsetMS(18000, 6); got != 18000 {
+		t.Errorf("exact boundary: got %d want 18000", got)
+	}
+	// cursor 落在分片中间时，偏移必须回到分片起点，不能用裸 cursor。
+	if got := WindowOffsetMS(185000, 6); got != 180000 {
+		t.Errorf("mid-segment cursor: got %d want 180000", got)
+	}
+	if got := WindowOffsetMS(185000, 6); got == 185000 {
+		t.Fatal("offset must not equal raw mid-segment cursor")
+	}
 }
