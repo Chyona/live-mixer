@@ -570,9 +570,14 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		)
 		return nil
 	}
-	latest, err := w.repo.GetByID(ctx, material.ID)
-	if err == nil && latest != nil {
-		material = latest
+	// 从库刷新游标/ASR，写回同一指针；epoch 仍用本场跟播抢占值，避免误跟到其它 worker。
+	epoch := material.IngestEpoch
+	if latest, err := w.repo.GetByID(ctx, material.ID); err == nil && latest != nil {
+		material.ASRCursorMS = latest.ASRCursorMS
+		material.LiveASR = latest.LiveASR
+		if latest.Duration > material.Duration {
+			material.Duration = latest.Duration
+		}
 	}
 	cursor := material.ASRCursorMS
 	if material.Duration <= cursor {
@@ -600,6 +605,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Int64("start_seg", startSeg),
 		zap.Int("segment_files", len(files)),
 		zap.Int64("duration_ms", material.Duration),
+		zap.Int64("ingest_epoch", epoch),
 	)
 	// 偏移必须等于「startSeg 之前各分片的真实总时长」。标称 6s×index 会随分片时长抖动累积漂移，
 	// 表现为成片里前段字幕准、后段逐渐错位。
@@ -654,10 +660,13 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			progress = 99
 		}
 	}
-	if err := w.repo.AppendWindowASR(ctx, material.ID, material.IngestEpoch, merged, newCursor, material.Duration, progress); err != nil {
-		w.logger.Warn("窗口 ASR 写库失败", zap.Uint("material_id", material.ID), zap.Error(err))
+	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, merged, newCursor, material.Duration, progress); err != nil {
+		w.logger.Warn("窗口 ASR 写库失败", zap.Uint("material_id", material.ID), zap.Int64("ingest_epoch", epoch), zap.Error(err))
 		return err
 	}
+	material.ASRCursorMS = newCursor
+	material.LiveASR = merged
+	material.ASRProgress = progress
 	w.logger.Info("窗口 ASR 完成",
 		zap.Uint("material_id", material.ID),
 		zap.Duration("elapsed", time.Since(asrStart)),

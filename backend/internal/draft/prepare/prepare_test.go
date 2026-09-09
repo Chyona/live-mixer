@@ -183,7 +183,7 @@ func TestPipeline_CutClips_FastWhenOver10Min(t *testing.T) {
 	}
 }
 
-func TestPipeline_CutClips_CaptionsForcePreciseOver10Min(t *testing.T) {
+func TestPipeline_CutClips_CaptionsAllowFastOver10Min(t *testing.T) {
 	cutter := &mockCutter{}
 	root := t.TempDir()
 	s := &session.Session{
@@ -200,11 +200,11 @@ func TestPipeline_CutClips_CaptionsForcePreciseOver10Min(t *testing.T) {
 	if err := p.Run(context.Background(), s); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(cutter.precise) != 1 {
-		t.Fatalf("precise calls = %d, want 1 when captions on", len(cutter.precise))
+	if len(cutter.fast) != 1 {
+		t.Fatalf("fast calls = %d, want 1 over 10min even with captions", len(cutter.fast))
 	}
-	if len(cutter.fast) != 0 {
-		t.Fatalf("fast calls = %d, want 0 when captions on", len(cutter.fast))
+	if len(cutter.precise) != 0 {
+		t.Fatalf("precise calls = %d, want 0 over 10min", len(cutter.precise))
 	}
 }
 

@@ -212,10 +212,10 @@ func parseVolumeDetectField(line, key string) (float64, bool) {
 	return v, true
 }
 
-// CutVideoSegment 按起止秒裁剪视频片段（重编码，帧级精确）。
-// 参考命令：
+// CutVideoSegment 按起止秒裁剪视频片段（重编码；混合 -ss 粗定位 + 精定位）。
+// 参考命令（起点 ≥15s）：
 //
-//	ffmpeg -y -threads 6 -ss 10 -i input.mp4 -t 20 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
+//	ffmpeg -y -threads 6 -ss 85 -i input.mp4 -ss 15 -t 20 -map 0:v:0 -map 0:a:0? -c:v libx264 -crf 18 -c:a aac -b:a 192k -movflags +faststart output.mp4
 //
 // startSec / endSec 单位为秒；endSec 须大于 startSec。
 func (c *FFmpegConverter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
@@ -257,16 +257,38 @@ func (c *FFmpegConverter) runCutVideo(ctx context.Context, inputPath, outputPath
 	return nil
 }
 
+// preciseCutCoarseBackSec 精确裁剪时先按输入 -ss 回退的秒数，再在解码侧微调。
+// 对 HLS/远程源：避免「纯 -ss 在 -i 之后」从片头解码到起点（草稿极慢）；
+// 对本地文件：同样用混合定位，兼顾速度与帧精度。
+const preciseCutCoarseBackSec = 15.0
+
 // buildCutVideoArgs 构建精确裁剪参数列表，便于单元测试校验。
-// -ss 放在 -i 之后做解码侧精确定位，避免输入 seek 落到关键帧导致成片与字幕起点不一致；
-// -t 使用时长（end-start）；-map 0:a:0? 表示音频轨可选。
+// 采用「输入粗定位 + 输出精定位」：
+//   - 先 -ss (start-15s) -i … 快速靠近目标（HLS 友好）；
+//   - 再 -ss 15 -t dur 解码侧落到精确起点并重编码。
+//
+// start < 15s 时仍用 -i 后 -ss，从文件头精确解码（成本可接受）。
+// -map 0:a:0? 表示音频轨可选。
 func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
-	return []string{
+	dur := endSec - startSec
+	args := []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
-		"-i", inputPath,
-		"-ss", formatFFmpegSeconds(startSec),
-		"-t", formatFFmpegSeconds(endSec - startSec),
+	}
+	if startSec >= preciseCutCoarseBackSec {
+		args = append(args,
+			"-ss", formatFFmpegSeconds(startSec-preciseCutCoarseBackSec),
+			"-i", inputPath,
+			"-ss", formatFFmpegSeconds(preciseCutCoarseBackSec),
+		)
+	} else {
+		args = append(args,
+			"-i", inputPath,
+			"-ss", formatFFmpegSeconds(startSec),
+		)
+	}
+	return append(args,
+		"-t", formatFFmpegSeconds(dur),
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
 		"-c:v", "libx264",
@@ -275,7 +297,7 @@ func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) [
 		"-b:a", "192k",
 		"-movflags", "+faststart",
 		outputPath,
-	}
+	)
 }
 
 // buildCutVideoFastArgs 构建关键帧快速裁剪参数：流拷贝、不重编码。

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"live-mixer/internal/model"
@@ -164,7 +165,7 @@ func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, e
 	if progress > 99 {
 		progress = 99
 	}
-	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+	result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(map[string]interface{}{
 			"live_asr":          liveASR,
@@ -174,7 +175,14 @@ func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, e
 			"asr_status":        model.ASRStatusProcessing,
 			"asr_updated_at":    now,
 			"last_heartbeat_at": now,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("窗口 ASR 写库未生效（素材 %d epoch %d 可能已切换）", id, epoch)
+	}
+	return nil
 }
 
 func (r *liveMaterialRepository) MarkEnding(ctx context.Context, id uint, epoch int64) error {
@@ -224,21 +232,21 @@ func (r *liveMaterialRepository) ResetFailedIngest(ctx context.Context, id uint,
 		status = model.LiveStatusWaiting
 	}
 	fields := map[string]interface{}{
-		"live_status":       status,
-		"asr_status":        model.ASRStatusPending,
-		"asr_progress":      int16(0),
-		"asr_error_msg":     "",
-		"ingest_error_msg":  "",
-		"asr_cursor_ms":     int64(0),
-		"next_seg":          int64(0),
-		"duration":          int64(0),
-		"live_asr":          "{}",
-		"asr_summaries":     "[]",
-		"asr_paragraphs":    "[]",
-		"stream_started_at": nil,
+		"live_status":         status,
+		"asr_status":          model.ASRStatusPending,
+		"asr_progress":        int16(0),
+		"asr_error_msg":       "",
+		"ingest_error_msg":    "",
+		"asr_cursor_ms":       int64(0),
+		"next_seg":            int64(0),
+		"duration":            int64(0),
+		"live_asr":            "{}",
+		"asr_summaries":       "[]",
+		"asr_paragraphs":      "[]",
+		"stream_started_at":   nil,
 		"record_playlist_url": "",
-		"last_heartbeat_at": now,
-		"asr_version":       gorm.Expr("asr_version + 1"),
+		"last_heartbeat_at":   now,
+		"asr_version":         gorm.Expr("asr_version + 1"),
 	}
 	if m3u8URL != "" {
 		fields["m3u8_url"] = m3u8URL

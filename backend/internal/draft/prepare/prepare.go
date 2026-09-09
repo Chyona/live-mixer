@@ -194,8 +194,9 @@ func fileSizeOrZero(path string) int64 {
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {
 	clips := s.Clips
 	totalMS := TotalClipDurationMS(clips)
-	// 开启字幕时禁止关键帧快切：-c copy 会落到关键帧，片头内容早于 SourceStart，表现为「部分切片字幕错位」。
-	useFast := UseFastKeyframeCut(clips) && !projectWantsCaptions(s.Project)
+	// 成片总时长 >10 分钟走关键帧快切；字幕对齐依赖 VideosStep 探测真实片长 + CaptionsStep 按比例缩放。
+	// 不再因「开字幕」强制全精确重编码：对 HLS 直切时精确模式曾极慢（逐段从片头解码）。
+	useFast := UseFastKeyframeCut(clips)
 	p.Logger.Info("选择草稿切片裁剪方式",
 		zap.String("job_id", s.JobID),
 		zap.Int("clips", len(clips)),
@@ -299,7 +300,7 @@ func ValidateClipRanges(clips []model.ClipRange) error {
 
 // MergeAdjacentClipRanges 按列表顺序合并相邻片段：严格保留入参顺序，不排序。
 // 仅当列表中相邻两项满足 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS
-//（含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。
+// （含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。
 func MergeAdjacentClipRanges(clips []model.ClipRange, maxGapMS int64) []model.ClipRange {
 	if len(clips) == 0 {
 		return nil

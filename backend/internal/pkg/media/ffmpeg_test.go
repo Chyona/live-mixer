@@ -109,11 +109,33 @@ func TestBuildASRAlignAudioFilter_StereoLeadPad(t *testing.T) {
 	}
 }
 
-func TestBuildCutVideoArgs(t *testing.T) {
+func TestBuildCutVideoArgs_ShortStart(t *testing.T) {
 	args := buildCutVideoArgs("/in.mp4", "/out.mp4", 10, 30)
 	want := []string{
 		"-y", "-threads", "6",
 		"-i", "/in.mp4", "-ss", "10",
+		"-t", "20",
+		"-map", "0:v:0", "-map", "0:a:0?",
+		"-c:v", "libx264", "-crf", "18",
+		"-c:a", "aac", "-b:a", "192k",
+		"-movflags", "+faststart",
+		"/out.mp4",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("args len = %d, want %d; args=%v", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("args[%d] = %q, want %q", i, args[i], want[i])
+		}
+	}
+}
+
+func TestBuildCutVideoArgs_HybridSeek(t *testing.T) {
+	args := buildCutVideoArgs("/in.mp4", "/out.mp4", 100, 120)
+	want := []string{
+		"-y", "-threads", "6",
+		"-ss", "85", "-i", "/in.mp4", "-ss", "15",
 		"-t", "20",
 		"-map", "0:v:0", "-map", "0:a:0?",
 		"-c:v", "libx264", "-crf", "18",
