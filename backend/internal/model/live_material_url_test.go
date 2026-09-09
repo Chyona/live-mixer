@@ -41,3 +41,15 @@ func TestLiveMaterial_ASRCoversClips(t *testing.T) {
 		t.Fatal("completed ASR should cover any clips")
 	}
 }
+
+func TestFormatClockMS(t *testing.T) {
+	if got := FormatClockMS(0); got != "0:00" {
+		t.Errorf("FormatClockMS(0) = %q", got)
+	}
+	if got := FormatClockMS(3312_000); got != "55:12" {
+		t.Errorf("FormatClockMS(3312000) = %q", got)
+	}
+	if got := FormatClockMS(3723_000); got != "1:02:03" {
+		t.Errorf("FormatClockMS(3723000) = %q", got)
+	}
+}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -87,33 +88,33 @@ type LiveMaterial struct {
 	// SourceMode 创建模式：upcoming/live/replay。
 	SourceMode string `gorm:"column:source_mode;size:16;not null;default:replay;comment:upcoming/live/replay" json:"source_mode"`
 	// LiveStatus 跟播生命周期。
-	LiveStatus string `gorm:"column:live_status;size:16;not null;default:none;index;comment:跟播状态" json:"live_status"`
-	ScheduledAt      *time.Time `gorm:"column:scheduled_at;comment:计划开播时间" json:"scheduled_at,omitempty"`
-	WaitDeadlineAt   *time.Time `gorm:"column:wait_deadline_at;comment:将要直播开播截止" json:"wait_deadline_at,omitempty"`
-	ConnectDeadlineAt *time.Time `gorm:"column:connect_deadline_at;comment:正在直播连上截止" json:"connect_deadline_at,omitempty"`
-	StreamStartedAt  *time.Time `gorm:"column:stream_started_at;comment:第一次读到媒体的时间" json:"stream_started_at,omitempty"`
-	ASRCursorMS      int64      `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
-	IngestEpoch      int64      `gorm:"column:ingest_epoch;not null;default:0;comment:跟播抢占代数" json:"ingest_epoch"`
-	NextSeg          int64      `gorm:"column:next_seg;not null;default:0;comment:下一分片序号" json:"next_seg"`
-	LastHeartbeatAt  *time.Time `gorm:"column:last_heartbeat_at;comment:跟播心跳" json:"last_heartbeat_at,omitempty"`
-	IngestErrorMsg   string     `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
-	LiveASR          string     `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
-	ASRSummaries     []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
-	ASRParagraphs    []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
-	Duration         int64               `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
-	Width            int                 `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`
-	Height           int                 `gorm:"not null;default:0;comment:直播画面高度像素" json:"height"`
-	ASRStatus        string              `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
-	ASRProgress      int16               `gorm:"column:asr_progress;not null;default:0;comment:ASR识别进度0到100" json:"asr_progress"`
-	ASRErrorMsg      string              `gorm:"column:asr_error_msg;type:text;comment:ASR识别失败原因" json:"asr_error_msg,omitempty"`
-	ASRStartedAt     *time.Time          `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
-	ASRUpdatedAt     *time.Time          `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
-	ASRCompletedAt   *time.Time          `gorm:"column:asr_completed_at;comment:ASR识别完成时间" json:"asr_completed_at,omitempty"`
-	ASRVersion       int64               `gorm:"column:asr_version;not null;default:0;comment:ASR乐观锁版本号" json:"asr_version"`
-	CreatedBy        uint                `gorm:"not null;index;comment:添加人账号ID" json:"created_by"`
-	CreatedAt        time.Time           `gorm:"comment:添加时间" json:"created_at"`
-	UpdatedAt        time.Time           `gorm:"comment:最后更新时间" json:"updated_at"`
-	Ext              string              `gorm:"size:1024;comment:扩展字段" json:"ext"`
+	LiveStatus        string              `gorm:"column:live_status;size:16;not null;default:none;index;comment:跟播状态" json:"live_status"`
+	ScheduledAt       *time.Time          `gorm:"column:scheduled_at;comment:计划开播时间" json:"scheduled_at,omitempty"`
+	WaitDeadlineAt    *time.Time          `gorm:"column:wait_deadline_at;comment:将要直播开播截止" json:"wait_deadline_at,omitempty"`
+	ConnectDeadlineAt *time.Time          `gorm:"column:connect_deadline_at;comment:正在直播连上截止" json:"connect_deadline_at,omitempty"`
+	StreamStartedAt   *time.Time          `gorm:"column:stream_started_at;comment:第一次读到媒体的时间" json:"stream_started_at,omitempty"`
+	ASRCursorMS       int64               `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
+	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:跟播抢占代数" json:"ingest_epoch"`
+	NextSeg           int64               `gorm:"column:next_seg;not null;default:0;comment:下一分片序号" json:"next_seg"`
+	LastHeartbeatAt   *time.Time          `gorm:"column:last_heartbeat_at;comment:跟播心跳" json:"last_heartbeat_at,omitempty"`
+	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
+	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
+	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
+	ASRParagraphs     []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
+	Duration          int64               `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
+	Width             int                 `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`
+	Height            int                 `gorm:"not null;default:0;comment:直播画面高度像素" json:"height"`
+	ASRStatus         string              `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
+	ASRProgress       int16               `gorm:"column:asr_progress;not null;default:0;comment:ASR识别进度0到100" json:"asr_progress"`
+	ASRErrorMsg       string              `gorm:"column:asr_error_msg;type:text;comment:ASR识别失败原因" json:"asr_error_msg,omitempty"`
+	ASRStartedAt      *time.Time          `gorm:"column:asr_started_at;comment:ASR识别开始时间" json:"asr_started_at,omitempty"`
+	ASRUpdatedAt      *time.Time          `gorm:"column:asr_updated_at;comment:ASR识别状态最后更新时间" json:"asr_updated_at,omitempty"`
+	ASRCompletedAt    *time.Time          `gorm:"column:asr_completed_at;comment:ASR识别完成时间" json:"asr_completed_at,omitempty"`
+	ASRVersion        int64               `gorm:"column:asr_version;not null;default:0;comment:ASR乐观锁版本号" json:"asr_version"`
+	CreatedBy         uint                `gorm:"not null;index;comment:添加人账号ID" json:"created_by"`
+	CreatedAt         time.Time           `gorm:"comment:添加时间" json:"created_at"`
+	UpdatedAt         time.Time           `gorm:"comment:最后更新时间" json:"updated_at"`
+	Ext               string              `gorm:"size:1024;comment:扩展字段" json:"ext"`
 }
 
 // TableName 指定直播素材表名。
@@ -212,4 +213,19 @@ func (m *LiveMaterial) ASRCoversClips(clips []ClipRange) bool {
 		}
 	}
 	return maxEnd > 0 && maxEnd <= m.ASRCursorMS
+}
+
+// FormatClockMS 将毫秒格式化为 m:ss 或 h:mm:ss（与前端 formatVideoDuration 对齐）。
+func FormatClockMS(ms int64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	totalSec := ms / 1000
+	h := totalSec / 3600
+	m := (totalSec % 3600) / 60
+	s := totalSec % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
 }

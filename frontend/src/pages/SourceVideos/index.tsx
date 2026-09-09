@@ -511,11 +511,12 @@ const SourceVideosPage = () => {
       {
         title: 'ASR解析进度',
         key: 'asr_progress',
-        width: 160,
+        width: 180,
         render: (_, record) => (
           <AsrProgressCell
             status={record.asr_status}
             progress={record.asr_progress}
+            coveredMs={record.asr_cursor_ms}
             errorMessage={
               record.live_status === 'failed'
                 ? record.ingest_error_msg || record.asr_error_msg

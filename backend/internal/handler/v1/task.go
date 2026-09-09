@@ -471,7 +471,7 @@ func writeTaskCreateError(c *gin.Context, err error) {
 		errors.Is(err, service.ErrVideoProjectNotFound),
 		errors.Is(err, service.ErrLLMSystemPromptNotFound):
 		response.NotFound(c, err.Error())
-	case errors.Is(err, service.ErrTaskASRNotReady):
+	case errors.Is(err, service.ErrTaskASRNotReady), errors.Is(err, service.ErrTaskASRBeyondCursor):
 		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrVideoProjectNameExists):
 		response.BadRequest(c, err.Error())

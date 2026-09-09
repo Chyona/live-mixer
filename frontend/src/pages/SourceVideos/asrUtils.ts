@@ -18,8 +18,41 @@ export const LIVE_STATUS_LABEL: Record<string, string> = {
   failed: '跟播失败',
 };
 
+const LIVE_WINDOW_ASR_STATUSES = new Set(['live', 'ending', 'ended']);
+
 export function isAsrReady(status: AsrStatus): boolean {
   return status === 'completed';
+}
+
+/** 跟播窗口 ASR 已写出可成片区间（与后端 ASRCoversClips 对齐）。 */
+export function hasLiveWindowAsrCoverage(
+  video: Pick<SourceVideo, 'live_status' | 'asr_cursor_ms'>
+): boolean {
+  if (!LIVE_WINDOW_ASR_STATUSES.has(String(video.live_status))) return false;
+  return Number(video.asr_cursor_ms) > 0;
+}
+
+/** 跟播中 ASR 未完成时，可选区结束时间（秒）；完成态或不适用则无限制。 */
+export function getAsrSelectableEndSec(
+  video: Pick<SourceVideo, 'asr_status' | 'live_status' | 'asr_cursor_ms'> | null | undefined
+): number | null {
+  if (!video || isAsrReady(video.asr_status)) return null;
+  if (!hasLiveWindowAsrCoverage(video)) return null;
+  const cursorSec = Number(video.asr_cursor_ms) / 1000;
+  if (!Number.isFinite(cursorSec) || cursorSec <= 0) return null;
+  return cursorSec;
+}
+
+export function shouldPollLiveAsrProgress(
+  video: Pick<SourceVideo, 'live_status' | 'asr_status'> | null | undefined
+): boolean {
+  if (!video) return false;
+  if (isLiveIngesting(video.live_status)) return true;
+  return (
+    video.live_status === 'ended' &&
+    video.asr_status !== 'completed' &&
+    video.asr_status !== 'failed'
+  );
 }
 
 export function getAsrActionDisabledReason(
@@ -36,7 +69,7 @@ export function getAsrActionDisabledReason(
     return '直播尚未开始，暂无法进行此操作';
   }
 
-  if (isLiveIngesting(video.live_status) && Number(video.asr_cursor_ms) > 0) {
+  if (hasLiveWindowAsrCoverage(video)) {
     return null;
   }
 

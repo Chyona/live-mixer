@@ -21,6 +21,7 @@ import {
   sourceVideoPlayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
+import { shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
 import {
   fetchSliceProjectDetail,
   saveSliceProject,
@@ -372,7 +373,7 @@ const ManualVideoSlicePage = () => {
   }, [loadPageData]);
 
   useEffect(() => {
-    if (!video || !isLiveIngesting(video.live_status) || !sourceVideoId) return;
+    if (!video || !shouldPollLiveAsrProgress(video) || !sourceVideoId) return;
     const timer = window.setInterval(() => {
       void fetchSourceVideoDetail(sourceVideoId).then((res) => {
         if (res.code !== 0) return;
@@ -383,7 +384,7 @@ const ManualVideoSlicePage = () => {
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [sourceVideoId, video?.id, video?.live_status]);
+  }, [sourceVideoId, video?.id, video?.live_status, video?.asr_status]);
 
   useEffect(() => {
     const state = location.state as ManualSliceLocationState | null;

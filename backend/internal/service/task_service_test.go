@@ -300,6 +300,53 @@ func TestTaskService_CreateAISlice_ASRNotReady(t *testing.T) {
 	}
 }
 
+func TestTaskASRCoverageError(t *testing.T) {
+	if err := TaskASRCoverageError(&model.LiveMaterial{ASRStatus: model.ASRStatusCompleted}, nil); err != nil {
+		t.Fatalf("completed = %v", err)
+	}
+
+	live := &model.LiveMaterial{
+		SourceMode:  model.SourceModeLive,
+		LiveStatus:  model.LiveStatusLive,
+		ASRStatus:   model.ASRStatusProcessing,
+		ASRCursorMS: 120000,
+	}
+	if err := TaskASRCoverageError(live, []model.ClipRange{{StartTime: 0, EndTime: 60000}}); err != nil {
+		t.Fatalf("covered live clips = %v", err)
+	}
+	err := TaskASRCoverageError(live, []model.ClipRange{{StartTime: 0, EndTime: 180000}})
+	if !errors.Is(err, ErrTaskASRBeyondCursor) {
+		t.Fatalf("beyond cursor = %v, want ErrTaskASRBeyondCursor", err)
+	}
+
+	replay := &model.LiveMaterial{ASRStatus: model.ASRStatusProcessing, LiveStatus: model.LiveStatusNone}
+	if err := TaskASRCoverageError(replay, []model.ClipRange{{StartTime: 0, EndTime: 1000}}); !errors.Is(err, ErrTaskASRNotReady) {
+		t.Fatalf("replay processing = %v, want ErrTaskASRNotReady", err)
+	}
+}
+
+func TestTaskService_CreateAISlice_ASRBeyondCursor(t *testing.T) {
+	live := &mockLiveRepoForTask{material: &model.LiveMaterial{
+		ID:          1,
+		SourceMode:  model.SourceModeLive,
+		LiveStatus:  model.LiveStatusLive,
+		ASRStatus:   model.ASRStatusProcessing,
+		ASRCursorMS: 120000,
+	}}
+	projects := &mockVideoProjectRepoForDraft{project: &model.VideoProject{
+		ID: 1, LiveID: 1, PromptID: 1,
+		Clips0: []model.ClipRange{{StartTime: 0, EndTime: 180000}},
+	}}
+	svc := NewTaskService(&mockTaskRepo{}, live, projects, &mockPromptRepo{prompt: &model.LLMSystemPrompt{ID: 1, Content: "sys"}}, nil, nil, nil)
+	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{VideoProjectID: 1})
+	if !errors.Is(err, ErrTaskASRBeyondCursor) {
+		t.Fatalf("error = %v, want ErrTaskASRBeyondCursor", err)
+	}
+	if !strings.Contains(err.Error(), "2:00") {
+		t.Fatalf("error = %v, want covered clock in message", err)
+	}
+}
+
 func TestTaskService_CreateAISlice_MissingProjectID(t *testing.T) {
 	svc := NewTaskService(&mockTaskRepo{}, &mockLiveRepoForTask{}, stubVideoProjectRepo{}, &mockPromptRepo{}, nil, nil, nil)
 	_, err := svc.CreateAISlice(context.Background(), 1, CreateAISliceInput{})

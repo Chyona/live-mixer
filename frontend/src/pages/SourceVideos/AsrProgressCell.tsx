@@ -2,6 +2,7 @@ import { Button, Progress, Tooltip } from 'antd';
 import { LuCircleAlert, LuHourglass, LuRotateCw } from 'react-icons/lu';
 
 import type { AsrStatus } from '~/services/sourceVideo';
+import { formatVideoDurationMs } from '~/utils/duration';
 
 import { ASR_STATUS_LABEL } from './asrUtils';
 
@@ -21,13 +22,22 @@ function getProgressStatus(status: AsrStatus): 'success' | 'exception' | 'active
 interface AsrProgressCellProps {
   status: AsrStatus;
   progress: number;
+  coveredMs?: number;
   errorMessage?: string;
   retrying?: boolean;
   retryLabel?: string;
   onRetry?: () => void;
 }
 
-const AsrProgressCell = ({ status, progress, errorMessage, retrying, retryLabel, onRetry }: AsrProgressCellProps) => {
+const AsrProgressCell = ({
+  status,
+  progress,
+  coveredMs,
+  errorMessage,
+  retrying,
+  retryLabel,
+  onRetry,
+}: AsrProgressCellProps) => {
   const label = ASR_STATUS_LABEL[status];
 
   if (status === 'pending') {
@@ -67,9 +77,12 @@ const AsrProgressCell = ({ status, progress, errorMessage, retrying, retryLabel,
     );
   }
 
+  const coveredLabel =
+    status !== 'completed' && Number(coveredMs) > 0 ? `已解析 ${formatVideoDurationMs(coveredMs!)}` : '';
+
   return (
     <div className="source-videos-asr">
-      <div className="source-videos-asr-progress" title={label}>
+      <div className="source-videos-asr-progress" title={coveredLabel ? `${label} · ${coveredLabel}` : label}>
         <Progress
           percent={progress}
           size="small"
@@ -77,6 +90,7 @@ const AsrProgressCell = ({ status, progress, errorMessage, retrying, retryLabel,
           showInfo
         />
       </div>
+      {coveredLabel ? <span className="source-videos-asr-covered">{coveredLabel}</span> : null}
     </div>
   );
 };

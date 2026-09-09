@@ -12,8 +12,10 @@ function buildActionDisabledReason(options: {
   hasSelectedPrompt: boolean;
   isUnderMin: boolean;
   isOverLimit: boolean;
+  rangesExceedAsr: boolean;
   minTotalDuration: number;
   maxTotalDuration?: number;
+  asrCoveredDuration?: number | null;
 }) {
   const {
     actionLoading,
@@ -22,8 +24,10 @@ function buildActionDisabledReason(options: {
     hasSelectedPrompt,
     isUnderMin,
     isOverLimit,
+    rangesExceedAsr,
     minTotalDuration,
     maxTotalDuration,
+    asrCoveredDuration,
   } = options;
 
   if (actionLoading || canAction) return null;
@@ -41,12 +45,16 @@ function buildActionDisabledReason(options: {
   if (isOverLimit && maxTotalDuration) {
     missing.push(`已选时长需不超过 ${maxTotalDuration / 60} 分钟`);
   }
+  if (rangesExceedAsr && asrCoveredDuration != null) {
+    missing.push(`选区超出已解析范围（已解析至 ${formatVideoDuration(asrCoveredDuration)}）`);
+  }
 
   return missing.length > 0 ? missing.join('；') : null;
 }
 
 interface SelectedSegmentsPanelProps {
   videoDuration: number;
+  asrCoveredDuration?: number | null;
   selectedRanges: TimeRange[];
   totalSelectedDuration: number;
   minTotalDuration: number;
@@ -67,6 +75,7 @@ interface SelectedSegmentsPanelProps {
 
 const SelectedSegmentsPanel = ({
   videoDuration,
+  asrCoveredDuration = null,
   selectedRanges,
   totalSelectedDuration,
   minTotalDuration,
@@ -90,12 +99,17 @@ const SelectedSegmentsPanel = ({
     maxTotalDuration != null &&
     maxTotalDuration > 0 &&
     totalSelectedDuration > maxTotalDuration;
+  const rangesExceedAsr =
+    asrCoveredDuration != null &&
+    asrCoveredDuration > 0 &&
+    selectedRanges.some((range) => range.end > asrCoveredDuration + 0.05);
   const canAction =
     !readOnly &&
     selectedRanges.length > 0 &&
     hasSelectedPrompt &&
     !isUnderMin &&
-    !isOverLimit;
+    !isOverLimit &&
+    !rangesExceedAsr;
   const actionLoading = submitting || aiSelecting;
 
   const disabledReason = readOnly
@@ -107,8 +121,10 @@ const SelectedSegmentsPanel = ({
         hasSelectedPrompt,
         isUnderMin,
         isOverLimit,
+        rangesExceedAsr,
         minTotalDuration,
         maxTotalDuration,
+        asrCoveredDuration,
       });
 
   const aiSelectButton = (
@@ -223,7 +239,9 @@ const SelectedSegmentsPanel = ({
         <div className="slice-selected-meta">
           {videoDuration > 0 && (
             <span className="slice-timeline-duration">
-              视频总时长 {formatVideoDuration(videoDuration)}
+              {asrCoveredDuration != null && asrCoveredDuration > 0 && asrCoveredDuration < videoDuration - 0.05
+                ? `已解析 ${formatVideoDuration(asrCoveredDuration)} / 总时长 ${formatVideoDuration(videoDuration)}`
+                : `视频总时长 ${formatVideoDuration(videoDuration)}`}
             </span>
           )}
           <div className="slice-selected-zoom">

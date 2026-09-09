@@ -25,7 +25,7 @@ import {
 } from '~/services/sliceProject';
 import { showAppError, toast } from '~/utils/toast';
 import { formatToDateTime } from '~/utils/date';
-import { formatVideoDurationMs, resolveSliceTimelineDurationSec } from '~/utils/duration';
+import { formatVideoDuration, formatVideoDurationMs, resolveSliceTimelineDurationSec } from '~/utils/duration';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import {
@@ -45,6 +45,7 @@ import {
   normalizeTranscriptParagraphs,
 } from '../ManualVideoSlice/utils';
 import type { TranscriptParagraph } from '../ManualVideoSlice/types';
+import { getAsrSelectableEndSec, shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
 
 const MIN_TOTAL_DURATION = 5 * 60;
 
@@ -326,7 +327,7 @@ const SourceVideoSlicePage = () => {
   }, [loadPageData]);
 
   useEffect(() => {
-    if (!video || !isLiveIngesting(video.live_status) || !sourceVideoId) return;
+    if (!video || !shouldPollLiveAsrProgress(video) || !sourceVideoId) return;
     const timer = window.setInterval(() => {
       void fetchSourceVideoDetail(sourceVideoId).then((res) => {
         if (res.code === 0) {
@@ -340,7 +341,7 @@ const SourceVideoSlicePage = () => {
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [sourceVideoId, video?.id, video?.live_status]);
+  }, [sourceVideoId, video?.id, video?.live_status, video?.asr_status]);
 
   const isTimelineReady = videoDuration > 0 && !videoError;
   const isTimelineLoading = canPreview && !videoError && videoDuration === 0;
@@ -428,6 +429,8 @@ const SourceVideoSlicePage = () => {
     setCurrentTime(time);
   }, []);
 
+  const asrSelectableEndSec = useMemo(() => getAsrSelectableEndSec(video), [video]);
+
   const handleRangeSelect = useCallback(
     (range: TimeRange) => {
       setSelectedRanges((prev) => [...prev, range]);
@@ -455,16 +458,36 @@ const SourceVideoSlicePage = () => {
         return;
       }
 
+      const start = preview.start;
+      let end = preview.end;
+      if (asrSelectableEndSec != null) {
+        if (start >= asrSelectableEndSec) {
+          toast.notify.warning(
+            '请在已解析范围内选择',
+            `目前仅支持选择到 ${formatVideoDuration(asrSelectableEndSec)}`
+          );
+          handleTimeChange(preview.start);
+          return;
+        }
+        if (end > asrSelectableEndSec) {
+          end = asrSelectableEndSec;
+          toast.notify.warning(
+            '已限制在已解析范围内',
+            `目前仅支持选择到 ${formatVideoDuration(asrSelectableEndSec)}`
+          );
+        }
+      }
+
       const nextRange: TimeRange = {
         id: `range-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        start: preview.start,
-        end: preview.end,
+        start,
+        end,
       };
       setSelectedRanges((prev) => [...prev, nextRange]);
       setActiveRangeId(nextRange.id);
-      handleTimeChange(preview.start);
+      handleTimeChange(start);
     },
-    [handleTimeChange, projectTaskReadOnly, selectedRanges]
+    [asrSelectableEndSec, handleTimeChange, projectTaskReadOnly, selectedRanges]
   );
 
   const handleRangeDelete = useCallback((rangeId: string) => {
@@ -496,6 +519,19 @@ const SourceVideoSlicePage = () => {
     [selectedRanges]
   );
 
+  const rangesExceedAsr =
+    asrSelectableEndSec != null &&
+    selectedRanges.some((range) => range.end > asrSelectableEndSec + 0.05);
+
+  const warnIfAsrRangeExceeded = useCallback(() => {
+    if (!rangesExceedAsr || asrSelectableEndSec == null) return false;
+    toast.notify.warning(
+      '选区超出已解析范围',
+      `目前仅支持选择到 ${formatVideoDuration(asrSelectableEndSec)}，请缩短选区后再试`
+    );
+    return true;
+  }, [asrSelectableEndSec, rangesExceedAsr]);
+
   const handleSubmit = useCallback(async () => {
     if (projectTaskReadOnly) {
       toast.notify.warning('项目有进行中任务，当前仅可查看');
@@ -517,6 +553,8 @@ const SourceVideoSlicePage = () => {
       toast.notify.warning('请先选择一个 AI 提示词');
       return;
     }
+
+    if (warnIfAsrRangeExceeded()) return;
 
     setSubmitting(true);
     try {
@@ -551,7 +589,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [projectName, projectTaskReadOnly, resetDirtyBaseline, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+  }, [projectName, projectTaskReadOnly, resetDirtyBaseline, selectedPrompt, selectedRanges, totalSelectedDuration, video, warnIfAsrRangeExceeded]);
 
   const handleAiSelect = useCallback(async () => {
     if (projectTaskReadOnly) {
@@ -574,6 +612,8 @@ const SourceVideoSlicePage = () => {
       toast.notify.warning('请先选择一个 AI 提示词');
       return;
     }
+
+    if (warnIfAsrRangeExceeded()) return;
 
     setAiSelecting(true);
     try {
@@ -608,7 +648,7 @@ const SourceVideoSlicePage = () => {
     } finally {
       setAiSelecting(false);
     }
-  }, [projectName, projectTaskReadOnly, resetDirtyBaseline, selectedPrompt, selectedRanges, totalSelectedDuration, video]);
+  }, [projectName, projectTaskReadOnly, resetDirtyBaseline, selectedPrompt, selectedRanges, totalSelectedDuration, video, warnIfAsrRangeExceeded]);
 
   const handleSwitchToManual = useCallback(() => {
     confirmLeave(() => {
@@ -741,6 +781,7 @@ const SourceVideoSlicePage = () => {
             <div className="slice-timeline-section">
               <SelectedSegmentsPanel
                 videoDuration={videoDuration}
+                asrCoveredDuration={asrSelectableEndSec}
                 selectedRanges={selectedRanges}
                 totalSelectedDuration={totalSelectedDuration}
                 minTotalDuration={MIN_TOTAL_DURATION}
@@ -772,6 +813,7 @@ const SourceVideoSlicePage = () => {
                 onRangeUpdate={handleRangeUpdate}
                 onPreviewRangeClick={handlePreviewRangeClick}
                 readOnly={projectTaskReadOnly}
+                selectableEnd={asrSelectableEndSec ?? undefined}
               />
             </div>
           )}

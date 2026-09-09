@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,6 +23,9 @@ var ErrTaskNotFound = errors.New("任务不存在")
 
 // ErrTaskASRNotReady 直播素材 ASR 尚未完成，无法创建依赖 ASR 的任务。
 var ErrTaskASRNotReady = errors.New("直播素材 ASR 尚未完成")
+
+// ErrTaskASRBeyondCursor 跟播选区超出窗口 ASR 已覆盖范围。
+var ErrTaskASRBeyondCursor = errors.New("选区超出已解析范围")
 
 // ErrTaskClips0NoASR 选区（或拆分后的某一段）与 live_asr 无重叠分句，无法创建 AI 选片/一键成片任务。
 var ErrTaskClips0NoASR = errors.New("选区时间段内无可用 ASR 分句")
@@ -545,6 +549,27 @@ func buildTaskListFilter(opts TaskListOptions) (repository.TaskListFilter, error
 	return filter, nil
 }
 
+func newTaskASRBeyondCursorError(cursorMS int64) error {
+	return fmt.Errorf("%w（已解析至 %s），请缩短选区后再试", ErrTaskASRBeyondCursor, model.FormatClockMS(cursorMS))
+}
+
+// TaskASRCoverageError 选区是否已被 ASR 覆盖：完成态放行；跟播中按 asr_cursor_ms 校验。
+func TaskASRCoverageError(material *model.LiveMaterial, clips0 []model.ClipRange) error {
+	if material == nil {
+		return ErrTaskASRNotReady
+	}
+	if material.ASRStatus == model.ASRStatusCompleted || material.ASRCoversClips(clips0) {
+		return nil
+	}
+	if len(clips0) > 0 && material.NeedsLiveIngest() && material.ASRCursorMS > 0 {
+		switch material.LiveStatus {
+		case model.LiveStatusLive, model.LiveStatusEnding, model.LiveStatusEnded:
+			return newTaskASRBeyondCursorError(material.ASRCursorMS)
+		}
+	}
+	return ErrTaskASRNotReady
+}
+
 // requireASRReadyMaterial 回放须 ASR 完成；跟播中只要选区已被窗口 ASR 覆盖即可。
 func (s *taskService) requireASRReadyMaterial(ctx context.Context, liveID uint, clips0 []model.ClipRange) (*model.LiveMaterial, error) {
 	material, err := s.liveMaterialRepo.GetByID(ctx, liveID)
@@ -554,13 +579,10 @@ func (s *taskService) requireASRReadyMaterial(ctx context.Context, liveID uint, 
 		}
 		return nil, err
 	}
-	if material.ASRStatus == model.ASRStatusCompleted {
-		return material, nil
+	if err := TaskASRCoverageError(material, clips0); err != nil {
+		return nil, err
 	}
-	if material.ASRCoversClips(clips0) {
-		return material, nil
-	}
-	return nil, ErrTaskASRNotReady
+	return material, nil
 }
 
 func requireLiveRecordReady(material *model.LiveMaterial) error {

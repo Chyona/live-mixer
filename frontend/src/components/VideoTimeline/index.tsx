@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, type CSSProperties, type FC, useMemo } from 'react';
 import { toast } from '~/utils/toast';
+import { clampRangeToSelectableEnd, resolveSelectableMaxEnd } from './selectableRange';
 import './index.css';
 
 export interface TimeRange {
@@ -29,6 +30,8 @@ export interface VideoTimelineProps {
   onPreviewRangeClick?: (range: TimeRange) => void;
   /** 只读：可定位播放，不可新增/调整/删除片段 */
   readOnly?: boolean;
+  /** 可选区上限（秒）。超出部分不可新建/拉伸选区，仍可定位播放。 */
+  selectableEnd?: number;
 }
 
 function formatTime(seconds: number): string {
@@ -283,6 +286,7 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
   onRangeUpdate,
   onPreviewRangeClick,
   readOnly = false,
+  selectableEnd,
 }) => {
   const [internalZoomLevel, setInternalZoomLevel] = useState(1);
   const isZoomControlled = zoomLevelProp !== undefined && onZoomLevelChange !== undefined;
@@ -571,22 +575,37 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
   );
 
   const handleMouseUp = useCallback(() => {
+    const coveredUntilLabel =
+      selectableEnd != null && selectableEnd > 0 ? formatTime(selectableEnd) : '';
+
     // 处理 resize 结束
     if (resizingId && resizePreview && resizeEdge && onRangeUpdate) {
       const originalRange = selectedRanges.find((r) => r.id === resizingId);
       const originalDuration = originalRange ? originalRange.end - originalRange.start : 0;
-      const newDuration = resizePreview.end - resizePreview.start;
+      const clampedResize = clampRangeToSelectableEnd(
+        resizePreview.start,
+        resizePreview.end,
+        selectableEnd
+      );
+      const nextStart = clampedResize?.start ?? resizePreview.start;
+      const nextEnd = clampedResize?.end ?? resizePreview.end;
+      const newDuration = nextEnd - nextStart;
       const additionalDuration = newDuration - originalDuration;
 
-      if (!checkMaxDuration(additionalDuration)) {
+      if (!clampedResize) {
+        toast.notify.warning('请在已解析范围内调整', `目前仅支持选择到 ${coveredUntilLabel}`);
+      } else if (!checkMaxDuration(additionalDuration)) {
         toast.notify.warning(`选中总时长不能超过 ${formatTime(maxTotalDuration || 0)}`);
-      } else if (resizePreview.end - resizePreview.start >= MIN_RANGE_DURATION) {
+      } else if (newDuration >= MIN_RANGE_DURATION) {
+        if (clampedResize.clamped) {
+          toast.notify.warning('已限制在已解析范围内', `目前仅支持选择到 ${coveredUntilLabel}`);
+        }
         onRangeUpdate({
           id: resizingId,
-          start: Math.round(resizePreview.start * 100) / 100,
-          end: Math.round(resizePreview.end * 100) / 100,
+          start: Math.round(nextStart * 100) / 100,
+          end: Math.round(nextEnd * 100) / 100,
         });
-        onTimeChange(resizePreview.start);
+        onTimeChange(nextStart);
       } else {
         toast.notify.warning(`片段时长不能少于 ${MIN_RANGE_DURATION} 秒`);
       }
@@ -602,20 +621,31 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
     if (dragStart !== null && dragEnd !== null) {
       const start = Math.min(dragStart, dragEnd);
       const end = Math.max(dragStart, dragEnd);
-      const rangeDuration = end - start;
+      const clamped = clampRangeToSelectableEnd(start, end, selectableEnd);
+      const rangeDuration = (clamped?.end ?? end) - (clamped?.start ?? start);
 
-      if (rangeDuration >= MIN_RANGE_DURATION) {
+      if (!clamped) {
+        if (hasDragged) {
+          toast.notify.warning('请在已解析范围内选择', `目前仅支持选择到 ${coveredUntilLabel}`);
+        } else {
+          setActiveRangeId(null);
+          onTimeChange(dragStart);
+        }
+      } else if (rangeDuration >= MIN_RANGE_DURATION) {
         if (!checkMaxDuration(rangeDuration)) {
           toast.notify.warning(`选中总时长不能超过 ${formatTime(maxTotalDuration || 0)}`);
         } else {
+          if (clamped.clamped) {
+            toast.notify.warning('已限制在已解析范围内', `目前仅支持选择到 ${coveredUntilLabel}`);
+          }
           const newRangeId = `range-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           onRangeSelect({
             id: newRangeId,
-            start: Math.round(start * 100) / 100,
-            end: Math.round(end * 100) / 100,
+            start: Math.round(clamped.start * 100) / 100,
+            end: Math.round(clamped.end * 100) / 100,
           });
           setActiveRangeId(newRangeId);
-          onTimeChange(start);
+          onTimeChange(clamped.start);
         }
       } else if (hasDragged && rangeDuration > 0) {
         toast.notify.warning(`片段时长不能少于 ${MIN_RANGE_DURATION} 秒`);
@@ -643,6 +673,7 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
     resizePreview,
     onRangeUpdate,
     selectedRanges,
+    selectableEnd,
     setActiveRangeId,
   ]);
 
@@ -651,17 +682,18 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
     if (resizingId && resizeEdge && resizePreview) {
       const handleGlobalResizeMove = (e: MouseEvent) => {
         const time = getTimeFromX(e.clientX);
+        const maxEnd = resolveSelectableMaxEnd(duration, selectableEnd);
         setResizePreview((prev) => {
           if (!prev) return null;
           if (resizeEdge === 'start') {
             return {
               ...prev,
-              start: Math.max(0, Math.min(time, prev.end - MIN_RANGE_DURATION)),
+              start: Math.max(0, Math.min(time, Math.min(prev.end - MIN_RANGE_DURATION, maxEnd))),
             };
           }
           return {
             ...prev,
-            end: Math.min(duration, Math.max(time, prev.start + MIN_RANGE_DURATION)),
+            end: Math.min(maxEnd, Math.max(time, prev.start + MIN_RANGE_DURATION)),
           };
         });
       };
@@ -705,7 +737,7 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
       document.removeEventListener('mousemove', handleGlobalMouseMove);
       document.removeEventListener('mouseup', handleGlobalMouseUp);
     };
-  }, [isDragging, dragStart, duration, getTimeFromX, handleMouseUp, resizingId, resizeEdge, resizePreview]);
+  }, [isDragging, dragStart, duration, getTimeFromX, handleMouseUp, resizingId, resizeEdge, resizePreview, selectableEnd]);
 
   // 缩放变化时将播放头滚入视野；播放过程中不自动抢滚动位置
   useEffect(() => {
@@ -769,8 +801,16 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
     };
   }, []);
 
-  const selectionStart = dragStart !== null && dragEnd !== null ? Math.min(dragStart, dragEnd) : null;
-  const selectionEnd = dragStart !== null && dragEnd !== null ? Math.max(dragStart, dragEnd) : null;
+  const rawSelectionStart = dragStart !== null && dragEnd !== null ? Math.min(dragStart, dragEnd) : null;
+  const rawSelectionEnd = dragStart !== null && dragEnd !== null ? Math.max(dragStart, dragEnd) : null;
+  const dragSelection =
+    rawSelectionStart !== null && rawSelectionEnd !== null
+      ? clampRangeToSelectableEnd(rawSelectionStart, rawSelectionEnd, selectableEnd)
+      : null;
+  const selectionStart = dragSelection?.start ?? null;
+  const selectionEnd = dragSelection?.end ?? null;
+  const uncoveredStart = resolveSelectableMaxEnd(duration, selectableEnd);
+  const showUncovered = selectableEnd != null && selectableEnd > 0 && duration - uncoveredStart > 0.05;
   const isInteracting = Boolean(resizingId) || isDragging;
 
   const rangeIndexMap = useMemo(() => {
@@ -840,6 +880,18 @@ const VideoTimeline: FC<VideoTimelineProps> = ({
           <div className="timeline-track" />
 
           <div className="timeline-overlays">
+            {showUncovered ? (
+              <div
+                className="timeline-uncovered"
+                style={{
+                  left: toTimelineX(uncoveredStart, safeScale),
+                  width: Math.max((duration - uncoveredStart) * safeScale, 4),
+                }}
+                title={`未解析区间（已解析至 ${formatTime(uncoveredStart)}）`}
+              >
+                <span className="timeline-uncovered-label">未解析</span>
+              </div>
+            ) : null}
             {previewRanges.map((range) => {
               const width = Math.max((range.end - range.start) * safeScale, 4);
               const rangeLabel = range.title?.trim() || 'AI选片';
