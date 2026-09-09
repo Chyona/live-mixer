@@ -119,6 +119,8 @@ func runCutPipeline(t *testing.T, clips []model.ClipRange, cutter *mockCutter) {
 		StagingDir: filepath.Join(root, "staging"),
 		RecordDir:  filepath.Join(root, "record"),
 		Clips:      clips,
+		// 默认关字幕，保留「超 10 分钟走关键帧快切」的既有行为断言。
+		Project: &model.VideoProject{EnableCaptions: model.EnableCaptionsOff},
 	}
 	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
 	if err := p.Run(context.Background(), s); err != nil {
@@ -178,5 +180,42 @@ func TestPipeline_CutClips_FastWhenOver10Min(t *testing.T) {
 	}
 	if len(cutter.precise) != 0 {
 		t.Fatalf("precise calls = %d, want 0", len(cutter.precise))
+	}
+}
+
+func TestPipeline_CutClips_CaptionsForcePreciseOver10Min(t *testing.T) {
+	cutter := &mockCutter{}
+	root := t.TempDir()
+	s := &session.Session{
+		JobID:      "job-cap",
+		Material:   &model.LiveMaterial{LiveURL: "https://example.com/live.mp4"},
+		StagingDir: filepath.Join(root, "staging"),
+		RecordDir:  filepath.Join(root, "record"),
+		Project:    &model.VideoProject{EnableCaptions: model.EnableCaptionsOn},
+		Clips: []model.ClipRange{
+			{StartTime: 0, EndTime: FastKeyframeCutMinDurationMS + 1},
+		},
+	}
+	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(cutter.precise) != 1 {
+		t.Fatalf("precise calls = %d, want 1 when captions on", len(cutter.precise))
+	}
+	if len(cutter.fast) != 0 {
+		t.Fatalf("fast calls = %d, want 0 when captions on", len(cutter.fast))
+	}
+}
+
+func TestProjectWantsCaptions(t *testing.T) {
+	if !projectWantsCaptions(nil) {
+		t.Fatal("nil project should default to captions on")
+	}
+	if projectWantsCaptions(&model.VideoProject{EnableCaptions: model.EnableCaptionsOff}) {
+		t.Fatal("off")
+	}
+	if !projectWantsCaptions(&model.VideoProject{EnableCaptions: model.EnableCaptionsOn}) {
+		t.Fatal("on")
 	}
 }

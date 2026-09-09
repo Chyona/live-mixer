@@ -434,11 +434,15 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		return nil
 	}
 	startSeg := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
-	// 平移量必须与拼接音频起点一致（分片对齐），不能用裸 cursor，否则字幕相对音频偏移。
-	offsetMS := liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)
 	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
 	if len(files) == 0 {
 		return nil
+	}
+	// 偏移必须等于「startSeg 之前各分片的真实总时长」。标称 6s×index 会随分片时长抖动累积漂移，
+	// 表现为成片里前段字幕准、后段逐渐错位。
+	offsetMS := w.measureSegmentPrefixDurationMS(ctx, material, startSeg)
+	if offsetMS <= 0 {
+		offsetMS = liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)
 	}
 	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.mp3", cursor))
 	concatTS := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.ts", cursor))
@@ -462,16 +466,43 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		w.logger.Warn("窗口 ASR 失败，跳过本窗", zap.Error(err))
 		return nil
 	}
-	merged, _, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
+	merged, mergedDur, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
 	if err != nil {
 		return err
 	}
-	newCursor := material.Duration
+	windowDur := asr.ParseDurationMs(raw)
+	newCursor := offsetMS + windowDur
+	if mergedDur > newCursor {
+		newCursor = mergedDur
+	}
+	if newCursor < cursor {
+		newCursor = cursor
+	}
+	// 覆盖进度仍以录像时长为分母，便于跟播 UI；cursor 用真实已转写终点。
 	progress := int16(10)
-	if newCursor > 0 {
-		progress = int16(20 + 70*cursor/newCursor)
+	if material.Duration > 0 {
+		progress = int16(20 + 70*newCursor/material.Duration)
+		if progress > 99 {
+			progress = 99
+		}
 	}
 	return w.repo.AppendWindowASR(ctx, material.ID, material.IngestEpoch, merged, newCursor, material.Duration, progress)
+}
+
+// measureSegmentPrefixDurationMS 累加 startSeg 之前本地分片的真实时长，作为窗口 ASR 时间原点。
+func (w *liveIngestWorker) measureSegmentPrefixDurationMS(ctx context.Context, material *model.LiveMaterial, startSeg int64) int64 {
+	if startSeg <= 0 {
+		return 0
+	}
+	prefix := make([]string, 0, startSeg)
+	for _, f := range globLocalSegments(w.segmentDir(material)) {
+		idx, ok := parseLocalSegIndex(f)
+		if !ok || int64(idx) >= startSeg {
+			continue
+		}
+		prefix = append(prefix, f)
+	}
+	return media.SumDurationMS(ctx, w.prober, prefix)
 }
 
 func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *model.LiveMaterial, duration int64) error {

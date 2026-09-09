@@ -86,6 +86,23 @@ func TestBuildCaptionsFromASR_ClampsPartialOverlap(t *testing.T) {
 	}
 }
 
+func TestBuildCaptionsFromASR_ScalesWhenDraftDurationDiffers(t *testing.T) {
+	// 源选区 1000ms，草稿轨仅 900ms：相对位置应按 0.9 缩放。
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 900_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":0,"end_time":1000,"text":"整段","words":[]}
+	]}}`
+	got := BuildCaptionsFromASR(liveASR, placements)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Start != 0 || got[0].End != 900_000 {
+		t.Fatalf("scaled caption = %#v, want 0-900000", got[0])
+	}
+}
+
 func TestBuildCaptionsFromASR_SplitsLongCaption(t *testing.T) {
 	placements := []session.ClipPlacement{
 		{SourceStartMS: 0, SourceEndMS: 20000, DraftStartUS: 0, DraftEndUS: 20_000_000},

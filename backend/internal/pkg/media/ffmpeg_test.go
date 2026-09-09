@@ -113,7 +113,7 @@ func TestBuildCutVideoArgs(t *testing.T) {
 	args := buildCutVideoArgs("/in.mp4", "/out.mp4", 10, 30)
 	want := []string{
 		"-y", "-threads", "6",
-		"-ss", "10", "-i", "/in.mp4",
+		"-i", "/in.mp4", "-ss", "10",
 		"-t", "20",
 		"-map", "0:v:0", "-map", "0:a:0?",
 		"-c:v", "libx264", "-crf", "18",

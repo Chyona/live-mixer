@@ -194,13 +194,15 @@ func fileSizeOrZero(path string) int64 {
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {
 	clips := s.Clips
 	totalMS := TotalClipDurationMS(clips)
-	useFast := UseFastKeyframeCut(clips)
+	// 开启字幕时禁止关键帧快切：-c copy 会落到关键帧，片头内容早于 SourceStart，表现为「部分切片字幕错位」。
+	useFast := UseFastKeyframeCut(clips) && !projectWantsCaptions(s.Project)
 	p.Logger.Info("选择草稿切片裁剪方式",
 		zap.String("job_id", s.JobID),
 		zap.Int("clips", len(clips)),
 		zap.Int64("total_duration_ms", totalMS),
 		zap.Int64("fast_cut_threshold_ms", FastKeyframeCutMinDurationMS),
 		zap.Bool("fast_keyframe", useFast),
+		zap.Bool("captions", projectWantsCaptions(s.Project)),
 	)
 	paths := make([]string, 0, len(clips))
 	for i, clip := range clips {
@@ -253,6 +255,14 @@ func TotalClipDurationMS(clips []model.ClipRange) int64 {
 // UseFastKeyframeCut 成片总时长超过 10 分钟时使用关键帧快速裁剪。
 func UseFastKeyframeCut(clips []model.ClipRange) bool {
 	return TotalClipDurationMS(clips) > FastKeyframeCutMinDurationMS
+}
+
+// projectWantsCaptions 项目需要生成字幕时，裁剪必须帧精确，避免与 ASR 时间轴错位。
+func projectWantsCaptions(project *model.VideoProject) bool {
+	if project == nil {
+		return true
+	}
+	return project.EnableCaptions != model.EnableCaptionsOff
 }
 
 // ResolveClipRanges 优先从 video_project.clips1 提取时间段；为空则回退 clips0。

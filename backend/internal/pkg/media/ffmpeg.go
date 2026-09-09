@@ -258,14 +258,14 @@ func (c *FFmpegConverter) runCutVideo(ctx context.Context, inputPath, outputPath
 }
 
 // buildCutVideoArgs 构建精确裁剪参数列表，便于单元测试校验。
-// -ss 放在 -i 之前做输入侧快速定位；-t 使用时长（end-start），避免输入 seek 后时间戳归零导致 -to 语义偏移；
-// -map 0:a:0? 表示音频轨可选。
+// -ss 放在 -i 之后做解码侧精确定位，避免输入 seek 落到关键帧导致成片与字幕起点不一致；
+// -t 使用时长（end-start）；-map 0:a:0? 表示音频轨可选。
 func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
 	return []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
-		"-ss", formatFFmpegSeconds(startSec),
 		"-i", inputPath,
+		"-ss", formatFFmpegSeconds(startSec),
 		"-t", formatFFmpegSeconds(endSec - startSec),
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
