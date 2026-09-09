@@ -577,22 +577,52 @@ func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_Delete_Success 验证删除时调用仓储层。
+// TestLiveMaterialService_Delete_Success 验证删除时先取消跟播再调用仓储层。
 func TestLiveMaterialService_Delete_Success(t *testing.T) {
 	var deletedID uint
+	var seq, cancelOrder, deleteOrder int
 	repo := &mockLiveMaterialRepo{
 		deleteFn: func(ctx context.Context, id uint) error {
+			seq++
+			deleteOrder = seq
 			deletedID = id
 			return nil
 		},
 	}
-	svc := NewLiveMaterialService(repo, nil)
+	ingest := &mockIngestWorker{
+		onCancel: func(id uint) {
+			seq++
+			cancelOrder = seq
+		},
+	}
+	svc := NewLiveMaterialServiceFull(repo, nil, ingest, nil, nil)
 	if err := svc.Delete(context.Background(), 3); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 	if deletedID != 3 {
 		t.Errorf("deletedID = %d, want 3", deletedID)
 	}
+	if len(ingest.canceled) != 1 || ingest.canceled[0] != 3 {
+		t.Errorf("canceled = %v, want [3]", ingest.canceled)
+	}
+	if cancelOrder != 1 || deleteOrder != 2 {
+		t.Errorf("call order cancel=%d delete=%d, want cancel=1 delete=2", cancelOrder, deleteOrder)
+	}
+}
+
+type mockIngestWorker struct {
+	canceled []uint
+	onCancel func(id uint)
+}
+
+func (m *mockIngestWorker) Enqueue()                  {}
+func (m *mockIngestWorker) Start(ctx context.Context) {}
+func (m *mockIngestWorker) Cancel(materialID uint) bool {
+	if m.onCancel != nil {
+		m.onCancel(materialID)
+	}
+	m.canceled = append(m.canceled, materialID)
+	return true
 }
 
 // TestLiveMaterialService_Delete_NotFound 验证素材不存在时返回错误。

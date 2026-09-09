@@ -110,7 +110,7 @@ function SourceVideoDeleteButton({
     const toastKey = `delete-source-video-related-${record.id}`;
     toast.notify.warning(
       '存在关联的项目',
-      `关联的 ${projectCount} 个剪辑项目将一并删除，若存在进行中的任务可能导致任务执行失败，此操作不可撤销。`,
+      `关联的 ${projectCount} 个剪辑项目将一并删除，进行中的跟播将停止；此操作不可撤销。`,
       {
         key: toastKey,
         duration: 0,
@@ -164,7 +164,7 @@ function SourceVideoDeleteButton({
   return (
     <Popconfirm
       title="确认删除该源视频？"
-      description="删除后不可恢复"
+      description="删除后不可恢复，进行中的跟播将停止"
       okText="删除"
       cancelText="取消"
       okButtonProps={{ danger: true, loading: actionLoading }}

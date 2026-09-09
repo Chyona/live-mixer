@@ -287,6 +287,10 @@ func (s *liveMaterialService) Get(ctx context.Context, id uint) (*model.LiveMate
 }
 
 func (s *liveMaterialService) Delete(ctx context.Context, id uint) error {
+	// 先取消进行中的跟播，释放并发槽与 ffmpeg；未在跑则 no-op。
+	if s.ingestWorker != nil {
+		s.ingestWorker.Cancel(id)
+	}
 	if err := s.liveMaterialRepo.Delete(ctx, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrLiveMaterialNotFound

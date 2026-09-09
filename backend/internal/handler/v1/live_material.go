@@ -406,7 +406,7 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 
 // DeleteLiveMaterial 删除直播素材
 // @Summary      删除直播素材
-// @Description  物理删除直播素材，并级联删除 video_project 中关联的剪辑项目
+// @Description  物理删除直播素材，取消进行中的跟播任务，并级联删除 video_project 中关联的剪辑项目
 // @Tags         直播素材
 // @Produce      json
 // @Param        id   path  int  true  "素材 ID"

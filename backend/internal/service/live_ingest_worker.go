@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -32,6 +33,9 @@ const (
 type LiveIngestWorker interface {
 	Enqueue()
 	Start(ctx context.Context)
+	// Cancel 取消指定素材的进行中跟播（杀 ffmpeg / 打断探测），释放并发槽。
+	// 若该素材当前未在本进程执行，返回 false。
+	Cancel(materialID uint) bool
 }
 
 type liveIngestWorker struct {
@@ -49,6 +53,13 @@ type liveIngestWorker struct {
 
 	wake      chan struct{}
 	startOnce sync.Once
+
+	cancelsMu sync.Mutex
+	cancels   map[uint]*ingestCancelEntry
+}
+
+type ingestCancelEntry struct {
+	cancel context.CancelFunc
 }
 
 type storageLiveURLAllocator struct {
@@ -100,11 +111,45 @@ func NewLiveIngestWorker(
 		logger:        logger,
 		concurrency:   concurrency,
 		wake:          newWakeChan(concurrency),
+		cancels:       make(map[uint]*ingestCancelEntry),
 	}
 }
 
 func (w *liveIngestWorker) Enqueue() {
 	enqueueWake(w.wake, w.concurrency)
+}
+
+// Cancel 取消本进程内正在执行的跟播任务。
+func (w *liveIngestWorker) Cancel(materialID uint) bool {
+	w.cancelsMu.Lock()
+	entry, ok := w.cancels[materialID]
+	if ok {
+		delete(w.cancels, materialID)
+	}
+	w.cancelsMu.Unlock()
+	if !ok || entry == nil {
+		return false
+	}
+	entry.cancel()
+	w.logger.Info("已请求取消跟播任务", zap.Uint("material_id", materialID))
+	return true
+}
+
+func (w *liveIngestWorker) bindCancel(materialID uint, cancel context.CancelFunc) func() {
+	entry := &ingestCancelEntry{cancel: cancel}
+	w.cancelsMu.Lock()
+	if prev, ok := w.cancels[materialID]; ok && prev != nil {
+		prev.cancel()
+	}
+	w.cancels[materialID] = entry
+	w.cancelsMu.Unlock()
+	return func() {
+		w.cancelsMu.Lock()
+		if cur, ok := w.cancels[materialID]; ok && cur == entry {
+			delete(w.cancels, materialID)
+		}
+		w.cancelsMu.Unlock()
+	}
 }
 
 func (w *liveIngestWorker) Start(ctx context.Context) {
@@ -161,30 +206,61 @@ func (w *liveIngestWorker) drain(ctx context.Context, workerID int) {
 			zap.Int64("ingest_epoch", material.IngestEpoch),
 		)
 		if err := w.Process(ctx, material); err != nil {
-			w.logger.Warn("跟播任务结束",
-				zap.Uint("material_id", material.ID),
-				zap.Error(err),
-			)
+			if errors.Is(err, context.Canceled) {
+				w.logger.Info("跟播任务已取消",
+					zap.Uint("material_id", material.ID),
+				)
+			} else {
+				w.logger.Warn("跟播任务结束",
+					zap.Uint("material_id", material.ID),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 }
 
 // Process 执行一场跟播（无 4 小时硬超时）。
 func (w *liveIngestWorker) Process(ctx context.Context, material *model.LiveMaterial) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	unbind := w.bindCancel(material.ID, cancel)
+	defer unbind()
+
 	stopHB := w.startHeartbeat(ctx, material.ID, material.IngestEpoch)
 	defer stopHB()
 
+	w.logger.Info("开始处理跟播任务",
+		zap.Uint("material_id", material.ID),
+		zap.String("live_status", material.LiveStatus),
+		zap.String("source_mode", material.SourceMode),
+		zap.String("asr_status", material.ASRStatus),
+		zap.Int16("asr_progress", material.ASRProgress),
+		zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+		zap.Int64("next_seg", material.NextSeg),
+		zap.Int64("ingest_epoch", material.IngestEpoch),
+		zap.String("m3u8_url", material.M3U8URL),
+	)
+
 	switch material.LiveStatus {
 	case model.LiveStatusWaiting, model.LiveStatusConnecting:
+		w.logger.Info("跟播进入等待媒体阶段", zap.Uint("material_id", material.ID))
 		if err := w.waitForMedia(ctx, material); err != nil {
 			return err
 		}
+		w.logger.Info("已检测到直播媒体，进入录像", zap.Uint("material_id", material.ID))
 		return w.recordAndFinalize(ctx, material)
 	case model.LiveStatusLive:
+		w.logger.Info("跟播已是 live，直接进入录像", zap.Uint("material_id", material.ID))
 		return w.recordAndFinalize(ctx, material)
 	case model.LiveStatusEnding:
+		w.logger.Info("跟播进入收尾合成", zap.Uint("material_id", material.ID))
 		return w.finalizeRecording(ctx, material, material.NextSeg)
 	default:
+		w.logger.Info("跟播状态无需处理，跳过",
+			zap.Uint("material_id", material.ID),
+			zap.String("live_status", material.LiveStatus),
+		)
 		return nil
 	}
 }
@@ -256,6 +332,10 @@ func (w *liveIngestWorker) waitForMedia(ctx context.Context, material *model.Liv
 			return fmt.Errorf("%s", msg)
 		}
 		if probe.HasMedia {
+			w.logger.Info("HTTP 探测到直播播放列表含媒体分片",
+				zap.Uint("material_id", material.ID),
+				zap.String("m3u8_url", material.M3U8URL),
+			)
 			return nil
 		}
 		select {
@@ -269,12 +349,40 @@ func (w *liveIngestWorker) waitForMedia(ctx context.Context, material *model.Liv
 func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *model.LiveMaterial) error {
 	width, height := material.Width, material.Height
 	if w.prober != nil {
-		if tl, err := w.prober.ProbeMediaTimeline(ctx, material.M3U8URL); err == nil {
+		probeStart := time.Now()
+		w.logger.Info("开始 ffprobe 探测直播流（若长时间无后续日志，多半卡在此处）",
+			zap.Uint("material_id", material.ID),
+			zap.String("m3u8_url", material.M3U8URL),
+		)
+		tl, err := w.prober.ProbeMediaTimeline(ctx, material.M3U8URL)
+		if err != nil {
+			w.logger.Warn("ffprobe 探测直播流失败，将沿用已有宽高继续录像",
+				zap.Uint("material_id", material.ID),
+				zap.Duration("elapsed", time.Since(probeStart)),
+				zap.Error(err),
+			)
+		} else {
 			width, height = tl.Width, tl.Height
+			w.logger.Info("ffprobe 探测直播流完成",
+				zap.Uint("material_id", material.ID),
+				zap.Duration("elapsed", time.Since(probeStart)),
+				zap.Int("width", width),
+				zap.Int("height", height),
+			)
 		}
+	} else {
+		w.logger.Info("未配置 prober，跳过直播流探测", zap.Uint("material_id", material.ID))
 	}
 	if err := w.repo.MarkLiveStarted(ctx, material.ID, material.IngestEpoch, width, height); err != nil {
-		w.logger.Warn("标记 live 失败", zap.Error(err))
+		w.logger.Warn("标记 live / ASR processing 失败（页面可能仍显示等待解析）",
+			zap.Uint("material_id", material.ID),
+			zap.Error(err),
+		)
+	} else {
+		w.logger.Info("已标记 live 并置 ASR 为 processing",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("ingest_epoch", material.IngestEpoch),
+		)
 	}
 	material.LiveStatus = model.LiveStatusLive
 	material.Width, material.Height = width, height
@@ -291,10 +399,20 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 		asrMu.Lock()
 		if asrBusy {
 			asrMu.Unlock()
+			w.logger.Info("窗口 ASR 仍在执行，跳过本轮调度",
+				zap.Uint("material_id", material.ID),
+				zap.Int64("next_seg", material.NextSeg),
+			)
 			return
 		}
 		asrBusy = true
 		asrMu.Unlock()
+		w.logger.Info("调度窗口 ASR",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("duration_ms", material.Duration),
+			zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+			zap.Int64("next_seg", material.NextSeg),
+		)
 		go func() {
 			defer func() {
 				asrMu.Lock()
@@ -312,11 +430,19 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 	for {
 		startIndex := int(material.NextSeg)
 		windowDue := time.Now().Add(model.LiveASRWindowDuration)
+		var firstSegOnce sync.Once
 
 		onSeg := func(index int, path string) {
+			firstSegOnce.Do(func() {
+				w.logger.Info("收到首个录像分片",
+					zap.Uint("material_id", material.ID),
+					zap.Int("index", index),
+					zap.String("path", path),
+				)
+			})
 			url, err := w.uploadSegment(ctx, material, int64(index), path, resumeFrom)
 			if err != nil {
-				w.logger.Warn("上传分片失败", zap.Int("index", index), zap.Error(err))
+				w.logger.Warn("上传分片失败", zap.Uint("material_id", material.ID), zap.Int("index", index), zap.Error(err))
 				return
 			}
 			segURLs[int64(index)] = url
@@ -327,7 +453,7 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 			dur := next * int64(model.LiveSegmentDurationSec) * 1000
 			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, false, resumeFrom)
 			if plErr != nil {
-				w.logger.Warn("发布播放列表失败", zap.Error(plErr))
+				w.logger.Warn("发布播放列表失败", zap.Uint("material_id", material.ID), zap.Error(plErr))
 			}
 			if playlistURL != "" {
 				material.RecordPlaylistURL = playlistURL
@@ -341,7 +467,21 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 			}
 		}
 
+		w.logger.Info("开始 ffmpeg 录像分片（阻塞至流结束或出错；若无「首个录像分片」日志则卡在拉流）",
+			zap.Uint("material_id", material.ID),
+			zap.Int("start_index", startIndex),
+			zap.String("work_dir", workDir),
+			zap.String("m3u8_url", material.M3U8URL),
+			zap.Duration("first_window_asr_after", model.LiveASRWindowDuration),
+		)
+		recStart := time.Now()
 		recErr := w.ffmpeg.RecordHLSSegments(ctx, material.M3U8URL, workDir, startIndex, model.LiveSegmentDurationSec, onSeg)
+		w.logger.Info("ffmpeg 录像会话结束",
+			zap.Uint("material_id", material.ID),
+			zap.Duration("elapsed", time.Since(recStart)),
+			zap.Int64("next_seg", material.NextSeg),
+			zap.Error(recErr),
+		)
 		_ = w.runWindowASR(ctx, material)
 		if recErr != nil && ctx.Err() != nil {
 			return recErr
@@ -423,6 +563,11 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 
 func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
 	if w.asrService == nil || w.audioPreparer == nil {
+		w.logger.Warn("窗口 ASR 跳过：ASR 服务或音频预处理未配置",
+			zap.Uint("material_id", material.ID),
+			zap.Bool("asr_service", w.asrService != nil),
+			zap.Bool("audio_preparer", w.audioPreparer != nil),
+		)
 		return nil
 	}
 	latest, err := w.repo.GetByID(ctx, material.ID)
@@ -431,13 +576,31 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	cursor := material.ASRCursorMS
 	if material.Duration <= cursor {
+		w.logger.Info("窗口 ASR 跳过：尚无新录像可转写",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("duration_ms", material.Duration),
+			zap.Int64("asr_cursor_ms", cursor),
+		)
 		return nil
 	}
 	startSeg := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
 	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
 	if len(files) == 0 {
+		w.logger.Info("窗口 ASR 跳过：本地分片不存在",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("start_seg", startSeg),
+			zap.String("work_dir", w.segmentDir(material)),
+		)
 		return nil
 	}
+	asrStart := time.Now()
+	w.logger.Info("开始窗口 ASR",
+		zap.Uint("material_id", material.ID),
+		zap.Int64("asr_cursor_ms", cursor),
+		zap.Int64("start_seg", startSeg),
+		zap.Int("segment_files", len(files)),
+		zap.Int64("duration_ms", material.Duration),
+	)
 	// 偏移必须等于「startSeg 之前各分片的真实总时长」。标称 6s×index 会随分片时长抖动累积漂移，
 	// 表现为成片里前段字幕准、后段逐渐错位。
 	offsetMS := w.measureSegmentPrefixDurationMS(ctx, material, startSeg)
@@ -447,27 +610,32 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.mp3", cursor))
 	concatTS := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.ts", cursor))
 	if err := w.ffmpeg.ConcatMediaFiles(ctx, files, concatTS); err != nil {
+		w.logger.Warn("窗口 ASR 拼接分片失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
 	defer os.Remove(concatTS)
 	if err := w.ffmpeg.ConvertToASRMP3(ctx, concatTS, tmpMP3); err != nil {
+		w.logger.Warn("窗口 ASR 转 MP3 失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
 	defer os.Remove(tmpMP3)
 	if w.storage == nil {
+		w.logger.Warn("窗口 ASR 跳过：对象存储未配置", zap.Uint("material_id", material.ID))
 		return nil
 	}
 	audioURL, err := w.storage.UploadFile(ctx, tmpMP3, fmt.Sprintf("%s/live-asr-%d-%d.mp3", storage.SubDirTemp, material.ID, cursor))
 	if err != nil {
+		w.logger.Warn("窗口 ASR 上传音频失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
 	raw, err := w.asrService.Transcribe(ctx, audioURL)
 	if err != nil {
-		w.logger.Warn("窗口 ASR 失败，跳过本窗", zap.Error(err))
+		w.logger.Warn("窗口 ASR 识别失败，跳过本窗", zap.Uint("material_id", material.ID), zap.Error(err))
 		return nil
 	}
 	merged, mergedDur, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
 	if err != nil {
+		w.logger.Warn("窗口 ASR 合并失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
 	windowDur := asr.ParseDurationMs(raw)
@@ -486,7 +654,18 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			progress = 99
 		}
 	}
-	return w.repo.AppendWindowASR(ctx, material.ID, material.IngestEpoch, merged, newCursor, material.Duration, progress)
+	if err := w.repo.AppendWindowASR(ctx, material.ID, material.IngestEpoch, merged, newCursor, material.Duration, progress); err != nil {
+		w.logger.Warn("窗口 ASR 写库失败", zap.Uint("material_id", material.ID), zap.Error(err))
+		return err
+	}
+	w.logger.Info("窗口 ASR 完成",
+		zap.Uint("material_id", material.ID),
+		zap.Duration("elapsed", time.Since(asrStart)),
+		zap.Int64("offset_ms", offsetMS),
+		zap.Int64("asr_cursor_ms", newCursor),
+		zap.Int16("asr_progress", progress),
+	)
+	return nil
 }
 
 // measureSegmentPrefixDurationMS 累加 startSeg 之前本地分片的真实时长，作为窗口 ASR 时间原点。
