@@ -2,8 +2,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"live-mixer/internal/bootstrap"
 	"live-mixer/internal/config"
@@ -74,19 +76,35 @@ func newRootCmd() *cobra.Command {
 			return seeder.SeedAll(db, logger)
 		}),
 	})
-	root.AddCommand(&cobra.Command{
+
+	var reinitYes bool
+	reinitCmd := &cobra.Command{
 		Use:   "reinit",
 		Short: "删除全部业务表后重新建表并填充种子数据",
-		RunE: withDB(func(db *gorm.DB, logger *zap.Logger) error {
-			if err := migrator.DropAllTables(db, logger); err != nil {
-				return err
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !reinitYes {
+				ok, err := confirmReinit(cmd)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					fmt.Fprintln(cmd.OutOrStdout(), "已取消，未做任何修改。")
+					return nil
+				}
 			}
-			if err := migrator.InitSchema(db, logger); err != nil {
-				return err
-			}
-			return seeder.SeedAll(db, logger)
-		}),
-	})
+			return withDB(func(db *gorm.DB, logger *zap.Logger) error {
+				if err := migrator.DropAllTables(db, logger); err != nil {
+					return err
+				}
+				if err := migrator.InitSchema(db, logger); err != nil {
+					return err
+				}
+				return seeder.SeedAll(db, logger)
+			})(cmd, args)
+		},
+	}
+	reinitCmd.Flags().BoolVarP(&reinitYes, "yes", "y", false, "跳过二次确认（脚本/自动化用）")
+	root.AddCommand(reinitCmd)
 
 	var username, password string
 	resetCmd := &cobra.Command{
@@ -102,4 +120,19 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(resetCmd)
 
 	return root
+}
+
+// confirmReinit 要求用户精确输入 YES 后才继续危险的清空重建。
+func confirmReinit(cmd *cobra.Command) (bool, error) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "警告：reinit 将删除数据库中的全部业务表及数据，然后重新建表并写入种子数据。")
+	fmt.Fprintln(out, "此操作不可撤销。若确认继续，请输入 YES（必须大写）后回车；其他输入将取消。")
+	fmt.Fprint(out, "请确认 [YES/N]: ")
+
+	reader := bufio.NewReader(cmd.InOrStdin())
+	line, err := reader.ReadString('\n')
+	if err != nil && len(strings.TrimSpace(line)) == 0 {
+		return false, fmt.Errorf("读取确认输入失败: %w", err)
+	}
+	return strings.TrimSpace(line) == "YES", nil
 }
