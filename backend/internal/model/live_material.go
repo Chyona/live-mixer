@@ -50,8 +50,8 @@ const LiveEarlyProbe = 15 * time.Minute
 // LiveSegmentDurationSec 跟播分片时长（秒）。
 const LiveSegmentDurationSec = 6
 
-// LiveASRWindowDuration 窗口 ASR 覆盖的录像时长。
-const LiveASRWindowDuration = 3 * time.Minute
+// LiveASRWindowDuration 窗口 ASR 调度间隔：约每这么长的新录像触发一次增量转写。
+const LiveASRWindowDuration = 10 * time.Minute
 
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
 // Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。
