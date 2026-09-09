@@ -256,6 +256,18 @@ func (w *liveIngestWorker) Process(ctx context.Context, material *model.LiveMate
 	case model.LiveStatusEnding:
 		w.logger.Info("跟播进入收尾合成", zap.Uint("material_id", material.ID))
 		return w.finalizeRecording(ctx, material, material.NextSeg)
+	case model.LiveStatusEnded:
+		// 已关播但 ASR 仍 processing（常见于 LLM 后处理失败未 Finalize）时补完。
+		if material.ASRStatus == model.ASRStatusCompleted {
+			w.logger.Info("关播 ASR 已完成，跳过", zap.Uint("material_id", material.ID))
+			return nil
+		}
+		w.logger.Info("关播后补完 ASR 收尾",
+			zap.Uint("material_id", material.ID),
+			zap.String("asr_status", material.ASRStatus),
+			zap.Int16("asr_progress", material.ASRProgress),
+		)
+		return w.finishASRPostprocess(ctx, material, material.Duration)
 	default:
 		w.logger.Info("跟播状态无需处理，跳过",
 			zap.Uint("material_id", material.ID),
@@ -554,7 +566,13 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 	}
 	_ = w.runWindowASR(ctx, material)
 	if err := w.finishASRPostprocess(ctx, material, dur); err != nil {
-		w.logger.Warn("关播 ASR 后处理失败", zap.Error(err))
+		w.logger.Warn("关播 ASR 后处理失败，将保留 ended+processing 供重试",
+			zap.Uint("material_id", material.ID),
+			zap.Error(err),
+		)
+		_ = os.Remove(finalPath)
+		_ = os.RemoveAll(workDir)
+		return err
 	}
 	_ = os.Remove(finalPath)
 	_ = os.RemoveAll(workDir)
@@ -652,11 +670,14 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	if newCursor < cursor {
 		newCursor = cursor
 	}
-	// 覆盖进度仍以录像时长为分母，便于跟播 UI；cursor 用真实已转写终点。
+	// 覆盖进度仍以录像时长为分母；跟播中最高 99，100 留给关播 Finalize。
 	progress := int16(10)
 	if material.Duration > 0 {
-		progress = int16(20 + 70*newCursor/material.Duration)
+		progress = int16(20 + 79*newCursor/material.Duration)
 		if progress > 99 {
+			progress = 99
+		}
+		if newCursor >= material.Duration && progress < 99 {
 			progress = 99
 		}
 	}
@@ -698,11 +719,51 @@ func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *m
 	if err != nil {
 		return err
 	}
-	post, err := runASRPostprocess(ctx, w.llmClient, latest.LiveASR, duration, nil, w.logger)
-	if err != nil {
+	if duration <= 0 {
+		duration = latest.Duration
+	}
+	epoch := material.IngestEpoch
+	if epoch <= 0 {
+		epoch = latest.IngestEpoch
+	}
+
+	post, postErr := runASRPostprocess(ctx, w.llmClient, latest.LiveASR, duration, nil, w.logger)
+	if postErr != nil {
+		w.logger.Warn("关播 ASR LLM 后处理失败，回退本地段落并继续标记完成",
+			zap.Uint("material_id", latest.ID),
+			zap.Error(postErr),
+		)
+		post = localASRPostprocessFallback(latest.LiveASR, duration)
+	}
+	if err := w.repo.FinalizeASR(ctx, latest.ID, epoch, latest.LiveASR, duration, latest.Width, latest.Height, post.Summaries, post.Paragraphs); err != nil {
 		return err
 	}
-	return w.repo.FinalizeASR(ctx, latest.ID, latest.IngestEpoch, latest.LiveASR, duration, latest.Width, latest.Height, post.Summaries, post.Paragraphs)
+	w.logger.Info("关播 ASR 已标记完成",
+		zap.Uint("material_id", latest.ID),
+		zap.Int64("duration_ms", duration),
+		zap.Int("summaries", len(post.Summaries)),
+		zap.Int("paragraphs", len(post.Paragraphs)),
+		zap.Bool("llm_fallback", postErr != nil),
+	)
+	return nil
+}
+
+// localASRPostprocessFallback LLM 不可用时用本地规则生成段落，保证关播仍能到 ASR 完成态。
+func localASRPostprocessFallback(liveASR string, durationMs int64) asrPostprocessResult {
+	out := asrPostprocessResult{}
+	utterances := asr.FormatUtterancesForAPI(liveASR)
+	if len(utterances) == 0 {
+		return out
+	}
+	ranges := buildParagraphRangesLocally(utterances)
+	paragraphs, err := stitchASRParagraphs(utterances, ranges)
+	if err != nil {
+		return out
+	}
+	paragraphs, _ = enforceASRParagraphMaxRunes(paragraphs)
+	finalizeASRParagraphTimeline(paragraphs, durationMs)
+	out.Paragraphs = paragraphs
+	return out
 }
 
 func (w *liveIngestWorker) segmentObjectKey(material *model.LiveMaterial, resumeFrom, index int64) string {

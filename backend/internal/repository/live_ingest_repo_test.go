@@ -71,3 +71,34 @@ func TestLiveIngestRepository_SkipFarFutureWaiting(t *testing.T) {
 		t.Fatalf("claimed = %+v, want nil for far-future waiting", claimed)
 	}
 }
+
+func TestLiveIngestRepository_ClaimEndedASRProcessing(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	ended := &model.LiveMaterial{
+		Name:        "已关播未 Finalize",
+		M3U8URL:     "https://example.com/ended.m3u8",
+		LiveURL:     "https://cdn.example/final.mp4",
+		RecordUUID:  "ended1",
+		SourceMode:  model.SourceModeLive,
+		LiveStatus:  model.LiveStatusEnded,
+		LiveASR:     `{"result":{"utterances":[]}}`,
+		ASRStatus:   model.ASRStatusProcessing,
+		ASRProgress: 90,
+		Duration:    1000,
+		CreatedBy:   1,
+	}
+	if err := db.Create(ended).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	claimed, err := repo.ClaimIngestWork(ctx)
+	if err != nil {
+		t.Fatalf("ClaimIngestWork() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != ended.ID {
+		t.Fatalf("claimed = %+v, want ended processing material", claimed)
+	}
+}

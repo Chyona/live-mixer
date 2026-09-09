@@ -65,11 +65,13 @@ func (r *liveMaterialRepository) ClaimIngestWork(ctx context.Context) (*model.Li
 			`(live_status = ? AND scheduled_at IS NOT NULL AND scheduled_at <= ?)
 			 OR live_status = ?
 			 OR (live_status = ? AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?))
-			 OR live_status = ?`,
+			 OR live_status = ?
+			 OR (live_status = ? AND asr_status = ?)`,
 			model.LiveStatusWaiting, now.Add(model.LiveEarlyProbe),
 			model.LiveStatusConnecting,
 			model.LiveStatusLive, staleBefore,
 			model.LiveStatusEnding,
+			model.LiveStatusEnded, model.ASRStatusProcessing,
 		)
 		if len(tried) > 0 {
 			q = q.Where("id NOT IN ?", uintSetKeys(tried))
@@ -281,7 +283,7 @@ func (r *liveMaterialRepository) FinalizeASR(ctx context.Context, id uint, epoch
 		return err
 	}
 	now := time.Now()
-	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+	result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(map[string]interface{}{
 			"asr_status":       model.ASRStatusCompleted,
@@ -296,5 +298,12 @@ func (r *liveMaterialRepository) FinalizeASR(ctx context.Context, id uint, epoch
 			"asr_updated_at":   now,
 			"asr_completed_at": now,
 			"asr_cursor_ms":    duration,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("FinalizeASR 未生效（素材 %d epoch %d 可能已切换）", id, epoch)
+	}
+	return nil
 }
