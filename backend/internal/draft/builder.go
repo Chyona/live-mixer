@@ -104,8 +104,24 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	result := &Result{DraftURL: s.DraftURL}
-	// 将本地 clip_XXX.mp4 打成 {jobID}.tar 并上传；失败仅记日志，不阻断草稿成功。
-	clipsTarURL, err := PackAndUploadClipsTar(ctx, b.Uploader, s.StagingDir, s.JobID, s.ClipPaths)
+
+	// 方案 A：写出 caption_diag.json（clip want/actual/delta + caption map_err），上传供留存；失败不阻断草稿。
+	diagPath, diagURL, diagErr := steps.WriteAndUploadCaptionDiag(ctx, s, b.Uploader, nil, b.Logger)
+	if diagErr != nil {
+		b.Logger.Warn("字幕对齐诊断报告失败",
+			zap.String("job_id", s.JobID),
+			zap.Error(diagErr),
+		)
+	} else {
+		result.CaptionDiagURL = diagURL
+	}
+
+	// 将本地 clip_XXX.mp4（及可选 caption_diag.json）打成 {jobID}.tar 并上传；失败仅记日志，不阻断草稿成功。
+	packPaths := append([]string(nil), s.ClipPaths...)
+	if diagPath != "" {
+		packPaths = append(packPaths, diagPath)
+	}
+	clipsTarURL, err := PackAndUploadClipsTar(ctx, b.Uploader, s.StagingDir, s.JobID, packPaths)
 	if err != nil {
 		b.Logger.Error("切片 tar 打包上传失败",
 			zap.String("job_id", s.JobID),

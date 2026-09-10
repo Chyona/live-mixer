@@ -30,10 +30,13 @@ type Session struct {
 	Clips      []model.ClipRange
 	// ClipPlacements 由 VideosStep 写入：每段切片在源时间轴与草稿时间轴的映射，供字幕同步。
 	ClipPlacements []ClipPlacement
-	DraftURL       string
-	CanvasW        int
-	CanvasH        int
-	Timeline       *Timeline
+	// FastKeyframe / CutMode 由 Prepare 写入，供字幕对齐诊断报告使用。
+	FastKeyframe bool
+	CutMode      string // "precise" | "keyframe_copy"
+	DraftURL     string
+	CanvasW      int
+	CanvasH      int
+	Timeline     *Timeline
 	// Progress 可选：报告本地进度（0-100），由调用方映射。
 	Progress func(local int16)
 }

@@ -197,12 +197,19 @@ func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, 
 	// 成片总时长 >10 分钟走关键帧快切；字幕对齐依赖 VideosStep 探测真实片长 + CaptionsStep 按比例缩放。
 	// 不再因「开字幕」强制全精确重编码：对 HLS 直切时精确模式曾极慢（逐段从片头解码）。
 	useFast := UseFastKeyframeCut(clips)
+	cutMode := "precise"
+	if useFast {
+		cutMode = "keyframe_copy"
+	}
+	s.FastKeyframe = useFast
+	s.CutMode = cutMode
 	p.Logger.Info("选择草稿切片裁剪方式",
 		zap.String("job_id", s.JobID),
 		zap.Int("clips", len(clips)),
 		zap.Int64("total_duration_ms", totalMS),
 		zap.Int64("fast_cut_threshold_ms", FastKeyframeCutMinDurationMS),
 		zap.Bool("fast_keyframe", useFast),
+		zap.String("cut_mode", cutMode),
 		zap.Bool("captions", projectWantsCaptions(s.Project)),
 	)
 	paths := make([]string, 0, len(clips))
@@ -210,10 +217,7 @@ func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, 
 		outPath := filepath.Join(s.StagingDir, fmt.Sprintf("clip_%03d.mp4", i))
 		startSec := float64(clip.StartTime) / 1000.0
 		endSec := float64(clip.EndTime) / 1000.0
-		mode := "precise"
-		if useFast {
-			mode = "keyframe_copy"
-		}
+		mode := cutMode
 		p.Logger.Info("开始 ffmpeg 裁剪切片",
 			zap.String("job_id", s.JobID),
 			zap.Int("index", i),

@@ -322,6 +322,7 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 		zap.String("draft_url", result.DraftURL),
 		zap.String("video_url", videoURL),
 		zap.String("clips_tar_url", result.ClipsTarURL),
+		zap.String("caption_diag_url", result.CaptionDiagURL),
 		zap.Bool("mark_complete", opts.MarkComplete),
 		zap.String("video_warn", videoWarn),
 	)

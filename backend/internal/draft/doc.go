@@ -8,6 +8,7 @@
 //
 // add_videos 的视频 URL：本地切片经 ObjectUploader 上传对象存储后使用返回的公网地址。
 // add_captions 的字幕：来自 live_material.live_asr，按 VideosStep 的 ClipPlacement 映射到草稿时间轴，与视频切片同步。
+// 组装成功后写入 staging/caption_diag.json（并上传）：含 clip want/actual/delta 与 caption map_err，用于无听感排查音字对齐。
 package draft
 
 import (

@@ -25,8 +25,9 @@ type Request struct {
 
 // Result 草稿组装产出。
 type Result struct {
-	DraftURL    string
-	ClipsTarURL string // 切片 tar 包下载地址；打包/上传失败时为空
+	DraftURL       string
+	ClipsTarURL    string // 切片 tar 包下载地址；打包/上传失败时为空
+	CaptionDiagURL string // 字幕对齐诊断 caption_diag.json；写入/上传失败时为空
 }
 
 // Generator 纯草稿组装能力：给定素材与 clips，产出 draft_url（及可选 clips_tar_url）。

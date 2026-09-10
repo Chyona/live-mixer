@@ -3,11 +3,9 @@ package steps
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
-	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/capcutmate"
 
 	"go.uber.org/zap"
@@ -117,71 +115,4 @@ func (st CaptionsStep) Run(ctx context.Context, s *session.Session) error {
 	tr.SegmentIDs = append([]string(nil), resp.SegmentIDs...)
 	s.ReportProgress(95)
 	return nil
-}
-
-// BuildCaptionsFromASR 将 live_asr JSON 分句映射到草稿字幕时间轴。
-// placements 来自 VideosStep，保证字幕 start/end（微秒）与 add_videos 切片一一对齐。
-// 长句会先按标点/字数断句并切分时间，再与切片重叠裁剪，避免字幕越出对应视频段。
-// 当草稿轨时长与源选区时长略有差异时按比例缩放，避免片尾字幕丢失或相对语音漂移。
-func BuildCaptionsFromASR(liveASRJSON string, placements []session.ClipPlacement) []capcutmate.CaptionItem {
-	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
-	if len(utterances) == 0 || len(placements) == 0 {
-		return nil
-	}
-
-	out := make([]capcutmate.CaptionItem, 0)
-	for _, p := range placements {
-		sourceDurMS := p.SourceEndMS - p.SourceStartMS
-		draftDurUS := p.DraftEndUS - p.DraftStartUS
-		if sourceDurMS <= 0 || draftDurUS <= 0 {
-			continue
-		}
-		scale := float64(draftDurUS) / float64(sourceDurMS*1000)
-		for _, u := range utterances {
-			if strings.TrimSpace(u.Text) == "" {
-				continue
-			}
-			// 分句与切片无重叠则跳过。
-			if u.EndTime <= p.SourceStartMS || u.StartTime >= p.SourceEndMS {
-				continue
-			}
-			for _, seg := range asr.SplitUtteranceForCaptions(u) {
-				text := strings.TrimSpace(seg.Text)
-				if text == "" {
-					continue
-				}
-				if seg.EndTime <= p.SourceStartMS || seg.StartTime >= p.SourceEndMS {
-					continue
-				}
-				overlapStartMS := seg.StartTime
-				if overlapStartMS < p.SourceStartMS {
-					overlapStartMS = p.SourceStartMS
-				}
-				overlapEndMS := seg.EndTime
-				if overlapEndMS > p.SourceEndMS {
-					overlapEndMS = p.SourceEndMS
-				}
-				if overlapEndMS <= overlapStartMS {
-					continue
-				}
-				draftStartUS := p.DraftStartUS + int64(float64((overlapStartMS-p.SourceStartMS)*1000)*scale)
-				draftEndUS := p.DraftStartUS + int64(float64((overlapEndMS-p.SourceStartMS)*1000)*scale)
-				if draftEndUS > p.DraftEndUS {
-					draftEndUS = p.DraftEndUS
-				}
-				if draftStartUS < p.DraftStartUS {
-					draftStartUS = p.DraftStartUS
-				}
-				if draftEndUS <= draftStartUS {
-					continue
-				}
-				out = append(out, capcutmate.CaptionItem{
-					Start: draftStartUS,
-					End:   draftEndUS,
-					Text:  text,
-				})
-			}
-		}
-	}
-	return out
 }

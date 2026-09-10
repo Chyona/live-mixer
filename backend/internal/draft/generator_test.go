@@ -220,6 +220,9 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if result.ClipsTarURL != "https://oss.example/temp/draft/job-1/job-1.tar" {
 		t.Errorf("ClipsTarURL = %q", result.ClipsTarURL)
 	}
+	if result.CaptionDiagURL != "https://oss.example/temp/draft/job-1/caption_diag.json" {
+		t.Errorf("CaptionDiagURL = %q", result.CaptionDiagURL)
+	}
 	if capcut.createCalls != 1 || capcut.addCalls != 1 || capcut.captionsCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d captions=%d", capcut.createCalls, capcut.addCalls, capcut.captionsCalls)
 	}
@@ -237,9 +240,9 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if !strings.Contains(capcut.lastAdd.VideoInfos, "https://oss.example/temp/draft/job-1/clip_000.mp4") {
 		t.Errorf("video_infos = %s, want object storage URL", capcut.lastAdd.VideoInfos)
 	}
-	// 2 个切片 + 1 个 tar 包。
-	if len(uploader.calls) != 3 {
-		t.Errorf("upload calls = %d, want 3", len(uploader.calls))
+	// 2 个切片 + caption_diag.json + 1 个 tar 包。
+	if len(uploader.calls) != 4 {
+		t.Errorf("upload calls = %d, want 4", len(uploader.calls))
 	}
 	if len(progressLog) == 0 {
 		t.Error("expected progress callbacks")
