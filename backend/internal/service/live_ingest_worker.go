@@ -635,17 +635,28 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		)
 		return nil
 	}
-	startSeg := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
-	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
-	if len(files) == 0 {
+	segDurations := w.measureAllSegmentDurationsMS(ctx, material)
+	if len(segDurations) == 0 {
 		w.logger.Info("窗口 ASR 跳过：本地分片不存在",
 			zap.Uint("material_id", material.ID),
-			zap.Int64("start_seg", startSeg),
 			zap.String("work_dir", w.segmentDir(material)),
 		)
 		return nil
 	}
-	// 关键：每窗最多送约一个窗口时长的分片。旧逻辑会把「游标→此刻」全部积压一次送去转写；
+	// 按真实分片时长定位起点；旧逻辑 cursor/标称6s 在分片抖动时会于窗边界跳段，导致后段 ASR 整体错位。
+	nominalStart := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
+	startSeg, offsetMS := liveingest.ResolveWindowStartByDurations(segDurations, cursor, 1)
+	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
+	if len(files) == 0 {
+		w.logger.Info("窗口 ASR 跳过：起始分片之后无本地文件",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("start_seg", startSeg),
+			zap.Int64("asr_cursor_ms", cursor),
+			zap.String("work_dir", w.segmentDir(material)),
+		)
+		return nil
+	}
+	// 限制：每窗最多送约一个窗口时长的分片。旧逻辑会把「游标→此刻」全部积压一次送去转写；
 	// 若游标未推进，会变成 10+20+30… 分钟平方累加计费。
 	maxSegs := maxWindowASRSegments()
 	truncated := false
@@ -653,24 +664,26 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		files = files[:maxSegs]
 		truncated = true
 	}
-	estBillMS := int64(len(files)) * int64(model.LiveSegmentDurationSec) * 1000
+	windowMediaMS := liveingest.SumSegmentDurationsMS(segDurations, startSeg, len(files))
+	if windowMediaMS <= 0 {
+		windowMediaMS = int64(len(files)) * int64(model.LiveSegmentDurationSec) * 1000
+	}
+	estBillMS := windowMediaMS
 	asrStart := time.Now()
 	w.logger.Info("开始窗口 ASR",
 		zap.Uint("material_id", material.ID),
 		zap.Int64("asr_cursor_ms", cursor),
 		zap.Int64("start_seg", startSeg),
+		zap.Int64("offset_ms", offsetMS),
+		zap.Int64("nominal_start_seg", nominalStart),
+		zap.Int64("nominal_offset_ms", liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)),
 		zap.Int("segment_files", len(files)),
 		zap.Bool("truncated_to_window", truncated),
+		zap.Int64("window_media_ms", windowMediaMS),
 		zap.Int64("est_bill_audio_ms", estBillMS),
 		zap.Int64("duration_ms", material.Duration),
 		zap.Int64("ingest_epoch", epoch),
 	)
-	// 偏移必须等于「startSeg 之前各分片的真实总时长」。标称 6s×index 会随分片时长抖动累积漂移，
-	// 表现为成片里前段字幕准、后段逐渐错位。
-	offsetMS := w.measureSegmentPrefixDurationMS(ctx, material, startSeg)
-	if offsetMS <= 0 {
-		offsetMS = liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)
-	}
 	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.mp3", cursor))
 	concatTS := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.ts", cursor))
 	if err := w.ffmpeg.ConcatMediaFiles(ctx, files, concatTS); err != nil {
@@ -697,19 +710,18 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		w.logger.Warn("窗口 ASR 识别失败，跳过本窗", zap.Uint("material_id", material.ID), zap.Error(err))
 		return nil
 	}
-	merged, mergedDur, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
+	merged, _, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
 	if err != nil {
 		w.logger.Warn("窗口 ASR 合并失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
-	windowDur := asr.ParseDurationMs(raw)
-	newCursor := offsetMS + windowDur
-	if mergedDur > newCursor {
-		newCursor = mergedDur
-	}
+	// 游标必须沿「真实分片时间轴」推进，不能用厂商 audio_info.duration：
+	// 否则下一窗再按标称 6s 反推 startSeg 时会在边界跳段/重叠。
+	newCursor := offsetMS + windowMediaMS
 	if newCursor < cursor {
 		newCursor = cursor
 	}
+	asrDur := asr.ParseDurationMs(raw)
 	// 覆盖进度仍以录像时长为分母；跟播中最高 99，100 留给关播 Finalize。
 	progress := int16(10)
 	if material.Duration > 0 {
@@ -738,13 +750,14 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Duration("elapsed", time.Since(asrStart)),
 		zap.Int64("offset_ms", offsetMS),
 		zap.Int64("asr_cursor_ms", newCursor),
+		zap.Int64("window_media_ms", windowMediaMS),
+		zap.Int64("asr_vendor_duration_ms", asrDur),
 		zap.Int64("est_bill_audio_ms", estBillMS),
 		zap.Int16("asr_progress", progress),
 	)
 	return nil
 }
 
-// catchUpWindowASR 连续跑窗口 ASR 直到追上录像游标或无法推进（关播收尾用）。
 func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model.LiveMaterial) {
 	const maxRounds = 128
 	for i := 0; i < maxRounds; i++ {
@@ -796,15 +809,57 @@ func (w *liveIngestWorker) measureSegmentPrefixDurationMS(ctx context.Context, m
 	if startSeg <= 0 {
 		return 0
 	}
-	prefix := make([]string, 0, startSeg)
-	for _, f := range globLocalSegments(w.segmentDir(material)) {
+	durs := w.measureAllSegmentDurationsMS(ctx, material)
+	return liveingest.SumSegmentDurationsMS(durs, 0, int(startSeg))
+}
+
+// measureAllSegmentDurationsMS 按分片下标返回真实时长表；探测失败的片用标称时长填充，避免窗起点计算出现空洞。
+func (w *liveIngestWorker) measureAllSegmentDurationsMS(ctx context.Context, material *model.LiveMaterial) []int64 {
+	files := globLocalSegments(w.segmentDir(material))
+	if len(files) == 0 {
+		return nil
+	}
+	maxIdx := -1
+	type item struct {
+		idx  int
+		path string
+	}
+	items := make([]item, 0, len(files))
+	for _, f := range files {
 		idx, ok := parseLocalSegIndex(f)
-		if !ok || int64(idx) >= startSeg {
+		if !ok || idx < 0 {
 			continue
 		}
-		prefix = append(prefix, f)
+		items = append(items, item{idx: idx, path: f})
+		if idx > maxIdx {
+			maxIdx = idx
+		}
 	}
-	return media.SumDurationMS(ctx, w.prober, prefix)
+	if maxIdx < 0 {
+		return nil
+	}
+	nominal := int64(model.LiveSegmentDurationSec) * 1000
+	if nominal <= 0 {
+		nominal = 6000
+	}
+	out := make([]int64, maxIdx+1)
+	for i := range out {
+		out[i] = nominal
+	}
+	prober := w.prober
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
+	for _, it := range items {
+		tl, err := prober.ProbeMediaTimeline(ctx, it.path)
+		if err != nil {
+			continue
+		}
+		if d := tl.DurationMS(); d > 0 {
+			out[it.idx] = d
+		}
+	}
+	return out
 }
 
 func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *model.LiveMaterial, duration int64) error {

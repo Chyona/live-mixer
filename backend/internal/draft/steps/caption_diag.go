@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
@@ -83,6 +84,10 @@ type CaptionDiagSummary struct {
 	DeltaMSP90             int64   `json:"delta_ms_p90"`
 	MapErrMSMedianAbs      int64   `json:"map_err_ms_median_abs"`
 	MapErrMSP90Abs         int64   `json:"map_err_ms_p90_abs"`
+	ASRUtteranceCount      int     `json:"asr_utterance_count"`
+	ASRWindowGapCount      int     `json:"asr_window_gap_count"`
+	ASRMaxWindowGapMS      int64   `json:"asr_max_window_gap_ms"`
+	ASRWindowGapBoundaries []int64 `json:"asr_window_gap_boundaries_ms,omitempty"`
 	LikelyLayer            string  `json:"likely_layer"`
 	LikelyLayerDescription string  `json:"likely_layer_description"`
 }
@@ -276,6 +281,7 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 	report.Summary.DeltaMSP90 = percentileSortedInt64(sortedCopyAbs(deltas), 90)
 	report.Summary.MapErrMSMedianAbs = percentileSortedInt64(sortedCopy(mapErrsAbs), 50)
 	report.Summary.MapErrMSP90Abs = percentileSortedInt64(sortedCopy(mapErrsAbs), 90)
+	fillASRWindowGapSummary(liveASR, &report.Summary)
 	report.Summary.LikelyLayer, report.Summary.LikelyLayerDescription = classifyCaptionDiag(report.Summary)
 	report.Hint = report.Summary.LikelyLayerDescription
 	return report, nil
@@ -303,13 +309,19 @@ func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 	cutHeavy := sum.ClipCount > 0 && float64(sum.SuspectCutClips)/float64(sum.ClipCount) >= 0.2 &&
 		sum.DeltaMSP90 >= captionDiagDeltaSuspectMS
 	mapHeavy := sum.SuspectMapRatio >= 0.1 || sum.MapErrMSP90Abs >= captionDiagMapErrSuspect
+	windowGapHeavy := sum.ASRWindowGapCount > 0 && sum.ASRMaxWindowGapMS >= 3000
 
 	switch {
 	case sum.CaptionCount == 0 && sum.ClipCount == 0:
 		return "none", "无切片与字幕，无法判断对齐"
+	case windowGapHeavy && !cutHeavy && !mapHeavy:
+		return "L1_window_boundary", "live_asr 在窗口边界附近出现异常空隙/跳跃，优先怀疑窗口 ASR 起点用标称 6s 反推导致跳段"
 	case sum.CaptionCount == 0:
 		if cutHeavy {
 			return "L2_cut", "无字幕条目；多段 actual-want 偏差偏大，优先怀疑裁切起点/时长"
+		}
+		if windowGapHeavy {
+			return "L1_window_boundary", "无草稿字幕条目，但源 ASR 在窗口边界有异常空隙"
 		}
 		return "none", "无字幕条目，无法判断对齐"
 	case cutHeavy && mapHeavy:
@@ -318,9 +330,58 @@ func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 		return "L2_cut", "多段 actual-want 偏差偏大，优先怀疑裁切起点/时长（混合 seek 或关键帧）"
 	case mapHeavy:
 		return "L1_or_L4_asr", "映射公式自洽误差大或个别句异常，优先怀疑 ASR 时间或拆句均分"
+	case windowGapHeavy:
+		return "L1_window_boundary", "草稿映射自洽，但源 ASR 在窗口边界有异常空隙；成片若选中边界后片段会整体错位"
 	default:
-		return "ok_or_mild", "统计未显示明显成簇异常；若体感仍有约 10% 不齐，可对嫌疑 clip 做语音能量 onset 对比"
+		return "ok_or_mild", "统计未显示明显成簇异常；若体感仍不齐：①源视频 10 分钟窗后是否已错（L1）②仅成片错则查裁切内容平移（需 onset）"
 	}
+}
+
+// fillASRWindowGapSummary 扫描完整 live_asr：在调度窗口倍数附近的大空隙，提示窗间接缝问题。
+func fillASRWindowGapSummary(liveASRJSON string, sum *CaptionDiagSummary) {
+	if sum == nil {
+		return
+	}
+	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
+	sum.ASRUtteranceCount = len(utterances)
+	if len(utterances) < 2 {
+		return
+	}
+	windowMS := int64(model.LiveASRWindowDuration / time.Millisecond)
+	if windowMS <= 0 {
+		windowMS = 10 * 60 * 1000
+	}
+	const nearMS = 45 * 1000  // 落在窗边界 ±45s 内
+	const gapSuspectMS = 3500 // 空隙超过该值视为可疑（正常句间停顿通常更短）
+	var prevEnd int64 = -1
+	for _, u := range utterances {
+		if prevEnd >= 0 {
+			gap := u.StartTime - prevEnd
+			if gap >= gapSuspectMS {
+				mid := prevEnd + gap/2
+				boundary := ((mid + windowMS/2) / windowMS) * windowMS
+				if boundary > 0 && absInt64(mid-boundary) <= nearMS {
+					sum.ASRWindowGapCount++
+					if gap > sum.ASRMaxWindowGapMS {
+						sum.ASRMaxWindowGapMS = gap
+					}
+					sum.ASRWindowGapBoundaries = appendUniqueInt64(sum.ASRWindowGapBoundaries, boundary)
+				}
+			}
+		}
+		if u.EndTime > prevEnd {
+			prevEnd = u.EndTime
+		}
+	}
+}
+
+func appendUniqueInt64(vals []int64, v int64) []int64 {
+	for _, x := range vals {
+		if x == v {
+			return vals
+		}
+	}
+	return append(vals, v)
 }
 
 // WriteCaptionDiagReport 写入 staging/caption_diag.json。

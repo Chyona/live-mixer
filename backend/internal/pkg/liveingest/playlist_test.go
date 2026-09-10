@@ -74,3 +74,42 @@ func TestWindowOffsetMS(t *testing.T) {
 		t.Fatal("offset must not equal raw mid-segment cursor")
 	}
 }
+
+func TestResolveWindowStartByDurations_NonNominalSegs(t *testing.T) {
+	// 101 片 × 5900ms ≈ 595900；若误用 cursor/6000 会得到 startSeg=99，实测应约为 100。
+	durs := make([]int64, 200)
+	for i := range durs {
+		durs[i] = 5900
+	}
+	cursor := int64(101 * 5900) // 第一窗结束后的真实游标
+	start, offset := ResolveWindowStartByDurations(durs, cursor, 0)
+	if start != 101 {
+		t.Fatalf("startSeg=%d want 101 (nominal would be %d)", start, cursor/6000)
+	}
+	if offset != cursor {
+		t.Fatalf("offset=%d want %d", offset, cursor)
+	}
+	// overlap 1 片
+	start2, offset2 := ResolveWindowStartByDurations(durs, cursor, 1)
+	if start2 != 100 {
+		t.Fatalf("overlap startSeg=%d want 100", start2)
+	}
+	if offset2 != 100*5900 {
+		t.Fatalf("overlap offset=%d want %d", offset2, 100*5900)
+	}
+}
+
+func TestResolveWindowStartByDurations_MidSegment(t *testing.T) {
+	durs := []int64{6000, 6000, 6000, 6000}
+	start, offset := ResolveWindowStartByDurations(durs, 15000, 0)
+	if start != 2 || offset != 12000 {
+		t.Fatalf("got start=%d offset=%d", start, offset)
+	}
+}
+
+func TestSumSegmentDurationsMS(t *testing.T) {
+	durs := []int64{1000, 2000, 3000, 4000}
+	if got := SumSegmentDurationsMS(durs, 1, 2); got != 5000 {
+		t.Fatalf("got %d", got)
+	}
+}

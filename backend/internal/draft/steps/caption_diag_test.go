@@ -136,6 +136,13 @@ func TestClassifyCaptionDiag(t *testing.T) {
 	if layer != "L1_or_L4_asr" {
 		t.Fatalf("layer = %q, want L1_or_L4_asr", layer)
 	}
+	layer, _ = classifyCaptionDiag(CaptionDiagSummary{
+		ClipCount: 2, CaptionCount: 5,
+		ASRWindowGapCount: 1, ASRMaxWindowGapMS: 8000,
+	})
+	if layer != "L1_window_boundary" {
+		t.Fatalf("layer = %q, want L1_window_boundary", layer)
+	}
 }
 
 func TestBuildCaptionDiagObjectKey(t *testing.T) {
