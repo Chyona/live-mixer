@@ -37,9 +37,12 @@ func main() {
 
 	// HTTP 联调（add-live / one-click）
 	baseURL := flag.String("base-url", "", "webserver 根地址（默认 http://127.0.0.1:30000 或 LIVE_MIXER_BASE_URL）")
+	apiPrefix := flag.String("api-prefix", "/openapi/live-mixer", "API 前缀（与 webserver Group 一致）")
 	username := flag.String("user", "", "登录用户（默认 admin 或 LIVE_MIXER_USER）")
 	password := flag.String("password", "", "登录密码（默认 admin 或 LIVE_MIXER_PASSWORD）")
-	token := flag.String("token", "", "已有 JWT，跳过登录")
+	token := flag.String("token", "", "已有 JWT；默认从配置 jwt.secret 本地签发")
+	userID := flag.Uint("user-id", 1, "本地签发 JWT 的用户 ID（默认 1）")
+	forceLogin := flag.Bool("login", false, "强制密码登录（默认用配置 JWT 签发）")
 	name := flag.String("name", "", "源视频名称（add-live；默认 test-live-时间戳）")
 	sourceMode := flag.String("source-mode", "live", "upcoming|live|replay（add-live，默认 live）")
 	remark := flag.String("remark", "", "备注（add-live）")
@@ -67,6 +70,7 @@ func main() {
 	if err := loadDotEnv(firstNonEmpty(*envFile, filepath.Join(repoRoot, "docker", ".env"))); err != nil {
 		fmt.Fprintf(os.Stderr, "警告: 加载 .env 失败: %v\n", err)
 	}
+	setHTTPAPIPrefix(firstNonEmpty(strings.TrimSpace(*apiPrefix), os.Getenv("LIVE_MIXER_API_PREFIX"), "/openapi/live-mixer"))
 
 	resolved := strings.TrimSpace(*mode)
 	if resolved == "" {
@@ -126,9 +130,12 @@ func main() {
 		}
 		runAddLiveMode(addLiveArgs{
 			BaseURL:      httpBase,
+			ConfigPath:   *configPath,
 			Username:     *username,
 			Password:     *password,
 			Token:        *token,
+			UserID:       uint(*userID),
+			ForceLogin:   *forceLogin,
 			Name:         *name,
 			M3U8URL:      strings.TrimSpace(*m3u8URL),
 			SourceMode:   *sourceMode,
@@ -160,9 +167,12 @@ func main() {
 		}
 		runOneClickMode(oneClickArgs{
 			BaseURL:      httpBase,
+			ConfigPath:   *configPath,
 			Username:     *username,
 			Password:     *password,
 			Token:        *token,
+			UserID:       uint(*userID),
+			ForceLogin:   *forceLogin,
 			LiveID:       uint(*liveID),
 			PromptID:     uint(*promptID),
 			Clips:        clips,
@@ -187,9 +197,12 @@ func main() {
 		}
 		runLiveE2EMode(liveE2EArgs{
 			BaseURL:      httpBase,
+			ConfigPath:   *configPath,
 			Username:     *username,
 			Password:     *password,
 			Token:        *token,
+			UserID:       uint(*userID),
+			ForceLogin:   *forceLogin,
 			Name:         *name,
 			M3U8URL:      strings.TrimSpace(*m3u8URL),
 			Remark:       *remark,

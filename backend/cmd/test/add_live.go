@@ -14,9 +14,12 @@ import (
 
 type addLiveArgs struct {
 	BaseURL      string
+	ConfigPath   string
 	Username     string
 	Password     string
 	Token        string
+	UserID       uint
+	ForceLogin   bool
 	Name         string
 	M3U8URL      string
 	SourceMode   string
@@ -93,17 +96,10 @@ func runAddLiveMode(a addLiveArgs) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	ctx := context.Background()
 
-	token := strings.TrimSpace(a.Token)
-	if token == "" {
-		user := firstNonEmpty(strings.TrimSpace(a.Username), os.Getenv("LIVE_MIXER_USER"), "admin")
-		pass := firstNonEmpty(strings.TrimSpace(a.Password), os.Getenv("LIVE_MIXER_PASSWORD"), "admin")
-		var err error
-		token, err = apiLogin(ctx, client, base, user, pass)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "登录失败: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("已登录 %s\n", user)
+	token, err := resolveHTTPToken(ctx, client, base, a.Token, a.Username, a.Password, a.ConfigPath, a.UserID, a.ForceLogin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "获取 token 失败: %v\n", err)
+		os.Exit(1)
 	}
 
 	reqBody := map[string]any{
@@ -221,7 +217,7 @@ func writeAddLiveReport(path string, report addLiveReport) {
 
 func apiLogin(ctx context.Context, client *http.Client, base, user, pass string) (string, error) {
 	var data loginData
-	if err := apiJSON(ctx, client, http.MethodPost, base+"/v1/auth/login", "", map[string]string{
+	if err := apiJSON(ctx, client, http.MethodPost, apiURL(base, "/v1/auth/login"), "", map[string]string{
 		"username": user,
 		"password": pass,
 	}, &data); err != nil {
@@ -235,7 +231,7 @@ func apiLogin(ctx context.Context, client *http.Client, base, user, pass string)
 
 func apiCreateLiveMaterial(ctx context.Context, client *http.Client, base, token string, body map[string]any) (materialSnapshot, error) {
 	var out materialSnapshot
-	if err := apiJSON(ctx, client, http.MethodPost, base+"/v1/live-materials", token, body, &out); err != nil {
+	if err := apiJSON(ctx, client, http.MethodPost, apiURL(base, "/v1/live-materials"), token, body, &out); err != nil {
 		return materialSnapshot{}, err
 	}
 	if out.ID == 0 {
@@ -246,7 +242,7 @@ func apiCreateLiveMaterial(ctx context.Context, client *http.Client, base, token
 
 func apiGetLiveMaterial(ctx context.Context, client *http.Client, base, token string, id uint) (materialSnapshot, error) {
 	var out materialSnapshot
-	if err := apiJSON(ctx, client, http.MethodGet, fmt.Sprintf("%s/v1/live-materials/%d", base, id), token, nil, &out); err != nil {
+	if err := apiJSON(ctx, client, http.MethodGet, apiURL(base, fmt.Sprintf("/v1/live-materials/%d", id)), token, nil, &out); err != nil {
 		return materialSnapshot{}, err
 	}
 	return out, nil

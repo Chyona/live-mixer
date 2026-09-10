@@ -12,9 +12,12 @@ import (
 
 type oneClickArgs struct {
 	BaseURL      string
+	ConfigPath   string
 	Username     string
 	Password     string
 	Token        string
+	UserID       uint
+	ForceLogin   bool
 	LiveID       uint
 	PromptID     uint
 	Clips        []clipRangeMS
@@ -83,17 +86,10 @@ func runOneClickMode(a oneClickArgs) {
 	client := &http.Client{Timeout: 60 * time.Second}
 	ctx := context.Background()
 
-	token := strings.TrimSpace(a.Token)
-	if token == "" {
-		user := firstNonEmpty(strings.TrimSpace(a.Username), os.Getenv("LIVE_MIXER_USER"), "admin")
-		pass := firstNonEmpty(strings.TrimSpace(a.Password), os.Getenv("LIVE_MIXER_PASSWORD"), "admin")
-		var err error
-		token, err = apiLogin(ctx, client, base, user, pass)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "登录失败: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("已登录 %s\n", user)
+	token, err := resolveHTTPToken(ctx, client, base, a.Token, a.Username, a.Password, a.ConfigPath, a.UserID, a.ForceLogin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "获取 token 失败: %v\n", err)
+		os.Exit(1)
 	}
 
 	material, err := apiGetLiveMaterial(ctx, client, base, token, a.LiveID)
@@ -322,7 +318,7 @@ func trimErr(s string) string {
 
 func apiCreateAISliceDraft(ctx context.Context, client *http.Client, base, token string, body map[string]any) (taskBatchCreateData, error) {
 	var out taskBatchCreateData
-	if err := apiJSON(ctx, client, http.MethodPost, base+"/v1/tasks/ai-slice-draft", token, body, &out); err != nil {
+	if err := apiJSON(ctx, client, http.MethodPost, apiURL(base, "/v1/tasks/ai-slice-draft"), token, body, &out); err != nil {
 		return taskBatchCreateData{}, err
 	}
 	return out, nil
@@ -330,7 +326,7 @@ func apiCreateAISliceDraft(ctx context.Context, client *http.Client, base, token
 
 func apiGetTask(ctx context.Context, client *http.Client, base, token, id string) (taskDetail, error) {
 	var out taskDetail
-	if err := apiJSON(ctx, client, http.MethodGet, base+"/v1/tasks/"+id, token, nil, &out); err != nil {
+	if err := apiJSON(ctx, client, http.MethodGet, apiURL(base, "/v1/tasks/"+id), token, nil, &out); err != nil {
 		return taskDetail{}, err
 	}
 	return out, nil

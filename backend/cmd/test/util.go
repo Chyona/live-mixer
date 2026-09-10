@@ -49,6 +49,35 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// HTTP API 路径前缀（webserver 挂载在 /openapi/live-mixer）。
+var httpAPIPrefix = "/openapi/live-mixer"
+
+func setHTTPAPIPrefix(prefix string) {
+	p := strings.TrimSpace(prefix)
+	if p == "" {
+		p = "/openapi/live-mixer"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	httpAPIPrefix = strings.TrimRight(p, "/")
+}
+
+// apiURL 拼接 base + API 前缀 + path。
+// path 形如 "/v1/auth/login"；若 base 已含前缀则不再重复。
+func apiURL(base, path string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	prefix := strings.TrimRight(httpAPIPrefix, "/")
+	if prefix == "" {
+		return base + path
+	}
+	if strings.HasSuffix(base, prefix) {
+		return base + path
+	}
+	return base + prefix + path
+}
+
 func loadDotEnv(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
