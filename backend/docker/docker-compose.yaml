@@ -69,9 +69,9 @@ services:
       - ./logs:/app/logs  # 挂载配置文件目录
     environment:
       # 草稿下载URL
-      - DRAFT_URL=http://192.168.3.21/openapi/capcut-mate/v1/get_draft
+      - DRAFT_URL=http://192.168.3.21:81/openapi/capcut-mate/v1/get_draft
       # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
-      - DOWNLOAD_URL=http://192.168.3.21
+      - DOWNLOAD_URL=http://192.168.3.21:81
       # 草稿提示URL
       - TIP_URL=https://docs.jcaigc.cn
       # 文件下载大小限制（字节），默认1GB（1073741824）
