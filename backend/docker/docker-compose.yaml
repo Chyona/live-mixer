@@ -69,9 +69,9 @@ services:
       - ./logs:/app/logs  # 挂载配置文件目录
     environment:
       # 草稿下载URL
-      - DRAFT_URL=http://192.168.3.219/openapi/capcut-mate/v1/get_draft
+      - DRAFT_URL=http://192.168.3.21/openapi/capcut-mate/v1/get_draft
       # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
-      - DOWNLOAD_URL=http://192.168.3.219
+      - DOWNLOAD_URL=http://192.168.3.21
       # 草稿提示URL
       - TIP_URL=https://docs.jcaigc.cn
       # 文件下载大小限制（字节），默认1GB（1073741824）
@@ -93,11 +93,11 @@ services:
     environment:
       - PROXY_PASS_URL_1=http://capcut-mate:30000/openapi/capcut-mate/
       - PROXY_LOCATION_1=/openapi/capcut-mate/
-      - PROXY_PASS_URL_2=http://192.168.3.3:30000/openapi/capcut-mate/v1/gen_video
+      - PROXY_PASS_URL_2=http://192.168.3.21:30000/openapi/capcut-mate/v1/gen_video
       - PROXY_LOCATION_2=/openapi/capcut-mate/v1/gen_video
-      - PROXY_PASS_URL_3=http://192.168.3.3:30000/openapi/capcut-mate/v1/gen_video_status
+      - PROXY_PASS_URL_3=http://192.168.3.21:30000/openapi/capcut-mate/v1/gen_video_status
       - PROXY_LOCATION_3=/openapi/capcut-mate/v1/gen_video_status
-      - PROXY_PASS_URL_4=http://192.168.3.3:30000/openapi/capcut-mate/v1/gen_video_active_count
+      - PROXY_PASS_URL_4=http://192.168.3.21:30000/openapi/capcut-mate/v1/gen_video_active_count
       - PROXY_LOCATION_4=/openapi/capcut-mate/v1/gen_video_active_count
       - PROXY_PASS_URL_5=http://live-mixer:30000/openapi/live-mixer/
       - PROXY_LOCATION_5=/openapi/live-mixer/
