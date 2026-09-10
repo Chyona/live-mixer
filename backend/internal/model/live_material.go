@@ -94,9 +94,14 @@ type LiveMaterial struct {
 	ConnectDeadlineAt *time.Time          `gorm:"column:connect_deadline_at;comment:正在直播连上截止" json:"connect_deadline_at,omitempty"`
 	StreamStartedAt   *time.Time          `gorm:"column:stream_started_at;comment:第一次读到媒体的时间" json:"stream_started_at,omitempty"`
 	ASRCursorMS       int64               `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
-	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:跟播抢占代数" json:"ingest_epoch"`
+	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:录像/收尾抢占代数" json:"ingest_epoch"`
+	ASREpoch          int64               `gorm:"column:asr_epoch;not null;default:0;comment:窗口ASR抢占代数" json:"asr_epoch"`
 	NextSeg           int64               `gorm:"column:next_seg;not null;default:0;comment:下一分片序号" json:"next_seg"`
-	LastHeartbeatAt   *time.Time          `gorm:"column:last_heartbeat_at;comment:跟播心跳" json:"last_heartbeat_at,omitempty"`
+	LastHeartbeatAt   *time.Time          `gorm:"column:last_heartbeat_at;comment:录像/收尾心跳" json:"last_heartbeat_at,omitempty"`
+	ASRHeartbeatAt    *time.Time          `gorm:"column:asr_heartbeat_at;comment:窗口ASR心跳" json:"asr_heartbeat_at,omitempty"`
+	LastProgressAt    *time.Time          `gorm:"column:last_progress_at;comment:最近一次分片进度时间" json:"last_progress_at,omitempty"`
+	ASRDue            bool                `gorm:"column:asr_due;not null;default:false;comment:是否有待跑窗口ASR" json:"asr_due"`
+	IngestResumeSeg   int64               `gorm:"column:ingest_resume_seg;not null;default:0;comment:本场录像起始分片序号" json:"ingest_resume_seg"`
 	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
 	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`

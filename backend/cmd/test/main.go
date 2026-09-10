@@ -41,6 +41,7 @@ func main() {
 	username := flag.String("user", "", "登录用户（默认 admin 或 LIVE_MIXER_USER）")
 	password := flag.String("password", "", "登录密码（默认 admin 或 LIVE_MIXER_PASSWORD）")
 	token := flag.String("token", "", "已有 JWT；默认从配置 jwt.secret 本地签发")
+	jwtSecret := flag.String("jwt-secret", "", "显式 JWT 密钥（默认自动尝试 config.yaml 与 APP_JWT_SECRET）")
 	userID := flag.Uint("user-id", 1, "本地签发 JWT 的用户 ID（默认 1）")
 	forceLogin := flag.Bool("login", false, "强制密码登录（默认用配置 JWT 签发）")
 	name := flag.String("name", "", "源视频名称（add-live；默认 test-live-时间戳）")
@@ -131,6 +132,7 @@ func main() {
 		runAddLiveMode(addLiveArgs{
 			BaseURL:      httpBase,
 			ConfigPath:   *configPath,
+			JWTSecret:    *jwtSecret,
 			Username:     *username,
 			Password:     *password,
 			Token:        *token,
@@ -168,6 +170,7 @@ func main() {
 		runOneClickMode(oneClickArgs{
 			BaseURL:      httpBase,
 			ConfigPath:   *configPath,
+			JWTSecret:    *jwtSecret,
 			Username:     *username,
 			Password:     *password,
 			Token:        *token,
@@ -198,6 +201,7 @@ func main() {
 		runLiveE2EMode(liveE2EArgs{
 			BaseURL:      httpBase,
 			ConfigPath:   *configPath,
+			JWTSecret:    *jwtSecret,
 			Username:     *username,
 			Password:     *password,
 			Token:        *token,

@@ -15,6 +15,7 @@ import (
 type addLiveArgs struct {
 	BaseURL      string
 	ConfigPath   string
+	JWTSecret    string
 	Username     string
 	Password     string
 	Token        string
@@ -96,7 +97,7 @@ func runAddLiveMode(a addLiveArgs) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	ctx := context.Background()
 
-	token, err := resolveHTTPToken(ctx, client, base, a.Token, a.Username, a.Password, a.ConfigPath, a.UserID, a.ForceLogin)
+	token, err := resolveHTTPToken(ctx, client, base, a.Token, a.Username, a.Password, a.ConfigPath, a.JWTSecret, a.UserID, a.ForceLogin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "获取 token 失败: %v\n", err)
 		os.Exit(1)

@@ -58,8 +58,13 @@ CREATE TABLE IF NOT EXISTS live_material (
     stream_started_at   TIMESTAMPTZ,
     asr_cursor_ms       BIGINT NOT NULL DEFAULT 0,
     ingest_epoch        BIGINT NOT NULL DEFAULT 0,
+    asr_epoch           BIGINT NOT NULL DEFAULT 0,
     next_seg            BIGINT NOT NULL DEFAULT 0,
     last_heartbeat_at   TIMESTAMPTZ,
+    asr_heartbeat_at    TIMESTAMPTZ,
+    last_progress_at    TIMESTAMPTZ,
+    asr_due             BOOLEAN NOT NULL DEFAULT FALSE,
+    ingest_resume_seg   BIGINT NOT NULL DEFAULT 0,
     ingest_error_msg    TEXT,
     live_asr        JSONB         NOT NULL DEFAULT '{}',
     -- AI 总结分段：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟

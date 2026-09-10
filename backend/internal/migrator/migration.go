@@ -111,8 +111,13 @@ var liveMaterialIngestColumns = []struct {
 	{name: "stream_started_at", pg: "TIMESTAMPTZ"},
 	{name: "asr_cursor_ms", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "ingest_epoch", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "asr_epoch", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "next_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "last_heartbeat_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_heartbeat_at", pg: "TIMESTAMPTZ"},
+	{name: "last_progress_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_due", pg: "BOOLEAN NOT NULL DEFAULT FALSE"},
+	{name: "ingest_resume_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "ingest_error_msg", pg: "TEXT"},
 }
 

@@ -11,7 +11,7 @@ services:
     memswap_limit: 12G
     cpus: '6'
     ports:
-      - "30000:30000"
+      - "31000:30000"
     volumes:
       - ./logs:/app/logs
       - ./html:/app/html

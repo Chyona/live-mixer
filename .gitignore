@@ -56,3 +56,5 @@ frontend/.vite/
 /backend/*.exe
 /backend/internal/config/config.yaml
 /docs
+/backend/docker/html
+/backend/docker/.env

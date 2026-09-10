@@ -7,9 +7,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"live-mixer/internal/config"
-	jwtpkg "live-mixer/internal/pkg/jwt"
 )
 
 // live-e2e：打真实 webserver，串联 UI 同款链路：
@@ -19,6 +16,7 @@ import (
 type liveE2EArgs struct {
 	BaseURL      string
 	ConfigPath   string
+	JWTSecret    string
 	Username     string
 	Password     string
 	Token        string
@@ -86,11 +84,10 @@ func runLiveE2EMode(a liveE2EArgs) {
 	client := &http.Client{Timeout: 60 * time.Second}
 	ctx := context.Background()
 
-	token, err := resolveHTTPToken(ctx, client, base, a.Token, a.Username, a.Password, a.ConfigPath, a.UserID, a.ForceLogin)
+	token, err := resolveHTTPToken(ctx, client, base, a.Token, a.Username, a.Password, a.ConfigPath, a.JWTSecret, a.UserID, a.ForceLogin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "获取 token 失败: %v\n", err)
-		fmt.Fprintf(os.Stderr, "请确认 -config / APP_JWT_SECRET 与 webserver 一致，或改用 -login 密码登录（当前 %s，登录 URL 形如 %s）\n",
-			base, apiURL(base, "/v1/auth/login"))
+		fmt.Fprintf(os.Stderr, "提示: 本地 webserver.exe 用 config.yaml 的 jwt.secret；docker 用 APP_JWT_SECRET。可用 -jwt-secret 显式指定。\n")
 		os.Exit(1)
 	}
 
@@ -201,6 +198,7 @@ func runLiveE2EMode(a liveE2EArgs) {
 	runOneClickMode(oneClickArgs{
 		BaseURL:      base,
 		ConfigPath:   a.ConfigPath,
+		JWTSecret:    a.JWTSecret,
 		Token:        token,
 		UserID:       a.UserID,
 		LiveID:       created.ID,
@@ -230,58 +228,4 @@ func writeLiveE2EReport(path string, report liveE2EReport) {
 	}
 	mustWriteJSON(path, report)
 	fmt.Printf("E2E 报告已写入 %s\n", path)
-}
-
-func resolveHTTPToken(ctx context.Context, client *http.Client, base, token, username, password, configPath string, userID uint, forceLogin bool) (string, error) {
-	if t := strings.TrimSpace(token); t != "" {
-		return t, nil
-	}
-	if !forceLogin {
-		uid := userID
-		if uid == 0 {
-			uid = 1
-		}
-		user := firstNonEmpty(strings.TrimSpace(username), os.Getenv("LIVE_MIXER_USER"), "admin")
-		t, err := mintTokenFromConfig(configPath, uid, user)
-		if err == nil {
-			fmt.Printf("已用配置 JWT 签发 token（uid=%d user=%s）\n", uid, user)
-			return t, nil
-		}
-		fmt.Fprintf(os.Stderr, "警告: 本地签发 token 失败，回退密码登录: %v\n", err)
-	}
-	user := firstNonEmpty(strings.TrimSpace(username), os.Getenv("LIVE_MIXER_USER"), "admin")
-	pass := firstNonEmpty(strings.TrimSpace(password), os.Getenv("LIVE_MIXER_PASSWORD"), "admin")
-	t, err := apiLogin(ctx, client, base, user, pass)
-	if err != nil {
-		return "", err
-	}
-	fmt.Printf("已登录 %s @ %s\n", user, base)
-	return t, nil
-}
-
-func mintTokenFromConfig(configPath string, userID uint, username string) (string, error) {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return "", fmt.Errorf("加载配置: %w", err)
-	}
-	secret := strings.TrimSpace(cfg.JWT.Secret)
-	if secret == "" {
-		return "", fmt.Errorf("jwt.secret 为空（可设 APP_JWT_SECRET 或 -config）")
-	}
-	exp := cfg.JWT.ExpiresIn
-	if exp <= 0 {
-		exp = 86400
-	}
-	if userID == 0 {
-		userID = 1
-	}
-	if strings.TrimSpace(username) == "" {
-		username = "admin"
-	}
-	return jwtpkg.GenerateToken(secret, exp, jwtpkg.UserClaims{
-		UserID:   userID,
-		Username: username,
-		Nickname: "测试",
-		Roles:    []string{"ADMIN"},
-	})
 }

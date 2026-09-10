@@ -44,7 +44,7 @@ func TestLiveIngestWorker_Cancel_StopsWaitingProcess(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		w.cancelsMu.Lock()
-		_, registered := w.cancels[material.ID]
+		_, registered := w.recorderCancels[material.ID]
 		w.cancelsMu.Unlock()
 		if registered {
 			break
