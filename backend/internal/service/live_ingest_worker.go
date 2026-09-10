@@ -464,8 +464,41 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 	}
 
 	segURLs := map[int64]string{}
+	segDurMS := map[int64]int64{}
 	if material.NextSeg > 0 {
 		segURLs = w.completeSegmentURLs(ctx, material, nil, resumeFrom)
+	}
+	prober := w.prober
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
+	nominalSegMS := int64(model.LiveSegmentDurationSec) * 1000
+	if nominalSegMS <= 0 {
+		nominalSegMS = 6000
+	}
+	// 列表「时长」必须是本地已录分片真实累计时长。
+	// 续录分片不多时全量校正；过多时避免逐片 ffprobe 拖死跟播，沿用库内值并仅对新片累加真实时长。
+	recordedMS := int64(0)
+	if material.NextSeg > 0 {
+		if material.NextSeg <= 200 {
+			recordedMS = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
+		} else if material.Duration > 0 {
+			recordedMS = material.Duration
+			w.logger.Warn("续录分片较多，跳过全量时长校正",
+				zap.Uint("material_id", material.ID),
+				zap.Int64("next_seg", material.NextSeg),
+				zap.Int64("duration_ms", recordedMS),
+			)
+		} else {
+			recordedMS = material.NextSeg * nominalSegMS
+		}
+		if recordedMS > 0 && recordedMS != material.Duration {
+			material.Duration = recordedMS
+			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, material.NextSeg, recordedMS, material.RecordPlaylistURL)
+		}
+	}
+	if recordedMS <= 0 && material.Duration > 0 {
+		recordedMS = material.Duration
 	}
 	for {
 		startIndex := int(material.NextSeg)
@@ -490,17 +523,19 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 			if next < material.NextSeg {
 				next = material.NextSeg
 			}
-			dur := next * int64(model.LiveSegmentDurationSec) * 1000
-			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, false, resumeFrom)
+			oneMS := probeSegmentDurationMS(ctx, prober, path, nominalSegMS)
+			segDurMS[int64(index)] = oneMS
+			recordedMS += oneMS
+			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, segDurMS, false, resumeFrom)
 			if plErr != nil {
 				w.logger.Warn("发布播放列表失败", zap.Uint("material_id", material.ID), zap.Error(plErr))
 			}
 			if playlistURL != "" {
 				material.RecordPlaylistURL = playlistURL
 			}
-			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, dur, playlistURL)
+			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, recordedMS, playlistURL)
 			material.NextSeg = next
-			material.Duration = dur
+			material.Duration = recordedMS
 			if time.Now().After(windowDue) {
 				scheduleWindowASR()
 				windowDue = time.Now().Add(model.LiveASRWindowDuration)
@@ -588,7 +623,9 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 		}
 	}
 	segURLs := w.collectSegmentURLs(ctx, material, files, resumeFrom)
-	_, _ = w.publishPlaylist(ctx, material, segURLs, true, resumeFrom)
+	segDurMS := map[int64]int64{}
+	_ = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
+	_, _ = w.publishPlaylist(ctx, material, segURLs, segDurMS, true, resumeFrom)
 
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {
 		return err
@@ -841,6 +878,35 @@ func (w *liveIngestWorker) measureSegmentPrefixDurationMS(ctx context.Context, m
 	return sum
 }
 
+// measureLocalRecordingDurationMS 累加本地已落盘分片的真实时长，并写入 outDur（按分片下标）。
+// 用于续录校正 duration，以及关播写 m3u8 的 EXTINF。
+func (w *liveIngestWorker) measureLocalRecordingDurationMS(ctx context.Context, material *model.LiveMaterial, outDur map[int64]int64) int64 {
+	prober := w.prober
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
+	nominal := int64(model.LiveSegmentDurationSec) * 1000
+	if nominal <= 0 {
+		nominal = 6000
+	}
+	var sum int64
+	for _, f := range globLocalSegments(w.segmentDir(material)) {
+		idx, ok := parseLocalSegIndex(f)
+		if !ok || idx < 0 {
+			continue
+		}
+		ms := probeSegmentDurationMS(ctx, prober, f, nominal)
+		if ms <= 0 {
+			ms = nominal
+		}
+		if outDur != nil {
+			outDur[int64(idx)] = ms
+		}
+		sum += ms
+	}
+	return sum
+}
+
 func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *model.LiveMaterial, duration int64) error {
 	latest, err := w.repo.GetByID(ctx, material.ID)
 	if err != nil {
@@ -905,7 +971,7 @@ func (w *liveIngestWorker) uploadSegment(ctx context.Context, material *model.Li
 	return w.storage.UploadFile(ctx, localPath, w.segmentObjectKey(material, resumeFrom, index))
 }
 
-func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.LiveMaterial, segURLs map[int64]string, ended bool, resumeFrom int64) (string, error) {
+func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.LiveMaterial, segURLs map[int64]string, segDurMS map[int64]int64, ended bool, resumeFrom int64) (string, error) {
 	if w.storage == nil {
 		return "", fmt.Errorf("对象存储未配置")
 	}
@@ -915,10 +981,20 @@ func (w *liveIngestWorker) publishPlaylist(ctx context.Context, material *model.
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	nominalSec := float64(model.LiveSegmentDurationSec)
+	if nominalSec <= 0 {
+		nominalSec = 6
+	}
 	items := make([]liveingest.PlaylistItem, 0, len(keys))
 	for _, k := range keys {
+		durSec := nominalSec
+		if segDurMS != nil {
+			if ms, ok := segDurMS[k]; ok && ms > 0 {
+				durSec = float64(ms) / 1000.0
+			}
+		}
 		items = append(items, liveingest.PlaylistItem{
-			DurationSec: float64(model.LiveSegmentDurationSec),
+			DurationSec: durSec,
 			URL:         segURLs[k],
 		})
 	}

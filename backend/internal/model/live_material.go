@@ -101,7 +101,7 @@ type LiveMaterial struct {
 	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
 	ASRParagraphs     []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
-	Duration          int64               `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
+	Duration          int64               `gorm:"not null;default:0;comment:本地跟播录像真实时长毫秒" json:"duration"`
 	Width             int                 `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`
 	Height            int                 `gorm:"not null;default:0;comment:直播画面高度像素" json:"height"`
 	ASRStatus         string              `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
