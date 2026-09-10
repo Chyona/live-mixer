@@ -635,17 +635,20 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		)
 		return nil
 	}
-	segDurations := w.measureAllSegmentDurationsMS(ctx, material)
-	if len(segDurations) == 0 {
-		w.logger.Info("窗口 ASR 跳过：本地分片不存在",
+	prober := w.prober
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
+	nominalStart := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
+	startSeg, offsetMS, resErr := resolveWindowStartFast(ctx, prober, w.segmentDir(material), cursor, 1)
+	if resErr != nil {
+		w.logger.Info("窗口 ASR 跳过：无法定位起始分片",
 			zap.Uint("material_id", material.ID),
-			zap.String("work_dir", w.segmentDir(material)),
+			zap.Int64("asr_cursor_ms", cursor),
+			zap.Error(resErr),
 		)
 		return nil
 	}
-	// 按真实分片时长定位起点；旧逻辑 cursor/标称6s 在分片抖动时会于窗边界跳段，导致后段 ASR 整体错位。
-	nominalStart := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
-	startSeg, offsetMS := liveingest.ResolveWindowStartByDurations(segDurations, cursor, 1)
 	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
 	if len(files) == 0 {
 		w.logger.Info("窗口 ASR 跳过：起始分片之后无本地文件",
@@ -664,11 +667,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		files = files[:maxSegs]
 		truncated = true
 	}
-	windowMediaMS := liveingest.SumSegmentDurationsMS(segDurations, startSeg, len(files))
-	if windowMediaMS <= 0 {
-		windowMediaMS = int64(len(files)) * int64(model.LiveSegmentDurationSec) * 1000
-	}
-	estBillMS := windowMediaMS
+	nominalWindowMS := int64(len(files)) * int64(model.LiveSegmentDurationSec) * 1000
 	asrStart := time.Now()
 	w.logger.Info("开始窗口 ASR",
 		zap.Uint("material_id", material.ID),
@@ -679,8 +678,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Int64("nominal_offset_ms", liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)),
 		zap.Int("segment_files", len(files)),
 		zap.Bool("truncated_to_window", truncated),
-		zap.Int64("window_media_ms", windowMediaMS),
-		zap.Int64("est_bill_audio_ms", estBillMS),
+		zap.Int64("est_bill_audio_ms", nominalWindowMS),
 		zap.Int64("duration_ms", material.Duration),
 		zap.Int64("ingest_epoch", epoch),
 	)
@@ -691,6 +689,12 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		return err
 	}
 	defer os.Remove(concatTS)
+	// 只探测拼接结果一次，避免对窗内上百个 ts 逐个 ffprobe。
+	windowMediaMS := probeSegmentDurationMS(ctx, prober, concatTS, nominalWindowMS)
+	if windowMediaMS <= 0 {
+		windowMediaMS = nominalWindowMS
+	}
+	estBillMS := windowMediaMS
 	if err := w.ffmpeg.ConvertToASRMP3(ctx, concatTS, tmpMP3); err != nil {
 		w.logger.Warn("窗口 ASR 转 MP3 失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
@@ -804,62 +808,37 @@ func maxWindowASRSegments() int {
 	return n + 1
 }
 
-// measureSegmentPrefixDurationMS 累加 startSeg 之前本地分片的真实时长，作为窗口 ASR 时间原点。
+// measureSegmentPrefixDurationMS 累加 startSeg 之前本地分片的真实时长（仅探测前缀，带单片超时）。
 func (w *liveIngestWorker) measureSegmentPrefixDurationMS(ctx context.Context, material *model.LiveMaterial, startSeg int64) int64 {
 	if startSeg <= 0 {
 		return 0
-	}
-	durs := w.measureAllSegmentDurationsMS(ctx, material)
-	return liveingest.SumSegmentDurationsMS(durs, 0, int(startSeg))
-}
-
-// measureAllSegmentDurationsMS 按分片下标返回真实时长表；探测失败的片用标称时长填充，避免窗起点计算出现空洞。
-func (w *liveIngestWorker) measureAllSegmentDurationsMS(ctx context.Context, material *model.LiveMaterial) []int64 {
-	files := globLocalSegments(w.segmentDir(material))
-	if len(files) == 0 {
-		return nil
-	}
-	maxIdx := -1
-	type item struct {
-		idx  int
-		path string
-	}
-	items := make([]item, 0, len(files))
-	for _, f := range files {
-		idx, ok := parseLocalSegIndex(f)
-		if !ok || idx < 0 {
-			continue
-		}
-		items = append(items, item{idx: idx, path: f})
-		if idx > maxIdx {
-			maxIdx = idx
-		}
-	}
-	if maxIdx < 0 {
-		return nil
-	}
-	nominal := int64(model.LiveSegmentDurationSec) * 1000
-	if nominal <= 0 {
-		nominal = 6000
-	}
-	out := make([]int64, maxIdx+1)
-	for i := range out {
-		out[i] = nominal
 	}
 	prober := w.prober
 	if prober == nil {
 		prober = media.NewFFprobeProber("")
 	}
-	for _, it := range items {
-		tl, err := prober.ProbeMediaTimeline(ctx, it.path)
-		if err != nil {
+	nominal := int64(model.LiveSegmentDurationSec) * 1000
+	if nominal <= 0 {
+		nominal = 6000
+	}
+	dir := w.segmentDir(material)
+	byIdx := make(map[int]string)
+	for _, f := range globLocalSegments(dir) {
+		idx, ok := parseLocalSegIndex(f)
+		if !ok || idx < 0 || int64(idx) >= startSeg {
 			continue
 		}
-		if d := tl.DurationMS(); d > 0 {
-			out[it.idx] = d
+		byIdx[idx] = f
+	}
+	var sum int64
+	for i := int64(0); i < startSeg; i++ {
+		if p, ok := byIdx[int(i)]; ok {
+			sum += probeSegmentDurationMS(ctx, prober, p, nominal)
+		} else {
+			sum += nominal
 		}
 	}
-	return out
+	return sum
 }
 
 func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *model.LiveMaterial, duration int64) error {
