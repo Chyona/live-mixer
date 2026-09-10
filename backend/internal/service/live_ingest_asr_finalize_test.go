@@ -3,6 +3,9 @@ package service
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"live-mixer/internal/model"
 )
 
 func TestLocalASRPostprocessFallback_BuildsParagraphs(t *testing.T) {
@@ -30,5 +33,17 @@ func TestLocalASRPostprocessFallback_EmptyASR(t *testing.T) {
 	got := localASRPostprocessFallback("{}", 0)
 	if len(got.Paragraphs) != 0 || len(got.Summaries) != 0 {
 		t.Fatalf("got %#v, want empty", got)
+	}
+}
+
+func TestMaxWindowASRSegments(t *testing.T) {
+	// 10 分钟窗口 / 6 秒分片 = 100，再 +1 重叠余量。
+	got := maxWindowASRSegments()
+	want := int(model.LiveASRWindowDuration/time.Second)/model.LiveSegmentDurationSec + 1
+	if got != want {
+		t.Fatalf("maxWindowASRSegments() = %d, want %d", got, want)
+	}
+	if got < 50 {
+		t.Fatalf("maxWindowASRSegments() = %d, unexpectedly small", got)
 	}
 }

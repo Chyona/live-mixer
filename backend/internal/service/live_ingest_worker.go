@@ -407,6 +407,33 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 
 	var asrMu sync.Mutex
 	asrBusy := false
+	waitASRIdle := func() {
+		for {
+			asrMu.Lock()
+			idle := !asrBusy
+			asrMu.Unlock()
+			if idle {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+	}
+	runWindowASRExclusive := func() {
+		waitASRIdle()
+		asrMu.Lock()
+		asrBusy = true
+		asrMu.Unlock()
+		defer func() {
+			asrMu.Lock()
+			asrBusy = false
+			asrMu.Unlock()
+		}()
+		w.catchUpWindowASR(ctx, material)
+	}
 	scheduleWindowASR := func() {
 		asrMu.Lock()
 		if asrBusy {
@@ -431,6 +458,7 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 				asrBusy = false
 				asrMu.Unlock()
 			}()
+			// 定时窗只跑一窗（有分片上限）；积压留给后续调度或关播 catch-up。
 			_ = w.runWindowASR(ctx, material)
 		}()
 	}
@@ -494,7 +522,8 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 			zap.Int64("next_seg", material.NextSeg),
 			zap.Error(recErr),
 		)
-		_ = w.runWindowASR(ctx, material)
+		// 等进行中的窗口结束后再追平，避免与调度协程并发 Transcribe（重复计费）。
+		runWindowASRExclusive()
 		if recErr != nil && ctx.Err() != nil {
 			return recErr
 		}
@@ -564,7 +593,7 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {
 		return err
 	}
-	_ = w.runWindowASR(ctx, material)
+	w.catchUpWindowASR(ctx, material)
 	if err := w.finishASRPostprocess(ctx, material, dur); err != nil {
 		w.logger.Warn("关播 ASR 后处理失败，将保留 ended+processing 供重试",
 			zap.Uint("material_id", material.ID),
@@ -616,12 +645,23 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		)
 		return nil
 	}
+	// 关键：每窗最多送约一个窗口时长的分片。旧逻辑会把「游标→此刻」全部积压一次送去转写；
+	// 若游标未推进，会变成 10+20+30… 分钟平方累加计费。
+	maxSegs := maxWindowASRSegments()
+	truncated := false
+	if len(files) > maxSegs {
+		files = files[:maxSegs]
+		truncated = true
+	}
+	estBillMS := int64(len(files)) * int64(model.LiveSegmentDurationSec) * 1000
 	asrStart := time.Now()
 	w.logger.Info("开始窗口 ASR",
 		zap.Uint("material_id", material.ID),
 		zap.Int64("asr_cursor_ms", cursor),
 		zap.Int64("start_seg", startSeg),
 		zap.Int("segment_files", len(files)),
+		zap.Bool("truncated_to_window", truncated),
+		zap.Int64("est_bill_audio_ms", estBillMS),
 		zap.Int64("duration_ms", material.Duration),
 		zap.Int64("ingest_epoch", epoch),
 	)
@@ -682,7 +722,12 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		}
 	}
 	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, merged, newCursor, material.Duration, progress); err != nil {
-		w.logger.Warn("窗口 ASR 写库失败", zap.Uint("material_id", material.ID), zap.Int64("ingest_epoch", epoch), zap.Error(err))
+		w.logger.Warn("窗口 ASR 写库失败（厂商侧已计费，下一窗可能重复）",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("ingest_epoch", epoch),
+			zap.Int64("est_bill_audio_ms", estBillMS),
+			zap.Error(err),
+		)
 		return err
 	}
 	material.ASRCursorMS = newCursor
@@ -693,9 +738,57 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Duration("elapsed", time.Since(asrStart)),
 		zap.Int64("offset_ms", offsetMS),
 		zap.Int64("asr_cursor_ms", newCursor),
+		zap.Int64("est_bill_audio_ms", estBillMS),
 		zap.Int16("asr_progress", progress),
 	)
 	return nil
+}
+
+// catchUpWindowASR 连续跑窗口 ASR 直到追上录像游标或无法推进（关播收尾用）。
+func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model.LiveMaterial) {
+	const maxRounds = 128
+	for i := 0; i < maxRounds; i++ {
+		if ctx.Err() != nil {
+			return
+		}
+		before := material.ASRCursorMS
+		if err := w.runWindowASR(ctx, material); err != nil {
+			w.logger.Warn("窗口 ASR 追平中断",
+				zap.Uint("material_id", material.ID),
+				zap.Int("round", i),
+				zap.Error(err),
+			)
+			return
+		}
+		if material.ASRCursorMS <= before {
+			return
+		}
+		if material.Duration > 0 && material.ASRCursorMS >= material.Duration {
+			return
+		}
+	}
+	w.logger.Warn("窗口 ASR 追平达到轮次上限",
+		zap.Uint("material_id", material.ID),
+		zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+		zap.Int64("duration_ms", material.Duration),
+	)
+}
+
+// maxWindowASRSegments 单次送去转写的最大分片数（约等于一个调度窗口 + 1 片重叠余量）。
+func maxWindowASRSegments() int {
+	segSec := model.LiveSegmentDurationSec
+	if segSec <= 0 {
+		segSec = 6
+	}
+	windowSec := int(model.LiveASRWindowDuration / time.Second)
+	if windowSec <= 0 {
+		windowSec = 10 * 60
+	}
+	n := windowSec / segSec
+	if n < 1 {
+		n = 1
+	}
+	return n + 1
 }
 
 // measureSegmentPrefixDurationMS 累加 startSeg 之前本地分片的真实时长，作为窗口 ASR 时间原点。
