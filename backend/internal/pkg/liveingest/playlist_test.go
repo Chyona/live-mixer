@@ -38,12 +38,26 @@ func TestBuildEventPlaylist(t *testing.T) {
 
 func TestPreferStablePlaylistURL(t *testing.T) {
 	existing := "https://cdn.example/live.m3u8?sig=old"
-	uploaded := "https://cdn.example/live.m3u8?sig=new"
-	if got := PreferStablePlaylistURL(existing, uploaded); got != existing {
-		t.Errorf("got %s, want existing", got)
+	if got := PreferStablePlaylistURL(existing, "https://cdn.example/live.m3u8?sig=new"); got != existing {
+		t.Fatalf("PreferStablePlaylistURL = %q, want existing", got)
 	}
-	if got := PreferStablePlaylistURL("  ", uploaded); got != uploaded {
-		t.Errorf("got %s, want uploaded", got)
+	if got := PreferStablePlaylistURL("", "https://cdn.example/x.m3u8"); got != "https://cdn.example/x.m3u8" {
+		t.Fatalf("PreferStablePlaylistURL empty existing = %q", got)
+	}
+}
+
+func TestSealPlaylistAsVOD(t *testing.T) {
+	live := BuildEventPlaylist([]PlaylistItem{{DurationSec: 6, URL: "https://cdn.example/seg_00000.ts"}}, 6, false)
+	sealed := SealPlaylistAsVOD(live)
+	if !strings.Contains(sealed, "#EXT-X-ENDLIST") {
+		t.Fatalf("sealed missing ENDLIST: %s", sealed)
+	}
+	if !strings.Contains(sealed, "seg_00000.ts") {
+		t.Fatalf("sealed lost segment url: %s", sealed)
+	}
+	already := SealPlaylistAsVOD(sealed)
+	if strings.Count(already, "#EXT-X-ENDLIST") != 1 {
+		t.Fatalf("want single ENDLIST, got %s", already)
 	}
 }
 

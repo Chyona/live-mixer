@@ -60,6 +60,19 @@ func BuildEventPlaylist(items []PlaylistItem, targetDuration int, ended bool) st
 	return b.String()
 }
 
+// SealPlaylistAsVOD 若播放列表缺少 ENDLIST 则追加，强制按 VOD 从片头随机访问。
+// 跟播中上传的 EVENT 列表无 ENDLIST 时，ffmpeg 会从 live edge 起播，导致裁切内容与 ASR 时间轴错位。
+func SealPlaylistAsVOD(body string) string {
+	if strings.Contains(body, "#EXT-X-ENDLIST") {
+		return body
+	}
+	trimmed := strings.TrimRight(body, "\r\n \t")
+	if trimmed == "" {
+		return "#EXTM3U\n#EXT-X-ENDLIST\n"
+	}
+	return trimmed + "\n#EXT-X-ENDLIST\n"
+}
+
 // PreferStablePlaylistURL 播放列表对象会被反复覆盖，复用首次签名地址，避免前端每次轮询都换 URL 重建播放器。
 func PreferStablePlaylistURL(existing, uploaded string) string {
 	if u := strings.TrimSpace(existing); u != "" {

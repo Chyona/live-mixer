@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/liveingest"
 	"live-mixer/internal/pkg/media"
 
 	"go.uber.org/zap"
@@ -86,7 +88,19 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ReportProgress(15)
 
 	if skipDownload {
-		s.SourcePath = sourceURL
+		// 跟播中的 EVENT playlist 无 ENDLIST 时，ffmpeg 会从 live edge 起播。
+		// 先下载清单并 Seal 为 VOD，再按时间轴裁切，才能与本地 ASR 同源。
+		vodPath, err := p.materializeVODPlaylist(ctx, s, sourceURL)
+		if err != nil {
+			return err
+		}
+		s.SourcePath = vodPath
+		defer func() {
+			_ = os.Remove(vodPath)
+			if s.SourcePath == vodPath {
+				s.SourcePath = ""
+			}
+		}()
 	} else {
 		s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
 		stopHeartbeat := startDownloadHeartbeat(ctx, s)
@@ -109,6 +123,34 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ClipPaths = paths
 	s.ReportProgress(50)
 	return nil
+}
+
+// materializeVODPlaylist 下载远程 m3u8 并补 ENDLIST，返回本地路径供 ffmpeg 随机访问。
+func (p *Pipeline) materializeVODPlaylist(ctx context.Context, s *session.Session, sourceURL string) (string, error) {
+	dest := filepath.Join(s.StagingDir, "source_vod.m3u8")
+	if _, err := p.Downloader.Download(ctx, sourceURL, dest); err != nil {
+		return "", fmt.Errorf("下载跟播播放列表失败: %w", err)
+	}
+	raw, err := os.ReadFile(dest)
+	if err != nil {
+		_ = os.Remove(dest)
+		return "", fmt.Errorf("读取跟播播放列表失败: %w", err)
+	}
+	// 先删再写：CachingDownloader 可能硬链接到共享缓存，直接覆盖会污染缓存。
+	_ = os.Remove(dest)
+	sealed := liveingest.SealPlaylistAsVOD(string(raw))
+	hadEndlist := strings.Contains(string(raw), "#EXT-X-ENDLIST")
+	if err := os.WriteFile(dest, []byte(sealed), 0o644); err != nil {
+		_ = os.Remove(dest)
+		return "", fmt.Errorf("写入 VOD 播放列表失败: %w", err)
+	}
+	p.Logger.Info("已物化 VOD 播放列表供裁切",
+		zap.String("job_id", s.JobID),
+		zap.String("source_url", sourceURL),
+		zap.String("local_playlist", dest),
+		zap.Bool("appended_endlist", !hadEndlist),
+	)
+	return dest, nil
 }
 
 func resolveDraftSourceURL(m *model.LiveMaterial) string {

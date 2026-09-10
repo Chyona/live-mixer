@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"live-mixer/internal/draft/session"
@@ -107,7 +108,33 @@ func (mockDownloader) Download(ctx context.Context, url, dest string) (string, e
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	return dest, os.WriteFile(dest, []byte("source"), 0o644)
+	body := []byte("source")
+	if strings.Contains(strings.ToLower(url), ".m3u8") {
+		body = []byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6.000,\nhttps://cdn.example/seg_00000.ts\n")
+	}
+	return dest, os.WriteFile(dest, body, 0o644)
+}
+
+type recordingCutter struct {
+	mockCutter
+	inputs   []string
+	playlists []string
+}
+
+func (m *recordingCutter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	m.inputs = append(m.inputs, inputPath)
+	if b, err := os.ReadFile(inputPath); err == nil {
+		m.playlists = append(m.playlists, string(b))
+	}
+	return m.mockCutter.CutVideoSegment(ctx, inputPath, outputPath, startSec, endSec)
+}
+
+func (m *recordingCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	m.inputs = append(m.inputs, inputPath)
+	if b, err := os.ReadFile(inputPath); err == nil {
+		m.playlists = append(m.playlists, string(b))
+	}
+	return m.mockCutter.CutVideoSegmentFast(ctx, inputPath, outputPath, startSec, endSec)
 }
 
 func runCutPipeline(t *testing.T, clips []model.ClipRange, cutter *mockCutter) {
@@ -217,5 +244,61 @@ func TestProjectWantsCaptions(t *testing.T) {
 	}
 	if !projectWantsCaptions(&model.VideoProject{EnableCaptions: model.EnableCaptionsOn}) {
 		t.Fatal("on")
+	}
+}
+
+func TestPipeline_Run_SealsLivePlaylistAsVOD(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	cutter := &recordingCutter{}
+	s := &session.Session{
+		JobID: "job-hls",
+		Material: &model.LiveMaterial{
+			LiveStatus:        model.LiveStatusLive,
+			RecordPlaylistURL: "https://cdn.example/live.m3u8",
+		},
+		StagingDir: staging,
+		RecordDir:  filepath.Join(root, "record"),
+		Clips:      []model.ClipRange{{StartTime: 0, EndTime: 3000}},
+	}
+	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(cutter.inputs) != 1 {
+		t.Fatalf("cut inputs = %d, want 1", len(cutter.inputs))
+	}
+	got := cutter.inputs[0]
+	if !strings.HasSuffix(got, "source_vod.m3u8") {
+		t.Fatalf("cut input = %q, want local source_vod.m3u8", got)
+	}
+	if strings.HasPrefix(got, "http") {
+		t.Fatalf("should not cut from remote live URL: %s", got)
+	}
+	if len(cutter.playlists) != 1 || !strings.Contains(cutter.playlists[0], "#EXT-X-ENDLIST") {
+		t.Fatalf("cut-time playlist missing ENDLIST: %q", cutter.playlists)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "source_vod.m3u8")); !os.IsNotExist(err) {
+		t.Fatalf("source_vod.m3u8 should be cleaned up after Run, err=%v", err)
+	}
+}
+
+func TestMaterializeVODPlaylist_AppendsENDLIST(t *testing.T) {
+	root := t.TempDir()
+	s := &session.Session{JobID: "j", StagingDir: root}
+	p := NewPipeline(mockDownloader{}, &mockCutter{}, zap.NewNop())
+	path, err := p.materializeVODPlaylist(context.Background(), s, "https://cdn.example/live.m3u8")
+	if err != nil {
+		t.Fatalf("materializeVODPlaylist: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "#EXT-X-ENDLIST") {
+		t.Fatalf("missing ENDLIST: %s", body)
+	}
+	if !strings.Contains(string(body), "seg_00000.ts") {
+		t.Fatalf("lost segment: %s", body)
 	}
 }

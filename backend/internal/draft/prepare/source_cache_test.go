@@ -115,3 +115,19 @@ func TestCachingDownloader_EmptyCacheDirPassthrough(t *testing.T) {
 		t.Fatalf("inner downloads = %d, want 1", got)
 	}
 }
+
+func TestCachingDownloader_M3U8BypassesCache(t *testing.T) {
+	root := t.TempDir()
+	inner := &countingDownloader{}
+	d := NewCachingDownloader(inner, filepath.Join(root, SourceCacheSubDir), zap.NewNop())
+	url := "https://cdn.example/live.m3u8"
+	for i := 0; i < 2; i++ {
+		dest := filepath.Join(root, fmt.Sprintf("t%d", i), "source_vod.m3u8")
+		if _, err := d.Download(context.Background(), url, dest); err != nil {
+			t.Fatalf("Download %d: %v", i, err)
+		}
+	}
+	if got := inner.calls.Load(); got != 2 {
+		t.Fatalf("m3u8 should bypass cache, inner downloads = %d, want 2", got)
+	}
+}
