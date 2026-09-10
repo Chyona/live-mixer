@@ -15,6 +15,42 @@ func TestIsM3U8URL(t *testing.T) {
 	}
 }
 
+func TestHLSInputArgs_LocalM3U8AllowsHTTPS(t *testing.T) {
+	args := HLSInputArgs(`docker\html\staging\job\source_vod.m3u8`)
+	if len(args) < 2 || args[0] != "-protocol_whitelist" {
+		t.Fatalf("local m3u8 must set protocol_whitelist, got %v", args)
+	}
+	if !strings.Contains(args[1], "https") {
+		t.Fatalf("whitelist missing https: %v", args)
+	}
+	// 本地清单本身非 HTTP，不必强加 reconnect（分片拉流由 hls demuxer 处理）。
+	for _, a := range args {
+		if a == "-reconnect" {
+			t.Fatalf("unexpected reconnect on local m3u8: %v", args)
+		}
+	}
+}
+
+func TestHLSInputArgs_HTTPURLIncludesReconnect(t *testing.T) {
+	args := HLSInputArgs("https://cdn.example.com/live.m3u8")
+	found := false
+	for _, a := range args {
+		if a == "-reconnect" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("http m3u8 should include reconnect: %v", args)
+	}
+}
+
+func TestHLSInputArgs_LocalMP4Nil(t *testing.T) {
+	if got := HLSInputArgs("/tmp/source.mp4"); got != nil {
+		t.Fatalf("local mp4 should not add HLS args, got %v", got)
+	}
+}
+
 func TestProbeHLSPlaylist_Media(t *testing.T) {
 	body := `#EXTM3U
 #EXT-X-VERSION:3

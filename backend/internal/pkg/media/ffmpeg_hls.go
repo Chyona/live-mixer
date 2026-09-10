@@ -18,18 +18,25 @@ const (
 	segmentWatchInterval = 800 * time.Millisecond
 )
 
-// HLSInputArgs 在 -i 之前插入的 HLS/HTTP 重连参数。
+// HLSInputArgs 在 -i 之前插入的 HLS/HTTP 参数。
+// 本地 m3u8（如 seal 后的 source_vod.m3u8）分片常为 https，必须放宽 protocol_whitelist，
+// 否则 ffmpeg 默认只允许 file,crypto,data，会报 Protocol 'https' not on whitelist。
 func HLSInputArgs(input string) []string {
-	if !IsHTTPURL(input) {
+	if !IsHTTPURL(input) && !IsM3U8URL(input) {
 		return nil
 	}
-	return []string{
+	args := []string{
 		"-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-		"-reconnect", "1",
-		"-reconnect_streamed", "1",
-		"-reconnect_on_network_error", "1",
-		"-rw_timeout", "15000000",
 	}
+	if IsHTTPURL(input) {
+		args = append(args,
+			"-reconnect", "1",
+			"-reconnect_streamed", "1",
+			"-reconnect_on_network_error", "1",
+			"-rw_timeout", "15000000",
+		)
+	}
+	return args
 }
 
 func prependHLSInputArgs(args []string, input string) []string {
