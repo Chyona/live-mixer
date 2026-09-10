@@ -285,7 +285,8 @@ func apiJSON(ctx context.Context, client *http.Client, method, url, token string
 		return fmt.Errorf("HTTP %d 非 JSON: %s", resp.StatusCode, truncate(string(raw), 240))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || wrap.Code != 0 {
-		return fmt.Errorf("HTTP %d code=%d message=%s", resp.StatusCode, wrap.Code, firstNonEmpty(wrap.Message, truncate(string(raw), 240)))
+		msg := firstNonEmpty(wrap.Message, truncate(string(raw), 240))
+		return fmt.Errorf("%s → HTTP %d code=%d message=%s", url, resp.StatusCode, wrap.Code, msg)
 	}
 	if out == nil || len(wrap.Data) == 0 || string(wrap.Data) == "null" {
 		return nil

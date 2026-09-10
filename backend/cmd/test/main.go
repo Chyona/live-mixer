@@ -6,6 +6,7 @@
 //	live-window  — 拉取跟播 m3u8 分片，按当前窗口 ASR 逻辑转写并输出 JSON
 //	add-live     — 模拟 UI 添加「正在直播」源视频，轮询直至 ASR 推进
 //	one-click    — 对源视频发起一键成片（POST /v1/tasks/ai-slice-draft），轮询至完成
+//	live-e2e     — 直播 m3u8 → 跟播约 10 分钟 → 等 ASR → 一键成片（打真实 webserver）
 package main
 
 import (
@@ -18,7 +19,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "", "paragraphs | live-window | add-live | one-click")
+	mode := flag.String("mode", "", "paragraphs | live-window | add-live | one-click | live-e2e")
 	configPath := flag.String("config", "", "外部配置文件路径（可选；paragraphs/live-window）")
 	envFile := flag.String("env", "", "可选 .env 路径（默认尝试 docker/.env）")
 
@@ -56,6 +57,10 @@ func main() {
 	projectSource := flag.String("project-source", "timeline", "项目来源（one-click，默认 timeline）")
 	canvasW := flag.Int("canvas-width", 0, "画布宽（可选）")
 	canvasH := flag.Int("canvas-height", 0, "画布高（可选）")
+
+	// live-e2e
+	recordFor := flag.Duration("record-for", 10*time.Minute, "live-e2e：录像目标时长（按 duration_ms）")
+	skipOneClick := flag.Bool("skip-one-click", false, "live-e2e：录制+ASR 后不发起一键成片")
 	flag.Parse()
 
 	repoRoot := findRepoRoot()
@@ -171,8 +176,37 @@ func main() {
 			NoWait:       *noWait,
 			OutPath:      out,
 		})
+	case "live-e2e":
+		out := strings.TrimSpace(*outPath)
+		if out == "" {
+			out = "live_e2e_report.json"
+		}
+		wait := *waitFor
+		if wait <= 0 {
+			wait = *recordFor + 15*time.Minute
+		}
+		runLiveE2EMode(liveE2EArgs{
+			BaseURL:      httpBase,
+			Username:     *username,
+			Password:     *password,
+			Token:        *token,
+			Name:         *name,
+			M3U8URL:      strings.TrimSpace(*m3u8URL),
+			Remark:       *remark,
+			RecordFor:    *recordFor,
+			PollInterval: *pollEvery,
+			Wait:         wait,
+			PromptID:     uint(*promptID),
+			MaxClipMS:    *maxClipMS,
+			ProjectSrc:   *projectSource,
+			CanvasW:      *canvasW,
+			CanvasH:      *canvasH,
+			OneClickWait: 30 * time.Minute,
+			SkipOneClick: *skipOneClick,
+			OutPath:      out,
+		})
 	default:
-		fmt.Fprintf(os.Stderr, "未知 mode=%q，请用 paragraphs | live-window | add-live | one-click\n", resolved)
+		fmt.Fprintf(os.Stderr, "未知 mode=%q，请用 paragraphs | live-window | add-live | one-click | live-e2e\n", resolved)
 		os.Exit(2)
 	}
 }
