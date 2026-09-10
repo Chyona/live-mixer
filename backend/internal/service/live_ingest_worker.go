@@ -27,6 +27,9 @@ const (
 	liveIngestPollInterval       = 3 * time.Second
 	liveIngestHeartbeat          = 20 * time.Second
 	liveIngestProbeInterval      = 12 * time.Second
+	// 跟播进度诊断：避免每片刷屏，按片数或时间打点。
+	liveIngestProgressLogEverySegs = 50
+	liveIngestProgressLogInterval  = 60 * time.Second
 )
 
 // LiveIngestWorker 跟播长任务：探测 / 分片录像 / 窗口 ASR / 合成 mp4。
@@ -434,20 +437,28 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 		}()
 		w.catchUpWindowASR(ctx, material)
 	}
-	scheduleWindowASR := func() {
+	scheduleWindowASR := func(reason string) {
 		asrMu.Lock()
-		if asrBusy {
-			asrMu.Unlock()
+		busy := asrBusy
+		if !busy {
+			asrBusy = true
+		}
+		asrMu.Unlock()
+		if busy {
 			w.logger.Info("窗口 ASR 仍在执行，跳过本轮调度",
 				zap.Uint("material_id", material.ID),
+				zap.String("reason", reason),
+				zap.Bool("asr_busy", true),
 				zap.Int64("next_seg", material.NextSeg),
+				zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+				zap.Int64("duration_ms", material.Duration),
 			)
 			return
 		}
-		asrBusy = true
-		asrMu.Unlock()
 		w.logger.Info("调度窗口 ASR",
 			zap.Uint("material_id", material.ID),
+			zap.String("reason", reason),
+			zap.Bool("asr_busy", false),
 			zap.Int64("duration_ms", material.Duration),
 			zap.Int64("asr_cursor_ms", material.ASRCursorMS),
 			zap.Int64("next_seg", material.NextSeg),
@@ -504,8 +515,71 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 		startIndex := int(material.NextSeg)
 		windowDue := time.Now().Add(model.LiveASRWindowDuration)
 		var firstSegOnce sync.Once
+		var lastProgressLog time.Time
+		onSegDone := 0
+		var progressMu sync.Mutex
+
+		logRecordingProgress := func(trigger string, segIndex int, onSegElapsed time.Duration) {
+			progressMu.Lock()
+			defer progressMu.Unlock()
+			now := time.Now()
+			localLatest := latestLocalSegIndex(workDir)
+			next := material.NextSeg
+			lag := localLatest - (next - 1)
+			if next <= 0 {
+				lag = localLatest + 1
+			}
+			if lag < 0 {
+				lag = 0
+			}
+			dueIn := windowDue.Sub(now)
+			asrMu.Lock()
+			busy := asrBusy
+			asrMu.Unlock()
+			fields := []zap.Field{
+				zap.Uint("material_id", material.ID),
+				zap.String("trigger", trigger),
+				zap.Int64("next_seg", next),
+				zap.Int64("local_latest_seg", localLatest),
+				zap.Int64("upload_lag_segs", lag),
+				zap.Int64("duration_ms", material.Duration),
+				zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+				zap.Duration("window_due_in", dueIn),
+				zap.Bool("asr_busy", busy),
+			}
+			if segIndex >= 0 {
+				fields = append(fields, zap.Int("seg_index", segIndex))
+			}
+			if onSegElapsed > 0 {
+				fields = append(fields, zap.Duration("on_seg_elapsed", onSegElapsed))
+			}
+			w.logger.Info("跟播录像进度", fields...)
+			lastProgressLog = now
+		}
+
+		stopProgress := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(liveIngestProgressLogInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopProgress:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					progressMu.Lock()
+					due := lastProgressLog.IsZero() || time.Since(lastProgressLog) >= liveIngestProgressLogInterval
+					progressMu.Unlock()
+					if due {
+						logRecordingProgress("ticker", -1, 0)
+					}
+				}
+			}
+		}()
 
 		onSeg := func(index int, path string) {
+			segStart := time.Now()
 			firstSegOnce.Do(func() {
 				w.logger.Info("收到首个录像分片",
 					zap.Uint("material_id", material.ID),
@@ -536,9 +610,33 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, recordedMS, playlistURL)
 			material.NextSeg = next
 			material.Duration = recordedMS
-			if time.Now().After(windowDue) {
-				scheduleWindowASR()
+			onSegDone++
+			now := time.Now()
+			progressMu.Lock()
+			needBeat := lastProgressLog.IsZero() ||
+				onSegDone%liveIngestProgressLogEverySegs == 0 ||
+				now.Sub(lastProgressLog) >= liveIngestProgressLogInterval
+			progressMu.Unlock()
+			if needBeat {
+				logRecordingProgress("on_seg", index, now.Sub(segStart))
+			}
+			progressMu.Lock()
+			due := now.After(windowDue)
+			overdue := now.Sub(windowDue)
+			progressMu.Unlock()
+			if due {
+				w.logger.Info("窗口 ASR 调度到期",
+					zap.Uint("material_id", material.ID),
+					zap.Int64("next_seg", next),
+					zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+					zap.Int64("duration_ms", recordedMS),
+					zap.Duration("window_interval", model.LiveASRWindowDuration),
+					zap.Duration("overdue", overdue),
+				)
+				scheduleWindowASR("window_due")
+				progressMu.Lock()
 				windowDue = time.Now().Add(model.LiveASRWindowDuration)
+				progressMu.Unlock()
 			}
 		}
 
@@ -551,6 +649,7 @@ func (w *liveIngestWorker) recordAndFinalize(ctx context.Context, material *mode
 		)
 		recStart := time.Now()
 		recErr := w.ffmpeg.RecordHLSSegments(ctx, material.M3U8URL, workDir, startIndex, model.LiveSegmentDurationSec, onSeg)
+		close(stopProgress)
 		w.logger.Info("ffmpeg 录像会话结束",
 			zap.Uint("material_id", material.ID),
 			zap.Duration("elapsed", time.Since(recStart)),
@@ -646,6 +745,13 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 }
 
 func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
+	logStep := func(step string, fields ...zap.Field) {
+		base := []zap.Field{
+			zap.Uint("material_id", material.ID),
+			zap.String("step", step),
+		}
+		w.logger.Info("窗口 ASR 步骤", append(base, fields...)...)
+	}
 	if w.asrService == nil || w.audioPreparer == nil {
 		w.logger.Warn("窗口 ASR 跳过：ASR 服务或音频预处理未配置",
 			zap.Uint("material_id", material.ID),
@@ -677,15 +783,23 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		prober = media.NewFFprobeProber("")
 	}
 	nominalStart := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
+	logStep("resolve_start", zap.Int64("asr_cursor_ms", cursor), zap.Int64("nominal_start_seg", nominalStart))
+	resolveStart := time.Now()
 	startSeg, offsetMS, resErr := resolveWindowStartFast(ctx, prober, w.segmentDir(material), cursor, 1)
 	if resErr != nil {
 		w.logger.Info("窗口 ASR 跳过：无法定位起始分片",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("asr_cursor_ms", cursor),
+			zap.Duration("elapsed", time.Since(resolveStart)),
 			zap.Error(resErr),
 		)
 		return nil
 	}
+	logStep("resolve_ok",
+		zap.Int64("start_seg", startSeg),
+		zap.Int64("offset_ms", offsetMS),
+		zap.Duration("elapsed", time.Since(resolveStart)),
+	)
 	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
 	if len(files) == 0 {
 		w.logger.Info("窗口 ASR 跳过：起始分片之后无本地文件",
@@ -721,36 +835,64 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	)
 	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.mp3", cursor))
 	concatTS := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.ts", cursor))
+	logStep("concat_start", zap.Int("segment_files", len(files)))
+	concatStart := time.Now()
 	if err := w.ffmpeg.ConcatMediaFiles(ctx, files, concatTS); err != nil {
-		w.logger.Warn("窗口 ASR 拼接分片失败", zap.Uint("material_id", material.ID), zap.Error(err))
+		w.logger.Warn("窗口 ASR 拼接分片失败",
+			zap.Uint("material_id", material.ID),
+			zap.Duration("elapsed", time.Since(concatStart)),
+			zap.Error(err),
+		)
 		return err
 	}
 	defer os.Remove(concatTS)
+	logStep("concat_ok", zap.Duration("elapsed", time.Since(concatStart)))
 	// 只探测拼接结果一次，避免对窗内上百个 ts 逐个 ffprobe。
 	windowMediaMS := probeSegmentDurationMS(ctx, prober, concatTS, nominalWindowMS)
 	if windowMediaMS <= 0 {
 		windowMediaMS = nominalWindowMS
 	}
 	estBillMS := windowMediaMS
+	logStep("mp3_start", zap.Int64("window_media_ms", windowMediaMS))
+	mp3Start := time.Now()
 	if err := w.ffmpeg.ConvertToASRMP3(ctx, concatTS, tmpMP3); err != nil {
-		w.logger.Warn("窗口 ASR 转 MP3 失败", zap.Uint("material_id", material.ID), zap.Error(err))
+		w.logger.Warn("窗口 ASR 转 MP3 失败",
+			zap.Uint("material_id", material.ID),
+			zap.Duration("elapsed", time.Since(mp3Start)),
+			zap.Error(err),
+		)
 		return err
 	}
 	defer os.Remove(tmpMP3)
+	logStep("mp3_ok", zap.Duration("elapsed", time.Since(mp3Start)))
 	if w.storage == nil {
 		w.logger.Warn("窗口 ASR 跳过：对象存储未配置", zap.Uint("material_id", material.ID))
 		return nil
 	}
+	logStep("upload_start")
+	uploadStart := time.Now()
 	audioURL, err := w.storage.UploadFile(ctx, tmpMP3, fmt.Sprintf("%s/live-asr-%d-%d.mp3", storage.SubDirTemp, material.ID, cursor))
 	if err != nil {
-		w.logger.Warn("窗口 ASR 上传音频失败", zap.Uint("material_id", material.ID), zap.Error(err))
+		w.logger.Warn("窗口 ASR 上传音频失败",
+			zap.Uint("material_id", material.ID),
+			zap.Duration("elapsed", time.Since(uploadStart)),
+			zap.Error(err),
+		)
 		return err
 	}
+	logStep("upload_ok", zap.Duration("elapsed", time.Since(uploadStart)))
+	logStep("transcribe_start")
+	transcribeStart := time.Now()
 	raw, err := w.asrService.Transcribe(ctx, audioURL)
 	if err != nil {
-		w.logger.Warn("窗口 ASR 识别失败，跳过本窗", zap.Uint("material_id", material.ID), zap.Error(err))
+		w.logger.Warn("窗口 ASR 识别失败，跳过本窗",
+			zap.Uint("material_id", material.ID),
+			zap.Duration("elapsed", time.Since(transcribeStart)),
+			zap.Error(err),
+		)
 		return nil
 	}
+	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
 	merged, _, err := asr.MergeWindowASR(material.LiveASR, raw, offsetMS, cursor)
 	if err != nil {
 		w.logger.Warn("窗口 ASR 合并失败", zap.Uint("material_id", material.ID), zap.Error(err))
@@ -774,11 +916,14 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			progress = 99
 		}
 	}
+	logStep("db_start", zap.Int64("asr_cursor_ms", newCursor), zap.Int16("asr_progress", progress))
+	dbStart := time.Now()
 	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, merged, newCursor, material.Duration, progress); err != nil {
 		w.logger.Warn("窗口 ASR 写库失败（厂商侧已计费，下一窗可能重复）",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("ingest_epoch", epoch),
 			zap.Int64("est_bill_audio_ms", estBillMS),
+			zap.Duration("elapsed", time.Since(dbStart)),
 			zap.Error(err),
 		)
 		return err
@@ -802,7 +947,14 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model.LiveMaterial) {
 	const maxRounds = 128
 	for i := 0; i < maxRounds; i++ {
-		if ctx.Err() != nil {
+		if err := ctx.Err(); err != nil {
+			w.logger.Warn("窗口 ASR 追平因上下文取消退出",
+				zap.Uint("material_id", material.ID),
+				zap.Int("round", i),
+				zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+				zap.Int64("duration_ms", material.Duration),
+				zap.Error(err),
+			)
 			return
 		}
 		before := material.ASRCursorMS
@@ -1143,6 +1295,26 @@ func globLocalSegments(dir string) []string {
 	matches, _ := filepath.Glob(filepath.Join(dir, "seg_*.ts"))
 	sort.Strings(matches)
 	return matches
+}
+
+// latestLocalSegIndex 返回目录中最大 seg 序号；无分片时为 -1。
+// 用于对比 ffmpeg 已写盘进度与 onSeg 上传进度（upload_lag_segs）。
+func latestLocalSegIndex(dir string) int64 {
+	matches, err := filepath.Glob(filepath.Join(dir, "seg_*.ts"))
+	if err != nil || len(matches) == 0 {
+		return -1
+	}
+	max := int64(-1)
+	for _, p := range matches {
+		idx, ok := parseLocalSegIndex(p)
+		if !ok {
+			continue
+		}
+		if int64(idx) > max {
+			max = int64(idx)
+		}
+	}
+	return max
 }
 
 func globLocalSegmentsFrom(dir string, startIndex int) []string {

@@ -56,3 +56,19 @@ func TestResolveWindowStartFast_StopsAtCursor(t *testing.T) {
 		t.Fatalf("offset=%d want %d", off, 9*5900)
 	}
 }
+
+func TestLatestLocalSegIndex(t *testing.T) {
+	dir := t.TempDir()
+	if got := latestLocalSegIndex(dir); got != -1 {
+		t.Fatalf("empty dir got %d want -1", got)
+	}
+	for _, i := range []int{0, 3, 12} {
+		p := filepath.Join(dir, fmt.Sprintf("seg_%05d.ts", i))
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := latestLocalSegIndex(dir); got != 12 {
+		t.Fatalf("got %d want 12", got)
+	}
+}
