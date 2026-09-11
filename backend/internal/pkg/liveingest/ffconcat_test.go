@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+func TestQuoteFFConcatPath_WindowsStyle(t *testing.T) {
+	got := quoteFFConcatPath(`E:\workspace\GitHub\live-mixer\seg_00000.ts`)
+	want := `'E:/workspace/GitHub/live-mixer/seg_00000.ts'`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	// 不得出现 Go strconv.Quote 那种 \"E:\\\\...\" 形态。
+	if strings.Contains(got, `\\`) || strings.HasPrefix(got, `"`) {
+		t.Fatalf("must not use Go double-quote escaping: %q", got)
+	}
+}
+
 func TestWriteFFConcatList(t *testing.T) {
 	dir := t.TempDir()
 	seg0 := filepath.Join(dir, "seg_00000.ts")
@@ -31,6 +43,13 @@ func TestWriteFFConcatList(t *testing.T) {
 	}
 	if !strings.Contains(s, "seg_00000.ts") || !strings.Contains(s, "seg_00001.ts") {
 		t.Fatalf("missing files: %s", s)
+	}
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) < 3 || !strings.HasPrefix(lines[1], "file '") || !strings.HasSuffix(lines[1], "'") {
+		t.Fatalf("want single-quoted file line, got %q", lines)
+	}
+	if strings.Contains(lines[1], `\\`) {
+		t.Fatalf("Windows path must use forward slashes, got %q", lines[1])
 	}
 }
 

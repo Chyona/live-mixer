@@ -258,16 +258,23 @@ func (c *FFmpegConverter) runCutVideo(ctx context.Context, inputPath, outputPath
 }
 
 // preciseCutCoarseBackSec 精确裁剪时先按输入 -ss 回退的秒数，再在解码侧微调。
-// 对 HLS/远程源：避免「纯 -ss 在 -i 之后」从片头解码到起点（草稿极慢）；
-// 对本地文件：同样用混合定位，兼顾速度与帧精度。
+// 对可索引的单文件（mp4）：混合定位兼顾速度与帧精度。
+// 对 ffconcat/m3u8：禁止输入侧 -ss（TS concat 无可靠全局时间索引，粗 seek 会切错内容但时长仍对，表现为字幕 map 准、听感中后段全错）。
 const preciseCutCoarseBackSec = 15.0
 
+// requiresOutputSideSeekOnly 多段 TS concat / HLS 清单只能在 -i 之后 -ss，从片头解码定位。
+func requiresOutputSideSeekOnly(inputPath string) bool {
+	lower := strings.ToLower(strings.TrimSpace(inputPath))
+	if strings.HasSuffix(lower, ".ffconcat") || strings.HasSuffix(lower, ".concat.txt") {
+		return true
+	}
+	return IsM3U8URL(inputPath)
+}
+
 // buildCutVideoArgs 构建精确裁剪参数列表，便于单元测试校验。
-// 采用「输入粗定位 + 输出精定位」：
-//   - 先 -ss (start-15s) -i … 快速靠近目标（HLS 友好）；
-//   - 再 -ss 15 -t dur 解码侧落到精确起点并重编码。
+// 单文件：输入粗定位 + 输出精定位（start≥15s）。
+// concat/m3u8：始终 -i 后 -ss（与「片头几秒」同一路径，保证与 ASR 媒体轴一致）。
 //
-// start < 15s 时仍用 -i 后 -ss，从文件头精确解码（成本可接受）。
 // -map 0:a:0? 表示音频轨可选。
 func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) []string {
 	dur := endSec - startSec
@@ -275,7 +282,7 @@ func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) [
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
 	}
-	if startSec >= preciseCutCoarseBackSec {
+	if startSec >= preciseCutCoarseBackSec && !requiresOutputSideSeekOnly(inputPath) {
 		args = append(args,
 			"-ss", formatFFmpegSeconds(startSec-preciseCutCoarseBackSec),
 			"-i", inputPath,
@@ -301,21 +308,32 @@ func buildCutVideoArgs(inputPath, outputPath string, startSec, endSec float64) [
 }
 
 // buildCutVideoFastArgs 构建关键帧快速裁剪参数：流拷贝、不重编码。
-// -ss 在 -i 之前按关键帧定位；-c copy 直接拷贝音视频包。
+// 单文件：-ss 在 -i 之前；concat/m3u8：-ss 在 -i 之后，避免输入侧错误粗定位。
 func buildCutVideoFastArgs(inputPath, outputPath string, startSec, endSec float64) []string {
-	return []string{
+	args := []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
-		"-ss", formatFFmpegSeconds(startSec),
-		"-i", inputPath,
-		"-t", formatFFmpegSeconds(endSec - startSec),
+	}
+	if requiresOutputSideSeekOnly(inputPath) {
+		args = append(args,
+			"-i", inputPath,
+			"-ss", formatFFmpegSeconds(startSec),
+		)
+	} else {
+		args = append(args,
+			"-ss", formatFFmpegSeconds(startSec),
+			"-i", inputPath,
+		)
+	}
+	return append(args,
+		"-t", formatFFmpegSeconds(endSec-startSec),
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
 		"-c", "copy",
 		"-avoid_negative_ts", "make_zero",
 		"-movflags", "+faststart",
 		outputPath,
-	}
+	)
 }
 
 // formatFFmpegSeconds 将秒数格式化为 ffmpeg 可接受的小数秒字符串。

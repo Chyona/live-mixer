@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/liveingest"
 	"live-mixer/internal/pkg/media"
 )
 
-// resolveWindowStartFast 按真实分片时长定位窗口起点。
-// cursor=0 时直接返回 0；否则按分片下标递增探测，覆盖 cursor 后立即停止。
-// 禁止对「全部历史分片」做全量 ffprobe——长直播时会卡死 asrBusy，导致进度一直 0%。
+// resolveWindowStartFast 按 MediaTimelineIndex 定位窗口起点（Index 轴）。
+// cursor=0 时直接返回 0；否则 Resolve(cursor) 得 seg，再按 overlap 回退片起点。
+// 无索引或索引过短时回退逐片探测（并写回 Index）。
 func resolveWindowStartFast(
 	ctx context.Context,
 	prober media.MediaTimelineProber,
@@ -26,24 +27,48 @@ func resolveWindowStartFast(
 	if len(files) == 0 {
 		return 0, 0, fmt.Errorf("无本地分片")
 	}
-	if prober == nil {
-		prober = media.NewFFprobeProber("")
-	}
 	nominal := int64(model.LiveSegmentDurationSec) * 1000
 	if nominal <= 0 {
 		nominal = 6000
 	}
 
+	idx := loadTimelineIndex(dir)
+	// 仅当 sidecar 已有真实分片时长时走 Index；空索引不填标称网格（避免与探针路径分叉）。
+	if len(idx.Segs) > 0 && idx.TotalMS > 0 {
+		resolveAt := cursorMS
+		if resolveAt >= idx.TotalMS {
+			resolveAt = idx.TotalMS - 1
+			if resolveAt < 0 {
+				resolveAt = 0
+			}
+		}
+		seg, _, ok := idx.Resolve(resolveAt)
+		if ok {
+			start := seg
+			if overlapSegs > 0 {
+				start -= int64(overlapSegs)
+				if start < 0 {
+					start = 0
+				}
+			}
+			return start, idx.CumStartMS(start), nil
+		}
+	}
+
+	// 回退：逐片探测并写回 Index。
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
 	byIdx := make(map[int]string, len(files))
 	maxIdx := -1
 	for _, f := range files {
-		idx, ok := parseLocalSegIndex(f)
-		if !ok || idx < 0 {
+		idxN, ok := parseLocalSegIndex(f)
+		if !ok || idxN < 0 {
 			continue
 		}
-		byIdx[idx] = f
-		if idx > maxIdx {
-			maxIdx = idx
+		byIdx[idxN] = f
+		if idxN > maxIdx {
+			maxIdx = idxN
 		}
 	}
 	if maxIdx < 0 {
@@ -57,6 +82,7 @@ func resolveWindowStartFast(
 		dur := nominal
 		if p, ok := byIdx[i]; ok {
 			dur = probeSegmentDurationMS(ctx, prober, p, nominal)
+			liveingest.UpsertSegDuration(dir, int64(i), dur, nominal)
 		}
 		durs[i] = dur
 		if cum+dur > cursorMS {
@@ -83,6 +109,37 @@ func resolveWindowStartFast(
 		off += d
 	}
 	return start, off, nil
+}
+
+// ensureIndexCoversFiles 用标称时长补齐已落盘分片的最大下标，便于 Resolve。
+func ensureIndexCoversFiles(idx *liveingest.MediaTimelineIndex, files []string) {
+	if idx == nil {
+		return
+	}
+	maxIdx := int64(-1)
+	for _, f := range files {
+		n, ok := parseLocalSegIndex(f)
+		if ok && int64(n) > maxIdx {
+			maxIdx = int64(n)
+		}
+	}
+	if maxIdx < 0 {
+		return
+	}
+	if len(idx.Segs) == 0 || idx.Segs[len(idx.Segs)-1].Index < maxIdx {
+		d := idx.NominalSegMS
+		if d <= 0 {
+			d = 6000
+		}
+		// 若该片已有真实时长则保留。
+		for _, s := range idx.Segs {
+			if s.Index == maxIdx && s.DurMS > 0 {
+				d = s.DurMS
+				break
+			}
+		}
+		idx.SetDuration(maxIdx, d)
+	}
 }
 
 func probeSegmentDurationMS(ctx context.Context, prober media.MediaTimelineProber, path string, fallback int64) int64 {

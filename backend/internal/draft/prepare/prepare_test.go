@@ -115,6 +115,15 @@ func (mockDownloader) Download(ctx context.Context, url, dest string) (string, e
 	return dest, os.WriteFile(dest, body, 0o644)
 }
 
+type recordingDownloader struct {
+	urls []string
+}
+
+func (d *recordingDownloader) Download(ctx context.Context, url, dest string) (string, error) {
+	d.urls = append(d.urls, url)
+	return mockDownloader{}.Download(ctx, url, dest)
+}
+
 type recordingCutter struct {
 	mockCutter
 	inputs   []string
@@ -303,7 +312,7 @@ func TestMaterializeVODPlaylist_AppendsENDLIST(t *testing.T) {
 	}
 }
 
-func TestPipeline_Run_PrefersLocalConcatOverRemoteM3U8(t *testing.T) {
+func TestPipeline_Run_PrefersLocalTimelineIndexOverRemoteM3U8(t *testing.T) {
 	root := t.TempDir()
 	ingest := filepath.Join(root, "ingest")
 	if err := os.MkdirAll(ingest, 0o755); err != nil {
@@ -328,7 +337,38 @@ func TestPipeline_Run_PrefersLocalConcatOverRemoteM3U8(t *testing.T) {
 	if err := p.Run(context.Background(), s); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "source_local.ffconcat") {
-		t.Fatalf("want local ffconcat cut, got %v", cutter.inputs)
+	if s.SourceMode != "local_timeline_index" {
+		t.Fatalf("SourceMode=%q want local_timeline_index", s.SourceMode)
+	}
+	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "seg_00000.ts") {
+		t.Fatalf("want single-seg cut, got %v", cutter.inputs)
+	}
+}
+
+func TestPipeline_Run_PreferFinalMP4WhenEnded(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	cutter := &recordingCutter{}
+	dl := &recordingDownloader{}
+	s := &session.Session{
+		JobID: "job-ended",
+		Material: &model.LiveMaterial{
+			LiveStatus: model.LiveStatusEnded,
+			URLType:    model.URLTypeFile,
+			LiveURL:    "https://cdn.example/final.mp4",
+		},
+		StagingDir: staging,
+		RecordDir:  filepath.Join(root, "record"),
+		Clips:      []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+	}
+	p := NewPipeline(dl, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.SourceMode != "final_mp4" {
+		t.Fatalf("SourceMode=%q want final_mp4", s.SourceMode)
+	}
+	if len(dl.urls) != 1 || dl.urls[0] != "https://cdn.example/final.mp4" {
+		t.Fatalf("download urls=%v", dl.urls)
 	}
 }

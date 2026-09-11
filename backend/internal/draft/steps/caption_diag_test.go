@@ -143,6 +143,13 @@ func TestClassifyCaptionDiag(t *testing.T) {
 	if layer != "L1_window_boundary" {
 		t.Fatalf("layer = %q, want L1_window_boundary", layer)
 	}
+	layer, _ = classifyCaptionDiag(CaptionDiagSummary{
+		ClipCount: 5, CaptionCount: 10, SuspectContentClips: 2,
+		MapErrMSP90Abs: 0, SuspectMapRatio: 0,
+	})
+	if layer != "content_seek_mismatch" {
+		t.Fatalf("layer = %q, want content_seek_mismatch", layer)
+	}
 }
 
 func TestBuildCaptionDiagObjectKey(t *testing.T) {

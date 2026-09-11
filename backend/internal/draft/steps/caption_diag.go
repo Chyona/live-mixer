@@ -16,6 +16,7 @@ import (
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
 	"live-mixer/internal/pkg/capcutmate"
+	"live-mixer/internal/pkg/liveingest"
 	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/storage"
 
@@ -27,12 +28,15 @@ const (
 	captionDiagMapErrSuspect  = 50   // |map_err_ms| 超过则计入映射异常
 	captionDiagDeltaSuspectMS = 300  // |delta_ms| 超过则计入裁切时长嫌疑
 	captionDiagMaxSkewMS      = 2500 // 与 resolveClipDraftDurationMS 一致
+	captionDiagOnsetSuspectMS = 120  // |onset_shift_ms| 超过则 suspect_content
+	captionDiagOnsetWindowMS  = 400  // 片头抽样音频长度
 )
 
 // CaptionDiagReport 字幕/音画对齐诊断报告（方案 A）。
 type CaptionDiagReport struct {
 	JobID           string             `json:"job_id"`
 	SourceURL       string             `json:"source_url,omitempty"`
+	SourceMode      string             `json:"source_mode,omitempty"`
 	CutMode         string             `json:"cut_mode"`
 	FastKeyframe    bool               `json:"fast_keyframe"`
 	TotalWantMS     int64              `json:"total_want_ms"`
@@ -45,18 +49,20 @@ type CaptionDiagReport struct {
 
 // CaptionDiagClip 单段切片时长对比。
 type CaptionDiagClip struct {
-	Index         int     `json:"index"`
-	Path          string  `json:"path,omitempty"`
-	SourceStartMS int64   `json:"source_start_ms"`
-	SourceEndMS   int64   `json:"source_end_ms"`
-	WantMS        int64   `json:"want_ms"`
-	ActualMS      int64   `json:"actual_ms"`
-	DeltaMS       int64   `json:"delta_ms"`
-	DraftStartUS  int64   `json:"draft_start_us"`
-	DraftEndUS    int64   `json:"draft_end_us"`
-	Scale         float64 `json:"scale"`
-	UsedProbe     bool    `json:"used_probe"`
-	SuspectCut    bool    `json:"suspect_cut"`
+	Index          int    `json:"index"`
+	Path           string `json:"path,omitempty"`
+	SourceStartMS  int64  `json:"source_start_ms"`
+	SourceEndMS    int64  `json:"source_end_ms"`
+	WantMS         int64  `json:"want_ms"`
+	ActualMS       int64  `json:"actual_ms"`
+	DeltaMS        int64  `json:"delta_ms"`
+	DraftStartUS   int64  `json:"draft_start_us"`
+	DraftEndUS     int64  `json:"draft_end_us"`
+	Scale          float64 `json:"scale"`
+	UsedProbe      bool   `json:"used_probe"`
+	SuspectCut     bool   `json:"suspect_cut"`
+	OnsetShiftMS   *int64 `json:"onset_shift_ms,omitempty"`
+	SuspectContent bool   `json:"suspect_content"`
 }
 
 // CaptionDiagItem 单条字幕映射误差。
@@ -78,6 +84,7 @@ type CaptionDiagSummary struct {
 	ClipCount              int     `json:"clip_count"`
 	CaptionCount           int     `json:"caption_count"`
 	SuspectCutClips        int     `json:"suspect_cut_clips"`
+	SuspectContentClips    int     `json:"suspect_content_clips"`
 	SuspectMapCaptions     int     `json:"suspect_map_captions"`
 	SuspectMapRatio        float64 `json:"suspect_map_ratio"`
 	DeltaMSMedian          int64   `json:"delta_ms_median"`
@@ -196,6 +203,7 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 		JobID:           s.JobID,
 		CutMode:         s.CutMode,
 		FastKeyframe:    s.FastKeyframe,
+		SourceMode:      s.SourceMode,
 		CaptionsEnabled: true,
 		Clips:           make([]CaptionDiagClip, 0, len(s.ClipPlacements)),
 		Captions:        make([]CaptionDiagItem, 0, len(mapped)),
@@ -208,6 +216,9 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 		if report.SourceURL == "" {
 			report.SourceURL = s.Material.ProcessMediaURL()
 		}
+	}
+	if report.SourceMode == "" && media.IsM3U8URL(report.SourceURL) {
+		report.SourceMode = "remote_hls"
 	}
 
 	deltas := make([]int64, 0, len(s.ClipPlacements))
@@ -245,6 +256,8 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 			report.Summary.SuspectCutClips++
 		}
 	}
+
+	fillOnsetContentChecks(ctx, s, report)
 
 	mapErrsAbs := make([]int64, 0, len(mapped))
 	for _, m := range mapped {
@@ -305,18 +318,148 @@ func probeClipActualMS(ctx context.Context, prober media.MediaTimelineProber, lo
 	return actual, true
 }
 
+// fillOnsetContentChecks 抽样校验裁切片头与源 [source_start, +T) 的 onset 偏移。
+func fillOnsetContentChecks(ctx context.Context, s *session.Session, report *CaptionDiagReport) {
+	if s == nil || report == nil || len(report.Clips) == 0 {
+		return
+	}
+	sampleIdx := selectOnsetSampleIndices(report.Clips)
+	if len(sampleIdx) == 0 {
+		return
+	}
+	tmpDir := filepath.Join(s.StagingDir, "onset_diag")
+	_ = os.MkdirAll(tmpDir, 0o755)
+	defer os.RemoveAll(tmpDir)
+
+	durSec := float64(captionDiagOnsetWindowMS) / 1000.0
+	for _, i := range sampleIdx {
+		if i < 0 || i >= len(report.Clips) {
+			continue
+		}
+		clipPath := ""
+		if i < len(s.ClipPaths) {
+			clipPath = s.ClipPaths[i]
+		}
+		if clipPath == "" {
+			continue
+		}
+		refInput, refStartSec, ok := resolveOnsetRefInput(s, report.Clips[i].SourceStartMS)
+		if !ok {
+			continue
+		}
+		refRaw := filepath.Join(tmpDir, fmt.Sprintf("ref_%d.pcm", i))
+		clipRaw := filepath.Join(tmpDir, fmt.Sprintf("clip_%d.pcm", i))
+		octx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		errRef := media.ExtractMonoPCM16Window(octx, "", refInput, refRaw, refStartSec, durSec, media.OnsetSampleRate)
+		errClip := media.ExtractMonoPCM16Window(octx, "", clipPath, clipRaw, 0, durSec, media.OnsetSampleRate)
+		cancel()
+		if errRef != nil || errClip != nil {
+			continue
+		}
+		refPCM, err1 := media.ReadPCM16File(refRaw)
+		clipPCM, err2 := media.ReadPCM16File(clipRaw)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		shift, ok := media.OnsetShiftMS(refPCM, clipPCM, media.OnsetSampleRate, 200)
+		if !ok {
+			continue
+		}
+		v := shift
+		report.Clips[i].OnsetShiftMS = &v
+		if absInt64(shift) > captionDiagOnsetSuspectMS {
+			report.Clips[i].SuspectContent = true
+			report.Summary.SuspectContentClips++
+		}
+	}
+}
+
+// selectOnsetSampleIndices 抽样：首/中/末 + |source_start| 最大的几段。
+func selectOnsetSampleIndices(clips []CaptionDiagClip) []int {
+	n := len(clips)
+	if n == 0 {
+		return nil
+	}
+	set := map[int]struct{}{}
+	add := func(i int) {
+		if i >= 0 && i < n {
+			set[i] = struct{}{}
+		}
+	}
+	add(0)
+	add(n / 2)
+	add(n - 1)
+	type pair struct{ i int; start int64 }
+	arr := make([]pair, n)
+	for i, c := range clips {
+		arr[i] = pair{i: i, start: c.SourceStartMS}
+	}
+	sort.Slice(arr, func(a, b int) bool { return absInt64(arr[a].start) > absInt64(arr[b].start) })
+	for k := 0; k < 3 && k < len(arr); k++ {
+		add(arr[k].i)
+	}
+	out := make([]int, 0, len(set))
+	for i := range set {
+		out = append(out, i)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// resolveOnsetRefInput 解析用于 onset 对照的源媒体与片内起点（秒）。
+func resolveOnsetRefInput(s *session.Session, sourceStartMS int64) (input string, startSec float64, ok bool) {
+	if s == nil {
+		return "", 0, false
+	}
+	dir := strings.TrimSpace(s.LocalIngestDir)
+	if dir != "" && len(liveingest.GlobLocalSegments(dir)) > 0 {
+		nominal := int64(model.LiveSegmentDurationSec) * 1000
+		idx := liveingest.LoadMediaTimelineIndex(dir, nominal)
+		spans, err := idx.Range(sourceStartMS, sourceStartMS+int64(captionDiagOnsetWindowMS))
+		if err == nil && len(spans) > 0 {
+			spans = liveingest.AttachFilePaths(dir, spans)
+			if st, err := os.Stat(spans[0].FilePath); err == nil && st.Size() > 0 {
+				return spans[0].FilePath, float64(spans[0].OffsetMS) / 1000.0, true
+			}
+		}
+	}
+	src := strings.TrimSpace(s.SourcePath)
+	if src != "" {
+		if st, err := os.Stat(src); err == nil && !st.IsDir() && st.Size() > 0 {
+			return src, float64(sourceStartMS) / 1000.0, true
+		}
+		// SourcePath 可能是 ingest 目录
+		if st, err := os.Stat(src); err == nil && st.IsDir() {
+			final := filepath.Join(src, "final.mp4")
+			if st2, err := os.Stat(final); err == nil && st2.Size() > 0 {
+				return final, float64(sourceStartMS) / 1000.0, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
 func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 	cutHeavy := sum.ClipCount > 0 && float64(sum.SuspectCutClips)/float64(sum.ClipCount) >= 0.2 &&
 		sum.DeltaMSP90 >= captionDiagDeltaSuspectMS
 	mapHeavy := sum.SuspectMapRatio >= 0.1 || sum.MapErrMSP90Abs >= captionDiagMapErrSuspect
 	windowGapHeavy := sum.ASRWindowGapCount > 0 && sum.ASRMaxWindowGapMS >= 3000
+	contentHeavy := sum.ClipCount > 0 && sum.SuspectContentClips > 0 &&
+		(sum.SuspectContentClips >= 2 || float64(sum.SuspectContentClips)/float64(sum.ClipCount) >= 0.3)
 
 	switch {
 	case sum.CaptionCount == 0 && sum.ClipCount == 0:
 		return "none", "无切片与字幕，无法判断对齐"
-	case windowGapHeavy && !cutHeavy && !mapHeavy:
+	case contentHeavy && !mapHeavy:
+		return "content_seek_mismatch", "片头 onset 校验显示裁切内容与源起点错位（map 可能仍自洽）；优先修 seg+offset / seek"
+	case contentHeavy && mapHeavy:
+		return "content_seek_mismatch", "onset 与映射误差同时异常，优先排查裁切内容错位"
+	case windowGapHeavy && !cutHeavy && !mapHeavy && !contentHeavy:
 		return "L1_window_boundary", "live_asr 在窗口边界附近出现异常空隙/跳跃，优先怀疑窗口 ASR 起点用标称 6s 反推导致跳段"
 	case sum.CaptionCount == 0:
+		if contentHeavy {
+			return "content_seek_mismatch", "无字幕条目；onset 显示裁切内容错位"
+		}
 		if cutHeavy {
 			return "L2_cut", "无字幕条目；多段 actual-want 偏差偏大，优先怀疑裁切起点/时长"
 		}
@@ -333,7 +476,7 @@ func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 	case windowGapHeavy:
 		return "L1_window_boundary", "草稿映射自洽，但源 ASR 在窗口边界有异常空隙；成片若选中边界后片段会整体错位"
 	default:
-		return "ok_or_mild", "统计未显示明显成簇异常；若体感仍不齐：①源视频 10 分钟窗后是否已错（L1）②仅成片错则查裁切内容平移（需 onset）"
+		return "ok_or_mild", "统计未显示明显成簇异常；若体感仍不齐：①源视频 10 分钟窗后是否已错（L1）②仅成片错则查裁切内容平移（onset）"
 	}
 }
 

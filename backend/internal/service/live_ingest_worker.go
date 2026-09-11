@@ -847,17 +847,26 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	if windowMediaMS <= 0 {
 		windowMediaMS = nominalWindowMS
 	}
-	// 与剪辑源 live.m3u8 EXTINF 对齐：优先用分片 sidecar 累计时长作为时间轴。
-	timelineMS := windowTimelineMS(w.segmentDir(material), files, windowMediaMS, int64(model.LiveSegmentDurationSec)*1000)
+	// Index 轴窗长：词戳/游标/target 全部绑定 Index，不以厂商 duration 或偏长 EXTINF 拉伸。
+	idx := loadTimelineIndex(w.segmentDir(material))
+	ensureIndexCoversFiles(idx, files)
+	endSegExclusive := startSeg + int64(len(files))
+	indexWindowMS := idx.WindowMS(startSeg, endSegExclusive)
+	if indexWindowMS <= 0 {
+		indexWindowMS = windowTimelineMS(w.segmentDir(material), files, windowMediaMS, int64(model.LiveSegmentDurationSec)*1000)
+	}
+	timelineMS := indexWindowMS
 	if timelineMS <= 0 {
 		timelineMS = windowMediaMS
 	}
-	estBillMS := timelineMS
-	targetDurSec := float64(windowMediaMS) / 1000.0
+	// 以 Index 窗长为 Target；concat 仅作抽音源。偏差大则告警，不拉伸词戳。
+	targetWindowMS := timelineMS
+	estBillMS := targetWindowMS
+	targetDurSec := float64(targetWindowMS) / 1000.0
 	align := media.ASRAlignOptions{TargetDurSec: targetDurSec}
 	if w.prober != nil {
 		if tl, err := w.prober.ProbeMediaTimeline(ctx, concatTS); err != nil {
-			w.logger.Warn("窗口 ASR 探测 concat 时间轴失败，仅按媒体时长封口抽音",
+			w.logger.Warn("窗口 ASR 探测 concat 时间轴失败，仅按 Index 窗长封口抽音",
 				zap.Uint("material_id", material.ID),
 				zap.Error(err),
 			)
@@ -865,15 +874,14 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			opts := tl.AlignOptions()
 			align.LeadPadMs = opts.LeadPadMs
 			align.TrimStartSec = opts.TrimStartSec
-			// 封口到 concat 真实媒体时长，禁止垫到偏长的 EXTINF timeline（否则再线性缩放会把后段字幕拉歪）。
 			align.TargetDurSec = targetDurSec
 		}
 	}
 	if gap := timelineMS - windowMediaMS; gap > 500 || gap < -500 {
-		w.logger.Info("窗口 ASR 媒体时长与 playlist EXTINF 有偏差，ASR 以 concat 媒体轴为准",
+		w.logger.Warn("窗口 ASR concat 探针与 Index 窗长偏差较大，以 Index 为准（不拉伸词戳）",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("window_media_ms", windowMediaMS),
-			zap.Int64("timeline_ms", timelineMS),
+			zap.Int64("index_window_ms", timelineMS),
 			zap.Int64("gap_ms", gap),
 		)
 	}
@@ -885,7 +893,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Float64("trim_start_sec", align.TrimStartSec),
 	)
 	mp3Start := time.Now()
-	// 等长抽音：输出 MP3 封口到 concat 媒体轴（与本地裁切同源）。
+	// 等长抽音：输出 MP3 封口到 Index 窗长。
 	if err := w.ffmpeg.ConvertToASRMP3Aligned(ctx, concatTS, tmpMP3, align); err != nil {
 		w.logger.Warn("窗口 ASR 对齐转 MP3 失败，回退普通转码",
 			zap.Uint("material_id", material.ID),
@@ -936,20 +944,20 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	maxUttEnd := asr.MaxUtteranceEndMS(raw)
 	scaledRaw := raw
 	scaleFactor := 1.0
-	// 仅在词轴明显越出媒体时长时才线性缩放；常见「厂商 duration 略短」只改 metadata，避免后段字幕被越拉越偏。
-	if asr.ShouldScaleUtteranceTimestamps(asrDur, windowMediaMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
-		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, windowMediaMS)
+	// 仅在词轴明显越出 Index 窗长时才线性缩放；禁止用厂商 duration 拉伸到偏长轴。
+	if asr.ShouldScaleUtteranceTimestamps(asrDur, targetWindowMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
+		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, targetWindowMS)
 		if scaleErr != nil {
 			w.logger.Warn("窗口 ASR 兜底缩放失败，沿用厂商时间戳",
 				zap.Uint("material_id", material.ID),
 				zap.Int64("asr_vendor_duration_ms", asrDur),
-				zap.Int64("window_media_ms", windowMediaMS),
+				zap.Int64("index_window_ms", targetWindowMS),
 				zap.Error(scaleErr),
 			)
 		} else {
 			scaledRaw = scaled
 			scaleFactor = scale
-			w.logger.Info("窗口 ASR 兜底缩放对齐 concat 媒体轴",
+			w.logger.Info("窗口 ASR 兜底缩放对齐 Index 轴",
 				zap.Uint("material_id", material.ID),
 				zap.Int64("asr_vendor_duration_ms", asrDur),
 				zap.Int64("window_media_ms", windowMediaMS),
@@ -959,11 +967,11 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			)
 		}
 	} else {
-		if rewritten, err := asr.SetAudioInfoDuration(raw, windowMediaMS); err == nil {
+		if rewritten, err := asr.SetAudioInfoDuration(raw, targetWindowMS); err == nil {
 			scaledRaw = rewritten
 		}
-		if asr.ShouldScaleTimestamps(asrDur, windowMediaMS, 500) {
-			w.logger.Info("窗口 ASR 跳过词级缩放（末句已在媒体轴内），仅同步 audio_info.duration",
+		if asr.ShouldScaleTimestamps(asrDur, targetWindowMS, 500) {
+			w.logger.Info("窗口 ASR 跳过词级缩放（末句已在 Index 轴内），仅同步 audio_info.duration",
 				zap.Uint("material_id", material.ID),
 				zap.Int64("asr_vendor_duration_ms", asrDur),
 				zap.Int64("window_media_ms", windowMediaMS),
@@ -977,8 +985,8 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		w.logger.Warn("窗口 ASR 合并失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
-	// 游标沿 concat 媒体轴推进（与本地裁切同源）；playlist EXTINF 可能略长，不拿来推进 ASR。
-	newCursor := offsetMS + windowMediaMS
+	// 游标沿 Index 轴推进。
+	newCursor := offsetMS + targetWindowMS
 	if newCursor < cursor {
 		newCursor = cursor
 	}
@@ -1024,7 +1032,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	return nil
 }
 
-// windowTimelineMS 优先用 sidecar 分片时长之和（与 playlist EXTINF 一致），否则用 concat 探针。
+// windowTimelineMS 优先用 MediaTimelineIndex / sidecar 分片时长之和，否则用 concat 探针。
 func windowTimelineMS(workDir string, files []string, concatProbeMS, nominalSegMS int64) int64 {
 	if nominalSegMS <= 0 {
 		nominalSegMS = 6000

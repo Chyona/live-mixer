@@ -33,11 +33,13 @@ type Session struct {
 	// FastKeyframe / CutMode 由 Prepare 写入，供字幕对齐诊断报告使用。
 	FastKeyframe bool
 	CutMode      string // "precise" | "keyframe_copy"
-	DraftURL     string
-	CanvasW      int
-	CanvasH      int
-	Timeline     *Timeline
-	// LocalIngestDir 跟播本地分片目录；有 seg 时优先本地 concat 裁切，与窗口 ASR 同源。
+	// SourceMode 裁切源模式：local_timeline_index | final_mp4 | remote_hls | downloaded
+	SourceMode string
+	DraftURL   string
+	CanvasW    int
+	CanvasH    int
+	Timeline   *Timeline
+	// LocalIngestDir 跟播本地分片目录；有 seg 时优先按 MediaTimelineIndex 做 seg+offset 裁切。
 	LocalIngestDir string
 	// Progress 可选：报告本地进度（0-100），由调用方映射。
 	Progress func(local int16)

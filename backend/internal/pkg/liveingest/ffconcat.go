@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -16,8 +15,24 @@ func GlobLocalSegments(dir string) []string {
 	return matches
 }
 
+// quoteFFConcatPath 按 ffmpeg concat 脚本规则引用路径：正斜杠 + 单引号。
+// 勿用 strconv.Quote：Go 双引号与 \\ 转义会被 ffmpeg 当成文件名的一部分，Windows 上报
+// Impossible to open '"E:\\...\\seg.ts"'。
+func quoteFFConcatPath(abs string) string {
+	p := filepath.ToSlash(abs)
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range p {
+		if r == '\'' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
+
 // WriteFFConcatList 写出 ffmpeg concat demuxer 清单（ffconcat version 1.0）。
-// 路径使用绝对路径并 Quote，便于 Windows 反斜杠与空格。
 func WriteFFConcatList(files []string, dest string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("无分片可写入 concat 清单")
@@ -30,7 +45,7 @@ func WriteFFConcatList(files []string, dest string) error {
 			abs = f
 		}
 		b.WriteString("file ")
-		b.WriteString(strconv.Quote(abs))
+		b.WriteString(quoteFFConcatPath(abs))
 		b.WriteString("\n")
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {

@@ -153,6 +153,28 @@ func TestBuildCutVideoArgs_HybridSeek(t *testing.T) {
 	}
 }
 
+func TestBuildCutVideoArgs_FFConcatForcesOutputSideSeek(t *testing.T) {
+	args := buildCutVideoArgs(`docker\staging\source_local.ffconcat`, "/out.mp4", 270.17, 276.85)
+	// 不得出现输入侧 -ss（会在 TS concat 上切错内容）。
+	if args[2] == "-ss" {
+		t.Fatalf("ffconcat must not use input-side -ss, got %v", args)
+	}
+	wantPrefix := []string{"-y", "-threads", "6", "-i", `docker\staging\source_local.ffconcat`, "-ss", "270.17"}
+	for i := range wantPrefix {
+		if args[i] != wantPrefix[i] {
+			t.Fatalf("args[%d]=%q want %q; full=%v", i, args[i], wantPrefix[i], args)
+		}
+	}
+}
+
+func TestBuildCutVideoFastArgs_FFConcatOutputSideSeek(t *testing.T) {
+	args := buildCutVideoFastArgs("source_local.ffconcat", "/out.mp4", 100, 120)
+	// [-y, -threads, N, -i, file, -ss, ...]
+	if len(args) < 6 || args[3] != "-i" || args[5] != "-ss" {
+		t.Fatalf("want -i then -ss for ffconcat, got %v", args)
+	}
+}
+
 func TestBuildCutVideoFastArgs(t *testing.T) {
 	args := buildCutVideoFastArgs("/in.mp4", "/out.mp4", 10, 30)
 	want := []string{

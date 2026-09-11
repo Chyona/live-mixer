@@ -60,13 +60,6 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	if s.Material == nil {
 		return fmt.Errorf("直播素材为空")
 	}
-	sourceURL := resolveDraftSourceURL(s.Material)
-	if sourceURL == "" {
-		return fmt.Errorf("直播素材没有可裁剪的媒体地址")
-	}
-	if p.Downloader == nil {
-		return fmt.Errorf("下载器未配置")
-	}
 	if p.Cutter == nil {
 		return fmt.Errorf("裁剪器未配置")
 	}
@@ -78,32 +71,77 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 		return fmt.Errorf("创建 capcut-mate 录制目录失败: %w", err)
 	}
 
+	s.ReportProgress(15)
+
+	// 直播中 / 本地仍有分片：按 Index 轴 seg+offset 裁切（禁止整表 ffconcat 全局 seek）。
+	// 已 ended 且可拿到 final.mp4 时优先单文件（见 resolveDraftSourceURL）。
+	preferFinal := shouldPreferFinalMP4(s)
+	if !preferFinal && canUseLocalTimelineIndex(s) {
+		p.Logger.Info("开始准备直播视频（本地时间轴索引）",
+			zap.String("job_id", s.JobID),
+			zap.String("local_ingest_dir", s.LocalIngestDir),
+			zap.String("staging_dir", s.StagingDir),
+		)
+		s.ReportProgress(25)
+		clips := s.Clips
+		useFast := UseFastKeyframeCut(clips)
+		cutMode := "precise"
+		if useFast {
+			cutMode = "keyframe_copy"
+		}
+		s.FastKeyframe = useFast
+		s.CutMode = cutMode
+		paths, err := p.cutClipsByTimelineIndex(ctx, s, useFast)
+		if err != nil {
+			return err
+		}
+		s.ClipPaths = paths
+		s.ReportProgress(50)
+		return nil
+	}
+
+	sourceURL := resolveDraftSourceURL(s.Material)
+	if sourceURL == "" {
+		// ended 优先 final 失败时，仍可尝试本地分片 Index 裁切。
+		if canUseLocalTimelineIndex(s) {
+			s.ReportProgress(25)
+			useFast := UseFastKeyframeCut(s.Clips)
+			s.FastKeyframe = useFast
+			if useFast {
+				s.CutMode = "keyframe_copy"
+			} else {
+				s.CutMode = "precise"
+			}
+			paths, err := p.cutClipsByTimelineIndex(ctx, s, useFast)
+			if err != nil {
+				return err
+			}
+			s.ClipPaths = paths
+			s.ReportProgress(50)
+			return nil
+		}
+		return fmt.Errorf("直播素材没有可裁剪的媒体地址")
+	}
+	if p.Downloader == nil {
+		return fmt.Errorf("下载器未配置")
+	}
+
 	skipDownload := media.IsM3U8URL(sourceURL)
 	p.Logger.Info("开始准备直播视频",
 		zap.String("job_id", s.JobID),
 		zap.String("source_url", sourceURL),
 		zap.Bool("hls_direct", skipDownload),
+		zap.Bool("prefer_final", preferFinal),
 		zap.String("local_ingest_dir", s.LocalIngestDir),
 		zap.String("staging_dir", s.StagingDir),
 	)
-	s.ReportProgress(15)
 
 	cleanupSource := func() {}
-	if localConcat, ok, err := p.tryMaterializeLocalConcat(s); err != nil {
-		p.Logger.Warn("本地分片 concat 准备失败，回退远程源",
-			zap.String("job_id", s.JobID),
-			zap.String("local_ingest_dir", s.LocalIngestDir),
-			zap.Error(err),
-		)
-	} else if ok {
-		s.SourcePath = localConcat
-		cleanupSource = func() {
-			_ = os.Remove(localConcat)
-			if s.SourcePath == localConcat {
-				s.SourcePath = ""
-			}
-		}
+	if localFinal, ok := tryLocalFinalMP4(s); ok {
+		s.SourcePath = localFinal
+		s.SourceMode = "final_mp4"
 	} else if skipDownload {
+		s.SourceMode = "remote_hls"
 		// 跟播中的 EVENT playlist 无 ENDLIST 时，ffmpeg 会从 live edge 起播。
 		// 先下载清单并 Seal 为 VOD，再按时间轴裁切。
 		vodPath, err := p.materializeVODPlaylist(ctx, s, sourceURL)
@@ -118,6 +156,11 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 			}
 		}
 	} else {
+		if preferFinal || strings.Contains(strings.ToLower(sourceURL), "final") {
+			s.SourceMode = "final_mp4"
+		} else {
+			s.SourceMode = "downloaded"
+		}
 		s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
 		stopHeartbeat := startDownloadHeartbeat(ctx, s)
 		_, err := p.Downloader.Download(ctx, sourceURL, s.SourcePath)
@@ -142,27 +185,42 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	return nil
 }
 
-// tryMaterializeLocalConcat 若本地跟播分片可用，写出 ffconcat 供裁切（与窗口 ASR concat 同源）。
-func (p *Pipeline) tryMaterializeLocalConcat(s *session.Session) (path string, ok bool, err error) {
+// shouldPreferFinalMP4 关播完成后优先单文件 final.mp4（本地或 LiveURL）。
+func shouldPreferFinalMP4(s *session.Session) bool {
+	if s == nil || s.Material == nil {
+		return false
+	}
+	m := s.Material
+	if m.LiveStatus == model.LiveStatusLive || m.LiveStatus == model.LiveStatusEnding {
+		return false
+	}
+	if _, ok := tryLocalFinalMP4(s); ok {
+		return true
+	}
+	if m.URLType == model.URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
+		return true
+	}
+	if m.LiveStatus == model.LiveStatusEnded && strings.TrimSpace(m.LiveURL) != "" {
+		return true
+	}
+	return false
+}
+
+// tryLocalFinalMP4 若本地 ingest 目录仍有 final.mp4 则返回路径。
+func tryLocalFinalMP4(s *session.Session) (string, bool) {
+	if s == nil {
+		return "", false
+	}
 	dir := strings.TrimSpace(s.LocalIngestDir)
 	if dir == "" {
-		return "", false, nil
+		return "", false
 	}
-	files := liveingest.GlobLocalSegments(dir)
-	if len(files) == 0 {
-		return "", false, nil
+	p := filepath.Join(dir, "final.mp4")
+	st, err := os.Stat(p)
+	if err != nil || st.Size() == 0 {
+		return "", false
 	}
-	dest := filepath.Join(s.StagingDir, "source_local.ffconcat")
-	if err := liveingest.WriteFFConcatList(files, dest); err != nil {
-		return "", false, err
-	}
-	p.Logger.Info("已物化本地分片 concat 供裁切（与 ASR 同源）",
-		zap.String("job_id", s.JobID),
-		zap.String("local_ingest_dir", dir),
-		zap.Int("segment_files", len(files)),
-		zap.String("concat_list", dest),
-	)
-	return dest, true, nil
+	return p, true
 }
 
 // materializeVODPlaylist 下载远程 m3u8 并补 ENDLIST，返回本地路径供 ffmpeg 随机访问。
@@ -197,8 +255,12 @@ func resolveDraftSourceURL(m *model.LiveMaterial) string {
 	if m == nil {
 		return ""
 	}
-	if m.URLType == model.URLTypeFile && m.LiveURL != "" {
-		return m.LiveURL
+	// 已 ended / url_type=file：优先 final.mp4（LiveURL），远程 HLS 仅降级。
+	if m.URLType == model.URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
+		return strings.TrimSpace(m.LiveURL)
+	}
+	if m.LiveStatus == model.LiveStatusEnded && strings.TrimSpace(m.LiveURL) != "" {
+		return strings.TrimSpace(m.LiveURL)
 	}
 	if m.LiveStatus == model.LiveStatusLive || m.LiveStatus == model.LiveStatusEnding {
 		if m.RecordPlaylistURL != "" {
