@@ -72,16 +72,17 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	s := &session.Session{
-		JobID:      req.JobID,
-		Project:    req.Project,
-		Material:   req.Material,
-		StagingDir: req.StagingDir,
-		RecordDir:  req.RecordDir,
-		Clips:      clips,
-		CanvasW:    req.CanvasW,
-		CanvasH:    req.CanvasH,
-		Timeline:   session.NewTimeline(),
-		Progress:   req.Progress,
+		JobID:          req.JobID,
+		Project:        req.Project,
+		Material:       req.Material,
+		StagingDir:     req.StagingDir,
+		RecordDir:      req.RecordDir,
+		LocalIngestDir: req.LocalIngestDir,
+		Clips:          clips,
+		CanvasW:        req.CanvasW,
+		CanvasH:        req.CanvasH,
+		Timeline:       session.NewTimeline(),
+		Progress:       req.Progress,
 	}
 
 	if err := b.Prepare.Run(ctx, s); err != nil {

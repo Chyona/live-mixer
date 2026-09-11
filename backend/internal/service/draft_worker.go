@@ -9,6 +9,7 @@ import (
 	"live-mixer/internal/draft"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/capcutmate"
+	"live-mixer/internal/pkg/liveingest"
 	"live-mixer/internal/pkg/webroot"
 	"live-mixer/internal/repository"
 
@@ -262,13 +263,14 @@ func (w *draftWorker) ProcessWithOptions(ctx context.Context, task *model.Task, 
 	width, height := draft.ResolveCanvasSize(task.Width, task.Height, project)
 
 	result, err := w.generator.Build(ctx, draft.Request{
-		JobID:      task.ID,
-		Material:   material,
-		Project:    project,
-		CanvasW:    width,
-		CanvasH:    height,
-		StagingDir: w.web.StagingDir(task.ID),
-		RecordDir:  w.web.CapCutMateRecordDir(task.ID),
+		JobID:          task.ID,
+		Material:       material,
+		Project:        project,
+		CanvasW:        width,
+		CanvasH:        height,
+		StagingDir:     w.web.StagingDir(task.ID),
+		RecordDir:      w.web.CapCutMateRecordDir(task.ID),
+		LocalIngestDir: liveingest.LiveIngestSegmentDir(w.web.RootDir, material.ID, material.IngestEpoch),
 		// 将 Generator 本地进度压缩到草稿阶段上限，为视频生成预留空间。
 		Progress: func(local int16) {
 			if local > draftPhaseLocalProgress {

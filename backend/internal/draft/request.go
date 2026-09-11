@@ -17,6 +17,8 @@ type Request struct {
 	CanvasW, CanvasH int
 	StagingDir       string
 	RecordDir        string
+	// LocalIngestDir 可选：跟播本地分片目录，优先于远程 m3u8 裁切（与窗口 ASR 同源）。
+	LocalIngestDir string
 	// Progress 可选：本地进度 0–100；由任务层映射到 task.progress。
 	Progress func(local int16)
 	// Recipe 为空时使用 DefaultRecipe。

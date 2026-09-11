@@ -302,3 +302,33 @@ func TestMaterializeVODPlaylist_AppendsENDLIST(t *testing.T) {
 		t.Fatalf("lost segment: %s", body)
 	}
 }
+
+func TestPipeline_Run_PrefersLocalConcatOverRemoteM3U8(t *testing.T) {
+	root := t.TempDir()
+	ingest := filepath.Join(root, "ingest")
+	if err := os.MkdirAll(ingest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"seg_00000.ts", "seg_00001.ts"} {
+		if err := os.WriteFile(filepath.Join(ingest, name), []byte("ts"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staging := filepath.Join(root, "staging")
+	cutter := &recordingCutter{}
+	s := &session.Session{
+		JobID:          "job-local",
+		Material:       &model.LiveMaterial{LiveStatus: model.LiveStatusLive, RecordPlaylistURL: "https://cdn.example/live.m3u8"},
+		StagingDir:     staging,
+		RecordDir:      filepath.Join(root, "record"),
+		LocalIngestDir: ingest,
+		Clips:          []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+	}
+	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "source_local.ffconcat") {
+		t.Fatalf("want local ffconcat cut, got %v", cutter.inputs)
+	}
+}

@@ -7,9 +7,59 @@ import (
 )
 
 const (
-	// DefaultScaleSkewThresholdMS：厂商时长与媒体探针差超过该值时做线性缩放。
-	DefaultScaleSkewThresholdMS int64 = 500
+	// DefaultScaleSkewThresholdMS：厂商时长与媒体探针差超过该值才考虑线性缩放。
+	// 秒级偏差常见于 audio_info.duration 元数据偏短/末尾静音未计入，不应拉伸词级时间戳。
+	DefaultScaleSkewThresholdMS int64 = 5000
 )
+
+// MaxUtteranceEndMS 返回结果中分句/词的最大 end_time（毫秒）；无则 0。
+func MaxUtteranceEndMS(raw json.RawMessage) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var payload liveASRPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return 0
+	}
+	var max int64
+	for _, item := range payload.Result.Utterances {
+		var u utteranceTimes
+		if err := json.Unmarshal(item, &u); err != nil {
+			continue
+		}
+		if u.EndTime > max {
+			max = u.EndTime
+		}
+		for _, w := range u.Words {
+			if w.EndTime > max {
+				max = w.EndTime
+			}
+		}
+	}
+	return max
+}
+
+// SetAudioInfoDuration 只改写 audio_info.duration，不改动词级时间戳。
+func SetAudioInfoDuration(raw json.RawMessage, durationMS int64) (json.RawMessage, error) {
+	if len(raw) == 0 || durationMS <= 0 {
+		return raw, nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("解析 ASR JSON: %w", err)
+	}
+	info := map[string]interface{}{"duration": durationMS}
+	if infoRaw, ok := payload["audio_info"]; ok && len(infoRaw) > 0 {
+		_ = json.Unmarshal(infoRaw, &info)
+		info["duration"] = durationMS
+	}
+	b, err := json.Marshal(info)
+	if err != nil {
+		return nil, err
+	}
+	payload["audio_info"] = b
+	return json.Marshal(payload)
+}
 
 // ScaleTimestampsToDuration 将 ASR 结果内时间戳线性缩放到 targetDurationMS，
 // 并改写 audio_info.duration。用于对齐「送转写媒体真实时长」与「厂商 audio_info」。
@@ -102,7 +152,7 @@ func scaleMS(v int64, scale float64) int64 {
 	return int64(math.Round(float64(v) * scale))
 }
 
-// ShouldScaleTimestamps 判断是否应对齐厂商时长与媒体时长。
+// ShouldScaleTimestamps 判断厂商时长与媒体时长是否偏差过大（仅元数据门槛）。
 func ShouldScaleTimestamps(vendorMS, mediaMS, thresholdMS int64) bool {
 	if vendorMS <= 0 || mediaMS <= 0 {
 		return false
@@ -115,4 +165,19 @@ func ShouldScaleTimestamps(vendorMS, mediaMS, thresholdMS int64) bool {
 		d = -d
 	}
 	return d >= thresholdMS
+}
+
+// ShouldScaleUtteranceTimestamps 判断是否应线性拉伸词级时间戳。
+// 若末句已落在媒体时长内，视为 audio_info.duration 元数据偏短，禁止缩放（否则后段字幕会越拉越偏）。
+func ShouldScaleUtteranceTimestamps(vendorMS, mediaMS, maxUttEndMS, thresholdMS int64) bool {
+	if !ShouldScaleTimestamps(vendorMS, mediaMS, thresholdMS) {
+		return false
+	}
+	if thresholdMS <= 0 {
+		thresholdMS = DefaultScaleSkewThresholdMS
+	}
+	if maxUttEndMS > 0 && maxUttEndMS <= mediaMS+thresholdMS {
+		return false
+	}
+	return true
 }

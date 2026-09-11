@@ -83,24 +83,40 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 		zap.String("job_id", s.JobID),
 		zap.String("source_url", sourceURL),
 		zap.Bool("hls_direct", skipDownload),
+		zap.String("local_ingest_dir", s.LocalIngestDir),
 		zap.String("staging_dir", s.StagingDir),
 	)
 	s.ReportProgress(15)
 
-	if skipDownload {
+	cleanupSource := func() {}
+	if localConcat, ok, err := p.tryMaterializeLocalConcat(s); err != nil {
+		p.Logger.Warn("本地分片 concat 准备失败，回退远程源",
+			zap.String("job_id", s.JobID),
+			zap.String("local_ingest_dir", s.LocalIngestDir),
+			zap.Error(err),
+		)
+	} else if ok {
+		s.SourcePath = localConcat
+		cleanupSource = func() {
+			_ = os.Remove(localConcat)
+			if s.SourcePath == localConcat {
+				s.SourcePath = ""
+			}
+		}
+	} else if skipDownload {
 		// 跟播中的 EVENT playlist 无 ENDLIST 时，ffmpeg 会从 live edge 起播。
-		// 先下载清单并 Seal 为 VOD，再按时间轴裁切，才能与本地 ASR 同源。
+		// 先下载清单并 Seal 为 VOD，再按时间轴裁切。
 		vodPath, err := p.materializeVODPlaylist(ctx, s, sourceURL)
 		if err != nil {
 			return err
 		}
 		s.SourcePath = vodPath
-		defer func() {
+		cleanupSource = func() {
 			_ = os.Remove(vodPath)
 			if s.SourcePath == vodPath {
 				s.SourcePath = ""
 			}
-		}()
+		}
 	} else {
 		s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
 		stopHeartbeat := startDownloadHeartbeat(ctx, s)
@@ -111,8 +127,9 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 			s.SourcePath = ""
 			return fmt.Errorf("下载直播视频失败: %w", err)
 		}
-		defer p.removeDownloadedSource(s)
+		cleanupSource = func() { p.removeDownloadedSource(s) }
 	}
+	defer cleanupSource()
 
 	s.ReportProgress(25)
 
@@ -123,6 +140,29 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	s.ClipPaths = paths
 	s.ReportProgress(50)
 	return nil
+}
+
+// tryMaterializeLocalConcat 若本地跟播分片可用，写出 ffconcat 供裁切（与窗口 ASR concat 同源）。
+func (p *Pipeline) tryMaterializeLocalConcat(s *session.Session) (path string, ok bool, err error) {
+	dir := strings.TrimSpace(s.LocalIngestDir)
+	if dir == "" {
+		return "", false, nil
+	}
+	files := liveingest.GlobLocalSegments(dir)
+	if len(files) == 0 {
+		return "", false, nil
+	}
+	dest := filepath.Join(s.StagingDir, "source_local.ffconcat")
+	if err := liveingest.WriteFFConcatList(files, dest); err != nil {
+		return "", false, err
+	}
+	p.Logger.Info("已物化本地分片 concat 供裁切（与 ASR 同源）",
+		zap.String("job_id", s.JobID),
+		zap.String("local_ingest_dir", dir),
+		zap.Int("segment_files", len(files)),
+		zap.String("concat_list", dest),
+	)
+	return dest, true, nil
 }
 
 // materializeVODPlaylist 下载远程 m3u8 并补 ENDLIST，返回本地路径供 ffmpeg 随机访问。

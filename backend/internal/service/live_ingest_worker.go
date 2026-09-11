@@ -853,11 +853,11 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		timelineMS = windowMediaMS
 	}
 	estBillMS := timelineMS
-	targetDurSec := float64(timelineMS) / 1000.0
+	targetDurSec := float64(windowMediaMS) / 1000.0
 	align := media.ASRAlignOptions{TargetDurSec: targetDurSec}
 	if w.prober != nil {
 		if tl, err := w.prober.ProbeMediaTimeline(ctx, concatTS); err != nil {
-			w.logger.Warn("窗口 ASR 探测 concat 时间轴失败，仅按 timeline 封口抽音",
+			w.logger.Warn("窗口 ASR 探测 concat 时间轴失败，仅按媒体时长封口抽音",
 				zap.Uint("material_id", material.ID),
 				zap.Error(err),
 			)
@@ -865,8 +865,17 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			opts := tl.AlignOptions()
 			align.LeadPadMs = opts.LeadPadMs
 			align.TrimStartSec = opts.TrimStartSec
+			// 封口到 concat 真实媒体时长，禁止垫到偏长的 EXTINF timeline（否则再线性缩放会把后段字幕拉歪）。
 			align.TargetDurSec = targetDurSec
 		}
+	}
+	if gap := timelineMS - windowMediaMS; gap > 500 || gap < -500 {
+		w.logger.Info("窗口 ASR 媒体时长与 playlist EXTINF 有偏差，ASR 以 concat 媒体轴为准",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("window_media_ms", windowMediaMS),
+			zap.Int64("timeline_ms", timelineMS),
+			zap.Int64("gap_ms", gap),
+		)
 	}
 	logStep("mp3_start",
 		zap.Int64("window_media_ms", windowMediaMS),
@@ -876,7 +885,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Float64("trim_start_sec", align.TrimStartSec),
 	)
 	mp3Start := time.Now()
-	// 等长抽音：输出 MP3 封口到剪辑时间轴，避免识别轴短于 live.m3u8。
+	// 等长抽音：输出 MP3 封口到 concat 媒体轴（与本地裁切同源）。
 	if err := w.ffmpeg.ConvertToASRMP3Aligned(ctx, concatTS, tmpMP3, align); err != nil {
 		w.logger.Warn("窗口 ASR 对齐转 MP3 失败，回退普通转码",
 			zap.Uint("material_id", material.ID),
@@ -924,27 +933,42 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
 	asrDur := asr.ParseDurationMs(raw)
+	maxUttEnd := asr.MaxUtteranceEndMS(raw)
 	scaledRaw := raw
 	scaleFactor := 1.0
-	// 等长抽音后厂商仍可能略偏；保留线性缩放作兜底。
-	if asr.ShouldScaleTimestamps(asrDur, timelineMS, asr.DefaultScaleSkewThresholdMS) {
-		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, timelineMS)
+	// 仅在词轴明显越出媒体时长时才线性缩放；常见「厂商 duration 略短」只改 metadata，避免后段字幕被越拉越偏。
+	if asr.ShouldScaleUtteranceTimestamps(asrDur, windowMediaMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
+		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, windowMediaMS)
 		if scaleErr != nil {
 			w.logger.Warn("窗口 ASR 兜底缩放失败，沿用厂商时间戳",
 				zap.Uint("material_id", material.ID),
 				zap.Int64("asr_vendor_duration_ms", asrDur),
-				zap.Int64("timeline_ms", timelineMS),
+				zap.Int64("window_media_ms", windowMediaMS),
 				zap.Error(scaleErr),
 			)
 		} else {
 			scaledRaw = scaled
 			scaleFactor = scale
-			w.logger.Info("窗口 ASR 兜底缩放对齐剪辑时间轴",
+			w.logger.Info("窗口 ASR 兜底缩放对齐 concat 媒体轴",
 				zap.Uint("material_id", material.ID),
 				zap.Int64("asr_vendor_duration_ms", asrDur),
-				zap.Int64("timeline_ms", timelineMS),
 				zap.Int64("window_media_ms", windowMediaMS),
+				zap.Int64("timeline_ms", timelineMS),
+				zap.Int64("max_utt_end_ms", maxUttEnd),
 				zap.Float64("scale", scaleFactor),
+			)
+		}
+	} else {
+		if rewritten, err := asr.SetAudioInfoDuration(raw, windowMediaMS); err == nil {
+			scaledRaw = rewritten
+		}
+		if asr.ShouldScaleTimestamps(asrDur, windowMediaMS, 500) {
+			w.logger.Info("窗口 ASR 跳过词级缩放（末句已在媒体轴内），仅同步 audio_info.duration",
+				zap.Uint("material_id", material.ID),
+				zap.Int64("asr_vendor_duration_ms", asrDur),
+				zap.Int64("window_media_ms", windowMediaMS),
+				zap.Int64("timeline_ms", timelineMS),
+				zap.Int64("max_utt_end_ms", maxUttEnd),
 			)
 		}
 	}
@@ -953,8 +977,8 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		w.logger.Warn("窗口 ASR 合并失败", zap.Uint("material_id", material.ID), zap.Error(err))
 		return err
 	}
-	// 游标沿剪辑时间轴（分片 EXTINF / timeline）推进，避免与 live.m3u8 漂移。
-	newCursor := offsetMS + timelineMS
+	// 游标沿 concat 媒体轴推进（与本地裁切同源）；playlist EXTINF 可能略长，不拿来推进 ASR。
+	newCursor := offsetMS + windowMediaMS
 	if newCursor < cursor {
 		newCursor = cursor
 	}

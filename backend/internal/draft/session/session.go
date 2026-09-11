@@ -37,6 +37,8 @@ type Session struct {
 	CanvasW      int
 	CanvasH      int
 	Timeline     *Timeline
+	// LocalIngestDir 跟播本地分片目录；有 seg 时优先本地 concat 裁切，与窗口 ASR 同源。
+	LocalIngestDir string
 	// Progress 可选：报告本地进度（0-100），由调用方映射。
 	Progress func(local int16)
 }

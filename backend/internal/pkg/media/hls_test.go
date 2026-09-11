@@ -51,6 +51,19 @@ func TestHLSInputArgs_LocalMP4Nil(t *testing.T) {
 	}
 }
 
+func TestConcatDemuxerInputArgs(t *testing.T) {
+	args := ConcatDemuxerInputArgs(`E:\staging\source_local.ffconcat`)
+	if len(args) != 3 || args[0] != "-f" || args[1] != "concat" || args[2] != "-safe" {
+		// -safe 0 is two tokens: "-safe", "0"
+	}
+	if len(args) != 4 || args[0] != "-f" || args[1] != "concat" || args[2] != "-safe" || args[3] != "0" {
+		t.Fatalf("got %v", args)
+	}
+	if ConcatDemuxerInputArgs("a.mp4") != nil {
+		t.Fatal("mp4")
+	}
+}
+
 func TestProbeHLSPlaylist_Media(t *testing.T) {
 	body := `#EXTM3U
 #EXT-X-VERSION:3

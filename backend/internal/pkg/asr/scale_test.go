@@ -40,13 +40,48 @@ func TestScaleTimestampsToDuration_StretchesUtterances(t *testing.T) {
 }
 
 func TestShouldScaleTimestamps(t *testing.T) {
-	if !ShouldScaleTimestamps(603324, 609099, 500) {
-		t.Fatal("want scale when skew ~5.8s")
+	if !ShouldScaleTimestamps(600000, 620000, 5000) {
+		t.Fatal("want scale when skew >= 5s")
 	}
-	if ShouldScaleTimestamps(609000, 609100, 500) {
-		t.Fatal("want skip when skew < threshold")
+	if ShouldScaleTimestamps(606132, 608719, 5000) {
+		t.Fatal("sub-5s metadata skew must not scale")
 	}
-	if ShouldScaleTimestamps(0, 609099, 500) {
+	if ShouldScaleTimestamps(0, 609099, 5000) {
 		t.Fatal("want skip when vendor missing")
+	}
+}
+
+func TestShouldScaleUtteranceTimestamps_SkipsWhenUtterancesFitMedia(t *testing.T) {
+	if ShouldScaleUtteranceTimestamps(606132, 608719, 606000, 5000) {
+		t.Fatal("utterances within media must not scale")
+	}
+	if !ShouldScaleUtteranceTimestamps(650000, 600000, 649000, 5000) {
+		t.Fatal("want scale when utterance domain exceeds media")
+	}
+}
+
+func TestMaxUtteranceEndMS(t *testing.T) {
+	raw := json.RawMessage(`{
+		"audio_info":{"duration":100000},
+		"result":{"utterances":[
+			{"start_time":10000,"end_time":20000,"text":"a","words":[{"start_time":10000,"end_time":25000,"text":"a"}]}
+		]}
+	}`)
+	if got := MaxUtteranceEndMS(raw); got != 25000 {
+		t.Fatalf("MaxUtteranceEndMS = %d, want 25000", got)
+	}
+}
+
+func TestSetAudioInfoDuration(t *testing.T) {
+	raw := json.RawMessage(`{"audio_info":{"duration":100},"result":{"utterances":[{"start_time":10,"end_time":20,"text":"a"}]}}`)
+	out, err := SetAudioInfoDuration(raw, 608719)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ParseDurationMs(out) != 608719 {
+		t.Fatalf("duration = %d", ParseDurationMs(out))
+	}
+	if MaxUtteranceEndMS(out) != 20 {
+		t.Fatal("utterances must be unchanged")
 	}
 }

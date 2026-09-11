@@ -39,8 +39,17 @@ func HLSInputArgs(input string) []string {
 	return args
 }
 
+// ConcatDemuxerInputArgs 本地 ffconcat 清单需在 -i 前声明 demuxer。
+func ConcatDemuxerInputArgs(input string) []string {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	if strings.HasSuffix(lower, ".ffconcat") || strings.HasSuffix(lower, ".concat.txt") {
+		return []string{"-f", "concat", "-safe", "0"}
+	}
+	return nil
+}
+
 func prependHLSInputArgs(args []string, input string) []string {
-	extra := HLSInputArgs(input)
+	extra := append(ConcatDemuxerInputArgs(input), HLSInputArgs(input)...)
 	if len(extra) == 0 {
 		return args
 	}
