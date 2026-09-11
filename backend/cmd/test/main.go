@@ -6,7 +6,7 @@
 //	live-window  — 拉取跟播 m3u8 分片，按当前窗口 ASR 逻辑转写并输出 JSON
 //	add-live     — 模拟 UI 添加「正在直播」源视频，轮询直至 ASR 推进
 //	one-click    — 对源视频发起一键成片（POST /v1/tasks/ai-slice-draft），轮询至完成
-//	live-e2e     — 直播 m3u8 → 跟播约 10 分钟 → 等 ASR → 一键成片（打真实 webserver）
+//	live-e2e     — 直播 m3u8 → 跟播满 -duration → 等 ASR 覆盖 → 一键成片（打真实 webserver）
 package main
 
 import (
@@ -48,7 +48,7 @@ func main() {
 	sourceMode := flag.String("source-mode", "live", "upcoming|live|replay（add-live，默认 live）")
 	remark := flag.String("remark", "", "备注（add-live）")
 	pollEvery := flag.Duration("poll", 15*time.Second, "轮询间隔（add-live / one-click）")
-	waitFor := flag.Duration("wait", 0, "最长等待（add-live 默认 15m；one-click 默认 30m）")
+	waitFor := flag.Duration("wait", 0, "最长等待（add-live 默认 15m；one-click 默认 30m；live-e2e 默认 duration+15m）")
 	noWait := flag.Bool("no-wait", false, "只提交不轮询（add-live / one-click）")
 
 	// one-click
@@ -57,13 +57,14 @@ func main() {
 	clipMS := flag.String("clip", "", "选区毫秒 start-end，多个逗号分隔：0-600000")
 	clipSec := flag.String("clip-sec", "", "选区秒 start-end，多个逗号分隔：0-600")
 	autoClip := flag.Bool("auto-clip", true, "未指定 -clip 时按 asr_cursor 自动选区 [0,end]")
-	maxClipMS := flag.Int64("max-clip-ms", 10*60*1000, "自动选区最大毫秒（默认 10 分钟，控 LLM/成片费用）")
+	maxClipMS := flag.Int64("max-clip-ms", 0, "自动选区最大毫秒（one-click 默认 10m；live-e2e 默认跟 -duration）")
 	projectSource := flag.String("project-source", "timeline", "项目来源（one-click，默认 timeline）")
 	canvasW := flag.Int("canvas-width", 0, "画布宽（可选）")
 	canvasH := flag.Int("canvas-height", 0, "画布高（可选）")
 
 	// live-e2e
-	recordFor := flag.Duration("record-for", 10*time.Minute, "live-e2e：录像目标时长（按 duration_ms）")
+	duration := flag.Duration("duration", 10*time.Minute, "live-e2e：目标时长（默认 10m，可传 20m/30m；同时作为录像门槛与一键成片选区上限）")
+	recordFor := flag.Duration("record-for", 0, "live-e2e：仅覆盖录像门槛（默认= -duration）")
 	skipOneClick := flag.Bool("skip-one-click", false, "live-e2e：录制+ASR 后不发起一键成片")
 	flag.Parse()
 
@@ -167,6 +168,10 @@ func main() {
 		if wait <= 0 {
 			wait = 30 * time.Minute
 		}
+		clipCap := *maxClipMS
+		if clipCap <= 0 {
+			clipCap = int64((10 * time.Minute) / time.Millisecond)
+		}
 		runOneClickMode(oneClickArgs{
 			BaseURL:      httpBase,
 			ConfigPath:   *configPath,
@@ -180,7 +185,7 @@ func main() {
 			PromptID:     uint(*promptID),
 			Clips:        clips,
 			AutoClip:     *autoClip && len(clips) == 0,
-			MaxClipMS:    *maxClipMS,
+			MaxClipMS:    clipCap,
 			ProjectSrc:   *projectSource,
 			CanvasW:      *canvasW,
 			CanvasH:      *canvasH,
@@ -194,9 +199,18 @@ func main() {
 		if out == "" {
 			out = "live_e2e_report.json"
 		}
+		e2eDur, recFor, clipCap, err := resolveLiveE2EDurations(*duration, *recordFor, *maxClipMS)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(2)
+		}
 		wait := *waitFor
 		if wait <= 0 {
-			wait = *recordFor + 15*time.Minute
+			wait = e2eDur + 15*time.Minute
+		}
+		oneClickWait := 30 * time.Minute
+		if e2eDur > 10*time.Minute {
+			oneClickWait = e2eDur + 20*time.Minute
 		}
 		runLiveE2EMode(liveE2EArgs{
 			BaseURL:      httpBase,
@@ -210,15 +224,16 @@ func main() {
 			Name:         *name,
 			M3U8URL:      strings.TrimSpace(*m3u8URL),
 			Remark:       *remark,
-			RecordFor:    *recordFor,
+			Duration:     e2eDur,
+			RecordFor:    recFor,
 			PollInterval: *pollEvery,
 			Wait:         wait,
 			PromptID:     uint(*promptID),
-			MaxClipMS:    *maxClipMS,
+			MaxClipMS:    clipCap,
 			ProjectSrc:   *projectSource,
 			CanvasW:      *canvasW,
 			CanvasH:      *canvasH,
-			OneClickWait: 30 * time.Minute,
+			OneClickWait: oneClickWait,
 			SkipOneClick: *skipOneClick,
 			OutPath:      out,
 		})
@@ -226,6 +241,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "未知 mode=%q，请用 paragraphs | live-window | add-live | one-click | live-e2e\n", resolved)
 		os.Exit(2)
 	}
+}
+
+// resolveLiveE2EDurations 解析 live-e2e 目标时长：
+// -duration 默认 10m，同时作为录像门槛与一键选区上限；
+// -record-for / -max-clip-ms 为 0 时跟 duration。
+func resolveLiveE2EDurations(duration, recordFor time.Duration, maxClipMS int64) (e2eDur, recFor time.Duration, clipCap int64, err error) {
+	e2eDur = duration
+	if e2eDur <= 0 {
+		e2eDur = 10 * time.Minute
+	}
+	recFor = recordFor
+	if recFor <= 0 {
+		recFor = e2eDur
+	}
+	clipCap = maxClipMS
+	if clipCap <= 0 {
+		clipCap = e2eDur.Milliseconds()
+	}
+	if e2eDur < time.Minute {
+		return 0, 0, 0, fmt.Errorf("-duration 过短: %s（建议 10m / 20m / 30m）", e2eDur)
+	}
+	return e2eDur, recFor, clipCap, nil
 }
 
 // 用户提供的跟播列表，便于本地复现。

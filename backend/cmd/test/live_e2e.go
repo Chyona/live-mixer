@@ -10,7 +10,7 @@ import (
 )
 
 // live-e2e：打真实 webserver，串联 UI 同款链路：
-// 添加正在直播 → 跟播录像满 record-for → 等到窗口 ASR 推进 → 一键成片。
+// 添加正在直播 → 跟播录像满 duration → 等到窗口 ASR 覆盖该时长 → 一键成片。
 // 用于验证 live_ingest / 窗口 ASR / ai-slice-draft 现有逻辑的正确性与可靠性。
 
 type liveE2EArgs struct {
@@ -25,6 +25,7 @@ type liveE2EArgs struct {
 	Name         string
 	M3U8URL      string
 	Remark       string
+	Duration     time.Duration // 目标时长（报告用；默认与 RecordFor / MaxClipMS 一致）
 	RecordFor    time.Duration // 录像目标时长（按 material.duration 计）
 	PollInterval time.Duration
 	Wait         time.Duration // 录制+ASR 总等待上限
@@ -42,7 +43,9 @@ type liveE2EReport struct {
 	CreatedAt   time.Time          `json:"created_at"`
 	BaseURL     string             `json:"base_url"`
 	M3U8URL     string             `json:"m3u8_url"`
+	Duration    string             `json:"duration"`
 	RecordFor   string             `json:"record_for"`
+	MaxClipMS   int64              `json:"max_clip_ms"`
 	MaterialID  uint               `json:"material_id"`
 	Create      materialSnapshot   `json:"create"`
 	AfterRecord materialSnapshot   `json:"after_record,omitempty"`
@@ -65,7 +68,18 @@ func runLiveE2EMode(a liveE2EArgs) {
 	}
 	recordFor := a.RecordFor
 	if recordFor <= 0 {
+		recordFor = a.Duration
+	}
+	if recordFor <= 0 {
 		recordFor = 10 * time.Minute
+	}
+	e2eDur := a.Duration
+	if e2eDur <= 0 {
+		e2eDur = recordFor
+	}
+	maxClipMS := a.MaxClipMS
+	if maxClipMS <= 0 {
+		maxClipMS = e2eDur.Milliseconds()
 	}
 	poll := a.PollInterval
 	if poll <= 0 {
@@ -73,7 +87,6 @@ func runLiveE2EMode(a liveE2EArgs) {
 	}
 	wait := a.Wait
 	if wait <= 0 {
-		// 录 10 分钟 + 首窗 ASR 余量 + 网络抖动
 		wait = recordFor + 15*time.Minute
 	}
 	name := strings.TrimSpace(a.Name)
@@ -100,7 +113,8 @@ func runLiveE2EMode(a liveE2EArgs) {
 		reqBody["remark"] = r
 	}
 
-	fmt.Printf("=== live-e2e ===\nbase=%s\nurl=%s\nrecord_for=%s wait=%s\n", base, m3u8, recordFor, wait)
+	fmt.Printf("=== live-e2e ===\nbase=%s\nurl=%s\nduration=%s record_for=%s max_clip_ms=%d wait=%s\n",
+		base, m3u8, e2eDur, recordFor, maxClipMS, wait)
 	fmt.Println("1/3 创建源视频（模拟 UI 正在直播）…")
 	created, err := apiCreateLiveMaterial(ctx, client, base, token, reqBody)
 	if err != nil {
@@ -113,15 +127,26 @@ func runLiveE2EMode(a liveE2EArgs) {
 		CreatedAt:  time.Now(),
 		BaseURL:    base,
 		M3U8URL:    m3u8,
+		Duration:   e2eDur.String(),
 		RecordFor:  recordFor.String(),
+		MaxClipMS:  maxClipMS,
 		MaterialID: created.ID,
 		Create:     created,
 		Polls:      []materialSnapshot{created},
 	}
 
 	recordTargetMS := recordFor.Milliseconds()
+	// 成片选区需要 ASR 覆盖到选区终点；允许少量封窗误差。
+	asrTargetMS := maxClipMS
+	if asrTargetMS > recordTargetMS {
+		asrTargetMS = recordTargetMS
+	}
+	const asrCoverSlackMS int64 = 3000
+	if asrTargetMS > asrCoverSlackMS {
+		asrTargetMS -= asrCoverSlackMS
+	}
 	deadline := time.Now().Add(wait)
-	fmt.Printf("2/3 等待跟播录像 ≥ %s，并等待窗口 ASR 推进（asr_cursor_ms>0）…\n", recordFor)
+	fmt.Printf("2/3 等待跟播录像 ≥ %s，并等待 ASR 覆盖 ≥ %dms（asr_cursor_ms）…\n", recordFor, asrTargetMS)
 
 	var latest materialSnapshot = created
 	recordOK, asrOK := false, false
@@ -149,12 +174,12 @@ func runLiveE2EMode(a liveE2EArgs) {
 			report.AfterRecord = snap
 			fmt.Printf("录像达标: duration_ms=%d (≥ %d)\n", snap.Duration, recordTargetMS)
 		}
-		if !asrOK && (snap.ASRCursorMS > 0 || snap.ASRProgress > 0) {
+		if !asrOK && snap.ASRCursorMS >= asrTargetMS {
 			asrOK = true
 			report.AfterASR = snap
-			fmt.Printf("ASR 已推进: asr_cursor_ms=%d asr_progress=%d%%\n", snap.ASRCursorMS, snap.ASRProgress)
+			fmt.Printf("ASR 已覆盖: asr_cursor_ms=%d (≥ %d) asr_progress=%d%%\n",
+				snap.ASRCursorMS, asrTargetMS, snap.ASRProgress)
 		}
-		// 产品逻辑：约录满一个窗口后才调度 ASR；两者都满足再成片更稳。
 		if recordOK && asrOK {
 			break
 		}
@@ -168,8 +193,8 @@ func runLiveE2EMode(a liveE2EArgs) {
 			report.AfterASR = latest
 		}
 		writeLiveE2EReport(a.OutPath, report)
-		fmt.Fprintf(os.Stderr, "超时：record_ok=%v asr_ok=%v（最后 duration_ms=%d asr_cursor_ms=%d）\n",
-			recordOK, asrOK, latest.Duration, latest.ASRCursorMS)
+		fmt.Fprintf(os.Stderr, "超时：record_ok=%v asr_ok=%v（最后 duration_ms=%d asr_cursor_ms=%d，目标 record≥%d asr≥%d）\n",
+			recordOK, asrOK, latest.Duration, latest.ASRCursorMS, recordTargetMS, asrTargetMS)
 		fmt.Fprintln(os.Stderr, "请查 webserver 日志：跟播录像进度 / 窗口 ASR 调度到期 / 调度窗口 ASR / 窗口 ASR 步骤")
 		os.Exit(1)
 	}
@@ -182,7 +207,7 @@ func runLiveE2EMode(a liveE2EArgs) {
 		return
 	}
 
-	fmt.Printf("3/3 发起一键成片 live_id=%d …\n", created.ID)
+	fmt.Printf("3/3 发起一键成片 live_id=%d（选区上限 %dms）…\n", created.ID, maxClipMS)
 	oneClickOut := ""
 	if strings.TrimSpace(a.OutPath) != "" {
 		oneClickOut = strings.TrimSuffix(a.OutPath, ".json") + "_one_click.json"
@@ -204,7 +229,7 @@ func runLiveE2EMode(a liveE2EArgs) {
 		LiveID:       created.ID,
 		PromptID:     a.PromptID,
 		AutoClip:     true,
-		MaxClipMS:    a.MaxClipMS,
+		MaxClipMS:    maxClipMS,
 		ProjectSrc:   firstNonEmpty(strings.TrimSpace(a.ProjectSrc), "timeline"),
 		CanvasW:      a.CanvasW,
 		CanvasH:      a.CanvasH,

@@ -276,6 +276,19 @@ func formatASRStatusError(prefix, code, message string) string {
 	return fmt.Sprintf("%s: %s %s", prefix, code, msg)
 }
 
+// IsSilenceAudioError 是否为豆包「无有效人声」错误（20000003）。
+// 跟播窗口 ASR 遇此错误应推进游标，避免同一静音 chunk 被无限重试。
+func IsSilenceAudioError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, statusSilenceAudio) ||
+		strings.Contains(msg, "静音") ||
+		strings.Contains(msg, "no valid speech") ||
+		strings.Contains(msg, "Normal silence audio")
+}
+
 func (c *Client) setCommonHeaders(header http.Header, taskID string) {
 	header.Set("X-Api-Key", c.cfg.APIKey)
 	header.Set("X-Api-Resource-Id", c.cfg.ResourceID)

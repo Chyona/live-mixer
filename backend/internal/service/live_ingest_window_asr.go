@@ -149,14 +149,21 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	transcribeStart := time.Now()
 	raw, err := w.asrService.Transcribe(ctx, audioURL)
 	if err != nil {
-		w.logger.Warn("窗口 ASR 识别失败，跳过本 chunk",
+		// 必须推进游标：否则 ClaimWindowASR 会反复抢同一 chunk，E2E/跟播永远卡死。
+		// 静音（20000003）属预期跳过；其它识别失败也跳过本 chunk，避免死循环。
+		advanceReason := "识别失败跳过"
+		if asr.IsSilenceAudioError(err) {
+			advanceReason = "静音跳过"
+		}
+		w.logger.Warn("窗口 ASR "+advanceReason+"，推进游标",
 			zap.Uint("material_id", material.ID),
 			zap.Int("window_index", win.Index),
 			zap.Int64("local_cursor_ms", localCursor),
+			zap.Int64("chunk_ms", thisChunkMS),
 			zap.Duration("elapsed", time.Since(transcribeStart)),
 			zap.Error(err),
 		)
-		return nil
+		return w.commitWindowASRProgress(ctx, material, epoch, win, targetWindowMS, localCursor, thisChunkMS, cursor, material.LiveASR, 0, 1.0, asrStart)
 	}
 	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
 
@@ -182,6 +189,21 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	if err != nil {
 		return err
 	}
+	return w.commitWindowASRProgress(ctx, material, epoch, win, targetWindowMS, localCursor, thisChunkMS, cursor, merged, asrDur, scaleFactor, asrStart)
+}
+
+// commitWindowASRProgress 将游标推进 thisChunkMS，并写回 live_asr / asr_due。
+func (w *liveIngestWorker) commitWindowASRProgress(
+	ctx context.Context,
+	material *model.LiveMaterial,
+	epoch int64,
+	win model.MediaWindow,
+	targetWindowMS, localCursor, thisChunkMS, cursor int64,
+	liveASR string,
+	asrVendorDurMS int64,
+	scaleFactor float64,
+	asrStart time.Time,
+) error {
 	newLocal := localCursor + thisChunkMS
 	newCursor := win.StartMS + newLocal
 	if newLocal >= targetWindowMS {
@@ -192,23 +214,28 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	progress := windowASRProgress(material.Duration, newCursor)
 	_, stillPending := material.ParsedMediaWindows().NextPendingASRWindow(newCursor)
-	logStep("db_start", zap.Int64("asr_cursor_ms", newCursor), zap.Bool("still_due", stillPending))
-	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, merged, newCursor, material.Duration, progress, stillPending); err != nil {
+	w.logger.Info("窗口 ASR 步骤",
+		zap.Uint("material_id", material.ID),
+		zap.String("step", "db_start"),
+		zap.Int64("asr_cursor_ms", newCursor),
+		zap.Bool("still_due", stillPending),
+	)
+	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, newCursor, material.Duration, progress, stillPending); err != nil {
 		return err
 	}
 	material.ASRCursorMS = newCursor
-	material.LiveASR = merged
+	material.LiveASR = liveASR
 	material.ASRProgress = progress
 	material.ASRDue = stillPending
 	w.logger.Info("窗口 ASR chunk 完成",
 		zap.Uint("material_id", material.ID),
 		zap.Duration("elapsed", time.Since(asrStart)),
 		zap.Int("window_index", win.Index),
-		zap.Int64("offset_ms", offsetMS),
+		zap.Int64("offset_ms", win.StartMS+localCursor),
 		zap.Int64("chunk_ms", thisChunkMS),
 		zap.Int64("asr_cursor_ms", newCursor),
 		zap.Int64("window_ms", targetWindowMS),
-		zap.Int64("asr_vendor_duration_ms", asrDur),
+		zap.Int64("asr_vendor_duration_ms", asrVendorDurMS),
 		zap.Float64("asr_time_scale", scaleFactor),
 		zap.Int16("asr_progress", progress),
 	)

@@ -145,6 +145,24 @@ func TestClient_Transcribe_SilenceAudioError(t *testing.T) {
 	if !strings.Contains(err.Error(), "静音") || !strings.Contains(err.Error(), "重新解析") {
 		t.Fatalf("error = %v, want friendly silence message", err)
 	}
+	if !IsSilenceAudioError(err) {
+		t.Fatalf("IsSilenceAudioError(%v) = false, want true", err)
+	}
+}
+
+func TestIsSilenceAudioError(t *testing.T) {
+	if !IsSilenceAudioError(fmt.Errorf("ASR 查询失败: 20000003 源音频被识别为静音")) {
+		t.Fatal("want true for 20000003")
+	}
+	if !IsSilenceAudioError(fmt.Errorf("no valid speech in audio")) {
+		t.Fatal("want true for no valid speech")
+	}
+	if IsSilenceAudioError(fmt.Errorf("ASR 查询失败: 50000000 boom")) {
+		t.Fatal("want false for other codes")
+	}
+	if IsSilenceAudioError(nil) {
+		t.Fatal("want false for nil")
+	}
 }
 
 // TestClient_Transcribe_QueryTimeoutThenSuccess 单次 query 读超时后应继续轮询并最终成功。
