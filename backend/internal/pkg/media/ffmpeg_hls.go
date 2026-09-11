@@ -92,7 +92,9 @@ func (c *FFmpegConverter) ConvertURLToASRMP3(ctx context.Context, input, outputP
 	return c.runFFmpeg(ctx, args, "ffmpeg 从源抽 ASR MP3 失败")
 }
 
-// ConcatMediaFiles 按清单无损拼接分片为 mp4。
+// ConcatMediaFiles 按清单拼接分片为 mp4。
+// 先 concat copy，再 copy 视频并重编码音轨（aresample=async + atrim），避免 TS 拼接后
+// 「解码 PCM 比视频长一截」——后续从该 MP4 抽等长 ASR MP3 的前提。
 func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, outputPath string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("没有可拼接的分片")
@@ -115,6 +117,8 @@ func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, 
 	}
 	defer os.Remove(listPath)
 
+	copyPath := outputPath + ".copy.mp4"
+	defer os.Remove(copyPath)
 	args := []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
@@ -123,10 +127,10 @@ func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, 
 		"-i", listPath,
 		"-c", "copy",
 		"-movflags", "+faststart",
-		outputPath,
+		copyPath,
 	}
 	if err := c.runFFmpeg(ctx, args, "ffmpeg 拼接分片失败"); err != nil {
-		// TS 拼接成 mp4 偶发 copy 失败时回退重编码。
+		// TS 拼接成 mp4 偶发 copy 失败时回退整段重编码。
 		args = []string{
 			"-y",
 			"-threads", strconv.Itoa(DefaultFFmpegThreads),
@@ -143,7 +147,47 @@ func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, 
 		}
 		return c.runFFmpeg(ctx, args, "ffmpeg 拼接分片（重编码）失败")
 	}
+	if err := c.remuxCopyVideoSyncAudio(ctx, copyPath, outputPath); err != nil {
+		return fmt.Errorf("拼接后对齐音轨失败: %w", err)
+	}
 	return nil
+}
+
+// remuxCopyVideoSyncAudio 保留视频比特流，按容器时间轴重编码音轨并硬裁到等长。
+func (c *FFmpegConverter) remuxCopyVideoSyncAudio(ctx context.Context, inputPath, outputPath string) error {
+	prober := NewFFprobeProber("")
+	durSec, err := prober.ProbeDurationSec(ctx, inputPath)
+	if err != nil || durSec <= 0 {
+		tl, perr := prober.ProbeMediaTimeline(ctx, inputPath)
+		if perr != nil {
+			return fmt.Errorf("探测拼接结果时长失败: %w", err)
+		}
+		durSec = tl.FormatDurationSec
+		if durSec <= 0 && tl.HasVideo {
+			durSec = tl.VideoDurationSec
+		}
+		if durSec <= 0 {
+			return fmt.Errorf("拼接结果时长无效")
+		}
+	}
+	dur := formatFFmpegSeconds(durSec)
+	af := fmt.Sprintf(
+		"aresample=async=%d:first_pts=0,asetpts=PTS-STARTPTS,apad=whole_dur=%s,atrim=duration=%s,asetpts=PTS-STARTPTS",
+		asrAudioAsyncMaxSamplesPerSec, dur, dur,
+	)
+	args := []string{
+		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
+		"-i", inputPath,
+		"-c:v", "copy",
+		"-af", af,
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-t", dur,
+		"-movflags", "+faststart",
+		outputPath,
+	}
+	return c.runFFmpeg(ctx, args, "ffmpeg 对齐音轨失败")
 }
 
 // RecordHLSSegments 将 HLS 拉流写成固定时长 TS 分片。

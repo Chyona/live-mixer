@@ -64,7 +64,7 @@ func TestParseVolumeDetectOutput(t *testing.T) {
 
 func TestBuildASRMP3Args_NoAlign(t *testing.T) {
 	args := buildASRMP3Args(DefaultASRSampleRate, DefaultASRChannels, DefaultASRMP3Bitrate, "/in.mp4", "/out.mp3", ASRAlignOptions{})
-	wantAF := "asetpts=PTS-STARTPTS,aformat=sample_rates=16000:channel_layouts=mono"
+	wantAF := "aresample=async=10000:first_pts=0,asetpts=PTS-STARTPTS,aformat=sample_rates=16000:channel_layouts=mono"
 	want := []string{
 		"-y", "-threads", "6", "-i", "/in.mp4", "-vn",
 		"-af", wantAF,
@@ -83,7 +83,7 @@ func TestBuildASRMP3Args_NoAlign(t *testing.T) {
 func TestBuildASRMP3Args_WithAlign(t *testing.T) {
 	align := ASRAlignOptions{LeadPadMs: 1000, TrimStartSec: 0.5, TargetDurSec: 5}
 	args := buildASRMP3Args(DefaultASRSampleRate, DefaultASRChannels, DefaultASRMP3Bitrate, "/in.mp4", "/out.mp3", align)
-	wantAF := "atrim=start=0.5,asetpts=PTS-STARTPTS,adelay=delays=1000:all=1,aformat=sample_rates=16000:channel_layouts=mono,apad=whole_dur=5"
+	wantAF := "aresample=async=10000:first_pts=0,atrim=start=0.5,asetpts=PTS-STARTPTS,adelay=delays=1000:all=1,aformat=sample_rates=16000:channel_layouts=mono,apad=whole_dur=5,atrim=duration=5,asetpts=PTS-STARTPTS"
 	want := []string{
 		"-y", "-threads", "6", "-i", "/in.mp4", "-vn",
 		"-af", wantAF,
@@ -101,9 +101,30 @@ func TestBuildASRMP3Args_WithAlign(t *testing.T) {
 	}
 }
 
+func TestBuildASRMP3RangeArgs_SeekAndDuration(t *testing.T) {
+	align := ASRAlignOptions{TargetDurSec: 120}
+	args := buildASRMP3RangeArgs(DefaultASRSampleRate, DefaultASRChannels, DefaultASRMP3Bitrate, "/win.mp4", "/chunk.mp3", 240, 120, align)
+	want := []string{
+		"-y", "-threads", "6",
+		"-ss", "240", "-i", "/win.mp4", "-t", "120",
+		"-vn", "-af", "aresample=async=10000:first_pts=0,asetpts=PTS-STARTPTS,aformat=sample_rates=16000:channel_layouts=mono,apad=whole_dur=120,atrim=duration=120,asetpts=PTS-STARTPTS",
+		"-c:a", "libmp3lame", "-b:a", "64k",
+		"-t", "120",
+		"/chunk.mp3",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("args len = %d, want %d; args=%v", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("args[%d] = %q, want %q", i, args[i], want[i])
+		}
+	}
+}
+
 func TestBuildASRAlignAudioFilter_StereoLeadPad(t *testing.T) {
 	got := buildASRAlignAudioFilter(16000, 2, ASRAlignOptions{LeadPadMs: 250})
-	want := "asetpts=PTS-STARTPTS,adelay=delays=250:all=1,aformat=sample_rates=16000:channel_layouts=stereo"
+	want := "aresample=async=10000:first_pts=0,asetpts=PTS-STARTPTS,adelay=delays=250:all=1,aformat=sample_rates=16000:channel_layouts=stereo"
 	if got != want {
 		t.Errorf("filter = %q, want %q", got, want)
 	}
@@ -400,7 +421,43 @@ func TestFFmpegConverter_ConvertToASRMP3Aligned_AudioLate(t *testing.T) {
 	if outDur <= 0 {
 		outDur = outTL.AudioDurationSec
 	}
-	if math.Abs(outDur-align.TargetDurSec) > 0.2 {
+	if math.Abs(outDur-align.TargetDurSec) > 0.35 {
 		t.Errorf("output duration = %v, want ~%v", outDur, align.TargetDurSec)
+	}
+}
+
+func TestConvertRangeToASRMP3Aligned_EqualDurationFromWindowMP4(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	win := filepath.Join("..", "..", "..", "docker", "html", "staging", "live_ingest", "1", "e1", "windows", "window_00000.mp4")
+	if st, err := os.Stat(win); err != nil || st.Size() == 0 {
+		t.Skip("fixture window_00000.mp4 not present")
+	}
+	prober := NewFFprobeProber("")
+	tl, err := prober.ProbeMediaTimeline(context.Background(), win)
+	if err != nil {
+		t.Fatalf("probe window: %v", err)
+	}
+	target := tl.FormatDurationSec
+	if target <= 0 {
+		target = tl.VideoDurationSec
+	}
+	if target < 60 {
+		t.Fatalf("unexpected window duration %v", target)
+	}
+	out := filepath.Join(t.TempDir(), "eq.mp3")
+	c := NewFFmpegConverter(ffmpegPath)
+	align := ASRAlignOptions{TargetDurSec: target}
+	if err := c.ConvertRangeToASRMP3Aligned(context.Background(), win, out, 0, 0, align); err != nil {
+		t.Fatalf("ConvertRangeToASRMP3Aligned: %v", err)
+	}
+	got, err := prober.ProbeDurationSec(context.Background(), out)
+	if err != nil {
+		t.Fatalf("probe mp3: %v", err)
+	}
+	if math.Abs(got-target) > asrMP3DurationSkewSec {
+		t.Fatalf("mp3 duration = %v, want ~%v (window was known to decode to ~633s without async)", got, target)
 	}
 }

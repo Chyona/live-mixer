@@ -40,7 +40,10 @@ func TestLiveMediaWindowDuration(t *testing.T) {
 	if model.LiveMediaWindowDuration != 10*time.Minute {
 		t.Fatalf("LiveMediaWindowDuration = %v, want 10m", model.LiveMediaWindowDuration)
 	}
-	if model.MaxASRTranscribeDuration != model.LiveMediaWindowDuration {
-		t.Fatalf("MaxASRTranscribeDuration should equal media window")
+	if model.MaxASRTranscribeDuration != 2*time.Minute {
+		t.Fatalf("MaxASRTranscribeDuration = %v, want 2m (短 chunk，避免整窗缩放)", model.MaxASRTranscribeDuration)
+	}
+	if model.MaxASRTranscribeDuration >= model.LiveMediaWindowDuration {
+		t.Fatalf("ASR chunk (%v) must be shorter than media window (%v)", model.MaxASRTranscribeDuration, model.LiveMediaWindowDuration)
 	}
 }

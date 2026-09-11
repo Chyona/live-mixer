@@ -411,6 +411,20 @@ func resolveOnsetRefInput(s *session.Session, sourceStartMS int64) (input string
 	if s == nil {
 		return "", 0, false
 	}
+	// 媒体窗成片：对照必须用 window_N.mp4 + 窗内 offset，不能用 seg Index（会与裁切源不一致）。
+	if s.SourceMode == "media_windows" && s.Material != nil {
+		if win, off, found := s.Material.ParsedMediaWindows().FindByGlobalMS(sourceStartMS); found {
+			for _, dir := range []string{strings.TrimSpace(s.LocalIngestDir), strings.TrimSpace(s.StagingDir)} {
+				if dir == "" {
+					continue
+				}
+				p := filepath.Join(dir, "windows", liveingest.WindowMP4FileName(win.Index))
+				if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+					return p, float64(off) / 1000.0, true
+				}
+			}
+		}
+	}
 	dir := strings.TrimSpace(s.LocalIngestDir)
 	if dir != "" && len(liveingest.GlobLocalSegments(dir)) > 0 {
 		nominal := int64(model.LiveSegmentDurationSec) * 1000

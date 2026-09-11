@@ -54,11 +54,13 @@ const LiveSegmentDurationSec = 6
 // 可按产品需要改为 20m / 30m。
 const LiveMediaWindowDuration = 10 * time.Minute
 
-// LiveASRWindowDuration 兼容旧名：等同媒体窗时长（调度/文档引用）。
+// LiveASRWindowDuration 兼容旧名：媒体窗调度时长。
 const LiveASRWindowDuration = LiveMediaWindowDuration
 
-// MaxASRTranscribeDuration 单次 ASR 提交上限；跟播场景等于媒体窗（整窗一份 MP4 一次转写）。
-const MaxASRTranscribeDuration = LiveMediaWindowDuration
+// MaxASRTranscribeDuration 单次送厂商转写的上限。
+// 媒体窗 MP4 仍为完整窗；ASR 对该 MP4 按短 chunk 抽「与片段等长」的 MP3 再转写。
+// 必须先保证抽音等长：若 MP3 比视频长（曾出现 10:33 vs 10:02），厂商按时长回报后再缩放会把字幕压歪。
+const MaxASRTranscribeDuration = 2 * time.Minute
 
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
 // Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。

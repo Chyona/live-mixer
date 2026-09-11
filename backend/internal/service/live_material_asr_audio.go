@@ -246,11 +246,12 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 			zap.Float64("target_dur_sec", align.TargetDurSec),
 		)
 		_ = os.Remove(mp3Path)
-		if err := p.converter.ConvertToASRMP3Aligned(ctx, probeInput, mp3Path, media.ASRAlignOptions{}); err != nil {
+		retryAlign := media.ASRAlignOptions{TargetDurSec: align.TargetDurSec}
+		if err := p.converter.ConvertToASRMP3Aligned(ctx, probeInput, mp3Path, retryAlign); err != nil {
 			cleanup()
 			return empty, fmt.Errorf("无对齐重试转码 ASR MP3 失败: %w", err)
 		}
-		usedAlign = media.ASRAlignOptions{}
+		usedAlign = retryAlign
 		if silent2, loudErr2 := p.mp3NearSilence(ctx, mp3Path); loudErr2 == nil && silent2 {
 			cleanup()
 			return empty, fmt.Errorf("源视频音轨无明显语音（接近静音），无法进行 ASR；请检查原片是否有人声或音轨是否损坏")

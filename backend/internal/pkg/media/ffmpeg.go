@@ -4,6 +4,7 @@ package media
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -49,32 +50,92 @@ func (c *FFmpegConverter) ConvertToASRMP3(ctx context.Context, inputPath, output
 // ConvertToASRMP3Aligned 在标准 MP3 转码基础上，将音轨对齐到视频时间轴。
 // LeadPadMs>0 时片头补静音；TrimStartSec>0 时裁掉音轨前缀；TargetDurSec>0 时 apad+-t 封口到目标时长。
 func (c *FFmpegConverter) ConvertToASRMP3Aligned(ctx context.Context, inputPath, outputPath string, align ASRAlignOptions) error {
+	return c.ConvertRangeToASRMP3Aligned(ctx, inputPath, outputPath, 0, 0, align)
+}
+
+// ConvertRangeToASRMP3Aligned 从可定位媒体（如窗 MP4）抽取 [startSec, startSec+durSec) 为 ASR MP3。
+// durSec<=0 时转码到文件结束（或 align.TargetDurSec）。
+// 当 TargetDurSec>0 时，输出 MP3 探测时长必须与目标接近（采样等长），否则返回错误。
+func (c *FFmpegConverter) ConvertRangeToASRMP3Aligned(
+	ctx context.Context,
+	inputPath, outputPath string,
+	startSec, durSec float64,
+	align ASRAlignOptions,
+) error {
 	binary := c.BinaryPath
 	if strings.TrimSpace(binary) == "" {
 		binary = DefaultFFmpegBinary
 	}
-
-	args := buildASRMP3Args(c.resolvedSampleRate(), c.resolvedChannels(), c.resolvedMP3Bitrate(), inputPath, outputPath, align)
+	if durSec > 0 && align.TargetDurSec <= 0 {
+		align.TargetDurSec = durSec
+	}
+	args := buildASRMP3RangeArgs(c.resolvedSampleRate(), c.resolvedChannels(), c.resolvedMP3Bitrate(), inputPath, outputPath, startSec, durSec, align)
 	args = prependHLSInputArgs(args, inputPath)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ffmpeg 转 MP3 失败: %w, output: %s", err, strings.TrimSpace(string(output)))
 	}
+	if align.TargetDurSec > 0 {
+		if err := verifyASRMP3Duration(ctx, outputPath, align.TargetDurSec); err != nil {
+			_ = os.Remove(outputPath)
+			return err
+		}
+	}
+	return nil
+}
+
+// asrMP3DurationSkewSec 抽音结果相对目标时长允许的偏差（MP3 帧对齐会有几十到一百毫秒级误差）。
+const asrMP3DurationSkewSec = 0.35
+
+func verifyASRMP3Duration(ctx context.Context, mp3Path string, targetSec float64) error {
+	if targetSec <= 0 {
+		return nil
+	}
+	prober := NewFFprobeProber("")
+	got, err := prober.ProbeDurationSec(ctx, mp3Path)
+	if err != nil {
+		return fmt.Errorf("抽音后探测 MP3 时长失败: %w", err)
+	}
+	skew := got - targetSec
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > asrMP3DurationSkewSec {
+		return fmt.Errorf("ASR MP3 时长与源不一致: got=%.3fs want=%.3fs (skew=%.3fs)", got, targetSec, skew)
+	}
 	return nil
 }
 
 // buildASRMP3Args 构建 ffmpeg 转 ASR MP3 的参数列表，便于单元测试校验。
 func buildASRMP3Args(sampleRate, channels int, bitrate, inputPath, outputPath string, align ASRAlignOptions) []string {
+	return buildASRMP3RangeArgs(sampleRate, channels, bitrate, inputPath, outputPath, 0, 0, align)
+}
+
+// asrAudioAsyncMaxSamplesPerSec 将解码采样拉回容器/时间戳轴的最大补偿速率。
+// TS concat -c copy 的窗 MP4 会出现「包数量对应 ~10:33 PCM、时间戳只有 ~10:02」；
+// 不用 async 时 -t/apad 按 PTS 截断无效，MP3 会比视频长一截，ASR 再按视频轴缩放就会字幕错位。
+const asrAudioAsyncMaxSamplesPerSec = 10000
+
+// buildASRMP3RangeArgs 支持可选输入侧 -ss / -t，从窗 MP4 精确抽短 chunk。
+func buildASRMP3RangeArgs(sampleRate, channels int, bitrate, inputPath, outputPath string, startSec, durSec float64, align ASRAlignOptions) []string {
 	args := []string{
 		"-y",
 		"-threads", strconv.Itoa(DefaultFFmpegThreads),
-		"-i", inputPath,
+	}
+	if startSec > 0 {
+		args = append(args, "-ss", formatFFmpegSeconds(startSec))
+	}
+	args = append(args, "-i", inputPath)
+	if durSec > 0 {
+		args = append(args, "-t", formatFFmpegSeconds(durSec))
+	}
+	args = append(args,
 		"-vn",
 		"-af", buildASRAlignAudioFilter(sampleRate, channels, align),
 		"-c:a", "libmp3lame",
 		"-b:a", bitrate,
-	}
+	)
 	if align.TargetDurSec > 0 {
 		args = append(args, "-t", formatFFmpegSeconds(align.TargetDurSec))
 	}
@@ -83,9 +144,10 @@ func buildASRMP3Args(sampleRate, channels int, bitrate, inputPath, outputPath st
 }
 
 // buildASRAlignAudioFilter 构建将对齐到视频时间轴的 -af 滤镜链。
-// 始终 asetpts 归零，避免源片 audio.start_time>0 时 apad/whole_dur 按错误时间戳提前结束。
+// 先 aresample=async 把采样贴齐输入时间戳，再按需 pad/atrim 到 TargetDurSec，保证输出 MP3 与目标时长等长。
 func buildASRAlignAudioFilter(sampleRate, channels int, align ASRAlignOptions) string {
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 8)
+	parts = append(parts, fmt.Sprintf("aresample=async=%d:first_pts=0", asrAudioAsyncMaxSamplesPerSec))
 	if align.TrimStartSec > 0 {
 		parts = append(parts, fmt.Sprintf("atrim=start=%s", formatFFmpegSeconds(align.TrimStartSec)))
 	}
@@ -96,7 +158,12 @@ func buildASRAlignAudioFilter(sampleRate, channels int, align ASRAlignOptions) s
 	}
 	parts = append(parts, fmt.Sprintf("aformat=sample_rates=%d:channel_layouts=%s", sampleRate, channelLayoutName(channels)))
 	if align.TargetDurSec > 0 {
-		parts = append(parts, fmt.Sprintf("apad=whole_dur=%s", formatFFmpegSeconds(align.TargetDurSec)))
+		dur := formatFFmpegSeconds(align.TargetDurSec)
+		parts = append(parts,
+			fmt.Sprintf("apad=whole_dur=%s", dur),
+			fmt.Sprintf("atrim=duration=%s", dur),
+			"asetpts=PTS-STARTPTS",
+		)
 	}
 	return strings.Join(parts, ",")
 }
