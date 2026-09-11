@@ -171,7 +171,10 @@ func (m *LiveMaterial) CanUpdateM3U8() bool {
 	}
 }
 
-// PlayURL 前端播放地址：关播后用 final.mp4；跟播中用媒体窗 HLS（RecordPlaylistURL）；否则用户 m3u8。
+// PlayURL 前端播放地址。
+// 跟播/收尾：只用自有录像时间轴（RecordPlaylistURL），绝不回退到源站滑动 m3u8——
+// 否则人工切片预览与窗口 ASR / 一键成片时钟不一致。
+// 关播后：final.mp4（url_type=file）；回放素材：用户 m3u8 / live_url。
 func (m *LiveMaterial) PlayURL() string {
 	if m == nil {
 		return ""
@@ -180,10 +183,13 @@ func (m *LiveMaterial) PlayURL() string {
 		return m.LiveURL
 	}
 	switch m.LiveStatus {
-	case LiveStatusLive, LiveStatusEnding:
-		if u := strings.TrimSpace(m.RecordPlaylistURL); u != "" {
+	case LiveStatusWaiting, LiveStatusConnecting, LiveStatusLive, LiveStatusEnding:
+		return strings.TrimSpace(m.RecordPlaylistURL)
+	case LiveStatusEnded:
+		if u := strings.TrimSpace(m.LiveURL); u != "" {
 			return u
 		}
+		return strings.TrimSpace(m.RecordPlaylistURL)
 	}
 	if u := strings.TrimSpace(m.M3U8URL); u != "" {
 		return u

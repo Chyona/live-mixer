@@ -13,9 +13,24 @@ func TestLiveMaterial_PlayURL(t *testing.T) {
 	if got := m.PlayURL(); got != m.RecordPlaylistURL {
 		t.Errorf("live PlayURL = %q, want record playlist", got)
 	}
+	m.RecordPlaylistURL = ""
+	if got := m.PlayURL(); got != "" {
+		t.Errorf("live without record must not fall back to source m3u8, got %q", got)
+	}
+	m.RecordPlaylistURL = "https://cdn.example/live.m3u8"
 	m.URLType = URLTypeFile
 	if got := m.PlayURL(); got != m.LiveURL {
-		t.Errorf("ended PlayURL = %q, want live_url", got)
+		t.Errorf("file PlayURL = %q, want live_url", got)
+	}
+	ended := &LiveMaterial{
+		LiveURL:           "https://cdn.example/final.mp4",
+		M3U8URL:           "https://src.example/live.m3u8",
+		RecordPlaylistURL: "https://cdn.example/live.m3u8",
+		URLType:           URLTypeM3U8,
+		LiveStatus:        LiveStatusEnded,
+	}
+	if got := ended.PlayURL(); got != ended.LiveURL {
+		t.Errorf("ended PlayURL = %q, want final live_url", got)
 	}
 	replay := &LiveMaterial{M3U8URL: "https://src.example/vod.m3u8", URLType: URLTypeM3U8, LiveStatus: LiveStatusNone}
 	if got := replay.PlayURL(); got != replay.M3U8URL {

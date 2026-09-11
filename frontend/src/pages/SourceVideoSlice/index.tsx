@@ -742,7 +742,14 @@ const SourceVideoSlicePage = () => {
 
       {!hasVideoUrl ? (
         <div className="slice-page-empty-shell">
-          <SlicePageEmptyState variant="no-playback-url" entryFrom={entryFrom} />
+          <SlicePageEmptyState
+            variant={
+              video && isLiveIngesting(video.live_status)
+                ? 'record-preview-pending'
+                : 'no-playback-url'
+            }
+            entryFrom={entryFrom}
+          />
         </div>
       ) : !canPreview ? (
         <div className="slice-page-empty-shell">

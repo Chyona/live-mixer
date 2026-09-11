@@ -22,4 +22,7 @@ func TestBuildWindowsPlaylist(t *testing.T) {
 	if strings.Contains(body, "w2.ts") {
 		t.Fatalf("included not-ready window: %s", body)
 	}
+	if !strings.Contains(body, "#EXT-X-DISCONTINUITY") {
+		t.Fatalf("missing DISCONTINUITY between windows: %s", body)
+	}
 }

@@ -1042,7 +1042,13 @@ const ManualVideoSlicePage = () => {
       {!canPreview ? (
         <div className="slice-page-empty-shell">
           <SlicePageEmptyState
-            variant={streamUrl ? 'unsupported-format' : 'no-playback-url'}
+            variant={
+              streamUrl
+                ? 'unsupported-format'
+                : video && isLiveIngesting(video.live_status)
+                  ? 'record-preview-pending'
+                  : 'no-playback-url'
+            }
             entryFrom={entryFrom}
           />
         </div>

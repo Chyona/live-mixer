@@ -36,6 +36,7 @@ func BuildWindowsPlaylist(windows model.MediaWindowList, targetDurationSec int, 
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:EVENT\n")
 	b.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", td))
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
+	first := true
 	for _, w := range windows {
 		if !w.Ready {
 			continue
@@ -47,6 +48,12 @@ func BuildWindowsPlaylist(windows model.MediaWindowList, targetDurationSec int, 
 		if u == "" {
 			continue
 		}
+		// 各窗独立 remux，PTS 从 0 重算；窗间必须声明 DISCONTINUITY，否则播放器
+		// 会把后窗当成连续码流，currentTime 与 ASR/成片全局时间轴错位。
+		if !first {
+			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
+		first = false
 		dur := float64(w.DurMS) / 1000.0
 		if dur <= 0 {
 			dur = float64(td)

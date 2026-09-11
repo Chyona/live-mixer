@@ -27,7 +27,7 @@ export {
   SOURCE_VIDEO_URL_DUPLICATE_CODE,
 } from './sourceVideo.model';
 
-import type { AsrParagraphs, SourceVideo } from './sourceVideo.model';
+import type { AsrParagraphs, MediaWindowMeta, SourceVideo } from './sourceVideo.model';
 import { sourceVideoPlayUrl } from './sourceVideo.model';
 
 function parseContentDispositionFilename(header?: string): string | null {
@@ -175,6 +175,27 @@ function normalizeAsrParagraphs(raw: Record<string, unknown>): AsrParagraphs | n
   }
 }
 
+function normalizeMediaWindows(raw: unknown): MediaWindowMeta[] {
+  if (!Array.isArray(raw)) return [];
+  const list: MediaWindowMeta[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const url = String(row.url ?? '').trim();
+    const tsUrl = String(row.ts_url ?? '').trim();
+    list.push({
+      i: Number(row.i ?? 0) || 0,
+      start_ms: Number(row.start_ms ?? 0) || 0,
+      end_ms: Number(row.end_ms ?? 0) || 0,
+      dur_ms: Number(row.dur_ms ?? 0) || 0,
+      url: url || undefined,
+      ts_url: tsUrl || undefined,
+      ready: Boolean(row.ready),
+    });
+  }
+  return list;
+}
+
 export function normalizeSourceVideo(
   raw: Partial<SourceVideo> & Record<string, unknown>
 ): SourceVideo {
@@ -205,15 +226,15 @@ export function normalizeSourceVideo(
     updated_at: String(raw.updated_at ?? ''),
     created_by: String(raw.created_by ?? ''),
     project_count: normalizeProjectCount(raw),
+    media_windows: normalizeMediaWindows(raw.media_windows),
     matched_paragraphs: normalizeMatchedParagraphs(
       raw.matched_paragraphs ?? raw.matchedParagraphs
     ),
     asr_paragraphs: normalizeAsrParagraphs(raw),
     asr_summaries: normalizeAsrSummaries(raw.asr_summaries),
   };
-  if (!video.play_url.trim()) {
-    video.play_url = sourceVideoPlayUrl(video);
-  }
+  // 始终按 live_status 重算，避免跟播误用源站 m3u8 作为 play_url
+  video.play_url = sourceVideoPlayUrl(video);
   return video;
 }
 
