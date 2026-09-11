@@ -138,20 +138,45 @@ func (p *Pipeline) cutOneClipByTimelineIndex(
 		return p.runCut(ctx, spans[0].FilePath, outPath, startSec, endSec, useFast)
 	}
 
-	// 跨多片：只 concat 本 clip 覆盖的少数 ts，再对短 concat 做输出侧 -ss。
-	files := make([]string, 0, len(spans))
-	for _, sp := range spans {
-		files = append(files, sp.FilePath)
+	// 跨多片：逐片按片内 offset 切，再 concat；禁止对多段 TS 做 demuxer -ss（短 ffconcat 仍可能切错）。
+	parts := make([]string, 0, len(spans))
+	for si, sp := range spans {
+		part := filepath.Join(s.StagingDir, fmt.Sprintf("clip_%03d_p%02d.mp4", clipIndex, si))
+		startSec := float64(sp.OffsetMS) / 1000.0
+		endSec := startSec + float64(sp.DurMS)/1000.0
+		if err := p.runCut(ctx, sp.FilePath, part, startSec, endSec, useFast); err != nil {
+			for _, pth := range parts {
+				_ = os.Remove(pth)
+			}
+			return fmt.Errorf("裁剪第 %d 段分片 %d 失败: %w", clipIndex, sp.SegIndex, err)
+		}
+		parts = append(parts, part)
 	}
-	listPath := filepath.Join(s.StagingDir, fmt.Sprintf("clip_%03d_span.ffconcat", clipIndex))
-	if err := liveingest.WriteFFConcatList(files, listPath); err != nil {
-		return fmt.Errorf("裁剪第 %d 段：写短 concat 失败: %w", clipIndex, err)
+	defer func() {
+		for _, pth := range parts {
+			_ = os.Remove(pth)
+		}
+	}()
+
+	if concat, ok := p.Cutter.(mediaFileConcatenator); ok {
+		if err := concat.ConcatMediaFiles(ctx, parts, outPath); err != nil {
+			return fmt.Errorf("裁剪第 %d 段：拼接分片失败: %w", clipIndex, err)
+		}
+		return nil
+	}
+
+	// 测试 mock 等无 Concat 时：对已切好的 part 做 0 起点 concat（不再二次 seek 进 TS）。
+	listPath := filepath.Join(s.StagingDir, fmt.Sprintf("clip_%03d_parts.ffconcat", clipIndex))
+	if err := liveingest.WriteFFConcatList(parts, listPath); err != nil {
+		return fmt.Errorf("裁剪第 %d 段：写 part concat 失败: %w", clipIndex, err)
 	}
 	defer os.Remove(listPath)
+	return p.runCut(ctx, listPath, outPath, 0, float64(wantMS)/1000.0, useFast)
+}
 
-	startSec := float64(spans[0].OffsetMS) / 1000.0
-	endSec := startSec + float64(wantMS)/1000.0
-	return p.runCut(ctx, listPath, outPath, startSec, endSec, useFast)
+// mediaFileConcatenator 可选：真实 ffmpeg 裁剪器支持无损/重封装拼接。
+type mediaFileConcatenator interface {
+	ConcatMediaFiles(ctx context.Context, files []string, outputPath string) error
 }
 
 func (p *Pipeline) runCut(ctx context.Context, input, output string, startSec, endSec float64, useFast bool) error {

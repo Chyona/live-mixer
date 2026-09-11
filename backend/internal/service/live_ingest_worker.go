@@ -331,15 +331,14 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 	}()
 
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
-	if err := w.runWindowASR(ctx, material); err != nil {
-		return err
-	}
+	// 单次租约内按短 chunk 追平：避免把 10 分钟 backlog 打成一个超长 MP3（厂商词戳后段易漂）。
+	w.catchUpWindowASR(ctx, material)
 	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
-		windowMS := int64(model.LiveASRWindowDuration / time.Millisecond)
-		if windowMS <= 0 {
-			windowMS = 10 * 60 * 1000
+		chunkMS := int64(model.MaxASRTranscribeDuration / time.Millisecond)
+		if chunkMS <= 0 {
+			chunkMS = 2 * 60 * 1000
 		}
-		if latest.Duration-latest.ASRCursorMS < windowMS && !latest.ASRDue {
+		if latest.Duration-latest.ASRCursorMS < chunkMS && !latest.ASRDue {
 			_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
 		}
 	}
@@ -1163,17 +1162,17 @@ func (w *liveIngestWorker) catchUpWindowASRUnderLease(ctx context.Context, mater
 	_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
 }
 
-// maxWindowASRSegments 单次送去转写的最大分片数（约等于一个调度窗口 + 1 片重叠余量）。
+// maxWindowASRSegments 单次送去转写的最大分片数（短 chunk + 1 片重叠余量）。
 func maxWindowASRSegments() int {
 	segSec := model.LiveSegmentDurationSec
 	if segSec <= 0 {
 		segSec = 6
 	}
-	windowSec := int(model.LiveASRWindowDuration / time.Second)
-	if windowSec <= 0 {
-		windowSec = 10 * 60
+	chunkSec := int(model.MaxASRTranscribeDuration / time.Second)
+	if chunkSec <= 0 {
+		chunkSec = 2 * 60
 	}
-	n := windowSec / segSec
+	n := chunkSec / segSec
 	if n < 1 {
 		n = 1
 	}

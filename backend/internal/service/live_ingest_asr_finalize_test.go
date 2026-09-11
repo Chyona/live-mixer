@@ -37,13 +37,13 @@ func TestLocalASRPostprocessFallback_EmptyASR(t *testing.T) {
 }
 
 func TestMaxWindowASRSegments(t *testing.T) {
-	// 10 分钟窗口 / 6 秒分片 = 100，再 +1 重叠余量。
+	// 单次转写上限 2 分钟 / 6 秒分片 = 20，再 +1 重叠余量。
 	got := maxWindowASRSegments()
-	want := int(model.LiveASRWindowDuration/time.Second)/model.LiveSegmentDurationSec + 1
+	want := int(model.MaxASRTranscribeDuration/time.Second)/model.LiveSegmentDurationSec + 1
 	if got != want {
 		t.Fatalf("maxWindowASRSegments() = %d, want %d", got, want)
 	}
-	if got < 50 {
-		t.Fatalf("maxWindowASRSegments() = %d, unexpectedly small", got)
+	if got > 40 || got < 10 {
+		t.Fatalf("maxWindowASRSegments() = %d, out of expected short-chunk range", got)
 	}
 }

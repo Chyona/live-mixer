@@ -341,11 +341,11 @@ func maxWindowASRSegmentsLocal() int {
 	if segSec <= 0 {
 		segSec = 6
 	}
-	windowSec := int(model.LiveASRWindowDuration / time.Second)
-	if windowSec <= 0 {
-		windowSec = 10 * 60
+	chunkSec := int(model.MaxASRTranscribeDuration / time.Second)
+	if chunkSec <= 0 {
+		chunkSec = 2 * 60
 	}
-	n := windowSec / segSec
+	n := chunkSec / segSec
 	if n < 1 {
 		n = 1
 	}

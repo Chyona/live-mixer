@@ -53,6 +53,10 @@ const LiveSegmentDurationSec = 6
 // LiveASRWindowDuration 窗口 ASR 调度间隔：约每这么长的新录像触发一次增量转写。
 const LiveASRWindowDuration = 10 * time.Minute
 
+// MaxASRTranscribeDuration 单次送厂商转写的最大媒体时长。
+// 过长单文件（如整窗 10 分钟）时后段词戳相对媒体易漂。
+const MaxASRTranscribeDuration = 2 * time.Minute
+
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
 // Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。
 type ASRSummarySegment struct {

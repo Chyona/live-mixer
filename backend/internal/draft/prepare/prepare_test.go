@@ -102,6 +102,10 @@ func (m *mockCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputP
 	return os.WriteFile(outputPath, []byte("fast"), 0o644)
 }
 
+func (m *mockCutter) ConcatMediaFiles(ctx context.Context, files []string, outputPath string) error {
+	return os.WriteFile(outputPath, []byte("concat"), 0o644)
+}
+
 type mockDownloader struct{}
 
 func (mockDownloader) Download(ctx context.Context, url, dest string) (string, error) {
