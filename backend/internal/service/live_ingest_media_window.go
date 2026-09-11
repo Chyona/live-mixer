@@ -15,6 +15,45 @@ import (
 	"go.uber.org/zap"
 )
 
+// planMediaWindowSeal 计算下一窗应覆盖的分片区间。
+// 允许单片略超窗长（HLS 分片边界），避免「差一片永远不满窗」。
+func planMediaWindowSeal(
+	segStart, nextSeg int64,
+	segDurMS map[int64]int64,
+	windowMS, nominalMS int64,
+	forcePartial bool,
+) (segEnd, sumMS int64, partial bool) {
+	if windowMS <= 0 {
+		windowMS = int64(model.LiveMediaWindowDuration / time.Millisecond)
+	}
+	if nominalMS <= 0 {
+		nominalMS = 6000
+	}
+	if segStart < 0 {
+		segStart = 0
+	}
+	segEnd = segStart
+	for segEnd < nextSeg {
+		ms := int64(0)
+		if segDurMS != nil {
+			ms = segDurMS[segEnd]
+		}
+		if ms <= 0 {
+			ms = nominalMS
+		}
+		sumMS += ms
+		segEnd++
+		if sumMS >= windowMS {
+			break
+		}
+	}
+	partial = sumMS < windowMS
+	if partial && !forcePartial {
+		return segEnd, sumMS, true
+	}
+	return segEnd, sumMS, partial
+}
+
 // sealReadyMediaWindows 按媒体窗时长封窗：合成 window_N.mp4（+同源 TS），更新 media_windows 与预览 playlist。
 // forcePartial：关播时即使未满一窗也封最后一段。
 func (w *liveIngestWorker) sealReadyMediaWindows(
@@ -46,28 +85,18 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 			break
 		}
 
-		var sumMS int64
-		segEnd := segStart
-		for segEnd < material.NextSeg {
-			ms := segDurMS[segEnd]
-			if ms <= 0 {
-				ms = nominal
-			}
-			// 已有内容且再加一片会明显超过窗长、且已接近满窗：在边界封口。
-			if sumMS > 0 && sumMS >= windowMS*9/10 && sumMS+ms > windowMS {
-				break
-			}
-			sumMS += ms
-			segEnd++
-			if sumMS >= windowMS {
-				break
-			}
-		}
+		segEnd, sumMS, partial := planMediaWindowSeal(segStart, material.NextSeg, segDurMS, windowMS, nominal, forcePartial)
 		if segEnd <= segStart {
 			break
 		}
-		partial := sumMS < windowMS
 		if partial && !forcePartial {
+			w.logger.Debug("媒体窗未满，等待更多分片",
+				zap.Uint("material_id", material.ID),
+				zap.Int64("seg_start", segStart),
+				zap.Int64("seg_end", segEnd),
+				zap.Int64("sum_ms", sumMS),
+				zap.Int64("window_ms", windowMS),
+			)
 			break
 		}
 
@@ -94,6 +123,7 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 			zap.Int64("seg_start", segStart),
 			zap.Int64("seg_end", segEnd),
 			zap.Int64("est_dur_ms", sumMS),
+			zap.Int64("window_ms", windowMS),
 			zap.Bool("partial", partial),
 			zap.String("mp4", mp4Path),
 		)
