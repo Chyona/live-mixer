@@ -194,6 +194,12 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 				return empty, fmt.Errorf("源视频未检测到音轨，无法进行 ASR")
 			}
 			align = tl.AlignOptions()
+			// 回放 / HLS：强制输出 MP3 与探测到的视频（容器）时长一致。
+			if tl.FormatDurationSec > 0 {
+				align.TargetDurSec = tl.FormatDurationSec
+			} else if tl.VideoDurationSec > 0 {
+				align.TargetDurSec = tl.VideoDurationSec
+			}
 			p.logger.Info("已探测直播素材时间轴",
 				zap.Uint("material_id", materialID),
 				zap.Int("width", width),
@@ -204,6 +210,7 @@ func (p *liveMaterialASRAudioPreparer) Prepare(
 				zap.Float64("video_duration_sec", tl.VideoDurationSec),
 				zap.Float64("audio_start_sec", tl.AudioStartSec),
 				zap.Float64("audio_duration_sec", tl.AudioDurationSec),
+				zap.Float64("format_duration_sec", tl.FormatDurationSec),
 				zap.Int64("lead_pad_ms", align.LeadPadMs),
 				zap.Float64("trim_start_sec", align.TrimStartSec),
 				zap.Float64("target_dur_sec", align.TargetDurSec),

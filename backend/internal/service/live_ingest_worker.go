@@ -331,14 +331,11 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 	}()
 
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
-	// 单次租约内按短 chunk 追平：避免把 10 分钟 backlog 打成一个超长 MP3（厂商词戳后段易漂）。
+	// 单次租约内按已就绪媒体窗追平（每窗一份 MP4 → 一次转写）。
 	w.catchUpWindowASR(ctx, material)
 	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
-		chunkMS := int64(model.MaxASRTranscribeDuration / time.Millisecond)
-		if chunkMS <= 0 {
-			chunkMS = 2 * 60 * 1000
-		}
-		if latest.Duration-latest.ASRCursorMS < chunkMS && !latest.ASRDue {
+		_, pending := latest.ParsedMediaWindows().NextPendingASRWindow(latest.ASRCursorMS)
+		if !pending {
 			_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
 		}
 	}
@@ -605,16 +602,24 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 			segDurMS[int64(index)] = oneMS
 			w.persistSegDurations(workDir, segDurMS)
 			recordedMS += oneMS
-			playlistURL, plErr := w.publishPlaylist(ctx, material, segURLs, segDurMS, false, resumeFrom)
-			if plErr != nil {
-				w.logger.Warn("发布播放列表失败", zap.Uint("material_id", material.ID), zap.Error(plErr))
-			}
-			if playlistURL != "" {
-				material.RecordPlaylistURL = playlistURL
+			playlistURL := material.RecordPlaylistURL
+			// 首窗就绪前仍用分片 playlist 预览；之后只发布媒体窗 HLS。
+			if material.ParsedMediaWindows().ReadyCount() == 0 {
+				var plErr error
+				playlistURL, plErr = w.publishPlaylist(ctx, material, segURLs, segDurMS, false, resumeFrom)
+				if plErr != nil {
+					w.logger.Warn("发布播放列表失败", zap.Uint("material_id", material.ID), zap.Error(plErr))
+				}
+				if playlistURL != "" {
+					material.RecordPlaylistURL = playlistURL
+				}
 			}
 			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, recordedMS, playlistURL)
 			material.NextSeg = next
 			material.Duration = recordedMS
+			if err := w.sealReadyMediaWindows(ctx, material, segDurMS, false); err != nil {
+				w.logger.Warn("封媒体窗失败", zap.Uint("material_id", material.ID), zap.Error(err))
+			}
 			onSegDone++
 			now := time.Now()
 			progressMu.Lock()
@@ -696,8 +701,26 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 
 	workDir := w.segmentDir(material)
 	_ = os.MkdirAll(workDir, 0o755)
+
+	segDurMS := map[int64]int64{}
+	_ = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
+	if err := w.sealReadyMediaWindows(ctx, material, segDurMS, true); err != nil {
+		return fmt.Errorf("关播封媒体窗失败: %w", err)
+	}
+	if latest2, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest2 != nil {
+		material.MediaWindows = latest2.MediaWindows
+		material.NextWindowSeg = latest2.NextWindowSeg
+		material.RecordPlaylistURL = latest2.RecordPlaylistURL
+		material.Duration = latest2.Duration
+	}
+
 	finalPath := filepath.Join(workDir, "final.mp4")
-	if err := w.ffmpeg.ConcatMediaFiles(ctx, files, finalPath); err != nil {
+	windowFiles := w.collectLocalWindowMP4s(material)
+	if len(windowFiles) > 0 {
+		if err := w.ffmpeg.ConcatMediaFiles(ctx, windowFiles, finalPath); err != nil {
+			return fmt.Errorf("合成最终 mp4（媒体窗）失败: %w", err)
+		}
+	} else if err := w.ffmpeg.ConcatMediaFiles(ctx, files, finalPath); err != nil {
 		return fmt.Errorf("合成最终 mp4 失败: %w", err)
 	}
 	if w.storage != nil {
@@ -712,14 +735,14 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 			material.Width, material.Height = tl.Width, tl.Height
 		}
 	}
-	segURLs := w.collectSegmentURLs(ctx, material, files, resumeFrom)
-	segDurMS := map[int64]int64{}
-	_ = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
-	_, _ = w.publishPlaylist(ctx, material, segURLs, segDurMS, true, resumeFrom)
+	if _, err := w.publishWindowsPlaylist(ctx, material, true); err != nil {
+		w.logger.Warn("关播发布媒体窗 playlist 失败", zap.Uint("material_id", material.ID), zap.Error(err))
+	}
 
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {
 		return err
 	}
+	material.Duration = dur
 	w.catchUpWindowASRUnderLease(ctx, material)
 	if err := w.finishASRPostprocess(ctx, material, dur); err != nil {
 		w.logger.Warn("关播 ASR 后处理失败，将保留 ended+processing 供重试",
@@ -735,300 +758,27 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 	return nil
 }
 
-func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
-	logStep := func(step string, fields ...zap.Field) {
-		base := []zap.Field{
-			zap.Uint("material_id", material.ID),
-			zap.String("step", step),
-		}
-		w.logger.Info("窗口 ASR 步骤", append(base, fields...)...)
-	}
-	if w.asrService == nil || w.audioPreparer == nil {
-		w.logger.Warn("窗口 ASR 跳过：ASR 服务或音频预处理未配置",
-			zap.Uint("material_id", material.ID),
-			zap.Bool("asr_service", w.asrService != nil),
-			zap.Bool("audio_preparer", w.audioPreparer != nil),
-		)
+func (w *liveIngestWorker) collectLocalWindowMP4s(material *model.LiveMaterial) []string {
+	windows := material.ParsedMediaWindows()
+	if len(windows) == 0 {
 		return nil
 	}
-	// 从库刷新游标/ASR；写回使用 asr_epoch 租约。
-	epoch := material.ASREpoch
-	if latest, err := w.repo.GetByID(ctx, material.ID); err == nil && latest != nil {
-		material.ASRCursorMS = latest.ASRCursorMS
-		material.LiveASR = latest.LiveASR
-		material.ASREpoch = latest.ASREpoch
-		epoch = latest.ASREpoch
-		if latest.Duration > material.Duration {
-			material.Duration = latest.Duration
+	winDir := filepath.Join(w.segmentDir(material), "windows")
+	out := make([]string, 0, len(windows))
+	for _, win := range windows {
+		if !win.Ready {
+			continue
 		}
+		p := filepath.Join(winDir, liveingest.WindowMP4FileName(win.Index))
+		if st, err := os.Stat(p); err != nil || st.Size() == 0 {
+			return nil
+		}
+		out = append(out, p)
 	}
-	cursor := material.ASRCursorMS
-	if material.Duration <= cursor {
-		w.logger.Info("窗口 ASR 跳过：尚无新录像可转写",
-			zap.Uint("material_id", material.ID),
-			zap.Int64("duration_ms", material.Duration),
-			zap.Int64("asr_cursor_ms", cursor),
-		)
+	if len(out) == 0 {
 		return nil
 	}
-	prober := w.prober
-	if prober == nil {
-		prober = media.NewFFprobeProber("")
-	}
-	nominalStart := liveingest.WindowStartIndex(cursor, model.LiveSegmentDurationSec)
-	logStep("resolve_start", zap.Int64("asr_cursor_ms", cursor), zap.Int64("nominal_start_seg", nominalStart))
-	resolveStart := time.Now()
-	startSeg, offsetMS, resErr := resolveWindowStartFast(ctx, prober, w.segmentDir(material), cursor, 1)
-	if resErr != nil {
-		w.logger.Info("窗口 ASR 跳过：无法定位起始分片",
-			zap.Uint("material_id", material.ID),
-			zap.Int64("asr_cursor_ms", cursor),
-			zap.Duration("elapsed", time.Since(resolveStart)),
-			zap.Error(resErr),
-		)
-		return nil
-	}
-	logStep("resolve_ok",
-		zap.Int64("start_seg", startSeg),
-		zap.Int64("offset_ms", offsetMS),
-		zap.Duration("elapsed", time.Since(resolveStart)),
-	)
-	files := globLocalSegmentsFrom(w.segmentDir(material), int(startSeg))
-	if len(files) == 0 {
-		w.logger.Info("窗口 ASR 跳过：起始分片之后无本地文件",
-			zap.Uint("material_id", material.ID),
-			zap.Int64("start_seg", startSeg),
-			zap.Int64("asr_cursor_ms", cursor),
-			zap.String("work_dir", w.segmentDir(material)),
-		)
-		return nil
-	}
-	// 限制：每窗最多送约一个窗口时长的分片。旧逻辑会把「游标→此刻」全部积压一次送去转写；
-	// 若游标未推进，会变成 10+20+30… 分钟平方累加计费。
-	maxSegs := maxWindowASRSegments()
-	truncated := false
-	if len(files) > maxSegs {
-		files = files[:maxSegs]
-		truncated = true
-	}
-	nominalWindowMS := int64(len(files)) * int64(model.LiveSegmentDurationSec) * 1000
-	asrStart := time.Now()
-	w.logger.Info("开始窗口 ASR",
-		zap.Uint("material_id", material.ID),
-		zap.Int64("asr_cursor_ms", cursor),
-		zap.Int64("start_seg", startSeg),
-		zap.Int64("offset_ms", offsetMS),
-		zap.Int64("nominal_start_seg", nominalStart),
-		zap.Int64("nominal_offset_ms", liveingest.WindowOffsetMS(cursor, model.LiveSegmentDurationSec)),
-		zap.Int("segment_files", len(files)),
-		zap.Bool("truncated_to_window", truncated),
-		zap.Int64("est_bill_audio_ms", nominalWindowMS),
-		zap.Int64("duration_ms", material.Duration),
-		zap.Int64("ingest_epoch", material.IngestEpoch),
-		zap.Int64("asr_epoch", epoch),
-	)
-	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.mp3", cursor))
-	concatTS := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_%d.ts", cursor))
-	logStep("concat_start", zap.Int("segment_files", len(files)))
-	concatStart := time.Now()
-	if err := w.ffmpeg.ConcatMediaFiles(ctx, files, concatTS); err != nil {
-		w.logger.Warn("窗口 ASR 拼接分片失败",
-			zap.Uint("material_id", material.ID),
-			zap.Duration("elapsed", time.Since(concatStart)),
-			zap.Error(err),
-		)
-		return err
-	}
-	defer os.Remove(concatTS)
-	logStep("concat_ok", zap.Duration("elapsed", time.Since(concatStart)))
-	// 只探测拼接结果一次，避免对窗内上百个 ts 逐个 ffprobe。
-	windowMediaMS := probeSegmentDurationMS(ctx, prober, concatTS, nominalWindowMS)
-	if windowMediaMS <= 0 {
-		windowMediaMS = nominalWindowMS
-	}
-	// Index 轴窗长：词戳/游标/target 全部绑定 Index，不以厂商 duration 或偏长 EXTINF 拉伸。
-	idx := loadTimelineIndex(w.segmentDir(material))
-	ensureIndexCoversFiles(idx, files)
-	endSegExclusive := startSeg + int64(len(files))
-	indexWindowMS := idx.WindowMS(startSeg, endSegExclusive)
-	if indexWindowMS <= 0 {
-		indexWindowMS = windowTimelineMS(w.segmentDir(material), files, windowMediaMS, int64(model.LiveSegmentDurationSec)*1000)
-	}
-	timelineMS := indexWindowMS
-	if timelineMS <= 0 {
-		timelineMS = windowMediaMS
-	}
-	// 以 Index 窗长为 Target；concat 仅作抽音源。偏差大则告警，不拉伸词戳。
-	targetWindowMS := timelineMS
-	estBillMS := targetWindowMS
-	targetDurSec := float64(targetWindowMS) / 1000.0
-	align := media.ASRAlignOptions{TargetDurSec: targetDurSec}
-	if w.prober != nil {
-		if tl, err := w.prober.ProbeMediaTimeline(ctx, concatTS); err != nil {
-			w.logger.Warn("窗口 ASR 探测 concat 时间轴失败，仅按 Index 窗长封口抽音",
-				zap.Uint("material_id", material.ID),
-				zap.Error(err),
-			)
-		} else {
-			opts := tl.AlignOptions()
-			align.LeadPadMs = opts.LeadPadMs
-			align.TrimStartSec = opts.TrimStartSec
-			align.TargetDurSec = targetDurSec
-		}
-	}
-	if gap := timelineMS - windowMediaMS; gap > 500 || gap < -500 {
-		w.logger.Warn("窗口 ASR concat 探针与 Index 窗长偏差较大，以 Index 为准（不拉伸词戳）",
-			zap.Uint("material_id", material.ID),
-			zap.Int64("window_media_ms", windowMediaMS),
-			zap.Int64("index_window_ms", timelineMS),
-			zap.Int64("gap_ms", gap),
-		)
-	}
-	logStep("mp3_start",
-		zap.Int64("window_media_ms", windowMediaMS),
-		zap.Int64("timeline_ms", timelineMS),
-		zap.Float64("target_dur_sec", align.TargetDurSec),
-		zap.Int64("lead_pad_ms", align.LeadPadMs),
-		zap.Float64("trim_start_sec", align.TrimStartSec),
-	)
-	mp3Start := time.Now()
-	// 等长抽音：输出 MP3 封口到 Index 窗长。
-	if err := w.ffmpeg.ConvertToASRMP3Aligned(ctx, concatTS, tmpMP3, align); err != nil {
-		w.logger.Warn("窗口 ASR 对齐转 MP3 失败，回退普通转码",
-			zap.Uint("material_id", material.ID),
-			zap.Duration("elapsed", time.Since(mp3Start)),
-			zap.Error(err),
-		)
-		mp3Start = time.Now()
-		if err := w.ffmpeg.ConvertToASRMP3(ctx, concatTS, tmpMP3); err != nil {
-			w.logger.Warn("窗口 ASR 转 MP3 失败",
-				zap.Uint("material_id", material.ID),
-				zap.Duration("elapsed", time.Since(mp3Start)),
-				zap.Error(err),
-			)
-			return err
-		}
-	}
-	defer os.Remove(tmpMP3)
-	logStep("mp3_ok", zap.Duration("elapsed", time.Since(mp3Start)))
-	if w.storage == nil {
-		w.logger.Warn("窗口 ASR 跳过：对象存储未配置", zap.Uint("material_id", material.ID))
-		return nil
-	}
-	logStep("upload_start")
-	uploadStart := time.Now()
-	audioURL, err := w.storage.UploadFile(ctx, tmpMP3, fmt.Sprintf("%s/live-asr-%d-%d.mp3", storage.SubDirTemp, material.ID, cursor))
-	if err != nil {
-		w.logger.Warn("窗口 ASR 上传音频失败",
-			zap.Uint("material_id", material.ID),
-			zap.Duration("elapsed", time.Since(uploadStart)),
-			zap.Error(err),
-		)
-		return err
-	}
-	logStep("upload_ok", zap.Duration("elapsed", time.Since(uploadStart)))
-	logStep("transcribe_start")
-	transcribeStart := time.Now()
-	raw, err := w.asrService.Transcribe(ctx, audioURL)
-	if err != nil {
-		w.logger.Warn("窗口 ASR 识别失败，跳过本窗",
-			zap.Uint("material_id", material.ID),
-			zap.Duration("elapsed", time.Since(transcribeStart)),
-			zap.Error(err),
-		)
-		return nil
-	}
-	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
-	asrDur := asr.ParseDurationMs(raw)
-	maxUttEnd := asr.MaxUtteranceEndMS(raw)
-	scaledRaw := raw
-	scaleFactor := 1.0
-	// 仅在词轴明显越出 Index 窗长时才线性缩放；禁止用厂商 duration 拉伸到偏长轴。
-	if asr.ShouldScaleUtteranceTimestamps(asrDur, targetWindowMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
-		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, targetWindowMS)
-		if scaleErr != nil {
-			w.logger.Warn("窗口 ASR 兜底缩放失败，沿用厂商时间戳",
-				zap.Uint("material_id", material.ID),
-				zap.Int64("asr_vendor_duration_ms", asrDur),
-				zap.Int64("index_window_ms", targetWindowMS),
-				zap.Error(scaleErr),
-			)
-		} else {
-			scaledRaw = scaled
-			scaleFactor = scale
-			w.logger.Info("窗口 ASR 兜底缩放对齐 Index 轴",
-				zap.Uint("material_id", material.ID),
-				zap.Int64("asr_vendor_duration_ms", asrDur),
-				zap.Int64("window_media_ms", windowMediaMS),
-				zap.Int64("timeline_ms", timelineMS),
-				zap.Int64("max_utt_end_ms", maxUttEnd),
-				zap.Float64("scale", scaleFactor),
-			)
-		}
-	} else {
-		if rewritten, err := asr.SetAudioInfoDuration(raw, targetWindowMS); err == nil {
-			scaledRaw = rewritten
-		}
-		if asr.ShouldScaleTimestamps(asrDur, targetWindowMS, 500) {
-			w.logger.Info("窗口 ASR 跳过词级缩放（末句已在 Index 轴内），仅同步 audio_info.duration",
-				zap.Uint("material_id", material.ID),
-				zap.Int64("asr_vendor_duration_ms", asrDur),
-				zap.Int64("window_media_ms", windowMediaMS),
-				zap.Int64("timeline_ms", timelineMS),
-				zap.Int64("max_utt_end_ms", maxUttEnd),
-			)
-		}
-	}
-	merged, _, err := asr.MergeWindowASR(material.LiveASR, scaledRaw, offsetMS, cursor)
-	if err != nil {
-		w.logger.Warn("窗口 ASR 合并失败", zap.Uint("material_id", material.ID), zap.Error(err))
-		return err
-	}
-	// 游标沿 Index 轴推进。
-	newCursor := offsetMS + targetWindowMS
-	if newCursor < cursor {
-		newCursor = cursor
-	}
-	// 覆盖进度仍以录像时长为分母；跟播中最高 99，100 留给关播 Finalize。
-	progress := int16(10)
-	if material.Duration > 0 {
-		progress = int16(20 + 79*newCursor/material.Duration)
-		if progress > 99 {
-			progress = 99
-		}
-		if newCursor >= material.Duration && progress < 99 {
-			progress = 99
-		}
-	}
-	logStep("db_start", zap.Int64("asr_cursor_ms", newCursor), zap.Int16("asr_progress", progress))
-	dbStart := time.Now()
-	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, merged, newCursor, material.Duration, progress); err != nil {
-		w.logger.Warn("窗口 ASR 写库失败（厂商侧已计费，下一窗可能重复）",
-			zap.Uint("material_id", material.ID),
-			zap.Int64("asr_epoch", epoch),
-			zap.Int64("est_bill_audio_ms", estBillMS),
-			zap.Duration("elapsed", time.Since(dbStart)),
-			zap.Error(err),
-		)
-		return err
-	}
-	material.ASRCursorMS = newCursor
-	material.LiveASR = merged
-	material.ASRProgress = progress
-	w.logger.Info("窗口 ASR 完成",
-		zap.Uint("material_id", material.ID),
-		zap.Duration("elapsed", time.Since(asrStart)),
-		zap.Int64("offset_ms", offsetMS),
-		zap.Int64("asr_cursor_ms", newCursor),
-		zap.Int64("window_media_ms", windowMediaMS),
-		zap.Int64("timeline_ms", timelineMS),
-		zap.Float64("target_dur_sec", targetDurSec),
-		zap.Int64("asr_vendor_duration_ms", asrDur),
-		zap.Float64("asr_time_scale", scaleFactor),
-		zap.Int64("est_bill_audio_ms", estBillMS),
-		zap.Int16("asr_progress", progress),
-	)
-	return nil
+	return out
 }
 
 // windowTimelineMS 优先用 MediaTimelineIndex / sidecar 分片时长之和，否则用 concat 探针。
@@ -1089,7 +839,8 @@ func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model
 		if material.ASRCursorMS <= before {
 			return
 		}
-		if material.Duration > 0 && material.ASRCursorMS >= material.Duration {
+		_, pending := material.ParsedMediaWindows().NextPendingASRWindow(material.ASRCursorMS)
+		if !pending {
 			return
 		}
 	}
@@ -1123,8 +874,15 @@ func (w *liveIngestWorker) catchUpWindowASRUnderLease(ctx context.Context, mater
 			material.LiveASR = latest.LiveASR
 			material.Duration = latest.Duration
 			material.ASREpoch = latest.ASREpoch
-			if latest.Duration > 0 && latest.ASRCursorMS >= latest.Duration {
+			material.MediaWindows = latest.MediaWindows
+			material.ASRDue = latest.ASRDue
+			_, pending := latest.ParsedMediaWindows().NextPendingASRWindow(latest.ASRCursorMS)
+			if !pending {
 				return
+			}
+			if !latest.ASRDue {
+				// 关播封窗后应已 asr_due；若被清掉则直接追平本素材需能再抢。
+				_ = w.repo.CommitMediaWindow(ctx, latest.ID, latest.IngestEpoch, latest.MediaWindows, latest.NextWindowSeg, latest.Duration, latest.RecordPlaylistURL, true)
 			}
 			claimed, err = w.repo.ClaimWindowASRWork(ctx)
 			if err != nil {
@@ -1159,7 +917,14 @@ func (w *liveIngestWorker) catchUpWindowASRUnderLease(ctx context.Context, mater
 	}()
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
 	w.catchUpWindowASR(ctx, material)
-	_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
+	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
+		_, pending := latest.ParsedMediaWindows().NextPendingASRWindow(latest.ASRCursorMS)
+		if !pending {
+			_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
+		}
+	} else {
+		_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
+	}
 }
 
 // maxWindowASRSegments 单次送去转写的最大分片数（短 chunk + 1 片重叠余量）。

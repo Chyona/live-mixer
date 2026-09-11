@@ -119,6 +119,9 @@ var liveMaterialIngestColumns = []struct {
 	{name: "asr_due", pg: "BOOLEAN NOT NULL DEFAULT FALSE"},
 	{name: "ingest_resume_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "ingest_error_msg", pg: "TEXT"},
+	{name: "media_window_ms", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "media_windows", pg: "JSONB NOT NULL DEFAULT '[]'"},
+	{name: "next_window_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 }
 
 // ensureLiveMaterialIngestSchema 补齐跟播列，并把 live_url/m3u8_url 改为部分唯一（失败记录可重试）。

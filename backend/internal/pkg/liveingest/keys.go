@@ -19,9 +19,29 @@ func FinalObjectKey(recordUUID string) string {
 	return path.Join(RecordPrefix(recordUUID), "final.mp4")
 }
 
-// PlaylistObjectKey 自有播放列表相对键。
+// PlaylistObjectKey 自有播放列表相对键（媒体窗 HLS）。
 func PlaylistObjectKey(recordUUID string) string {
 	return path.Join(RecordPrefix(recordUUID), "live.m3u8")
+}
+
+// WindowMP4ObjectKey 媒体窗 MP4（ASR/成片权威文件）。
+func WindowMP4ObjectKey(recordUUID string, windowIndex int) string {
+	return path.Join(RecordPrefix(recordUUID), "windows", fmt.Sprintf("window_%05d.mp4", windowIndex))
+}
+
+// WindowTSObjectKey 媒体窗 TS（HLS 预览，与 MP4 同源）。
+func WindowTSObjectKey(recordUUID string, windowIndex int) string {
+	return path.Join(RecordPrefix(recordUUID), "windows", fmt.Sprintf("window_%05d.ts", windowIndex))
+}
+
+// WindowMP4FileName 本地窗 MP4 文件名。
+func WindowMP4FileName(windowIndex int) string {
+	return fmt.Sprintf("window_%05d.mp4", windowIndex)
+}
+
+// WindowTSFileName 本地窗 TS 文件名。
+func WindowTSFileName(windowIndex int) string {
+	return fmt.Sprintf("window_%05d.ts", windowIndex)
 }
 
 // SegmentObjectKey 分片相对键。

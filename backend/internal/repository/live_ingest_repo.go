@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"live-mixer/internal/model"
@@ -28,7 +29,8 @@ type LiveIngestRepository interface {
 	MarkConnecting(ctx context.Context, id uint, epoch int64) error
 	MarkLiveStarted(ctx context.Context, id uint, epoch int64, width, height int, resumeSeg int64) error
 	UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error
-	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16) error
+	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error
+	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool) error
 	ClearASRDue(ctx context.Context, id uint, asrEpoch int64) error
 	ReleaseASRLease(ctx context.Context, id uint, asrEpoch int64) error
 	MarkASRProcessing(ctx context.Context, id uint, asrEpoch int64) error
@@ -116,34 +118,21 @@ func (r *liveMaterialRepository) ClaimRecorderWork(ctx context.Context) (*model.
 	return nil, nil
 }
 
-// ClaimWindowASRWork 抢占窗口 ASR（不 bump ingest_epoch）。
+// ClaimWindowASRWork 抢占窗口 ASR（不 bump ingest_epoch）：仅当 asr_due（媒体窗已就绪）。
 func (r *liveMaterialRepository) ClaimWindowASRWork(ctx context.Context) (*model.LiveMaterial, error) {
 	tried := make(map[uint]struct{})
 	now := time.Now()
 	staleBefore := now.Add(-ingestHeartbeatStale)
-	windowMS := int64(model.LiveASRWindowDuration / time.Millisecond)
-	if windowMS <= 0 {
-		windowMS = 10 * 60 * 1000
-	}
-	chunkMS := int64(model.MaxASRTranscribeDuration / time.Millisecond)
-	if chunkMS <= 0 {
-		chunkMS = 2 * 60 * 1000
-	}
-	// 积压达到短 chunk 即可抢占，不必等满 10 分钟调度窗。
-	claimThreshold := chunkMS
-	if windowMS < claimThreshold {
-		claimThreshold = windowMS
-	}
 	for attempt := 0; attempt < claimOptimisticMaxAttempts; attempt++ {
 		var material model.LiveMaterial
 		q := r.db.WithContext(ctx).Where(
 			`live_status IN (?, ?, ?)
 			 AND asr_status IN (?, ?)
-			 AND (asr_due = ? OR (duration - asr_cursor_ms) >= ?)
+			 AND asr_due = ?
 			 AND (asr_heartbeat_at IS NULL OR asr_heartbeat_at < ?)`,
 			model.LiveStatusLive, model.LiveStatusEnding, model.LiveStatusEnded,
 			model.ASRStatusPending, model.ASRStatusProcessing,
-			true, claimThreshold,
+			true,
 			staleBefore,
 		)
 		if len(tried) > 0 {
@@ -272,10 +261,6 @@ func (r *liveMaterialRepository) MarkLiveStarted(ctx context.Context, id uint, e
 
 func (r *liveMaterialRepository) UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error {
 	now := time.Now()
-	chunkMS := int64(model.MaxASRTranscribeDuration / time.Millisecond)
-	if chunkMS <= 0 {
-		chunkMS = 2 * 60 * 1000
-	}
 	fields := map[string]interface{}{
 		"next_seg":          nextSeg,
 		"duration":          durationMS,
@@ -287,20 +272,35 @@ func (r *liveMaterialRepository) UpdateRecordingProgress(ctx context.Context, id
 	if playlistURL != "" {
 		fields["record_playlist_url"] = playlistURL
 	}
-	// 有足够未转写时长时置位，供 ASR Worker 抢占（按短 chunk，避免等满 10 分钟）。
-	result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
-		Updates(fields)
-	if result.Error != nil {
-		return result.Error
-	}
-	_ = r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
-		Where("id = ? AND ingest_epoch = ? AND (duration - asr_cursor_ms) >= ?", id, epoch, chunkMS).
-		Update("asr_due", true).Error
-	return nil
+		Updates(fields).Error
 }
 
-func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16) error {
+func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error {
+	now := time.Now()
+	if strings.TrimSpace(mediaWindowsJSON) == "" {
+		mediaWindowsJSON = "[]"
+	}
+	fields := map[string]interface{}{
+		"media_windows":     mediaWindowsJSON,
+		"next_window_seg":   nextWindowSeg,
+		"duration":          durationMS,
+		"asr_due":           asrDue,
+		"last_heartbeat_at": now,
+		"last_progress_at":  now,
+		"asr_updated_at":    now,
+		"updated_at":        now,
+	}
+	if playlistURL != "" {
+		fields["record_playlist_url"] = playlistURL
+	}
+	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+		Where("id = ? AND ingest_epoch = ?", id, epoch).
+		Updates(fields).Error
+}
+
+func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool) error {
 	now := time.Now()
 	if progress < 0 {
 		progress = 0
@@ -308,20 +308,6 @@ func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, a
 	if progress > 99 {
 		progress = 99
 	}
-	windowMS := int64(model.LiveASRWindowDuration / time.Millisecond)
-	if windowMS <= 0 {
-		windowMS = 10 * 60 * 1000
-	}
-	chunkMS := int64(model.MaxASRTranscribeDuration / time.Millisecond)
-	if chunkMS <= 0 {
-		chunkMS = 2 * 60 * 1000
-	}
-	// 剩余可转写媒体达到一个短 chunk 即继续 due，避免被 10 分钟调度窗卡住。
-	dueThreshold := chunkMS
-	if windowMS < dueThreshold {
-		dueThreshold = windowMS
-	}
-	stillDue := durationMS-asrCursorMS >= dueThreshold
 	result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND asr_epoch = ?", id, asrEpoch).
 		Updates(map[string]interface{}{
@@ -442,6 +428,8 @@ func (r *liveMaterialRepository) ResetFailedIngest(ctx context.Context, id uint,
 		"ingest_error_msg":    "",
 		"asr_cursor_ms":       int64(0),
 		"next_seg":            int64(0),
+		"next_window_seg":     int64(0),
+		"media_windows":       "[]",
 		"duration":            int64(0),
 		"live_asr":            "{}",
 		"asr_summaries":       "[]",

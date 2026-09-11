@@ -82,6 +82,8 @@ func buildCreateMaterial(createdBy uint, in CreateLiveMaterialInput, alloc LiveR
 	}
 	now := time.Now()
 	material := &model.LiveMaterial{
+		MediaWindowMS: int64(model.LiveMediaWindowDuration / time.Millisecond),
+		MediaWindows:  "[]",
 		Name:          name,
 		Remark:        in.Remark,
 		Ext:           in.Ext,

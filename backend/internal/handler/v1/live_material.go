@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -74,6 +75,8 @@ type LiveMaterialDetailResponse struct {
 	WaitDeadlineAt    *time.Time      `json:"wait_deadline_at,omitempty"`
 	ConnectDeadlineAt *time.Time      `json:"connect_deadline_at,omitempty"`
 	ASRCursorMS       int64           `json:"asr_cursor_ms"`
+	MediaWindowMS     int64           `json:"media_window_ms"`
+	MediaWindows      json.RawMessage `json:"media_windows"`
 	IngestErrorMsg    string          `json:"ingest_error_msg,omitempty"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
 	ASRSummaries  []model.ASRSummarySegment `json:"asr_summaries"`
@@ -102,6 +105,10 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 	if paragraphs == nil {
 		paragraphs = []model.ASRParagraph{}
 	}
+	mediaWindows := json.RawMessage([]byte(material.MediaWindows))
+	if len(strings.TrimSpace(material.MediaWindows)) == 0 {
+		mediaWindows = json.RawMessage([]byte("[]"))
+	}
 	return LiveMaterialDetailResponse{
 		ID:             material.ID,
 		Name:           material.Name,
@@ -117,6 +124,8 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		WaitDeadlineAt:    material.WaitDeadlineAt,
 		ConnectDeadlineAt: material.ConnectDeadlineAt,
 		ASRCursorMS:       material.ASRCursorMS,
+		MediaWindowMS:     material.EffectiveMediaWindowMS(),
+		MediaWindows:      mediaWindows,
 		IngestErrorMsg:    material.IngestErrorMsg,
 		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
 		ASRSummaries:   summaries,

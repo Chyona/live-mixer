@@ -36,14 +36,11 @@ func TestLocalASRPostprocessFallback_EmptyASR(t *testing.T) {
 	}
 }
 
-func TestMaxWindowASRSegments(t *testing.T) {
-	// 单次转写上限 2 分钟 / 6 秒分片 = 20，再 +1 重叠余量。
-	got := maxWindowASRSegments()
-	want := int(model.MaxASRTranscribeDuration/time.Second)/model.LiveSegmentDurationSec + 1
-	if got != want {
-		t.Fatalf("maxWindowASRSegments() = %d, want %d", got, want)
+func TestLiveMediaWindowDuration(t *testing.T) {
+	if model.LiveMediaWindowDuration != 10*time.Minute {
+		t.Fatalf("LiveMediaWindowDuration = %v, want 10m", model.LiveMediaWindowDuration)
 	}
-	if got > 40 || got < 10 {
-		t.Fatalf("maxWindowASRSegments() = %d, out of expected short-chunk range", got)
+	if model.MaxASRTranscribeDuration != model.LiveMediaWindowDuration {
+		t.Fatalf("MaxASRTranscribeDuration should equal media window")
 	}
 }

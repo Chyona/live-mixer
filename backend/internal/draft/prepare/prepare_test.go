@@ -260,39 +260,62 @@ func TestProjectWantsCaptions(t *testing.T) {
 	}
 }
 
-func TestPipeline_Run_SealsLivePlaylistAsVOD(t *testing.T) {
+func TestPipeline_Run_LiveUsesMediaWindows(t *testing.T) {
 	root := t.TempDir()
 	staging := filepath.Join(root, "staging")
+	ingest := filepath.Join(root, "ingest")
+	winDir := filepath.Join(ingest, "windows")
+	if err := os.MkdirAll(winDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	winPath := filepath.Join(winDir, "window_00000.mp4")
+	if err := os.WriteFile(winPath, []byte("mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cutter := &recordingCutter{}
+	windows := model.MediaWindowList{{
+		Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
+		URL: "https://cdn.example/window_00000.mp4",
+	}}
 	s := &session.Session{
-		JobID: "job-hls",
+		JobID: "job-win",
+		Material: &model.LiveMaterial{
+			LiveStatus:   model.LiveStatusLive,
+			MediaWindows: windows.Marshal(),
+		},
+		StagingDir:     staging,
+		RecordDir:      filepath.Join(root, "record"),
+		LocalIngestDir: ingest,
+		Clips:          []model.ClipRange{{StartTime: 0, EndTime: 3000}},
+	}
+	p := NewPipeline(nil, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if s.SourceMode != "media_windows" {
+		t.Fatalf("SourceMode=%q want media_windows", s.SourceMode)
+	}
+	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "window_00000.mp4") {
+		t.Fatalf("cut inputs = %v, want window mp4", cutter.inputs)
+	}
+}
+
+func TestPipeline_Run_LiveRejectsWithoutMediaWindows(t *testing.T) {
+	root := t.TempDir()
+	s := &session.Session{
+		JobID: "job-live-no-win",
 		Material: &model.LiveMaterial{
 			LiveStatus:        model.LiveStatusLive,
 			RecordPlaylistURL: "https://cdn.example/live.m3u8",
 		},
-		StagingDir: staging,
+		StagingDir: filepath.Join(root, "staging"),
 		RecordDir:  filepath.Join(root, "record"),
 		Clips:      []model.ClipRange{{StartTime: 0, EndTime: 3000}},
 	}
-	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
-	if err := p.Run(context.Background(), s); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if len(cutter.inputs) != 1 {
-		t.Fatalf("cut inputs = %d, want 1", len(cutter.inputs))
-	}
-	got := cutter.inputs[0]
-	if !strings.HasSuffix(got, "source_vod.m3u8") {
-		t.Fatalf("cut input = %q, want local source_vod.m3u8", got)
-	}
-	if strings.HasPrefix(got, "http") {
-		t.Fatalf("should not cut from remote live URL: %s", got)
-	}
-	if len(cutter.playlists) != 1 || !strings.Contains(cutter.playlists[0], "#EXT-X-ENDLIST") {
-		t.Fatalf("cut-time playlist missing ENDLIST: %q", cutter.playlists)
-	}
-	if _, err := os.Stat(filepath.Join(staging, "source_vod.m3u8")); !os.IsNotExist(err) {
-		t.Fatalf("source_vod.m3u8 should be cleaned up after Run, err=%v", err)
+	p := NewPipeline(mockDownloader{}, &recordingCutter{}, zap.NewNop())
+	err := p.Run(context.Background(), s)
+	if err == nil || !strings.Contains(err.Error(), "媒体窗尚未覆盖") {
+		t.Fatalf("err = %v, want media window coverage error", err)
 	}
 }
 
@@ -316,7 +339,7 @@ func TestMaterializeVODPlaylist_AppendsENDLIST(t *testing.T) {
 	}
 }
 
-func TestPipeline_Run_PrefersLocalTimelineIndexOverRemoteM3U8(t *testing.T) {
+func TestPipeline_Run_PrefersLocalTimelineIndexWhenEndedWithoutFinal(t *testing.T) {
 	root := t.TempDir()
 	ingest := filepath.Join(root, "ingest")
 	if err := os.MkdirAll(ingest, 0o755); err != nil {
@@ -331,7 +354,7 @@ func TestPipeline_Run_PrefersLocalTimelineIndexOverRemoteM3U8(t *testing.T) {
 	cutter := &recordingCutter{}
 	s := &session.Session{
 		JobID:          "job-local",
-		Material:       &model.LiveMaterial{LiveStatus: model.LiveStatusLive, RecordPlaylistURL: "https://cdn.example/live.m3u8"},
+		Material:       &model.LiveMaterial{LiveStatus: model.LiveStatusEnded, RecordPlaylistURL: "https://cdn.example/live.m3u8"},
 		StagingDir:     staging,
 		RecordDir:      filepath.Join(root, "record"),
 		LocalIngestDir: ingest,

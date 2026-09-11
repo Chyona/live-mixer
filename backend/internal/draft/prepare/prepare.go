@@ -73,9 +73,59 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 
 	s.ReportProgress(15)
 
-	// 直播中 / 本地仍有分片：按 Index 轴 seg+offset 裁切（禁止整表 ffconcat 全局 seek）。
-	// 已 ended 且可拿到 final.mp4 时优先单文件（见 resolveDraftSourceURL）。
+	// 跟播中（live/ending）：强制媒体窗 MP4，与 ASR/预览同源。
+	if s.Material != nil && (s.Material.LiveStatus == model.LiveStatusLive || s.Material.LiveStatus == model.LiveStatusEnding) {
+		if !canUseMediaWindows(s) {
+			ready := s.Material.ParsedMediaWindows().TotalReadyMS()
+			return fmt.Errorf("媒体窗尚未覆盖所选区间（已就绪 %dms），请等待下一窗合成后再一键成片", ready)
+		}
+		p.Logger.Info("开始准备直播视频（媒体窗 MP4）",
+			zap.String("job_id", s.JobID),
+			zap.String("staging_dir", s.StagingDir),
+			zap.Int("ready_windows", s.Material.ParsedMediaWindows().ReadyCount()),
+		)
+		s.ReportProgress(25)
+		useFast := UseFastKeyframeCut(s.Clips)
+		s.FastKeyframe = useFast
+		if useFast {
+			s.CutMode = "keyframe_copy"
+		} else {
+			s.CutMode = "precise"
+		}
+		paths, err := p.cutClipsByMediaWindows(ctx, s, useFast)
+		if err != nil {
+			return err
+		}
+		s.ClipPaths = paths
+		s.ReportProgress(50)
+		return nil
+	}
+
+	// 已 ended：优先 final.mp4；否则媒体窗；再降级本地 Index / 远程源。
 	preferFinal := shouldPreferFinalMP4(s)
+	if !preferFinal && canUseMediaWindows(s) {
+		p.Logger.Info("开始准备直播视频（媒体窗 MP4）",
+			zap.String("job_id", s.JobID),
+			zap.String("staging_dir", s.StagingDir),
+			zap.Int("ready_windows", s.Material.ParsedMediaWindows().ReadyCount()),
+		)
+		s.ReportProgress(25)
+		useFast := UseFastKeyframeCut(s.Clips)
+		s.FastKeyframe = useFast
+		if useFast {
+			s.CutMode = "keyframe_copy"
+		} else {
+			s.CutMode = "precise"
+		}
+		paths, err := p.cutClipsByMediaWindows(ctx, s, useFast)
+		if err != nil {
+			return err
+		}
+		s.ClipPaths = paths
+		s.ReportProgress(50)
+		return nil
+	}
+
 	if !preferFinal && canUseLocalTimelineIndex(s) {
 		p.Logger.Info("开始准备直播视频（本地时间轴索引）",
 			zap.String("job_id", s.JobID),

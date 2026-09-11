@@ -50,12 +50,15 @@ const LiveEarlyProbe = 15 * time.Minute
 // LiveSegmentDurationSec 跟播分片时长（秒）。
 const LiveSegmentDurationSec = 6
 
-// LiveASRWindowDuration 窗口 ASR 调度间隔：约每这么长的新录像触发一次增量转写。
-const LiveASRWindowDuration = 10 * time.Minute
+// LiveMediaWindowDuration 媒体窗时长：每满一窗合成一份 MP4（预览/ASR/成片同源）。
+// 可按产品需要改为 20m / 30m。
+const LiveMediaWindowDuration = 10 * time.Minute
 
-// MaxASRTranscribeDuration 单次送厂商转写的最大媒体时长。
-// 过长单文件（如整窗 10 分钟）时后段词戳相对媒体易漂。
-const MaxASRTranscribeDuration = 2 * time.Minute
+// LiveASRWindowDuration 兼容旧名：等同媒体窗时长（调度/文档引用）。
+const LiveASRWindowDuration = LiveMediaWindowDuration
+
+// MaxASRTranscribeDuration 单次 ASR 提交上限；跟播场景等于媒体窗（整窗一份 MP4 一次转写）。
+const MaxASRTranscribeDuration = LiveMediaWindowDuration
 
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
 // Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。
@@ -107,6 +110,12 @@ type LiveMaterial struct {
 	ASRDue            bool                `gorm:"column:asr_due;not null;default:false;comment:是否有待跑窗口ASR" json:"asr_due"`
 	IngestResumeSeg   int64               `gorm:"column:ingest_resume_seg;not null;default:0;comment:本场录像起始分片序号" json:"ingest_resume_seg"`
 	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
+	// MediaWindowMS 本素材媒体窗时长（毫秒）；创建时写入，默认 LiveMediaWindowDuration。
+	MediaWindowMS int64 `gorm:"column:media_window_ms;not null;default:0;comment:媒体窗毫秒" json:"media_window_ms"`
+	// MediaWindows 已合成媒体窗列表 JSON。
+	MediaWindows string `gorm:"column:media_windows;type:jsonb;not null;default:'[]';comment:媒体窗列表JSON" json:"media_windows"`
+	// NextWindowSeg 下一未封窗起始分片下标。
+	NextWindowSeg int64 `gorm:"column:next_window_seg;not null;default:0;comment:下一媒体窗起始分片" json:"next_window_seg"`
 	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
 	ASRParagraphs     []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
@@ -160,7 +169,7 @@ func (m *LiveMaterial) CanUpdateM3U8() bool {
 	}
 }
 
-// PlayURL 前端播放地址：关播后用 mp4；跟播中用自有分片列表；否则用户 m3u8 或 live_url。
+// PlayURL 前端播放地址：关播后用 final.mp4；跟播中用媒体窗 HLS（RecordPlaylistURL）；否则用户 m3u8。
 func (m *LiveMaterial) PlayURL() string {
 	if m == nil {
 		return ""
@@ -178,6 +187,26 @@ func (m *LiveMaterial) PlayURL() string {
 		return u
 	}
 	return strings.TrimSpace(m.LiveURL)
+}
+
+// EffectiveMediaWindowMS 本素材媒体窗毫秒。
+func (m *LiveMaterial) EffectiveMediaWindowMS() int64 {
+	if m != nil && m.MediaWindowMS > 0 {
+		return m.MediaWindowMS
+	}
+	ms := int64(LiveMediaWindowDuration / time.Millisecond)
+	if ms <= 0 {
+		ms = 10 * 60 * 1000
+	}
+	return ms
+}
+
+// ParsedMediaWindows 解析媒体窗列表。
+func (m *LiveMaterial) ParsedMediaWindows() MediaWindowList {
+	if m == nil {
+		return nil
+	}
+	return ParseMediaWindows(m.MediaWindows)
 }
 
 // ProcessMediaURL ASR（回放）与成片在 url_type=file 或回放 m3u8 时使用的媒体地址。

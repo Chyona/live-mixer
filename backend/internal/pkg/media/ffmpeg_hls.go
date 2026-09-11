@@ -295,3 +295,33 @@ func (c *FFmpegConverter) ProbeHLSHasMedia(ctx context.Context, inputURL string)
 	args = append(args, "-t", "1", "-i", inputURL, "-f", "null", "-")
 	return c.runFFmpeg(ctx, args, "ffmpeg 探测 HLS 失败")
 }
+
+// RemuxToMPEGTS 将本地媒体（如窗 MP4）无损/低损 remux 为 MPEG-TS，供 HLS 预览与 MP4 同源。
+func (c *FFmpegConverter) RemuxToMPEGTS(ctx context.Context, inputPath, outputPath string) error {
+	args := []string{
+		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
+		"-i", inputPath,
+		"-c", "copy",
+		"-bsf:v", "h264_mp4toannexb",
+		"-f", "mpegts",
+		outputPath,
+	}
+	if err := c.runFFmpeg(ctx, args, "ffmpeg remux MPEG-TS 失败"); err != nil {
+		// 部分封装无 annexb 比特流滤镜时回退重编码。
+		args = []string{
+			"-y",
+			"-threads", strconv.Itoa(DefaultFFmpegThreads),
+			"-i", inputPath,
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-crf", "18",
+			"-c:a", "aac",
+			"-b:a", "192k",
+			"-f", "mpegts",
+			outputPath,
+		}
+		return c.runFFmpeg(ctx, args, "ffmpeg remux MPEG-TS（重编码）失败")
+	}
+	return nil
+}
