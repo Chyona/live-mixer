@@ -5,18 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/liveingest"
+	"live-mixer/internal/pkg/utils"
 
 	"go.uber.org/zap"
 )
 
-// planMediaWindowSeal 计算下一窗应覆盖的分片区间。
-// 允许单片略超窗长（HLS 分片边界），避免「差一片永远不满窗」。
+// planMediaWindowSeal 计算下一增长步应覆盖的分片区间（满 MediaWindowMS 再封入主 MP4）。
 func planMediaWindowSeal(
 	segStart, nextSeg int64,
 	segDurMS map[int64]int64,
@@ -54,8 +53,9 @@ func planMediaWindowSeal(
 	return segEnd, sumMS, partial
 }
 
-// sealReadyMediaWindows 按媒体窗时长封窗：合成 window_N.mp4（+同源 TS），更新 media_windows 与预览 playlist。
-// forcePartial：关播时即使未满一窗也封最后一段。
+// sealReadyMediaWindows 按步长递增主 MP4：每次将分片 [0, segEnd) 重合成一份更长的 master.mp4
+//（约 10/20/30… 分钟），上传后写回 media_windows（单条）与 duration，并触发 ASR。
+// forcePartial：关播时即使未满一步也封入剩余分片。
 func (w *liveIngestWorker) sealReadyMediaWindows(
 	ctx context.Context,
 	material *model.LiveMaterial,
@@ -67,8 +67,7 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 	}
 	windowMS := material.EffectiveMediaWindowMS()
 	workDir := w.segmentDir(material)
-	winDir := filepath.Join(workDir, "windows")
-	if err := os.MkdirAll(winDir, 0o755); err != nil {
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return err
 	}
 	nominal := int64(model.LiveSegmentDurationSec) * 1000
@@ -90,108 +89,112 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 			break
 		}
 		if partial && !forcePartial {
-			w.logger.Debug("媒体窗未满，等待更多分片",
+			w.logger.Debug("主 MP4 未满一步，等待更多分片",
 				zap.Uint("material_id", material.ID),
 				zap.Int64("seg_start", segStart),
 				zap.Int64("seg_end", segEnd),
 				zap.Int64("sum_ms", sumMS),
-				zap.Int64("window_ms", windowMS),
+				zap.Int64("step_ms", windowMS),
 			)
 			break
 		}
 
-		windows := material.ParsedMediaWindows()
-		winIdx := 0
-		if len(windows) > 0 {
-			winIdx = windows[len(windows)-1].Index + 1
-		}
-		startMS := windows.TotalReadyMS()
-		files := make([]string, 0, segEnd-segStart)
-		for i := segStart; i < segEnd; i++ {
+		// 权威时钟：始终用 [0, segEnd) 全部分片重合成主文件，保证 10/20/30… 递增且时间轴连续。
+		files := make([]string, 0, segEnd)
+		for i := int64(0); i < segEnd; i++ {
 			p := filepath.Join(workDir, liveingest.SegmentFileName(int(i)))
 			if st, err := os.Stat(p); err != nil || st.Size() == 0 {
-				return fmt.Errorf("封窗缺少分片 seg=%d path=%s", i, p)
+				return fmt.Errorf("合成主 MP4 缺少分片 seg=%d path=%s", i, p)
 			}
 			files = append(files, p)
 		}
-		mp4Path := filepath.Join(winDir, liveingest.WindowMP4FileName(winIdx))
-		tsPath := filepath.Join(winDir, liveingest.WindowTSFileName(winIdx))
+		mp4Path := filepath.Join(workDir, liveingest.MasterMP4FileName())
+		tmpPath := filepath.Join(workDir, "master_building.mp4")
+		_ = os.Remove(tmpPath)
 
-		w.logger.Info("开始合成媒体窗",
+		w.logger.Info("开始合成递增主 MP4",
 			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", winIdx),
-			zap.Int64("seg_start", segStart),
 			zap.Int64("seg_end", segEnd),
-			zap.Int64("est_dur_ms", sumMS),
-			zap.Int64("window_ms", windowMS),
+			zap.Int("seg_count", len(files)),
+			zap.Int64("step_new_ms", sumMS),
+			zap.Int64("step_ms", windowMS),
 			zap.Bool("partial", partial),
 			zap.String("mp4", mp4Path),
 		)
-		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, mp4Path); err != nil {
-			return fmt.Errorf("合成媒体窗 mp4 失败: %w", err)
+		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, tmpPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("合成主 MP4 失败: %w", err)
 		}
-		durMS := sumMS
+		_ = os.Remove(mp4Path)
+		if err := os.Rename(tmpPath, mp4Path); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("替换主 MP4 失败: %w", err)
+		}
+
+		durMS := int64(0)
+		for i := int64(0); i < segEnd; i++ {
+			ms := int64(0)
+			if segDurMS != nil {
+				ms = segDurMS[i]
+			}
+			if ms <= 0 {
+				ms = nominal
+			}
+			durMS += ms
+		}
 		if w.prober != nil {
 			if tl, err := w.prober.ProbeMediaTimeline(ctx, mp4Path); err == nil && tl.FormatDurationSec > 0 {
 				if probed := int64(tl.FormatDurationSec * 1000); probed > 0 {
 					durMS = probed
 				}
+				if tl.Width > 0 {
+					material.Width = tl.Width
+				}
+				if tl.Height > 0 {
+					material.Height = tl.Height
+				}
 			}
-		}
-		if err := w.ffmpeg.RemuxToMPEGTS(ctx, mp4Path, tsPath); err != nil {
-			return fmt.Errorf("合成媒体窗 ts 失败: %w", err)
 		}
 
-		mp4Key := liveingest.WindowMP4ObjectKey(material.RecordUUID, winIdx)
-		tsKey := liveingest.WindowTSObjectKey(material.RecordUUID, winIdx)
-		var mp4URL, tsURL string
+		objectKey := liveingest.MasterObjectKey(material.RecordUUID)
+		var mp4URL string
 		if w.storage != nil {
 			var err error
-			mp4URL, err = w.storage.UploadFile(ctx, mp4Path, mp4Key)
+			mp4URL, err = w.storage.UploadFile(ctx, mp4Path, objectKey)
 			if err != nil {
-				return fmt.Errorf("上传媒体窗 mp4 失败: %w", err)
+				return fmt.Errorf("上传主 MP4 失败: %w", err)
 			}
-			tsURL, err = w.storage.UploadFile(ctx, tsPath, tsKey)
-			if err != nil {
-				return fmt.Errorf("上传媒体窗 ts 失败: %w", err)
-			}
+		}
+		if strings.TrimSpace(mp4URL) == "" {
+			mp4URL = strings.TrimSpace(material.LiveURL)
 		}
 
 		wmeta := model.MediaWindow{
-			Index:     winIdx,
-			StartMS:   startMS,
-			EndMS:     startMS + durMS,
+			Index:     0,
+			StartMS:   0,
+			EndMS:     durMS,
 			DurMS:     durMS,
 			URL:       mp4URL,
-			TSURL:     tsURL,
-			ObjectKey: mp4Key,
-			TSKey:     tsKey,
-			SegStart:  segStart,
+			ObjectKey: objectKey,
+			SegStart:  0,
 			SegEnd:    segEnd,
 			Ready:     true,
 		}
-		windows = windows.Upsert(wmeta)
-		material.MediaWindows = windows.Marshal()
+		material.MediaWindows = model.WithMaster(wmeta).Marshal()
 		material.NextWindowSeg = segEnd
+		material.Duration = durMS
+		if mp4URL != "" {
+			material.LiveURL = mp4URL
+		}
 
-		endedPlaylist := forcePartial && material.NextWindowSeg >= material.NextSeg
-		playlistURL, plErr := w.publishWindowsPlaylist(ctx, material, endedPlaylist)
-		if plErr != nil {
-			w.logger.Warn("发布媒体窗播放列表失败", zap.Uint("material_id", material.ID), zap.Error(plErr))
-		}
-		if playlistURL != "" {
-			material.RecordPlaylistURL = playlistURL
-		}
-		if err := w.repo.CommitMediaWindow(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg, material.Duration, playlistURL, true); err != nil {
-			return fmt.Errorf("写回媒体窗失败: %w", err)
+		if err := w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg, durMS, mp4URL, true); err != nil {
+			return fmt.Errorf("写回主 MP4 元数据失败: %w", err)
 		}
 		material.ASRDue = true
-		w.logger.Info("媒体窗已就绪",
+		w.logger.Info("主 MP4 已递增就绪",
 			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", winIdx),
-			zap.Int64("start_ms", wmeta.StartMS),
-			zap.Int64("end_ms", wmeta.EndMS),
-			zap.Int64("dur_ms", wmeta.DurMS),
+			zap.Int64("ready_ms", durMS),
+			zap.Int64("seg_end", segEnd),
 			zap.String("mp4_url", mp4URL),
 		)
 		enqueueWake(w.asrWake, 1)
@@ -206,65 +209,30 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 	return nil
 }
 
-func (w *liveIngestWorker) publishWindowsPlaylist(ctx context.Context, material *model.LiveMaterial, ended bool) (string, error) {
-	if w.storage == nil {
-		return "", fmt.Errorf("对象存储未配置")
-	}
-	windows := material.ParsedMediaWindows()
-	for i := range windows {
-		if !windows[i].Ready {
-			continue
-		}
-		if strings.TrimSpace(windows[i].TSURL) == "" && strings.TrimSpace(windows[i].TSKey) != "" {
-			if u, err := w.storage.AccessURL(ctx, windows[i].TSKey); err == nil {
-				windows[i].TSURL = u
-			}
-		}
-		if strings.TrimSpace(windows[i].URL) == "" && strings.TrimSpace(windows[i].ObjectKey) != "" {
-			if u, err := w.storage.AccessURL(ctx, windows[i].ObjectKey); err == nil {
-				windows[i].URL = u
-			}
-		}
-	}
-	sort.Slice(windows, func(i, j int) bool { return windows[i].Index < windows[j].Index })
-	td := int(material.EffectiveMediaWindowMS() / 1000)
-	if td <= 0 {
-		td = int(model.LiveMediaWindowDuration / time.Second)
-	}
-	body := liveingest.BuildWindowsPlaylist(windows, td, ended)
-	tmp := filepath.Join(w.segmentDir(material), "live.m3u8")
-	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
-		return "", err
-	}
-	defer os.Remove(tmp)
-	uploaded, err := w.storage.UploadFile(ctx, tmp, liveingest.PlaylistObjectKey(material.RecordUUID))
-	if err != nil {
-		return "", err
-	}
-	return liveingest.PreferStablePlaylistURL(material.RecordPlaylistURL, uploaded), nil
-}
-
-// resolveWindowMP4Path 优先本地窗文件，否则从对象存储拉到本地。
-func (w *liveIngestWorker) resolveWindowMP4Path(ctx context.Context, material *model.LiveMaterial, win model.MediaWindow) (string, error) {
+// resolveMasterMP4Path 优先本地 master.mp4，否则按 URL 下载。
+func (w *liveIngestWorker) resolveMasterMP4Path(ctx context.Context, material *model.LiveMaterial) (string, error) {
 	workDir := w.segmentDir(material)
-	local := filepath.Join(workDir, "windows", liveingest.WindowMP4FileName(win.Index))
+	local := filepath.Join(workDir, liveingest.MasterMP4FileName())
 	if st, err := os.Stat(local); err == nil && st.Size() > 0 {
 		return local, nil
 	}
-	_ = os.MkdirAll(filepath.Dir(local), 0o755)
-	url := strings.TrimSpace(win.URL)
-	if url == "" && w.storage != nil && strings.TrimSpace(win.ObjectKey) != "" {
-		u, err := w.storage.AccessURL(ctx, win.ObjectKey)
-		if err != nil {
-			return "", err
-		}
-		url = u
+	master, ok := material.ParsedMediaWindows().Master()
+	if !ok {
+		return "", fmt.Errorf("主 MP4 尚未就绪")
+	}
+	url := strings.TrimSpace(master.URL)
+	if url == "" {
+		url = strings.TrimSpace(material.LiveURL)
 	}
 	if url == "" {
-		return "", fmt.Errorf("媒体窗 %d 无可用 URL", win.Index)
+		return "", fmt.Errorf("主 MP4 无本地文件且无下载地址")
 	}
-	if err := downloadHTTPFile(ctx, w.httpClient, url, local); err != nil {
-		return "", fmt.Errorf("下载媒体窗 mp4 失败: %w", err)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return "", err
+	}
+	if _, err := utils.DownloadFileWithConfigContext(ctx, url, local, utils.DownloadConfig{}); err != nil {
+		_ = os.Remove(local)
+		return "", fmt.Errorf("下载主 MP4 失败: %w", err)
 	}
 	return local, nil
 }

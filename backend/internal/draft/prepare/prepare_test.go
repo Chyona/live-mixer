@@ -264,21 +264,20 @@ func TestPipeline_Run_LiveUsesMediaWindows(t *testing.T) {
 	root := t.TempDir()
 	staging := filepath.Join(root, "staging")
 	ingest := filepath.Join(root, "ingest")
-	winDir := filepath.Join(ingest, "windows")
-	if err := os.MkdirAll(winDir, 0o755); err != nil {
+	if err := os.MkdirAll(ingest, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	winPath := filepath.Join(winDir, "window_00000.mp4")
-	if err := os.WriteFile(winPath, []byte("mp4"), 0o644); err != nil {
+	masterPath := filepath.Join(ingest, "master.mp4")
+	if err := os.WriteFile(masterPath, []byte("mp4"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cutter := &recordingCutter{}
-	windows := model.MediaWindowList{{
-		Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
-		URL: "https://cdn.example/window_00000.mp4",
-	}}
+	windows := model.WithMaster(model.MediaWindow{
+		StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
+		URL: "https://cdn.example/master.mp4",
+	})
 	s := &session.Session{
-		JobID: "job-win",
+		JobID: "job-master",
 		Material: &model.LiveMaterial{
 			LiveStatus:   model.LiveStatusLive,
 			MediaWindows: windows.Marshal(),
@@ -292,11 +291,11 @@ func TestPipeline_Run_LiveUsesMediaWindows(t *testing.T) {
 	if err := p.Run(context.Background(), s); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if s.SourceMode != "media_windows" {
-		t.Fatalf("SourceMode=%q want media_windows", s.SourceMode)
+	if s.SourceMode != "master_mp4" {
+		t.Fatalf("SourceMode=%q want master_mp4", s.SourceMode)
 	}
-	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "window_00000.mp4") {
-		t.Fatalf("cut inputs = %v, want window mp4", cutter.inputs)
+	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "master.mp4") {
+		t.Fatalf("cut inputs = %v, want master.mp4", cutter.inputs)
 	}
 }
 
@@ -314,8 +313,8 @@ func TestPipeline_Run_LiveRejectsWithoutMediaWindows(t *testing.T) {
 	}
 	p := NewPipeline(mockDownloader{}, &recordingCutter{}, zap.NewNop())
 	err := p.Run(context.Background(), s)
-	if err == nil || !strings.Contains(err.Error(), "媒体窗尚未覆盖") {
-		t.Fatalf("err = %v, want media window coverage error", err)
+	if err == nil || !strings.Contains(err.Error(), "主 MP4 尚未覆盖") {
+		t.Fatalf("err = %v, want master mp4 coverage error", err)
 	}
 }
 

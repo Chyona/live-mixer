@@ -29,6 +29,9 @@ type LiveIngestRepository interface {
 	MarkConnecting(ctx context.Context, id uint, epoch int64) error
 	MarkLiveStarted(ctx context.Context, id uint, epoch int64, width, height int, resumeSeg int64) error
 	UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error
+	// CommitMasterMP4 写回递增主 MP4 元数据（media_windows 单条）、权威 duration 与 live_url。
+	CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error
+	// CommitMediaWindow 兼容旧名，等价 CommitMasterMP4（playlistURL 忽略）。
 	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error
 	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool) error
 	ClearASRDue(ctx context.Context, id uint, asrEpoch int64) error
@@ -277,7 +280,7 @@ func (r *liveMaterialRepository) UpdateRecordingProgress(ctx context.Context, id
 		Updates(fields).Error
 }
 
-func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error {
+func (r *liveMaterialRepository) CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error {
 	now := time.Now()
 	if strings.TrimSpace(mediaWindowsJSON) == "" {
 		mediaWindowsJSON = "[]"
@@ -292,12 +295,17 @@ func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint,
 		"asr_updated_at":    now,
 		"updated_at":        now,
 	}
-	if playlistURL != "" {
-		fields["record_playlist_url"] = playlistURL
+	if u := strings.TrimSpace(masterURL); u != "" {
+		fields["live_url"] = u
 	}
 	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(fields).Error
+}
+
+func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error {
+	_ = playlistURL
+	return r.CommitMasterMP4(ctx, id, epoch, mediaWindowsJSON, nextWindowSeg, durationMS, "", asrDue)
 }
 
 func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool) error {

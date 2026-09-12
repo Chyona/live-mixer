@@ -4,33 +4,27 @@ import "testing"
 
 func TestLiveMaterial_PlayURL(t *testing.T) {
 	m := &LiveMaterial{
-		LiveURL:           "https://cdn.example/final.mp4",
+		LiveURL:           "https://cdn.example/master.mp4",
 		M3U8URL:           "https://src.example/live.m3u8",
 		RecordPlaylistURL: "https://cdn.example/live.m3u8",
 		URLType:           URLTypeM3U8,
 		LiveStatus:        LiveStatusLive,
 	}
-	if got := m.PlayURL(); got != m.RecordPlaylistURL {
-		t.Errorf("live PlayURL = %q, want record playlist", got)
-	}
-	m.RecordPlaylistURL = ""
 	if got := m.PlayURL(); got != "" {
-		t.Errorf("live without record must not fall back to source m3u8, got %q", got)
+		t.Errorf("live without master ready PlayURL = %q, want empty", got)
 	}
-	m.RecordPlaylistURL = "https://cdn.example/live.m3u8"
+	m.MediaWindows = WithMaster(MediaWindow{
+		StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
+		URL: "https://cdn.example/master.mp4?signed=1",
+	}).Marshal()
+	if got := m.PlayURL(); got != "https://cdn.example/master.mp4?signed=1" {
+		t.Errorf("live with master PlayURL = %q", got)
+	}
+	m.MediaWindows = "[]"
 	m.URLType = URLTypeFile
+	m.LiveStatus = LiveStatusEnded
 	if got := m.PlayURL(); got != m.LiveURL {
-		t.Errorf("file PlayURL = %q, want live_url", got)
-	}
-	ended := &LiveMaterial{
-		LiveURL:           "https://cdn.example/final.mp4",
-		M3U8URL:           "https://src.example/live.m3u8",
-		RecordPlaylistURL: "https://cdn.example/live.m3u8",
-		URLType:           URLTypeM3U8,
-		LiveStatus:        LiveStatusEnded,
-	}
-	if got := ended.PlayURL(); got != ended.LiveURL {
-		t.Errorf("ended PlayURL = %q, want final live_url", got)
+		t.Errorf("ended PlayURL = %q, want live_url", got)
 	}
 	replay := &LiveMaterial{M3U8URL: "https://src.example/vod.m3u8", URLType: URLTypeM3U8, LiveStatus: LiveStatusNone}
 	if got := replay.PlayURL(); got != replay.M3U8URL {

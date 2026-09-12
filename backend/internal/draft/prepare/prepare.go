@@ -73,16 +73,16 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 
 	s.ReportProgress(15)
 
-	// 跟播中（live/ending）：强制媒体窗 MP4，与 ASR/预览同源。
+	// 跟播中（live/ending）：强制递增主 MP4，与 ASR/预览同源。
 	if s.Material != nil && (s.Material.LiveStatus == model.LiveStatusLive || s.Material.LiveStatus == model.LiveStatusEnding) {
 		if !canUseMediaWindows(s) {
 			ready := s.Material.ParsedMediaWindows().TotalReadyMS()
-			return fmt.Errorf("媒体窗尚未覆盖所选区间（已就绪 %dms），请等待下一窗合成后再一键成片", ready)
+			return fmt.Errorf("主 MP4 尚未覆盖所选区间（已就绪 %dms），请等待下一档（10/20/30…分钟）合成后再一键成片", ready)
 		}
-		p.Logger.Info("开始准备直播视频（媒体窗 MP4）",
+		p.Logger.Info("开始准备直播视频（递增主 MP4）",
 			zap.String("job_id", s.JobID),
 			zap.String("staging_dir", s.StagingDir),
-			zap.Int("ready_windows", s.Material.ParsedMediaWindows().ReadyCount()),
+			zap.Int64("ready_ms", s.Material.ParsedMediaWindows().TotalReadyMS()),
 		)
 		s.ReportProgress(25)
 		useFast := UseFastKeyframeCut(s.Clips)
@@ -101,13 +101,13 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 		return nil
 	}
 
-	// 已 ended：优先 final.mp4；否则媒体窗；再降级本地 Index / 远程源。
+	// 已 ended：优先主/最终 MP4；再降级本地 Index / 远程源。
 	preferFinal := shouldPreferFinalMP4(s)
 	if !preferFinal && canUseMediaWindows(s) {
-		p.Logger.Info("开始准备直播视频（媒体窗 MP4）",
+		p.Logger.Info("开始准备直播视频（递增主 MP4）",
 			zap.String("job_id", s.JobID),
 			zap.String("staging_dir", s.StagingDir),
-			zap.Int("ready_windows", s.Material.ParsedMediaWindows().ReadyCount()),
+			zap.Int64("ready_ms", s.Material.ParsedMediaWindows().TotalReadyMS()),
 		)
 		s.ReportProgress(25)
 		useFast := UseFastKeyframeCut(s.Clips)
@@ -235,7 +235,7 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	return nil
 }
 
-// shouldPreferFinalMP4 关播完成后优先单文件 final.mp4（本地或 LiveURL）。
+// shouldPreferFinalMP4 关播完成后优先单文件主 MP4（本地 master.mp4 或 LiveURL）。
 func shouldPreferFinalMP4(s *session.Session) bool {
 	if s == nil || s.Material == nil {
 		return false
@@ -256,7 +256,7 @@ func shouldPreferFinalMP4(s *session.Session) bool {
 	return false
 }
 
-// tryLocalFinalMP4 若本地 ingest 目录仍有 final.mp4 则返回路径。
+// tryLocalFinalMP4 若本地 ingest 目录仍有 master.mp4（或旧版 final.mp4）则返回路径。
 func tryLocalFinalMP4(s *session.Session) (string, bool) {
 	if s == nil {
 		return "", false
@@ -265,12 +265,15 @@ func tryLocalFinalMP4(s *session.Session) (string, bool) {
 	if dir == "" {
 		return "", false
 	}
-	p := filepath.Join(dir, "final.mp4")
-	st, err := os.Stat(p)
-	if err != nil || st.Size() == 0 {
-		return "", false
+	for _, name := range []string{liveingest.MasterMP4FileName(), "final.mp4"} {
+		p := filepath.Join(dir, name)
+		st, err := os.Stat(p)
+		if err != nil || st.Size() == 0 {
+			continue
+		}
+		return p, true
 	}
-	return p, true
+	return "", false
 }
 
 // materializeVODPlaylist 下载远程 m3u8 并补 ENDLIST，返回本地路径供 ffmpeg 随机访问。

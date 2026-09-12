@@ -15,18 +15,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// runWindowASR 对下一个待转写媒体窗处理一个短 ASR chunk（默认 ≤2min）。
-// 预览/成片仍用完整窗 MP4；此处只从该 MP4 按时间范围抽音，避免整窗一次转写后线性缩放把字幕压歪。
+// runWindowASR 对递增主 MP4 处理一个短 ASR chunk（默认 ≤2min）。
+// 预览/成片/ASR 同源 master.mp4；此处按 [asr_cursor, cursor+chunk) 抽等长 MP3，使累计覆盖达到 10/20/30… 与主文件时长一致。
 func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
 	logStep := func(step string, fields ...zap.Field) {
 		base := []zap.Field{
 			zap.Uint("material_id", material.ID),
 			zap.String("step", step),
 		}
-		w.logger.Info("窗口 ASR 步骤", append(base, fields...)...)
+		w.logger.Info("主 MP4 ASR 步骤", append(base, fields...)...)
 	}
 	if w.asrService == nil {
-		w.logger.Warn("窗口 ASR 跳过：ASR 服务未配置", zap.Uint("material_id", material.ID))
+		w.logger.Warn("主 MP4 ASR 跳过：ASR 服务未配置", zap.Uint("material_id", material.ID))
 		return nil
 	}
 	epoch := material.ASREpoch
@@ -36,47 +36,35 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		material.ASREpoch = latest.ASREpoch
 		material.MediaWindows = latest.MediaWindows
 		material.Duration = latest.Duration
+		material.LiveURL = latest.LiveURL
 		epoch = latest.ASREpoch
 	}
 	cursor := material.ASRCursorMS
-	windows := material.ParsedMediaWindows()
-	win, ok := windows.NextPendingASRWindow(cursor)
+	master, ok := material.ParsedMediaWindows().Master()
 	if !ok {
-		w.logger.Info("窗口 ASR 跳过：无待转写媒体窗",
+		w.logger.Info("主 MP4 ASR 跳过：主文件尚未就绪",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("asr_cursor_ms", cursor),
-			zap.Int("ready_windows", windows.ReadyCount()),
 		)
 		return nil
 	}
-	targetWindowMS := win.DurMS
-	if targetWindowMS <= 0 {
-		targetWindowMS = win.EndMS - win.StartMS
+	readyMS := master.DurMS
+	if readyMS <= 0 {
+		readyMS = master.EndMS
 	}
-	if targetWindowMS <= 0 {
-		w.logger.Warn("窗口 ASR 跳过：媒体窗时长无效",
-			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", win.Index),
-		)
+	if readyMS <= 0 {
+		w.logger.Warn("主 MP4 ASR 跳过：主文件时长无效", zap.Uint("material_id", material.ID))
 		return nil
 	}
-	localCursor := cursor - win.StartMS
-	if localCursor < 0 {
-		localCursor = 0
-	}
-	if localCursor >= targetWindowMS {
-		newCursor := win.EndMS
-		if newCursor < cursor {
-			newCursor = cursor
-		}
-		_, stillPending := windows.NextPendingASRWindow(newCursor)
-		progress := windowASRProgress(material.Duration, newCursor)
-		if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, material.LiveASR, newCursor, material.Duration, progress, stillPending); err != nil {
+	if cursor >= readyMS {
+		progress := windowASRProgress(readyMS, readyMS)
+		if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, material.LiveASR, readyMS, readyMS, progress, false); err != nil {
 			return err
 		}
-		material.ASRCursorMS = newCursor
+		material.ASRCursorMS = readyMS
+		material.Duration = readyMS
 		material.ASRProgress = progress
-		material.ASRDue = stillPending
+		material.ASRDue = false
 		return nil
 	}
 
@@ -84,33 +72,29 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	if chunkMS <= 0 {
 		chunkMS = int64((2 * time.Minute) / time.Millisecond)
 	}
-	remain := targetWindowMS - localCursor
+	remain := readyMS - cursor
 	thisChunkMS := chunkMS
 	if thisChunkMS > remain {
 		thisChunkMS = remain
 	}
-	offsetMS := win.StartMS + localCursor
+	offsetMS := cursor
 	asrStart := time.Now()
 	logStep("resolve_chunk",
-		zap.Int("window_index", win.Index),
-		zap.Int64("window_start_ms", win.StartMS),
-		zap.Int64("window_end_ms", win.EndMS),
-		zap.Int64("window_ms", targetWindowMS),
-		zap.Int64("local_cursor_ms", localCursor),
+		zap.Int64("ready_ms", readyMS),
 		zap.Int64("chunk_ms", thisChunkMS),
 		zap.Int64("offset_ms", offsetMS),
 		zap.Int64("asr_cursor_ms", cursor),
 	)
-	mp4Path, err := w.resolveWindowMP4Path(ctx, material, win)
+	mp4Path, err := w.resolveMasterMP4Path(ctx, material)
 	if err != nil {
 		return err
 	}
 
-	startSec := float64(localCursor) / 1000.0
+	startSec := float64(cursor) / 1000.0
 	durSec := float64(thisChunkMS) / 1000.0
 	align := media.ASRAlignOptions{TargetDurSec: durSec}
-	// 仅窗内起点 chunk 应用整文件 A/V 对齐；中段 seek 后再垫片会把时间轴再次弄歪。
-	if localCursor == 0 && w.prober != nil {
+	// 仅主文件起点 chunk 应用整文件 A/V 对齐；中段 seek 后再垫片会把时间轴再次弄歪。
+	if cursor == 0 && w.prober != nil {
 		if tl, perr := w.prober.ProbeMediaTimeline(ctx, mp4Path); perr == nil {
 			opts := tl.AlignOptions()
 			align.LeadPadMs = opts.LeadPadMs
@@ -119,7 +103,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		}
 	}
 
-	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_win_%d_%d.mp3", win.Index, localCursor))
+	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_master_%d.mp3", cursor))
 	logStep("mp3_start",
 		zap.String("mp4", mp4Path),
 		zap.Float64("start_sec", startSec),
@@ -128,9 +112,8 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Int64("lead_pad_ms", align.LeadPadMs),
 	)
 	mp3Start := time.Now()
-	// 必须：窗 MP4 → 与目标时长等长的 MP3 → 再送 ASR。禁止回退到无时长约束的抽音。
 	if err := w.ffmpeg.ConvertRangeToASRMP3Aligned(ctx, mp4Path, tmpMP3, startSec, durSec, align); err != nil {
-		return fmt.Errorf("从窗 MP4 抽等长 ASR MP3 失败: %w", err)
+		return fmt.Errorf("从主 MP4 抽等长 ASR MP3 失败: %w", err)
 	}
 	defer os.Remove(tmpMP3)
 	logStep("mp3_ok", zap.Duration("elapsed", time.Since(mp3Start)), zap.Float64("target_dur_sec", align.TargetDurSec))
@@ -139,7 +122,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	logStep("upload_start")
 	uploadStart := time.Now()
-	objectKey := fmt.Sprintf("%s/live-asr-%d-win%d-%d.mp3", storage.SubDirTemp, material.ID, win.Index, localCursor)
+	objectKey := fmt.Sprintf("%s/live-asr-%d-master-%d.mp3", storage.SubDirTemp, material.ID, cursor)
 	audioURL, err := w.storage.UploadFile(ctx, tmpMP3, objectKey)
 	if err != nil {
 		return err
@@ -149,21 +132,18 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	transcribeStart := time.Now()
 	raw, err := w.asrService.Transcribe(ctx, audioURL)
 	if err != nil {
-		// 必须推进游标：否则 ClaimWindowASR 会反复抢同一 chunk，E2E/跟播永远卡死。
-		// 静音（20000003）属预期跳过；其它识别失败也跳过本 chunk，避免死循环。
 		advanceReason := "识别失败跳过"
 		if asr.IsSilenceAudioError(err) {
 			advanceReason = "静音跳过"
 		}
-		w.logger.Warn("窗口 ASR "+advanceReason+"，推进游标",
+		w.logger.Warn("主 MP4 ASR "+advanceReason+"，推进游标",
 			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", win.Index),
-			zap.Int64("local_cursor_ms", localCursor),
+			zap.Int64("cursor_ms", cursor),
 			zap.Int64("chunk_ms", thisChunkMS),
 			zap.Duration("elapsed", time.Since(transcribeStart)),
 			zap.Error(err),
 		)
-		return w.commitWindowASRProgress(ctx, material, epoch, win, targetWindowMS, localCursor, thisChunkMS, cursor, material.LiveASR, 0, 1.0, asrStart)
+		return w.commitMasterASRProgress(ctx, material, epoch, readyMS, thisChunkMS, cursor, material.LiveASR, 0, 1.0, asrStart)
 	}
 	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
 
@@ -174,7 +154,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	if asr.ShouldScaleUtteranceTimestamps(asrDur, thisChunkMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
 		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, thisChunkMS)
 		if scaleErr != nil {
-			w.logger.Warn("窗口 ASR chunk 兜底缩放失败，沿用厂商时间戳",
+			w.logger.Warn("主 MP4 ASR chunk 兜底缩放失败，沿用厂商时间戳",
 				zap.Uint("material_id", material.ID),
 				zap.Error(scaleErr),
 			)
@@ -189,52 +169,49 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	if err != nil {
 		return err
 	}
-	return w.commitWindowASRProgress(ctx, material, epoch, win, targetWindowMS, localCursor, thisChunkMS, cursor, merged, asrDur, scaleFactor, asrStart)
+	return w.commitMasterASRProgress(ctx, material, epoch, readyMS, thisChunkMS, cursor, merged, asrDur, scaleFactor, asrStart)
 }
 
-// commitWindowASRProgress 将游标推进 thisChunkMS，并写回 live_asr / asr_due。
-func (w *liveIngestWorker) commitWindowASRProgress(
+func (w *liveIngestWorker) commitMasterASRProgress(
 	ctx context.Context,
 	material *model.LiveMaterial,
 	epoch int64,
-	win model.MediaWindow,
-	targetWindowMS, localCursor, thisChunkMS, cursor int64,
+	readyMS, thisChunkMS, cursor int64,
 	liveASR string,
 	asrVendorDurMS int64,
 	scaleFactor float64,
 	asrStart time.Time,
 ) error {
-	newLocal := localCursor + thisChunkMS
-	newCursor := win.StartMS + newLocal
-	if newLocal >= targetWindowMS {
-		newCursor = win.EndMS
+	newCursor := cursor + thisChunkMS
+	if newCursor > readyMS {
+		newCursor = readyMS
 	}
 	if newCursor < cursor {
 		newCursor = cursor
 	}
-	progress := windowASRProgress(material.Duration, newCursor)
-	_, stillPending := material.ParsedMediaWindows().NextPendingASRWindow(newCursor)
-	w.logger.Info("窗口 ASR 步骤",
+	stillPending := newCursor < readyMS
+	progress := windowASRProgress(readyMS, newCursor)
+	w.logger.Info("主 MP4 ASR 步骤",
 		zap.Uint("material_id", material.ID),
 		zap.String("step", "db_start"),
 		zap.Int64("asr_cursor_ms", newCursor),
 		zap.Bool("still_due", stillPending),
 	)
-	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, newCursor, material.Duration, progress, stillPending); err != nil {
+	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, newCursor, readyMS, progress, stillPending); err != nil {
 		return err
 	}
 	material.ASRCursorMS = newCursor
 	material.LiveASR = liveASR
 	material.ASRProgress = progress
 	material.ASRDue = stillPending
-	w.logger.Info("窗口 ASR chunk 完成",
+	material.Duration = readyMS
+	w.logger.Info("主 MP4 ASR chunk 完成",
 		zap.Uint("material_id", material.ID),
 		zap.Duration("elapsed", time.Since(asrStart)),
-		zap.Int("window_index", win.Index),
-		zap.Int64("offset_ms", win.StartMS+localCursor),
+		zap.Int64("offset_ms", cursor),
 		zap.Int64("chunk_ms", thisChunkMS),
 		zap.Int64("asr_cursor_ms", newCursor),
-		zap.Int64("window_ms", targetWindowMS),
+		zap.Int64("ready_ms", readyMS),
 		zap.Int64("asr_vendor_duration_ms", asrVendorDurMS),
 		zap.Float64("asr_time_scale", scaleFactor),
 		zap.Int16("asr_progress", progress),
@@ -242,10 +219,10 @@ func (w *liveIngestWorker) commitWindowASRProgress(
 	return nil
 }
 
-func windowASRProgress(durationMS, cursorMS int64) int16 {
+func windowASRProgress(readyMS, cursorMS int64) int16 {
 	progress := int16(10)
-	if durationMS > 0 {
-		progress = int16(20 + 79*cursorMS/durationMS)
+	if readyMS > 0 {
+		progress = int16(20 + 79*cursorMS/readyMS)
 		if progress > 99 {
 			progress = 99
 		}

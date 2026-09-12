@@ -45,7 +45,7 @@ pnpm dev                      # http://localhost:8008
 | --------------- | ------------------------- |
 | `pnpm dev`      | 开发服务（默认端口 8008） |
 | `pnpm build`    | 生产构建                  |
-| `pnpm preview`  | 预览构建产物              |
+| `pnpm preview`  | 预览构建产物              | image.png |
 | `pnpm validate` | lint + 类型检查 + 单测    |
 
 ## 环境配置

@@ -331,11 +331,10 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 	}()
 
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
-	// 单次租约内按已就绪媒体窗追平（每窗一份 MP4 → 一次转写）。
+	// 单次租约内按主 MP4 已就绪时长追平 ASR（累计覆盖 10/20/30…）。
 	w.catchUpWindowASR(ctx, material)
 	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
-		_, pending := latest.ParsedMediaWindows().NextPendingASRWindow(latest.ASRCursorMS)
-		if !pending {
+		if !latest.ParsedMediaWindows().ASRPending(latest.ASRCursorMS) {
 			_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
 		}
 	}
@@ -482,12 +481,8 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return err
 	}
-	segURLs := map[int64]string{}
 	segDurMS := map[int64]int64{}
 	w.loadPersistedSegDurations(workDir, segDurMS)
-	if material.NextSeg > 0 {
-		segURLs = w.completeSegmentURLs(ctx, material, nil, resumeFrom)
-	}
 	prober := w.prober
 	if prober == nil {
 		prober = media.NewFFprobeProber("")
@@ -593,7 +588,7 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 				w.logger.Warn("上传分片失败", zap.Uint("material_id", material.ID), zap.Int("index", index), zap.Error(err))
 				return
 			}
-			segURLs[int64(index)] = url
+			_ = url
 			next := int64(index + 1)
 			if next < material.NextSeg {
 				next = material.NextSeg
@@ -602,23 +597,17 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 			segDurMS[int64(index)] = oneMS
 			w.persistSegDurations(workDir, segDurMS)
 			recordedMS += oneMS
-			playlistURL := material.RecordPlaylistURL
-			// 首窗就绪前仍用分片 playlist 预览；之后只发布媒体窗 HLS。
-			if material.ParsedMediaWindows().ReadyCount() == 0 {
-				var plErr error
-				playlistURL, plErr = w.publishPlaylist(ctx, material, segURLs, segDurMS, false, resumeFrom)
-				if plErr != nil {
-					w.logger.Warn("发布播放列表失败", zap.Uint("material_id", material.ID), zap.Error(plErr))
-				}
-				if playlistURL != "" {
-					material.RecordPlaylistURL = playlistURL
-				}
-			}
-			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, recordedMS, playlistURL)
+			_ = recordedMS
+			// 权威时长仅来自主 MP4（10/20/30… 步进）；首档未就绪前为 0。
+			durForDB := material.MasterReadyMS()
+			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, durForDB, "")
 			material.NextSeg = next
-			material.Duration = recordedMS
+			material.Duration = durForDB
 			if err := w.sealReadyMediaWindows(ctx, material, segDurMS, false); err != nil {
-				w.logger.Warn("封媒体窗失败", zap.Uint("material_id", material.ID), zap.Error(err))
+				w.logger.Warn("递增主 MP4 失败", zap.Uint("material_id", material.ID), zap.Error(err))
+			}
+			if ready := material.MasterReadyMS(); ready > 0 {
+				material.Duration = ready
 			}
 			onSegDone++
 			now := time.Now()
@@ -705,38 +694,56 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 	segDurMS := map[int64]int64{}
 	_ = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
 	if err := w.sealReadyMediaWindows(ctx, material, segDurMS, true); err != nil {
-		return fmt.Errorf("关播封媒体窗失败: %w", err)
+		return fmt.Errorf("关播合成主 MP4 失败: %w", err)
 	}
 	if latest2, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest2 != nil {
 		material.MediaWindows = latest2.MediaWindows
 		material.NextWindowSeg = latest2.NextWindowSeg
-		material.RecordPlaylistURL = latest2.RecordPlaylistURL
 		material.Duration = latest2.Duration
+		material.LiveURL = latest2.LiveURL
+		material.LiveASR = latest2.LiveASR
+		material.ASRCursorMS = latest2.ASRCursorMS
 	}
 
-	finalPath := filepath.Join(workDir, "final.mp4")
-	windowFiles := w.collectLocalWindowMP4s(material)
-	if len(windowFiles) > 0 {
-		if err := w.ffmpeg.ConcatMediaFiles(ctx, windowFiles, finalPath); err != nil {
-			return fmt.Errorf("合成最终 mp4（媒体窗）失败: %w", err)
+	masterPath := filepath.Join(workDir, liveingest.MasterMP4FileName())
+	if st, err := os.Stat(masterPath); err != nil || st.Size() == 0 {
+		// 兜底：无主文件时直接用全部分片合成。
+		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, masterPath); err != nil {
+			return fmt.Errorf("合成最终主 MP4 失败: %w", err)
 		}
-	} else if err := w.ffmpeg.ConcatMediaFiles(ctx, files, finalPath); err != nil {
-		return fmt.Errorf("合成最终 mp4 失败: %w", err)
-	}
-	if w.storage != nil {
-		if _, err := w.storage.UploadFile(ctx, finalPath, liveingest.FinalObjectKey(material.RecordUUID)); err != nil {
-			return fmt.Errorf("上传最终 mp4 失败: %w", err)
+		if w.storage != nil {
+			url, uerr := w.storage.UploadFile(ctx, masterPath, liveingest.MasterObjectKey(material.RecordUUID))
+			if uerr != nil {
+				return fmt.Errorf("上传最终主 MP4 失败: %w", uerr)
+			}
+			material.LiveURL = url
+			dur := material.Duration
+			if w.prober != nil {
+				if tl, perr := w.prober.ProbeMediaTimeline(ctx, masterPath); perr == nil && tl.FormatDurationSec > 0 {
+					dur = int64(tl.FormatDurationSec * 1000)
+				}
+			}
+			material.MediaWindows = model.WithMaster(model.MediaWindow{
+				URL: url, ObjectKey: liveingest.MasterObjectKey(material.RecordUUID),
+				StartMS: 0, EndMS: dur, DurMS: dur, SegEnd: material.NextSeg, Ready: true,
+			}).Marshal()
+			material.Duration = dur
+			_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextSeg, dur, url, true)
 		}
 	}
+
 	dur := material.Duration
 	if w.prober != nil {
-		if tl, err := w.prober.ProbeMediaTimeline(ctx, finalPath); err == nil && tl.FormatDurationSec > 0 {
+		if tl, err := w.prober.ProbeMediaTimeline(ctx, masterPath); err == nil && tl.FormatDurationSec > 0 {
 			dur = int64(tl.FormatDurationSec * 1000)
 			material.Width, material.Height = tl.Width, tl.Height
 		}
 	}
-	if _, err := w.publishWindowsPlaylist(ctx, material, true); err != nil {
-		w.logger.Warn("关播发布媒体窗 playlist 失败", zap.Uint("material_id", material.ID), zap.Error(err))
+	if master, ok := material.ParsedMediaWindows().Master(); ok && dur > 0 && dur != master.DurMS {
+		master.DurMS = dur
+		master.EndMS = dur
+		material.MediaWindows = model.WithMaster(master).Marshal()
+		_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg, dur, master.URL, true)
 	}
 
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {
@@ -749,36 +756,11 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 			zap.Uint("material_id", material.ID),
 			zap.Error(err),
 		)
-		_ = os.Remove(finalPath)
 		_ = os.RemoveAll(workDir)
 		return err
 	}
-	_ = os.Remove(finalPath)
 	_ = os.RemoveAll(workDir)
 	return nil
-}
-
-func (w *liveIngestWorker) collectLocalWindowMP4s(material *model.LiveMaterial) []string {
-	windows := material.ParsedMediaWindows()
-	if len(windows) == 0 {
-		return nil
-	}
-	winDir := filepath.Join(w.segmentDir(material), "windows")
-	out := make([]string, 0, len(windows))
-	for _, win := range windows {
-		if !win.Ready {
-			continue
-		}
-		p := filepath.Join(winDir, liveingest.WindowMP4FileName(win.Index))
-		if st, err := os.Stat(p); err != nil || st.Size() == 0 {
-			return nil
-		}
-		out = append(out, p)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // windowTimelineMS 优先用 MediaTimelineIndex / sidecar 分片时长之和，否则用 concat 探针。
@@ -839,8 +821,7 @@ func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model
 		if material.ASRCursorMS <= before {
 			return
 		}
-		_, pending := material.ParsedMediaWindows().NextPendingASRWindow(material.ASRCursorMS)
-		if !pending {
+		if !material.ParsedMediaWindows().ASRPending(material.ASRCursorMS) {
 			return
 		}
 	}
@@ -876,13 +857,11 @@ func (w *liveIngestWorker) catchUpWindowASRUnderLease(ctx context.Context, mater
 			material.ASREpoch = latest.ASREpoch
 			material.MediaWindows = latest.MediaWindows
 			material.ASRDue = latest.ASRDue
-			_, pending := latest.ParsedMediaWindows().NextPendingASRWindow(latest.ASRCursorMS)
-			if !pending {
+			if !latest.ParsedMediaWindows().ASRPending(latest.ASRCursorMS) {
 				return
 			}
 			if !latest.ASRDue {
-				// 关播封窗后应已 asr_due；若被清掉则直接追平本素材需能再抢。
-				_ = w.repo.CommitMediaWindow(ctx, latest.ID, latest.IngestEpoch, latest.MediaWindows, latest.NextWindowSeg, latest.Duration, latest.RecordPlaylistURL, true)
+				_ = w.repo.CommitMasterMP4(ctx, latest.ID, latest.IngestEpoch, latest.MediaWindows, latest.NextWindowSeg, latest.Duration, latest.LiveURL, true)
 			}
 			claimed, err = w.repo.ClaimWindowASRWork(ctx)
 			if err != nil {
@@ -918,8 +897,7 @@ func (w *liveIngestWorker) catchUpWindowASRUnderLease(ctx context.Context, mater
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
 	w.catchUpWindowASR(ctx, material)
 	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
-		_, pending := latest.ParsedMediaWindows().NextPendingASRWindow(latest.ASRCursorMS)
-		if !pending {
+		if !latest.ParsedMediaWindows().ASRPending(latest.ASRCursorMS) {
 			_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
 		}
 	} else {
