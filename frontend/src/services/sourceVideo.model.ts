@@ -37,7 +37,7 @@ export interface AsrSummary {
   end_time: number;
 }
 
-/** 跟播递增主 MP4（与后端 media_windows 单条对齐）；预览/ASR/成片同源 */
+/** 跟播离散媒体窗（与后端 media_windows jsonb 对齐）；预览/ASR 用前 N 窗拼接的 master（live_url） */
 export interface MediaWindowMeta {
   i: number;
   start_ms: number;
@@ -77,7 +77,7 @@ export interface SourceVideo {
   created_by: string;
   /** 关联的剪辑项目数量 */
   project_count: number;
-  /** 跟播递增主 MP4；人工切片预览与 ASR/一键成片同轴 */
+  /** 跟播离散媒体窗；拼接主片见 live_url */
   media_windows?: MediaWindowMeta[];
   /**
    * 列表按 asr_keywords 搜索时返回的命中段落（视频文案正文）。
@@ -122,11 +122,9 @@ function readyMediaWindows(windows: MediaWindowMeta[] | undefined): MediaWindowM
 }
 
 function firstReadyWindowMp4Url(windows: MediaWindowMeta[] | undefined): string {
-  for (const w of readyMediaWindows(windows)) {
-    const mp4 = w.url?.trim();
-    if (mp4) return mp4;
-  }
-  return '';
+  const ready = readyMediaWindows(windows);
+  if (ready.length !== 1) return '';
+  return ready[0]?.url?.trim() || '';
 }
 
 function isLiveIngestStatus(status: string | undefined): boolean {
@@ -140,8 +138,11 @@ function isLiveIngestStatus(status: string | undefined): boolean {
 }
 
 /**
- * 切片页预览地址：跟播必须与递增主 MP4 / ASR / 一键成片同一时间轴。
- * 禁止回退到源站滑动 m3u8（DVR 窗与录像起点不一致会导致文案与声音完全错位）。
+ * 切片页预览地址：跟播必须与前 N 窗拼接主 MP4（live_url）/ ASR / 一键成片同一时间轴。
+ * 禁止回退到源站滑动 m3u8。
+ * - 优先 live_url（非 m3u8 的拼接 master）
+ * - 仅一窗就绪且尚无 master 时，可暂用该窗 MP4
+ * - >=2 窗时必须使用 master，不得用单窗或 HLS
  */
 export function sourceVideoPlayUrl(
   video: Pick<
@@ -154,12 +155,22 @@ export function sourceVideoPlayUrl(
   const live = video.live_url?.trim() || '';
   const remote = video.m3u8_url?.trim() || '';
   const windows = video.media_windows;
+  const ready = readyMediaWindows(windows);
 
   if (isLiveIngestStatus(status)) {
-    const master = firstReadyWindowMp4Url(windows);
-    if (master) return master;
-    if (live && !isProbablyM3u8Url(live)) return live;
-    if (backendPlay && backendPlay !== remote && !isProbablyM3u8Url(backendPlay)) {
+    if (live && !isProbablyM3u8Url(live) && (ready.length > 0 || status === 'ended')) {
+      return live;
+    }
+    if (ready.length === 1) {
+      const win = firstReadyWindowMp4Url(windows);
+      if (win) return win;
+    }
+    if (
+      backendPlay &&
+      backendPlay !== remote &&
+      !isProbablyM3u8Url(backendPlay) &&
+      (ready.length > 0 || status === 'ended')
+    ) {
       return backendPlay;
     }
     return '';

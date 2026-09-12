@@ -15,8 +15,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// runWindowASR 对递增主 MP4 处理一个短 ASR chunk（默认 ≤2min）。
-// 预览/成片/ASR 同源 master.mp4；此处按 [asr_cursor, cursor+chunk) 抽等长 MP3，使累计覆盖达到 10/20/30… 与主文件时长一致。
+// runWindowASR 对拼接主 MP4 处理一个短 ASR chunk（默认 ≤2min）。
+// 预览/成片/ASR 同源 master.mp4（由前 N 窗拼接）；按 [asr_cursor, cursor+chunk) 抽等长 MP3。
 func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
 	logStep := func(step string, fields ...zap.Field) {
 		base := []zap.Field{
@@ -40,20 +40,12 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		epoch = latest.ASREpoch
 	}
 	cursor := material.ASRCursorMS
-	master, ok := material.ParsedMediaWindows().Master()
-	if !ok {
+	readyMS := material.MasterReadyMS()
+	if readyMS <= 0 {
 		w.logger.Info("主 MP4 ASR 跳过：主文件尚未就绪",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("asr_cursor_ms", cursor),
 		)
-		return nil
-	}
-	readyMS := master.DurMS
-	if readyMS <= 0 {
-		readyMS = master.EndMS
-	}
-	if readyMS <= 0 {
-		w.logger.Warn("主 MP4 ASR 跳过：主文件时长无效", zap.Uint("material_id", material.ID))
 		return nil
 	}
 	if cursor >= readyMS {

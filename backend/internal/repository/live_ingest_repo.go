@@ -29,7 +29,7 @@ type LiveIngestRepository interface {
 	MarkConnecting(ctx context.Context, id uint, epoch int64) error
 	MarkLiveStarted(ctx context.Context, id uint, epoch int64, width, height int, resumeSeg int64) error
 	UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error
-	// CommitMasterMP4 写回递增主 MP4 元数据（media_windows 单条）、权威 duration 与 live_url。
+	// CommitMasterMP4 写回离散媒体窗列表、拼接主片 duration 与 live_url（master.mp4）。
 	CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error
 	// CommitMediaWindow 兼容旧名，等价 CommitMasterMP4（playlistURL 忽略）。
 	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error

@@ -272,14 +272,16 @@ func TestPipeline_Run_LiveUsesMediaWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutter := &recordingCutter{}
-	windows := model.WithMaster(model.MediaWindow{
-		StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
-		URL: "https://cdn.example/master.mp4",
-	})
+	windows := model.MediaWindowList{{
+		Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
+		URL: "https://cdn.example/windows/window_00000.mp4",
+	}}
 	s := &session.Session{
 		JobID: "job-master",
 		Material: &model.LiveMaterial{
 			LiveStatus:   model.LiveStatusLive,
+			LiveURL:      "https://cdn.example/master.mp4",
+			Duration:     600000,
 			MediaWindows: windows.Marshal(),
 		},
 		StagingDir:     staging,

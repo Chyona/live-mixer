@@ -50,11 +50,11 @@ const LiveEarlyProbe = 15 * time.Minute
 // LiveSegmentDurationSec 跟播分片时长（秒）。
 const LiveSegmentDurationSec = 6
 
-// LiveMediaWindowDuration 主 MP4 递增步长：每满一步将已录分片重合成一份更长的 master.mp4（10/20/30…）。
-// 预览 / ASR / 一键成片始终同源该文件。
+// LiveMediaWindowDuration 离散媒体窗步长：每满一步封一份 window_N.mp4，再拼前 N 窗为 master.mp4。
+// 预览 / ASR / 一键成片始终同源该 master。
 const LiveMediaWindowDuration = 10 * time.Minute
 
-// LiveASRWindowDuration 兼容旧名：主 MP4 递增步长。
+// LiveASRWindowDuration 兼容旧名：媒体窗步长。
 const LiveASRWindowDuration = LiveMediaWindowDuration
 
 // MaxASRTranscribeDuration 单次送厂商转写的上限（从主 MP4 抽等长 MP3）。
@@ -113,10 +113,10 @@ type LiveMaterial struct {
 	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
 	// MediaWindowMS 主 MP4 递增步长（毫秒）；创建时写入，默认 LiveMediaWindowDuration。
 	MediaWindowMS int64 `gorm:"column:media_window_ms;not null;default:0;comment:主MP4递增步长毫秒" json:"media_window_ms"`
-	// MediaWindows 主 MP4 元数据 JSON（至多一条：url/时长/已封分片上界）。
-	MediaWindows string `gorm:"column:media_windows;type:jsonb;not null;default:'[]';comment:主MP4元数据JSON" json:"media_windows"`
-	// NextWindowSeg 下一未封入主 MP4 的起始分片下标。
-	NextWindowSeg int64 `gorm:"column:next_window_seg;not null;default:0;comment:下一未封入主MP4分片" json:"next_window_seg"`
+	// MediaWindows 离散媒体窗元数据 JSON（window_0..N-1）；拼接主片见 live_url。
+	MediaWindows string `gorm:"column:media_windows;type:jsonb;not null;default:'[]';comment:媒体窗元数据JSON" json:"media_windows"`
+	// NextWindowSeg 下一未封入任何媒体窗的起始分片下标。
+	NextWindowSeg int64 `gorm:"column:next_window_seg;not null;default:0;comment:下一未封入媒体窗分片" json:"next_window_seg"`
 	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
 	ASRParagraphs     []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
@@ -171,23 +171,32 @@ func (m *LiveMaterial) CanUpdateM3U8() bool {
 }
 
 // PlayURL 前端播放地址。
-// 跟播/收尾/关播：只用已就绪的递增主 MP4（media_windows[0].url），绝不回退到源站滑动 m3u8。
-// 主 MP4 未封出前返回空（创建时预分配的 live_url 尚无对象内容）。
+// 跟播/收尾/关播：只用前 N 窗拼接主 MP4（live_url），绝不回退到源站滑动 m3u8。
+// 主片未写出前：仅一窗就绪时可暂用该窗 URL；否则返回空。
 // 回放素材：用户 m3u8 / live_url。
 func (m *LiveMaterial) PlayURL() string {
 	if m == nil {
 		return ""
 	}
-	if master, ok := m.ParsedMediaWindows().Master(); ok {
-		if u := strings.TrimSpace(master.URL); u != "" {
+	if u := m.MasterMP4URL(); u != "" {
+		switch m.LiveStatus {
+		case LiveStatusWaiting, LiveStatusConnecting, LiveStatusLive, LiveStatusEnding, LiveStatusEnded:
 			return u
 		}
 	}
 	switch m.LiveStatus {
 	case LiveStatusWaiting, LiveStatusConnecting, LiveStatusLive, LiveStatusEnding:
+		windows := m.ParsedMediaWindows()
+		if windows.ReadyCount() == 1 {
+			if w, ok := windows.FirstReady(); ok {
+				if u := strings.TrimSpace(w.URL); u != "" && !IsProbablyM3U8URL(u) {
+					return u
+				}
+			}
+		}
 		return ""
 	case LiveStatusEnded:
-		if u := strings.TrimSpace(m.LiveURL); u != "" {
+		if u := m.MasterMP4URL(); u != "" {
 			return u
 		}
 		return ""
@@ -204,10 +213,32 @@ func (m *LiveMaterial) PlayURL() string {
 	return ""
 }
 
-// MasterReadyMS 主 MP4 已就绪时长（毫秒）。
+// MasterMP4URL 返回已写出的拼接主 MP4 地址（非 m3u8 的 live_url）。
+// 创建时预分配的 live_url 在首窗拼接完成前不视为就绪。
+func (m *LiveMaterial) MasterMP4URL() string {
+	if m == nil {
+		return ""
+	}
+	u := strings.TrimSpace(m.LiveURL)
+	if u == "" || IsProbablyM3U8URL(u) {
+		return ""
+	}
+	if m.ParsedMediaWindows().ReadyCount() > 0 {
+		return u
+	}
+	if m.LiveStatus == LiveStatusEnded && m.Duration > 0 {
+		return u
+	}
+	return ""
+}
+
+// MasterReadyMS 拼接主片已就绪时长（毫秒）：优先 duration，否则窗覆盖终点。
 func (m *LiveMaterial) MasterReadyMS() int64 {
 	if m == nil {
 		return 0
+	}
+	if m.Duration > 0 {
+		return m.Duration
 	}
 	return m.ParsedMediaWindows().TotalReadyMS()
 }

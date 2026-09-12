@@ -598,13 +598,13 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 			w.persistSegDurations(workDir, segDurMS)
 			recordedMS += oneMS
 			_ = recordedMS
-			// 权威时长仅来自主 MP4（10/20/30… 步进）；首档未就绪前为 0。
+			// 权威时长来自拼接主片（前 N 窗 master）；首窗未就绪前为 0。
 			durForDB := material.MasterReadyMS()
 			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, durForDB, "")
 			material.NextSeg = next
 			material.Duration = durForDB
 			if err := w.sealReadyMediaWindows(ctx, material, segDurMS, false); err != nil {
-				w.logger.Warn("递增主 MP4 失败", zap.Uint("material_id", material.ID), zap.Error(err))
+				w.logger.Warn("封窗/拼接主 MP4 失败", zap.Uint("material_id", material.ID), zap.Error(err))
 			}
 			if ready := material.MasterReadyMS(); ready > 0 {
 				material.Duration = ready
@@ -707,7 +707,7 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 
 	masterPath := filepath.Join(workDir, liveingest.MasterMP4FileName())
 	if st, err := os.Stat(masterPath); err != nil || st.Size() == 0 {
-		// 兜底：无主文件时直接用全部分片合成。
+		// 兜底：无主文件时直接用全部分片合成 master，并补一条覆盖窗元数据。
 		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, masterPath); err != nil {
 			return fmt.Errorf("合成最终主 MP4 失败: %w", err)
 		}
@@ -723,10 +723,12 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 					dur = int64(tl.FormatDurationSec * 1000)
 				}
 			}
-			material.MediaWindows = model.WithMaster(model.MediaWindow{
-				URL: url, ObjectKey: liveingest.MasterObjectKey(material.RecordUUID),
-				StartMS: 0, EndMS: dur, DurMS: dur, SegEnd: material.NextSeg, Ready: true,
-			}).Marshal()
+			if material.ParsedMediaWindows().ReadyCount() == 0 {
+				material.MediaWindows = model.MediaWindowList{}.Upsert(model.MediaWindow{
+					Index: 0, StartMS: 0, EndMS: dur, DurMS: dur,
+					SegStart: 0, SegEnd: material.NextSeg, Ready: true,
+				}).Marshal()
+			}
 			material.Duration = dur
 			_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextSeg, dur, url, true)
 		}
@@ -739,11 +741,9 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 			material.Width, material.Height = tl.Width, tl.Height
 		}
 	}
-	if master, ok := material.ParsedMediaWindows().Master(); ok && dur > 0 && dur != master.DurMS {
-		master.DurMS = dur
-		master.EndMS = dur
-		material.MediaWindows = model.WithMaster(master).Marshal()
-		_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg, dur, master.URL, true)
+	if dur > 0 && dur != material.Duration {
+		material.Duration = dur
+		_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg, dur, material.LiveURL, true)
 	}
 
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {

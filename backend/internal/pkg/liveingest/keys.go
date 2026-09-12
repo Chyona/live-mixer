@@ -14,8 +14,8 @@ func RecordPrefix(recordUUID string) string {
 	return path.Join(storage.SubDirLiveRecord, uuid)
 }
 
-// MasterObjectKey 跟播递增主 MP4（10/20/30… 分钟），预览 / ASR / 成片同源。
-// 关播后同一键即为最终成片（不再另存 window_N / 再拼 final）。
+// MasterObjectKey 前 N 窗拼接主 MP4（预览 / ASR / 成片同源）。
+// 关播后同一键即为最终成片。
 func MasterObjectKey(recordUUID string) string {
 	return path.Join(RecordPrefix(recordUUID), "master.mp4")
 }
@@ -30,12 +30,27 @@ func MasterMP4FileName() string {
 	return "master.mp4"
 }
 
-// PlaylistObjectKey 首段封主 MP4 前的临时分片 EVENT 列表（预览不以之为准）。
+// WindowMP4ObjectKey 离散媒体窗 MP4（封窗产物；拼接 master 的输入）。
+func WindowMP4ObjectKey(recordUUID string, windowIndex int) string {
+	return path.Join(RecordPrefix(recordUUID), "windows", fmt.Sprintf("window_%05d.mp4", windowIndex))
+}
+
+// WindowMP4FileName 本地窗 MP4 文件名。
+func WindowMP4FileName(windowIndex int) string {
+	return fmt.Sprintf("window_%05d.mp4", windowIndex)
+}
+
+// WindowsDirName 本地窗目录名。
+func WindowsDirName() string {
+	return "windows"
+}
+
+// PlaylistObjectKey 首段封窗前的临时分片 EVENT 列表（预览不以之为准）。
 func PlaylistObjectKey(recordUUID string) string {
 	return path.Join(RecordPrefix(recordUUID), "live.m3u8")
 }
 
-// SegmentObjectKey 分片相对键（录制底物；封主 MP4 前的临时素材）。
+// SegmentObjectKey 分片相对键（录制底物；封窗前的临时素材）。
 func SegmentObjectKey(recordUUID string, epoch, index int64) string {
 	if epoch < 0 {
 		epoch = 0
