@@ -11,6 +11,7 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/liveingest"
+	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/utils"
 
 	"go.uber.org/zap"
@@ -135,10 +136,15 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 		}
 
 		durMS := sumMS
+		var winTL media.MediaTimeline
+		var hasWinTL bool
 		if w.prober != nil {
-			if tl, err := w.prober.ProbeMediaTimeline(ctx, mp4Path); err == nil && tl.FormatDurationSec > 0 {
-				if probed := int64(tl.FormatDurationSec * 1000); probed > 0 {
-					durMS = probed
+			if tl, err := w.prober.ProbeMediaTimeline(ctx, mp4Path); err == nil {
+				winTL, hasWinTL = tl, true
+				if tl.FormatDurationSec > 0 {
+					if probed := int64(tl.FormatDurationSec * 1000); probed > 0 {
+						durMS = probed
+					}
 				}
 				if tl.Width > 0 {
 					material.Width = tl.Width
@@ -174,7 +180,26 @@ func (w *liveIngestWorker) sealReadyMediaWindows(
 		material.MediaWindows = windows.Marshal()
 		material.NextWindowSeg = segEnd
 
+		winEv := AlignDiagEvent{
+			Event:       "window_sealed",
+			WindowIndex: winIdx,
+			WindowCount: windows.ReadyCount(),
+			LocalPath:   mp4Path,
+			URL:         mp4URL,
+			ReadyMS:     startMS + durMS,
+		}
+		if hasWinTL {
+			fillAlignTimeline(&winEv, winTL)
+		}
+		w.emitAlignDiag(material, winEv)
+
 		if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
+			w.emitAlignDiag(material, AlignDiagEvent{
+				Event:       "master_rebuild_failed",
+				WindowIndex: winIdx,
+				WindowCount: windows.ReadyCount(),
+				Error:       err.Error(),
+			})
 			return err
 		}
 
@@ -239,30 +264,34 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 	w.logger.Info("开始拼接前 N 窗主 MP4",
 		zap.Uint("material_id", material.ID),
 		zap.Int("window_count", len(files)),
-		zap.String("mp4", mp4Path),
+		zap.String("tmp", tmpPath),
 	)
 
+	// 先写临时文件：上传失败时不覆盖正式 master，避免 ASR 读到坏片而预览仍用旧 CDN。
 	if len(files) == 1 {
 		if err := copyFile(files[0], tmpPath); err != nil {
 			_ = os.Remove(tmpPath)
 			return fmt.Errorf("复制单窗为主片失败: %w", err)
 		}
 	} else {
-		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, tmpPath); err != nil {
+		if err := w.ffmpeg.ConcatMP4ContinuousTimeline(ctx, files, tmpPath); err != nil {
 			_ = os.Remove(tmpPath)
 			return fmt.Errorf("拼接主 MP4 失败: %w", err)
 		}
 	}
-	_ = os.Remove(mp4Path)
-	if err := os.Rename(tmpPath, mp4Path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("替换主 MP4 失败: %w", err)
-	}
 
 	durMS := ready.TotalReadyMS()
+	var masterTL media.MediaTimeline
+	var hasMasterTL bool
 	if w.prober != nil {
-		if tl, err := w.prober.ProbeMediaTimeline(ctx, mp4Path); err == nil && tl.FormatDurationSec > 0 {
-			if probed := int64(tl.FormatDurationSec * 1000); probed > 0 {
+		if tl, err := w.prober.ProbeMediaTimeline(ctx, tmpPath); err == nil {
+			masterTL, hasMasterTL = tl, true
+			// 权威时长优先视频轴，避免 format 跟偏长音轨。
+			probedSec := tl.VideoDurationSec
+			if probedSec <= 0 {
+				probedSec = tl.FormatDurationSec
+			}
+			if probed := int64(probedSec * 1000); probed > 0 {
 				durMS = probed
 			}
 			if tl.Width > 0 {
@@ -276,15 +305,36 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 
 	objectKey := liveingest.MasterObjectKey(material.RecordUUID)
 	var mp4URL string
+	uploadOK := false
 	if w.storage != nil {
 		var err error
-		mp4URL, err = w.storage.UploadFile(ctx, mp4Path, objectKey)
+		mp4URL, err = w.storage.UploadFile(ctx, tmpPath, objectKey)
 		if err != nil {
+			_ = os.Remove(tmpPath)
+			fail := false
+			w.emitAlignDiag(material, AlignDiagEvent{
+				Event:       "master_upload_failed",
+				WindowCount: len(files),
+				LocalPath:   tmpPath,
+				UploadOK:    &fail,
+				Error:       err.Error(),
+				ReadyMS:     durMS,
+			})
 			return fmt.Errorf("上传主 MP4 失败: %w", err)
 		}
+		uploadOK = true
 	}
 	if strings.TrimSpace(mp4URL) == "" {
 		mp4URL = strings.TrimSpace(material.LiveURL)
+	}
+
+	// 上传成功后再替换本地正式 master。
+	_ = os.Remove(mp4Path)
+	if err := os.Rename(tmpPath, mp4Path); err != nil {
+		if copyErr := copyFile(tmpPath, mp4Path); copyErr != nil {
+			return fmt.Errorf("替换主 MP4 失败: rename=%v copy=%w", err, copyErr)
+		}
+		_ = os.Remove(tmpPath)
 	}
 
 	material.Duration = durMS
@@ -305,6 +355,21 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 	); err != nil {
 		return fmt.Errorf("写回主 MP4 元数据失败: %w", err)
 	}
+
+	ok := uploadOK
+	ev := AlignDiagEvent{
+		Event:          "master_ready",
+		WindowCount:    len(files),
+		LocalPath:      mp4Path,
+		URL:            mp4URL,
+		ReadyMS:        durMS,
+		MasterReplaced: true,
+		UploadOK:       &ok,
+	}
+	if hasMasterTL {
+		fillAlignTimeline(&ev, masterTL)
+	}
+	w.emitAlignDiag(material, ev)
 
 	w.logger.Info("主 MP4 已由前 N 窗拼接就绪",
 		zap.Uint("material_id", material.ID),

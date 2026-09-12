@@ -48,6 +48,20 @@ export interface MediaWindowMeta {
   ready: boolean;
 }
 
+/** 跟播音画/字幕对齐诊断摘要（详情 API align_diag） */
+export interface AlignDiagSnapshot {
+  play_url: string;
+  live_url: string;
+  same_play_and_live: boolean;
+  master_ready_ms: number;
+  duration_ms: number;
+  window_count: number;
+  asr_cursor_ms: number;
+  asr_progress: number;
+  live_status: string;
+  hint: string;
+}
+
 export interface SourceVideo {
   id: number;
   name: string;
@@ -88,6 +102,8 @@ export interface SourceVideo {
   asr_paragraphs?: AsrParagraphs | null;
   /** 详情接口返回的 ASR 摘要选区；无 clips0 时用于填充时间轴 */
   asr_summaries?: AsrSummary[] | null;
+  /** 跟播对齐诊断摘要（仅详情接口） */
+  align_diag?: AlignDiagSnapshot | null;
 }
 
 export type SourceVideoAsrFields = Pick<

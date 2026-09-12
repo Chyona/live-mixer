@@ -77,10 +77,16 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		zap.Int64("offset_ms", offsetMS),
 		zap.Int64("asr_cursor_ms", cursor),
 	)
+	localMaster := filepath.Join(w.segmentDir(material), "master.mp4")
+	existedBefore := false
+	if st, err := os.Stat(localMaster); err == nil && st.Size() > 0 {
+		existedBefore = true
+	}
 	mp4Path, err := w.resolveMasterMP4Path(ctx, material)
 	if err != nil {
 		return err
 	}
+	asrSource := resolveMasterASRSource(existedBefore)
 
 	startSec := float64(cursor) / 1000.0
 	durSec := float64(thisChunkMS) / 1000.0
@@ -95,9 +101,25 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		}
 	}
 
+	chunkEv := AlignDiagEvent{
+		Event:        "asr_chunk_start",
+		LocalPath:    mp4Path,
+		ASRSource:    asrSource,
+		ASRCursorMS:  cursor,
+		ReadyMS:      readyMS,
+		ChunkMS:      thisChunkMS,
+		LeadPadMS:    align.LeadPadMs,
+		TrimStartSec: align.TrimStartSec,
+	}
+	if tl, ok := w.probeAlignTimeline(ctx, mp4Path); ok {
+		fillAlignTimeline(&chunkEv, tl)
+	}
+	w.emitAlignDiag(material, chunkEv)
+
 	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_master_%d.mp3", cursor))
 	logStep("mp3_start",
 		zap.String("mp4", mp4Path),
+		zap.String("asr_source", asrSource),
 		zap.Float64("start_sec", startSec),
 		zap.Float64("dur_sec", durSec),
 		zap.Float64("target_dur_sec", align.TargetDurSec),
@@ -135,12 +157,22 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			zap.Duration("elapsed", time.Since(transcribeStart)),
 			zap.Error(err),
 		)
+		w.emitAlignDiag(material, AlignDiagEvent{
+			Event:       "asr_chunk_skipped",
+			LocalPath:   mp4Path,
+			ASRSource:   asrSource,
+			ASRCursorMS: cursor,
+			ReadyMS:     readyMS,
+			ChunkMS:     thisChunkMS,
+			LeadPadMS:   align.LeadPadMs,
+			Error:       err.Error(),
+		})
 		return w.commitMasterASRProgress(ctx, material, epoch, readyMS, thisChunkMS, cursor, material.LiveASR, 0, 1.0, asrStart)
 	}
 	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
 
 	asrDur := asr.ParseDurationMs(raw)
-	maxUttEnd := asr.MaxUtteranceEndMS(raw)
+	minUttStart, maxUttEnd := utteranceBoundsMS(raw)
 	scaledRaw := raw
 	scaleFactor := 1.0
 	if asr.ShouldScaleUtteranceTimestamps(asrDur, thisChunkMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
@@ -157,6 +189,20 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	} else if rewritten, err := asr.SetAudioInfoDuration(raw, thisChunkMS); err == nil {
 		scaledRaw = rewritten
 	}
+	w.emitAlignDiag(material, AlignDiagEvent{
+		Event:         "asr_chunk_done",
+		LocalPath:     mp4Path,
+		ASRSource:     asrSource,
+		ASRCursorMS:   cursor,
+		ReadyMS:       readyMS,
+		ChunkMS:       thisChunkMS,
+		LeadPadMS:     align.LeadPadMs,
+		TrimStartSec:  align.TrimStartSec,
+		VendorDurMS:   asrDur,
+		MinUttStartMS: minUttStart,
+		MaxUttEndMS:   maxUttEnd,
+		ScaleFactor:   scaleFactor,
+	})
 	merged, _, err := asr.MergeWindowASR(material.LiveASR, scaledRaw, offsetMS, cursor)
 	if err != nil {
 		return err

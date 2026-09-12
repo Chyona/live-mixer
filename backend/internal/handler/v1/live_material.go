@@ -94,6 +94,8 @@ type LiveMaterialDetailResponse struct {
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	Ext            string          `json:"ext"`
+	// AlignDiag 跟播音画/字幕对齐诊断摘要（staging/align_diag.jsonl 的 API 侧快照）。
+	AlignDiag *model.AlignDiagSnapshot `json:"align_diag,omitempty"`
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, material *model.LiveMaterial) LiveMaterialDetailResponse {
@@ -142,6 +144,7 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		CreatedBy:      h.createdBy.nameOf(ctx, material.CreatedBy),
 		CreatedAt:      material.CreatedAt,
 		UpdatedAt:      material.UpdatedAt,
+		AlignDiag:      service.BuildAlignDiagSnapshot(material),
 		Ext:            material.Ext,
 	}
 }

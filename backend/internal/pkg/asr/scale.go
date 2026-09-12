@@ -39,6 +39,36 @@ func MaxUtteranceEndMS(raw json.RawMessage) int64 {
 	return max
 }
 
+// MinUtteranceStartMS 返回结果中分句/词的最小 start_time（毫秒）；无则 0。
+func MinUtteranceStartMS(raw json.RawMessage) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var payload liveASRPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return 0
+	}
+	var min int64 = -1
+	for _, item := range payload.Result.Utterances {
+		var u utteranceTimes
+		if err := json.Unmarshal(item, &u); err != nil {
+			continue
+		}
+		if u.StartTime >= 0 && (min < 0 || u.StartTime < min) {
+			min = u.StartTime
+		}
+		for _, w := range u.Words {
+			if w.StartTime >= 0 && (min < 0 || w.StartTime < min) {
+				min = w.StartTime
+			}
+		}
+	}
+	if min < 0 {
+		return 0
+	}
+	return min
+}
+
 // SetAudioInfoDuration 只改写 audio_info.duration，不改动词级时间戳。
 func SetAudioInfoDuration(raw json.RawMessage, durationMS int64) (json.RawMessage, error) {
 	if len(raw) == 0 || durationMS <= 0 {

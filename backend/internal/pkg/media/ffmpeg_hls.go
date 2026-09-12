@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +96,7 @@ func (c *FFmpegConverter) ConvertURLToASRMP3(ctx context.Context, input, outputP
 // ConcatMediaFiles 按清单拼接分片为 mp4。
 // 先 concat copy，再 copy 视频并重编码音轨（aresample=async + atrim），避免 TS 拼接后
 // 「解码 PCM 比视频长一截」——后续从该 MP4 抽等长 ASR MP3 的前提。
+// 注意：仅适用于 TS/毛时间戳分片；已封装好的 window MP4 请用 ConcatMP4ContinuousTimeline。
 func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, outputPath string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("没有可拼接的分片")
@@ -151,6 +153,122 @@ func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, 
 		return fmt.Errorf("拼接后对齐音轨失败: %w", err)
 	}
 	return nil
+}
+
+// ConcatMP4ContinuousTimeline 将已封装好的 MP4（如 window_N）按内容解码后拼成一条从 0 起的连续时间轴。
+// 与 ConcatMediaFiles 不同：不做 bitstream copy + aresample=async，避免多 MP4 接缝把音轨拉长。
+// 音视频均重编码；拼接后以视频时长为权威，音轨 apad/atrim 贴齐。
+func (c *FFmpegConverter) ConcatMP4ContinuousTimeline(ctx context.Context, files []string, outputPath string) error {
+	if len(files) == 0 {
+		return fmt.Errorf("没有可拼接的 MP4")
+	}
+	if len(files) == 1 {
+		return copyMediaFile(files[0], outputPath)
+	}
+	for i, f := range files {
+		if st, err := os.Stat(f); err != nil || st.Size() == 0 {
+			return fmt.Errorf("拼接输入[%d]无效: %s", i, f)
+		}
+	}
+
+	args := buildConcatMP4ContinuousArgs(files, outputPath)
+	tmpOut := outputPath + ".timeline.mp4"
+	args[len(args)-1] = tmpOut
+	_ = os.Remove(tmpOut)
+	if err := c.runFFmpeg(ctx, args, "ffmpeg 连续时间轴拼接失败"); err != nil {
+		_ = os.Remove(tmpOut)
+		return err
+	}
+	if err := c.alignAudioToVideoDuration(ctx, tmpOut, outputPath); err != nil {
+		_ = os.Remove(tmpOut)
+		return err
+	}
+	_ = os.Remove(tmpOut)
+	return nil
+}
+
+// buildConcatMP4ContinuousArgs 构造 filter_complex concat 参数（输出路径为最后一项）。
+func buildConcatMP4ContinuousArgs(files []string, outputPath string) []string {
+	n := len(files)
+	args := []string{
+		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
+	}
+	for _, f := range files {
+		args = append(args, "-i", f)
+	}
+	var fc strings.Builder
+	for i := 0; i < n; i++ {
+		fc.WriteString(fmt.Sprintf("[%d:v:0][%d:a:0]", i, i))
+	}
+	fc.WriteString(fmt.Sprintf("concat=n=%d:v=1:a=1[v][a]", n))
+	args = append(args,
+		"-filter_complex", fc.String(),
+		"-map", "[v]",
+		"-map", "[a]",
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "18",
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-movflags", "+faststart",
+		outputPath,
+	)
+	return args
+}
+
+// alignAudioToVideoDuration 以视频时长为权威，重编码音轨并硬裁/补齐到等长。
+func (c *FFmpegConverter) alignAudioToVideoDuration(ctx context.Context, inputPath, outputPath string) error {
+	prober := NewFFprobeProber("")
+	tl, err := prober.ProbeMediaTimeline(ctx, inputPath)
+	if err != nil {
+		return fmt.Errorf("探测连续轴拼接结果失败: %w", err)
+	}
+	durSec := tl.VideoDurationSec
+	if durSec <= 0 {
+		durSec = tl.FormatDurationSec
+	}
+	if durSec <= 0 {
+		return fmt.Errorf("连续轴拼接结果视频时长无效")
+	}
+	dur := formatFFmpegSeconds(durSec)
+	af := fmt.Sprintf(
+		"aresample=async=%d:first_pts=0,asetpts=PTS-STARTPTS,apad=whole_dur=%s,atrim=duration=%s,asetpts=PTS-STARTPTS",
+		asrAudioAsyncMaxSamplesPerSec, dur, dur,
+	)
+	args := []string{
+		"-y",
+		"-threads", strconv.Itoa(DefaultFFmpegThreads),
+		"-i", inputPath,
+		"-c:v", "copy",
+		"-af", af,
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-t", dur,
+		"-movflags", "+faststart",
+		outputPath,
+	}
+	return c.runFFmpeg(ctx, args, "ffmpeg 按视频轴对齐音轨失败")
+}
+
+func copyMediaFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }
 
 // remuxCopyVideoSyncAudio 保留视频比特流，按容器时间轴重编码音轨并硬裁到等长。

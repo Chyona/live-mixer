@@ -12,6 +12,7 @@ import type { BaseResponse } from './types';
 import { AppError, DEFAULT_REQUEST_TIMEOUT_MS, request } from './http';
 
 export type {
+  AlignDiagSnapshot,
   AsrStatus,
   LiveStatus,
   SourceMode,
@@ -27,7 +28,7 @@ export {
   SOURCE_VIDEO_URL_DUPLICATE_CODE,
 } from './sourceVideo.model';
 
-import type { AsrParagraphs, MediaWindowMeta, SourceVideo } from './sourceVideo.model';
+import type { AlignDiagSnapshot, AsrParagraphs, MediaWindowMeta, SourceVideo } from './sourceVideo.model';
 import { sourceVideoPlayUrl } from './sourceVideo.model';
 
 function parseContentDispositionFilename(header?: string): string | null {
@@ -196,6 +197,23 @@ function normalizeMediaWindows(raw: unknown): MediaWindowMeta[] {
   return list;
 }
 
+function normalizeAlignDiag(raw: unknown): AlignDiagSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  return {
+    play_url: String(row.play_url ?? ''),
+    live_url: String(row.live_url ?? ''),
+    same_play_and_live: Boolean(row.same_play_and_live),
+    master_ready_ms: Number(row.master_ready_ms ?? 0) || 0,
+    duration_ms: Number(row.duration_ms ?? 0) || 0,
+    window_count: Number(row.window_count ?? 0) || 0,
+    asr_cursor_ms: Number(row.asr_cursor_ms ?? 0) || 0,
+    asr_progress: Number(row.asr_progress ?? 0) || 0,
+    live_status: String(row.live_status ?? ''),
+    hint: String(row.hint ?? ''),
+  };
+}
+
 export function normalizeSourceVideo(
   raw: Partial<SourceVideo> & Record<string, unknown>
 ): SourceVideo {
@@ -232,6 +250,7 @@ export function normalizeSourceVideo(
     ),
     asr_paragraphs: normalizeAsrParagraphs(raw),
     asr_summaries: normalizeAsrSummaries(raw.asr_summaries),
+    align_diag: normalizeAlignDiag(raw.align_diag),
   };
   // 始终按 live_status 重算，避免跟播误用源站 m3u8 作为 play_url
   video.play_url = sourceVideoPlayUrl(video);

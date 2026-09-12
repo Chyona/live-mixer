@@ -42,9 +42,10 @@ import {
   buildTasksListLink,
   parseProjectId,
 } from '~/routes/links';
-import { mergeDebugAsrKeySearchParams } from '~/utils/asrParagraphsKey';
+import { mergeDebugAsrKeySearchParams, isDebugModeEnabled } from '~/utils/asrParagraphsKey';
 import { buildSliceBreadcrumbItems, resolveSlicePageTitle } from '~/utils/sliceBreadcrumbs';
 import { serializeManualSliceProjectState } from '~/utils/sliceProjectDirty';
+import AlignDiagDebugPanel from './components/AlignDiagDebugPanel';
 import TranscriptPanel from './components/TranscriptPanel';
 import VideoTranscriptResizeHandle from './components/VideoTranscriptResizeHandle';
 import SelectedCopyPanel from './components/SelectedCopyPanel';
@@ -212,6 +213,16 @@ const ManualVideoSlicePage = () => {
 
   const activeParagraphId = activeSync?.paragraphId ?? null;
   const activeTranscriptSegmentId = activeSync?.segmentId ?? null;
+
+  const alignDiagActiveAsr = useMemo(() => {
+    if (!activeParagraphId || !activeTranscriptSegmentId) return null;
+    const paragraph = paragraphs.find((item) => item.id === activeParagraphId);
+    const segment = paragraph?.segments.find((item) => item.id === activeTranscriptSegmentId);
+    if (!segment) return null;
+    return { start: segment.start, end: segment.end, text: segment.text };
+  }, [paragraphs, activeParagraphId, activeTranscriptSegmentId]);
+
+  const showAlignDiagDebug = isDebugModeEnabled();
 
   const transcriptHighlight = useMemo(
     () =>
@@ -1084,6 +1095,16 @@ const ManualVideoSlicePage = () => {
                     hlsStartPosition={hlsStartPositionForSourceVideo(video)}
                   />
                 </div>
+                {showAlignDiagDebug ? (
+                  <AlignDiagDebugPanel
+                    playUrl={streamUrl}
+                    liveUrl={video?.live_url ?? ''}
+                    mediaDurationSec={videoDuration}
+                    currentTime={currentTime}
+                    activeAsr={alignDiagActiveAsr}
+                    alignDiag={video?.align_diag}
+                  />
+                ) : null}
               </div>
 
               <VideoTranscriptResizeHandle

@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -459,5 +460,78 @@ func TestConvertRangeToASRMP3Aligned_EqualDurationFromWindowMP4(t *testing.T) {
 	}
 	if math.Abs(got-target) > asrMP3DurationSkewSec {
 		t.Fatalf("mp3 duration = %v, want ~%v (window was known to decode to ~633s without async)", got, target)
+	}
+}
+
+func TestBuildConcatMP4ContinuousArgs(t *testing.T) {
+	args := buildConcatMP4ContinuousArgs([]string{"a.mp4", "b.mp4", "c.mp4"}, "out.mp4")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-filter_complex") {
+		t.Fatalf("missing filter_complex: %v", args)
+	}
+	wantFC := "[0:v:0][0:a:0][1:v:0][1:a:0][2:v:0][2:a:0]concat=n=3:v=1:a=1[v][a]"
+	found := false
+	for i, a := range args {
+		if a == "-filter_complex" && i+1 < len(args) && args[i+1] == wantFC {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("filter_complex want %q in %v", wantFC, args)
+	}
+	if args[len(args)-1] != "out.mp4" {
+		t.Fatalf("output = %q", args[len(args)-1])
+	}
+	// Must not use demuxer bitstream copy path.
+	for _, a := range args {
+		if a == "copy" {
+			t.Fatalf("continuous timeline concat must not bitstream-copy: %v", args)
+		}
+	}
+}
+
+func TestConcatMP4ContinuousTimeline_AVAligned(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not in PATH")
+	}
+	dir := t.TempDir()
+	mk := func(name string, durSec float64) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		// Silent A/V with matching duration.
+		args := []string{
+			"-y", "-f", "lavfi", "-i", fmt.Sprintf("color=c=black:s=160x120:d=%g", durSec),
+			"-f", "lavfi", "-i", fmt.Sprintf("anullsrc=r=44100:cl=stereo:d=%g", durSec),
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+			"-c:a", "aac", "-b:a", "64k", "-shortest", path,
+		}
+		cmd := exec.Command(ffmpegPath, args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("make %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+		}
+		return path
+	}
+	a := mk("a.mp4", 1.2)
+	b := mk("b.mp4", 1.5)
+	out := filepath.Join(dir, "master.mp4")
+	c := NewFFmpegConverter(ffmpegPath)
+	if err := c.ConcatMP4ContinuousTimeline(context.Background(), []string{a, b}, out); err != nil {
+		t.Fatalf("ConcatMP4ContinuousTimeline: %v", err)
+	}
+	tl, err := NewFFprobeProber("").ProbeMediaTimeline(context.Background(), out)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if tl.VideoDurationSec < 2.5 || tl.VideoDurationSec > 3.0 {
+		t.Fatalf("video dur=%v want ~2.7", tl.VideoDurationSec)
+	}
+	skew := tl.AudioDurationSec - tl.VideoDurationSec
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > 0.15 {
+		t.Fatalf("A/V skew too large: video=%v audio=%v", tl.VideoDurationSec, tl.AudioDurationSec)
 	}
 }
