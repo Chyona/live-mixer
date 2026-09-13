@@ -593,12 +593,22 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 			w.logger.Warn("提交媒体窗失败",
 				zap.Uint("material_id", material.ID),
 				zap.Int("window_index", winIdx),
+				zap.Bool("partial", partial),
 				zap.Error(err),
 			)
-			if gotAnyWindow {
-				break
+			// 满窗提交失败不应直接关播：可能只是 master 拼接失败，稍后重试该窗或继续下一窗。
+			if partial {
+				if gotAnyWindow {
+					break
+				}
+				return err
 			}
-			return err
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(liveIngestProbeInterval):
+			}
+			continue
 		}
 		gotAnyWindow = true
 		emptyAttempts = 0

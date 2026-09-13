@@ -106,7 +106,9 @@ func (r *liveMaterialRepository) ClaimRecorderWork(ctx context.Context) (*model.
 			Updates(map[string]interface{}{
 				"ingest_epoch":      newEpoch,
 				"last_heartbeat_at": now,
-				"updated_at":        now,
+				// 同步刷新进度时间，避免「心跳已新但 progress 仍旧」被其它并发 worker 立刻再次抢占并 Cancel 掉正在录像的任务。
+				"last_progress_at": now,
+				"updated_at":       now,
 			})
 		if result.Error != nil {
 			return nil, result.Error
@@ -224,7 +226,9 @@ func (r *liveMaterialRepository) HeartbeatIngest(ctx context.Context, id uint, e
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(map[string]interface{}{
 			"last_heartbeat_at": now,
-			"updated_at":        now,
+			// 录像租约存活期间同步续 progress，防止 10 分钟窗内被 progress-stuck 误抢。
+			"last_progress_at": now,
+			"updated_at":       now,
 		}).Error
 }
 

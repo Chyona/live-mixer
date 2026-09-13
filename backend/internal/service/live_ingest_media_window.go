@@ -83,8 +83,12 @@ func (w *liveIngestWorker) commitRecordedWindow(
 		Ready:     true,
 	}
 	windows = windows.Upsert(wmeta)
-	material.MediaWindows = windows.Marshal()
 	nextIdx := int64(winIdx + 1)
+	// 先写入内存供 rebuild 使用；失败时回滚，避免 nextWindowIndex 跳号。
+	prevWindows := material.MediaWindows
+	prevNextWindow := material.NextWindowSeg
+	prevNextSeg := material.NextSeg
+	material.MediaWindows = windows.Marshal()
 	material.NextWindowSeg = nextIdx
 	material.NextSeg = nextIdx
 
@@ -102,6 +106,9 @@ func (w *liveIngestWorker) commitRecordedWindow(
 	w.emitAlignDiag(material, winEv)
 
 	if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
+		material.MediaWindows = prevWindows
+		material.NextWindowSeg = prevNextWindow
+		material.NextSeg = prevNextSeg
 		w.emitAlignDiag(material, AlignDiagEvent{
 			Event:       "master_rebuild_failed",
 			WindowIndex: winIdx,
@@ -174,8 +181,16 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 		}
 	} else {
 		if err := w.ffmpeg.ConcatMP4ContinuousTimeline(ctx, files, tmpPath); err != nil {
+			w.logger.Warn("连续时间轴拼接失败，回退 copy 拼接",
+				zap.Uint("material_id", material.ID),
+				zap.Int("window_count", len(files)),
+				zap.Error(err),
+			)
 			_ = os.Remove(tmpPath)
-			return fmt.Errorf("拼接主 MP4 失败: %w", err)
+			if err2 := w.ffmpeg.ConcatMediaFiles(ctx, files, tmpPath); err2 != nil {
+				_ = os.Remove(tmpPath)
+				return fmt.Errorf("拼接主 MP4 失败: continuous=%v fallback=%w", err, err2)
+			}
 		}
 	}
 
