@@ -93,10 +93,10 @@ func (c *FFmpegConverter) ConvertURLToASRMP3(ctx context.Context, input, outputP
 	return c.runFFmpeg(ctx, args, "ffmpeg 从源抽 ASR MP3 失败")
 }
 
-// ConcatMediaFiles 按清单拼接分片为 mp4。
-// 先 concat copy，再 copy 视频并重编码音轨（aresample=async + atrim），避免 TS 拼接后
-// 「解码 PCM 比视频长一截」——后续从该 MP4 抽等长 ASR MP3 的前提。
-// 注意：仅适用于 TS/毛时间戳分片；已封装好的 window MP4 请用 ConcatMP4ContinuousTimeline。
+// ConcatMediaFiles 按清单拼接分片为 mp4（跟播 TS→媒体窗）。
+// 先 concat copy，再 copy 视频并重编码音轨（aresample=async + atrim），保证音轨与容器等长以便 ASR。
+// copy 失败时回退整段重编码（不加整窗 fps 重编码，避免 10 分钟 1080p 封窗过慢/失败卡死跟播）。
+// 已封装好的 window MP4 多窗拼接请用 ConcatMP4ContinuousTimeline。
 func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, outputPath string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("没有可拼接的分片")
@@ -132,7 +132,6 @@ func (c *FFmpegConverter) ConcatMediaFiles(ctx context.Context, files []string, 
 		copyPath,
 	}
 	if err := c.runFFmpeg(ctx, args, "ffmpeg 拼接分片失败"); err != nil {
-		// TS 拼接成 mp4 偶发 copy 失败时回退整段重编码。
 		args = []string{
 			"-y",
 			"-threads", strconv.Itoa(DefaultFFmpegThreads),
@@ -308,7 +307,100 @@ func (c *FFmpegConverter) remuxCopyVideoSyncAudio(ctx context.Context, inputPath
 	return c.runFFmpeg(ctx, args, "ffmpeg 对齐音轨失败")
 }
 
-// RecordHLSSegments 将 HLS 拉流写成固定时长 TS 分片。
+const windowRecordProgressInterval = 45 * time.Second
+
+// RecordHLSWindowMP4 按固定时长从 HLS 直接 remux 一窗 MP4：
+//
+//	ffmpeg -y -t durationSec -i URL -c copy -bsf:a aac_adtstoasc out.mp4
+//
+// onProgress 在录制过程中周期性回调（用于刷新 last_progress_at，避免 10 分钟窗被进度卡住抢占）。
+// 流中断时 ffmpeg 可能非 0 退出但仍写出部分文件；调用方应探测输出是否有效。
+func (c *FFmpegConverter) RecordHLSWindowMP4(
+	ctx context.Context,
+	inputURL, outputPath string,
+	durationSec int,
+	onProgress func(),
+) error {
+	if durationSec <= 0 {
+		durationSec = 600
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return fmt.Errorf("创建录像目录失败: %w", err)
+	}
+	_ = os.Remove(outputPath)
+	args := buildRecordHLSWindowMP4Args(inputURL, outputPath, durationSec)
+
+	cmd := exec.CommandContext(ctx, c.ffmpegBinary(), args...)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("ffmpeg stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("启动 ffmpeg 按窗录像失败: %w", err)
+	}
+
+	stopProgress := make(chan struct{})
+	if onProgress != nil {
+		go func() {
+			ticker := time.NewTicker(windowRecordProgressInterval)
+			defer ticker.Stop()
+			onProgress()
+			for {
+				select {
+				case <-stopProgress:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					onProgress()
+				}
+			}
+		}()
+	}
+
+	errBuf := &strings.Builder{}
+	go func() {
+		sc := bufio.NewScanner(stderr)
+		for sc.Scan() {
+			line := sc.Text()
+			if errBuf.Len() < 800 {
+				errBuf.WriteString(line)
+				errBuf.WriteByte('\n')
+			}
+		}
+	}()
+
+	waitErr := cmd.Wait()
+	close(stopProgress)
+	if waitErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		msg := strings.TrimSpace(errBuf.String())
+		return fmt.Errorf("ffmpeg 按窗录像退出: %w %s", waitErr, msg)
+	}
+	return nil
+}
+
+// buildRecordHLSWindowMP4Args 生成按窗 remux 参数（-t + copy + aac_adtstoasc）。
+func buildRecordHLSWindowMP4Args(inputURL, outputPath string, durationSec int) []string {
+	if durationSec <= 0 {
+		durationSec = 600
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	args = append(args, HLSInputArgs(inputURL)...)
+	args = append(args,
+		"-t", strconv.Itoa(durationSec),
+		"-i", inputURL,
+		"-c", "copy",
+		"-bsf:a", "aac_adtstoasc",
+		"-movflags", "+faststart",
+		outputPath,
+	)
+	return args
+}
+
+// RecordHLSSegments 将 HLS 拉流写成固定时长 TS 分片（旧路径；跟播已改用 RecordHLSWindowMP4）。
 // onComplete 在每个「已写完」的分片上回调（不含当前仍在写入的最后一个文件，直至进程退出）。
 func (c *FFmpegConverter) RecordHLSSegments(
 	ctx context.Context,

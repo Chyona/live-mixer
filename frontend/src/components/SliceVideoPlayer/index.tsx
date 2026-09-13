@@ -10,6 +10,7 @@ import StreamVideoPlayer, {
   type StreamVideoPlayerHandle,
   type StreamVideoPlayerProps,
 } from '~/components/StreamVideoPlayer';
+import { attachAvDriftResync } from '~/utils/avDriftResync';
 import type { VideoPlayerTranscriptParagraph } from '~/utils/videoPlayerTools';
 import VideoPlayerToolbar from './VideoPlayerToolbar';
 
@@ -95,6 +96,16 @@ const SliceVideoPlayer = forwardRef<StreamVideoPlayerHandle, SliceVideoPlayerPro
         video.removeEventListener('seeked', syncCurrentTime);
       };
     }, [controlledCurrentTime, videoEl, videoProps.url]);
+
+    // 原生 mp4（跟播 master）预览兜底：音视频钟漂移 / 卡顿后 soft-seek 纠偏
+    useEffect(() => {
+      const video = playerRef.current?.video;
+      const sourceType = playerRef.current?.sourceType;
+      if (!video || sourceType !== 'native') return;
+
+      const handle = attachAvDriftResync(video);
+      return () => handle.destroy();
+    }, [videoEl, videoProps.url]);
 
     return (
       <div className="slice-video-player-frame">

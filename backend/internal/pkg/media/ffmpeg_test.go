@@ -11,6 +11,46 @@ import (
 	"testing"
 )
 
+func TestBuildRecordHLSWindowMP4Args(t *testing.T) {
+	args := buildRecordHLSWindowMP4Args("https://ex.example/live.m3u8", "windows/window_00000.mp4", 600)
+	want := []string{
+		"-hide_banner", "-loglevel", "error", "-y",
+		"-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+		"-reconnect", "1",
+		"-reconnect_streamed", "1",
+		"-reconnect_on_network_error", "1",
+		"-rw_timeout", "15000000",
+		"-t", "600",
+		"-i", "https://ex.example/live.m3u8",
+		"-c", "copy",
+		"-bsf:a", "aac_adtstoasc",
+		"-movflags", "+faststart",
+		"windows/window_00000.mp4",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("args len=%d want %d\n got=%v", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("args[%d]=%q want %q\n full=%v", i, args[i], want[i], args)
+		}
+	}
+}
+
+func TestBuildRecordHLSWindowMP4Args_DefaultDuration(t *testing.T) {
+	args := buildRecordHLSWindowMP4Args("https://ex.example/live.m3u8", "out.mp4", 0)
+	foundT := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-t" && args[i+1] == "600" {
+			foundT = true
+			break
+		}
+	}
+	if !foundT {
+		t.Fatalf("expected -t 600, got %v", args)
+	}
+}
+
 func TestBuildRecordHLSSegmentArgs_NoResetTimestamps(t *testing.T) {
 	args := buildRecordHLSSegmentArgs("https://ex.example/live.m3u8", "seg_%05d.ts", 0, 6)
 	for i, a := range args {

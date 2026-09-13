@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/liveingest"
@@ -17,211 +16,111 @@ import (
 	"go.uber.org/zap"
 )
 
-// planMediaWindowSeal 计算下一窗应覆盖的分片区间（满 MediaWindowMS 再封窗）。
-func planMediaWindowSeal(
-	segStart, nextSeg int64,
-	segDurMS map[int64]int64,
-	windowMS, nominalMS int64,
-	forcePartial bool,
-) (segEnd, sumMS int64, partial bool) {
-	if windowMS <= 0 {
-		windowMS = int64(model.LiveMediaWindowDuration / time.Millisecond)
-	}
-	if nominalMS <= 0 {
-		nominalMS = 6000
-	}
-	if segStart < 0 {
-		segStart = 0
-	}
-	segEnd = segStart
-	for segEnd < nextSeg {
-		ms := int64(0)
-		if segDurMS != nil {
-			ms = segDurMS[segEnd]
-		}
-		if ms <= 0 {
-			ms = nominalMS
-		}
-		sumMS += ms
-		segEnd++
-		if sumMS >= windowMS {
-			break
-		}
-	}
-	partial = sumMS < windowMS
-	if partial && !forcePartial {
-		return segEnd, sumMS, true
-	}
-	return segEnd, sumMS, partial
-}
+// minRecordedWindowMS 有效窗最短时长；更短视为空录。
+const minRecordedWindowMS int64 = 1000
 
-// sealReadyMediaWindows 离散封窗 + 拼接 master：
-// 1) 只将本窗分片 [segStart, segEnd) 合成 window_N.mp4；
-// 2) 再把已就绪的前 N 个窗 MP4 拼成 master.mp4（预览/ASR/成片同源）；
-// 3) 封窗成功后可删除本窗本地 TS（后续合成只依赖窗 MP4）。
-// forcePartial：关播时即使未满一窗也封入剩余分片。
-func (w *liveIngestWorker) sealReadyMediaWindows(
+// commitRecordedWindow 将已录好的 window_N.mp4 登记、上传，并拼接 master.mp4。
+// SegStart/SegEnd 使用窗下标语义（[winIdx, winIdx+1)），不再表示 TS 分片区间。
+func (w *liveIngestWorker) commitRecordedWindow(
 	ctx context.Context,
 	material *model.LiveMaterial,
-	segDurMS map[int64]int64,
-	forcePartial bool,
+	winIdx int,
+	mp4Path string,
+	partial bool,
 ) error {
-	if material == nil || material.NextSeg <= 0 {
-		return nil
+	if material == nil {
+		return fmt.Errorf("material 为空")
 	}
-	windowMS := material.EffectiveMediaWindowMS()
-	workDir := w.segmentDir(material)
-	winDir := filepath.Join(workDir, liveingest.WindowsDirName())
-	if err := os.MkdirAll(winDir, 0o755); err != nil {
-		return err
-	}
-	nominal := int64(model.LiveSegmentDurationSec) * 1000
-	if nominal <= 0 {
-		nominal = 6000
+	st, err := os.Stat(mp4Path)
+	if err != nil || st.Size() == 0 {
+		return fmt.Errorf("媒体窗文件无效: %s", mp4Path)
 	}
 
-	for {
-		segStart := material.NextWindowSeg
-		if segStart < 0 {
-			segStart = 0
-		}
-		if segStart >= material.NextSeg {
-			break
-		}
-
-		segEnd, sumMS, partial := planMediaWindowSeal(segStart, material.NextSeg, segDurMS, windowMS, nominal, forcePartial)
-		if segEnd <= segStart {
-			break
-		}
-		if partial && !forcePartial {
-			w.logger.Debug("媒体窗未满，等待更多分片",
-				zap.Uint("material_id", material.ID),
-				zap.Int64("seg_start", segStart),
-				zap.Int64("seg_end", segEnd),
-				zap.Int64("sum_ms", sumMS),
-				zap.Int64("window_ms", windowMS),
-			)
-			break
-		}
-
-		windows := material.ParsedMediaWindows()
-		winIdx := 0
-		if len(windows) > 0 {
-			winIdx = windows[len(windows)-1].Index + 1
-		}
-		startMS := windows.TotalReadyMS()
-
-		files := make([]string, 0, segEnd-segStart)
-		for i := segStart; i < segEnd; i++ {
-			p := filepath.Join(workDir, liveingest.SegmentFileName(int(i)))
-			if st, err := os.Stat(p); err != nil || st.Size() == 0 {
-				return fmt.Errorf("封窗缺少分片 seg=%d path=%s", i, p)
-			}
-			files = append(files, p)
-		}
-		mp4Path := filepath.Join(winDir, liveingest.WindowMP4FileName(winIdx))
-
-		w.logger.Info("开始合成媒体窗",
-			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", winIdx),
-			zap.Int64("seg_start", segStart),
-			zap.Int64("seg_end", segEnd),
-			zap.Int64("est_dur_ms", sumMS),
-			zap.Int64("window_ms", windowMS),
-			zap.Bool("partial", partial),
-			zap.String("mp4", mp4Path),
-		)
-		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, mp4Path); err != nil {
-			return fmt.Errorf("合成媒体窗 mp4 失败: %w", err)
-		}
-
-		durMS := sumMS
-		var winTL media.MediaTimeline
-		var hasWinTL bool
-		if w.prober != nil {
-			if tl, err := w.prober.ProbeMediaTimeline(ctx, mp4Path); err == nil {
-				winTL, hasWinTL = tl, true
-				if tl.FormatDurationSec > 0 {
-					if probed := int64(tl.FormatDurationSec * 1000); probed > 0 {
-						durMS = probed
-					}
-				}
-				if tl.Width > 0 {
-					material.Width = tl.Width
-				}
-				if tl.Height > 0 {
-					material.Height = tl.Height
+	durMS := int64(0)
+	var winTL media.MediaTimeline
+	var hasWinTL bool
+	if w.prober != nil {
+		if tl, perr := w.prober.ProbeMediaTimeline(ctx, mp4Path); perr == nil {
+			winTL, hasWinTL = tl, true
+			if tl.FormatDurationSec > 0 {
+				if probed := int64(tl.FormatDurationSec * 1000); probed > 0 {
+					durMS = probed
 				}
 			}
-		}
-
-		objectKey := liveingest.WindowMP4ObjectKey(material.RecordUUID, winIdx)
-		var mp4URL string
-		if w.storage != nil {
-			var err error
-			mp4URL, err = w.storage.UploadFile(ctx, mp4Path, objectKey)
-			if err != nil {
-				return fmt.Errorf("上传媒体窗 mp4 失败: %w", err)
+			if tl.Width > 0 {
+				material.Width = tl.Width
+			}
+			if tl.Height > 0 {
+				material.Height = tl.Height
 			}
 		}
+	}
+	if durMS < minRecordedWindowMS {
+		return fmt.Errorf("媒体窗过短 dur_ms=%d path=%s", durMS, mp4Path)
+	}
 
-		wmeta := model.MediaWindow{
-			Index:     winIdx,
-			StartMS:   startMS,
-			EndMS:     startMS + durMS,
-			DurMS:     durMS,
-			URL:       mp4URL,
-			ObjectKey: objectKey,
-			SegStart:  segStart,
-			SegEnd:    segEnd,
-			Ready:     true,
+	windows := material.ParsedMediaWindows()
+	startMS := windows.TotalReadyMS()
+	objectKey := liveingest.WindowMP4ObjectKey(material.RecordUUID, winIdx)
+	var mp4URL string
+	if w.storage != nil {
+		var uerr error
+		mp4URL, uerr = w.storage.UploadFile(ctx, mp4Path, objectKey)
+		if uerr != nil {
+			return fmt.Errorf("上传媒体窗 mp4 失败: %w", uerr)
 		}
-		windows = windows.Upsert(wmeta)
-		material.MediaWindows = windows.Marshal()
-		material.NextWindowSeg = segEnd
+	}
 
-		winEv := AlignDiagEvent{
-			Event:       "window_sealed",
+	wmeta := model.MediaWindow{
+		Index:     winIdx,
+		StartMS:   startMS,
+		EndMS:     startMS + durMS,
+		DurMS:     durMS,
+		URL:       mp4URL,
+		ObjectKey: objectKey,
+		SegStart:  int64(winIdx),
+		SegEnd:    int64(winIdx + 1),
+		Ready:     true,
+	}
+	windows = windows.Upsert(wmeta)
+	material.MediaWindows = windows.Marshal()
+	nextIdx := int64(winIdx + 1)
+	material.NextWindowSeg = nextIdx
+	material.NextSeg = nextIdx
+
+	winEv := AlignDiagEvent{
+		Event:       "window_sealed",
+		WindowIndex: winIdx,
+		WindowCount: windows.ReadyCount(),
+		LocalPath:   mp4Path,
+		URL:         mp4URL,
+		ReadyMS:     startMS + durMS,
+	}
+	if hasWinTL {
+		fillAlignTimeline(&winEv, winTL)
+	}
+	w.emitAlignDiag(material, winEv)
+
+	if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
+		w.emitAlignDiag(material, AlignDiagEvent{
+			Event:       "master_rebuild_failed",
 			WindowIndex: winIdx,
 			WindowCount: windows.ReadyCount(),
-			LocalPath:   mp4Path,
-			URL:         mp4URL,
-			ReadyMS:     startMS + durMS,
-		}
-		if hasWinTL {
-			fillAlignTimeline(&winEv, winTL)
-		}
-		w.emitAlignDiag(material, winEv)
-
-		if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
-			w.emitAlignDiag(material, AlignDiagEvent{
-				Event:       "master_rebuild_failed",
-				WindowIndex: winIdx,
-				WindowCount: windows.ReadyCount(),
-				Error:       err.Error(),
-			})
-			return err
-		}
-
-		w.releaseLocalSegments(workDir, segStart, segEnd)
-
-		w.logger.Info("媒体窗已就绪并完成主片拼接",
-			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", winIdx),
-			zap.Int64("window_dur_ms", durMS),
-			zap.Int64("master_ready_ms", material.Duration),
-			zap.String("window_url", mp4URL),
-			zap.String("master_url", material.LiveURL),
-		)
-		enqueueWake(w.asrWake, 1)
-
-		if !forcePartial {
-			break
-		}
-		if material.NextWindowSeg >= material.NextSeg {
-			break
-		}
+			Error:       err.Error(),
+		})
+		return err
 	}
+
+	w.logger.Info("媒体窗已就绪并完成主片拼接",
+		zap.Uint("material_id", material.ID),
+		zap.Int("window_index", winIdx),
+		zap.Int64("window_dur_ms", durMS),
+		zap.Bool("partial", partial),
+		zap.Int64("master_ready_ms", material.Duration),
+		zap.String("window_url", mp4URL),
+		zap.String("master_url", material.LiveURL),
+	)
+	enqueueWake(w.asrWake, 1)
 	return nil
 }
 
@@ -355,6 +254,7 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 	); err != nil {
 		return fmt.Errorf("写回主 MP4 元数据失败: %w", err)
 	}
+	material.NextSeg = material.NextWindowSeg
 
 	ok := uploadOK
 	ev := AlignDiagEvent{
@@ -378,13 +278,6 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 		zap.String("mp4_url", mp4URL),
 	)
 	return nil
-}
-
-func (w *liveIngestWorker) releaseLocalSegments(workDir string, segStart, segEnd int64) {
-	for i := segStart; i < segEnd; i++ {
-		p := filepath.Join(workDir, liveingest.SegmentFileName(int(i)))
-		_ = os.Remove(p)
-	}
 }
 
 func copyFile(src, dst string) error {
@@ -432,4 +325,43 @@ func (w *liveIngestWorker) resolveMasterMP4Path(ctx context.Context, material *m
 		return "", fmt.Errorf("下载主 MP4 失败: %w", err)
 	}
 	return local, nil
+}
+
+// probeLocalWindowDurationMS 探测本地窗文件时长；失败返回 0。
+func (w *liveIngestWorker) probeLocalWindowDurationMS(ctx context.Context, path string) int64 {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() == 0 {
+		return 0
+	}
+	if w.prober == nil {
+		return 0
+	}
+	tl, err := w.prober.ProbeMediaTimeline(ctx, path)
+	if err != nil {
+		return 0
+	}
+	sec := tl.FormatDurationSec
+	if sec <= 0 {
+		sec = tl.VideoDurationSec
+	}
+	if sec <= 0 {
+		return 0
+	}
+	return int64(sec * 1000)
+}
+
+// nextWindowIndex 下一要录的窗下标（= 已就绪窗数，并与 NextWindowSeg 取较大者）。
+func nextWindowIndex(material *model.LiveMaterial) int {
+	if material == nil {
+		return 0
+	}
+	ready := material.ParsedMediaWindows().ReadyCount()
+	idx := ready
+	if int(material.NextWindowSeg) > idx {
+		idx = int(material.NextWindowSeg)
+	}
+	if int(material.NextSeg) > idx {
+		idx = int(material.NextSeg)
+	}
+	return idx
 }

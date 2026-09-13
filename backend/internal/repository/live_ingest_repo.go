@@ -14,7 +14,8 @@ import (
 
 const (
 	ingestHeartbeatStale = 2 * time.Minute
-	// ingestProgressStuck：心跳仍在但长时间无分片进度，视为假活可抢。
+	// ingestProgressStuck：心跳仍在但长时间无录像进度，视为假活可抢。
+	// 按窗录制会在窗内周期性 UpdateRecordingProgress（约 45s），须小于该阈值。
 	ingestProgressStuck = 5 * time.Minute
 )
 
@@ -288,6 +289,8 @@ func (r *liveMaterialRepository) CommitMasterMP4(ctx context.Context, id uint, e
 	fields := map[string]interface{}{
 		"media_windows":     mediaWindowsJSON,
 		"next_window_seg":   nextWindowSeg,
+		// 按窗录制后 next_seg 与下一窗下标对齐，供进度卡住检测继续生效。
+		"next_seg":          nextWindowSeg,
 		"duration":          durationMS,
 		"asr_due":           asrDue,
 		"last_heartbeat_at": now,

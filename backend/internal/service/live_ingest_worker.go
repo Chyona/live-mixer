@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,9 +28,6 @@ const (
 	liveIngestPollInterval       = 3 * time.Second
 	liveIngestHeartbeat          = 20 * time.Second
 	liveIngestProbeInterval      = 12 * time.Second
-	// 跟播进度诊断：避免每片刷屏，按片数或时间打点。
-	liveIngestProgressLogEverySegs = 50
-	liveIngestProgressLogInterval  = 60 * time.Second
 )
 
 // LiveIngestWorker 跟播门面：内部拆录像 / 窗口 ASR / Finalize 三流水线。
@@ -460,7 +458,9 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 	} else {
 		w.logger.Info("未配置 prober，跳过直播流探测", zap.Uint("material_id", material.ID))
 	}
-	resumeFrom := material.NextSeg
+
+	winIdx := nextWindowIndex(material)
+	resumeFrom := int64(winIdx)
 	if err := w.repo.MarkLiveStarted(ctx, material.ID, material.IngestEpoch, width, height, resumeFrom); err != nil {
 		w.logger.Warn("标记 live 失败（页面可能仍显示等待解析）",
 			zap.Uint("material_id", material.ID),
@@ -470,202 +470,161 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 		w.logger.Info("已标记 live（ASR 由独立流水线推进）",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("ingest_epoch", material.IngestEpoch),
-			zap.Int64("resume_seg", resumeFrom),
+			zap.Int("resume_window", winIdx),
 		)
 	}
 	material.LiveStatus = model.LiveStatusLive
 	material.Width, material.Height = width, height
 	material.IngestResumeSeg = resumeFrom
+	material.NextSeg = resumeFrom
+	material.NextWindowSeg = resumeFrom
 
 	workDir := w.segmentDir(material)
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return err
-	}
-	segDurMS := map[int64]int64{}
-	w.loadPersistedSegDurations(workDir, segDurMS)
-	prober := w.prober
-	if prober == nil {
-		prober = media.NewFFprobeProber("")
-	}
-	nominalSegMS := int64(model.LiveSegmentDurationSec) * 1000
-	if nominalSegMS <= 0 {
-		nominalSegMS = 6000
-	}
-	recordedMS := int64(0)
-	if material.NextSeg > 0 {
-		if material.NextSeg <= 200 {
-			recordedMS = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
-		} else if material.Duration > 0 {
-			recordedMS = material.Duration
-			w.logger.Warn("续录分片较多，跳过全量时长校正",
+	// 全新录像：清空同 epoch 工作目录，避免脏残留。
+	if winIdx == 0 {
+		if err := resetLiveIngestWorkDir(workDir); err != nil {
+			w.logger.Warn("清空跟播工作目录失败，继续尝试录像",
 				zap.Uint("material_id", material.ID),
-				zap.Int64("next_seg", material.NextSeg),
-				zap.Int64("duration_ms", recordedMS),
+				zap.String("work_dir", workDir),
+				zap.Error(err),
 			)
 		} else {
-			recordedMS = material.NextSeg * nominalSegMS
-		}
-		if recordedMS > 0 && recordedMS != material.Duration {
-			material.Duration = recordedMS
-			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, material.NextSeg, recordedMS, material.RecordPlaylistURL)
-		}
-	}
-	if recordedMS <= 0 && material.Duration > 0 {
-		recordedMS = material.Duration
-	}
-	for {
-		startIndex := int(material.NextSeg)
-		var firstSegOnce sync.Once
-		var lastProgressLog time.Time
-		onSegDone := 0
-		var progressMu sync.Mutex
-
-		logRecordingProgress := func(trigger string, segIndex int, onSegElapsed time.Duration) {
-			progressMu.Lock()
-			defer progressMu.Unlock()
-			now := time.Now()
-			localLatest := latestLocalSegIndex(workDir)
-			next := material.NextSeg
-			lag := localLatest - (next - 1)
-			if next <= 0 {
-				lag = localLatest + 1
-			}
-			if lag < 0 {
-				lag = 0
-			}
-			fields := []zap.Field{
+			w.logger.Info("已清空跟播工作目录（全新录像）",
 				zap.Uint("material_id", material.ID),
-				zap.String("trigger", trigger),
-				zap.Int64("next_seg", next),
-				zap.Int64("local_latest_seg", localLatest),
-				zap.Int64("upload_lag_segs", lag),
-				zap.Int64("duration_ms", material.Duration),
-				zap.Int64("asr_cursor_ms", material.ASRCursorMS),
-				zap.Bool("asr_due", material.ASRDue),
-			}
-			if segIndex >= 0 {
-				fields = append(fields, zap.Int("seg_index", segIndex))
-			}
-			if onSegElapsed > 0 {
-				fields = append(fields, zap.Duration("on_seg_elapsed", onSegElapsed))
-			}
-			w.logger.Info("跟播录像进度", fields...)
-			lastProgressLog = now
+				zap.String("work_dir", workDir),
+			)
 		}
+	}
+	winDir := filepath.Join(workDir, liveingest.WindowsDirName())
+	if err := os.MkdirAll(winDir, 0o755); err != nil {
+		return err
+	}
 
-		stopProgress := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(liveIngestProgressLogInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-stopProgress:
-					return
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					progressMu.Lock()
-					due := lastProgressLog.IsZero() || time.Since(lastProgressLog) >= liveIngestProgressLogInterval
-					progressMu.Unlock()
-					if due {
-						logRecordingProgress("ticker", -1, 0)
-					}
-				}
-			}
-		}()
+	windowMS := material.EffectiveMediaWindowMS()
+	windowSec := int(windowMS / 1000)
+	if windowSec <= 0 {
+		windowSec = int(model.LiveMediaWindowDuration / time.Second)
+	}
+	// 满窗判定：达到目标时长的 90% 视为完整窗，继续下一窗；否则当作断流尾巴。
+	fullWindowMS := windowMS * 9 / 10
+	if fullWindowMS < minRecordedWindowMS {
+		fullWindowMS = minRecordedWindowMS
+	}
 
-		onSeg := func(index int, path string) {
-			segStart := time.Now()
-			firstSegOnce.Do(func() {
-				w.logger.Info("收到首个录像分片",
-					zap.Uint("material_id", material.ID),
-					zap.Int("index", index),
-					zap.String("path", path),
-				)
-			})
-			url, err := w.uploadSegment(ctx, material, int64(index), path, resumeFrom)
-			if err != nil {
-				w.logger.Warn("上传分片失败", zap.Uint("material_id", material.ID), zap.Int("index", index), zap.Error(err))
-				return
-			}
-			_ = url
-			next := int64(index + 1)
-			if next < material.NextSeg {
-				next = material.NextSeg
-			}
-			oneMS := probeSegmentDurationMS(ctx, prober, path, nominalSegMS)
-			segDurMS[int64(index)] = oneMS
-			w.persistSegDurations(workDir, segDurMS)
-			recordedMS += oneMS
-			_ = recordedMS
-			// 权威时长来自拼接主片（前 N 窗 master）；首窗未就绪前为 0。
-			durForDB := material.MasterReadyMS()
-			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, next, durForDB, "")
-			material.NextSeg = next
-			material.Duration = durForDB
-			if err := w.sealReadyMediaWindows(ctx, material, segDurMS, false); err != nil {
-				w.logger.Warn("封窗/拼接主 MP4 失败", zap.Uint("material_id", material.ID), zap.Error(err))
-			}
-			if ready := material.MasterReadyMS(); ready > 0 {
-				material.Duration = ready
-			}
-			onSegDone++
-			now := time.Now()
-			progressMu.Lock()
-			needBeat := lastProgressLog.IsZero() ||
-				onSegDone%liveIngestProgressLogEverySegs == 0 ||
-				now.Sub(lastProgressLog) >= liveIngestProgressLogInterval
-			progressMu.Unlock()
-			if needBeat {
-				logRecordingProgress("on_seg", index, now.Sub(segStart))
-			}
+	gotAnyWindow := material.ParsedMediaWindows().ReadyCount() > 0
+	emptyAttempts := 0
+	const maxEmptyAttempts = 8
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		winIdx = nextWindowIndex(material)
+		mp4Path := filepath.Join(winDir, liveingest.WindowMP4FileName(winIdx))
+		_ = os.Remove(mp4Path)
 
-		w.logger.Info("开始 ffmpeg 录像分片（阻塞至流结束或出错；若无「首个录像分片」日志则卡在拉流）",
+		w.logger.Info("开始 ffmpeg 按窗录像",
 			zap.Uint("material_id", material.ID),
-			zap.Int("start_index", startIndex),
-			zap.String("work_dir", workDir),
+			zap.Int("window_index", winIdx),
+			zap.Int("duration_sec", windowSec),
+			zap.String("output", mp4Path),
 			zap.String("m3u8_url", material.M3U8URL),
 		)
 		recStart := time.Now()
-		recErr := w.ffmpeg.RecordHLSSegments(ctx, material.M3U8URL, workDir, startIndex, model.LiveSegmentDurationSec, onSeg)
-		close(stopProgress)
-		w.logger.Info("ffmpeg 录像会话结束",
+		onProgress := func() {
+			dur := material.MasterReadyMS()
+			_ = w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, int64(winIdx), dur, "")
+		}
+		recErr := w.ffmpeg.RecordHLSWindowMP4(ctx, material.M3U8URL, mp4Path, windowSec, onProgress)
+		elapsed := time.Since(recStart)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		durMS := w.probeLocalWindowDurationMS(ctx, mp4Path)
+		w.logger.Info("ffmpeg 按窗录像结束",
 			zap.Uint("material_id", material.ID),
-			zap.Duration("elapsed", time.Since(recStart)),
-			zap.Int64("next_seg", material.NextSeg),
+			zap.Int("window_index", winIdx),
+			zap.Duration("elapsed", elapsed),
+			zap.Int64("probed_dur_ms", durMS),
 			zap.Error(recErr),
 		)
-		if recErr != nil && ctx.Err() != nil {
-			return recErr
+
+		if durMS < minRecordedWindowMS {
+			emptyAttempts++
+			_ = os.Remove(mp4Path)
+			if gotAnyWindow {
+				w.logger.Info("按窗录像无有效输出且已有窗，结束录像",
+					zap.Uint("material_id", material.ID),
+					zap.Int("empty_attempts", emptyAttempts),
+					zap.Error(recErr),
+				)
+				break
+			}
+			deadline := time.Now().Add(model.LiveConnectGrace)
+			if material.ConnectDeadlineAt != nil {
+				deadline = *material.ConnectDeadlineAt
+			}
+			if material.WaitDeadlineAt != nil {
+				deadline = *material.WaitDeadlineAt
+			}
+			if emptyAttempts >= maxEmptyAttempts || !time.Now().Before(deadline) {
+				msg := "未能录制到直播媒体窗"
+				if recErr != nil {
+					msg = fmt.Sprintf("%s: %v", msg, recErr)
+				}
+				_ = w.repo.MarkIngestFailed(ctx, material.ID, material.IngestEpoch, msg)
+				return fmt.Errorf("%s", msg)
+			}
+			w.logger.Info("尚未写出有效媒体窗，稍后重试",
+				zap.Uint("material_id", material.ID),
+				zap.Int("empty_attempts", emptyAttempts),
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(liveIngestProbeInterval):
+			}
+			continue
 		}
-		if material.NextSeg > 0 {
+
+		partial := durMS < fullWindowMS || recErr != nil
+		if err := w.commitRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
+			w.logger.Warn("提交媒体窗失败",
+				zap.Uint("material_id", material.ID),
+				zap.Int("window_index", winIdx),
+				zap.Error(err),
+			)
+			if gotAnyWindow {
+				break
+			}
+			return err
+		}
+		gotAnyWindow = true
+		emptyAttempts = 0
+
+		if partial {
+			w.logger.Info("媒体窗为 partial（断流或不足目标时长），结束录像",
+				zap.Uint("material_id", material.ID),
+				zap.Int("window_index", winIdx),
+				zap.Int64("dur_ms", durMS),
+				zap.Int64("full_window_ms", fullWindowMS),
+			)
 			break
 		}
-		deadline := time.Now().Add(model.LiveConnectGrace)
-		if material.ConnectDeadlineAt != nil {
-			deadline = *material.ConnectDeadlineAt
-		}
-		if material.WaitDeadlineAt != nil {
-			deadline = *material.WaitDeadlineAt
-		}
-		if !time.Now().Before(deadline) {
-			msg := "未能录制到直播分片"
-			_ = w.repo.MarkIngestFailed(ctx, material.ID, material.IngestEpoch, msg)
-			return fmt.Errorf("%s", msg)
-		}
-		w.logger.Info("尚未写出分片，稍后重试录像", zap.Uint("material_id", material.ID))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(liveIngestProbeInterval):
-		}
 	}
+
+	if !gotAnyWindow {
+		msg := "未能录制到直播媒体窗"
+		_ = w.repo.MarkIngestFailed(ctx, material.ID, material.IngestEpoch, msg)
+		return fmt.Errorf("%s", msg)
+	}
+
 	_ = w.repo.MarkEnding(ctx, material.ID, material.IngestEpoch)
 	material.LiveStatus = model.LiveStatusEnding
 	w.logger.Info("录像结束，已交 Finalize 流水线",
 		zap.Uint("material_id", material.ID),
-		zap.Int64("next_seg", material.NextSeg),
+		zap.Int64("next_window", material.NextWindowSeg),
 		zap.Int64("duration_ms", material.Duration),
 	)
 	enqueueWake(w.finalizeWake, 1)
@@ -674,16 +633,15 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 }
 
 func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *model.LiveMaterial, resumeFrom int64) error {
+	_ = resumeFrom
 	latest, err := w.repo.GetByID(ctx, material.ID)
 	if err == nil && latest != nil {
 		material = latest
 	}
-	files := w.collectLocalSegmentFiles(ctx, material, resumeFrom)
-	if len(files) == 0 {
-		files = globLocalSegments(w.segmentDir(material))
-	}
-	if len(files) == 0 {
-		msg := "关播时没有可用录像分片"
+
+	windows := material.ParsedMediaWindows().ReadyWindows()
+	if len(windows) == 0 {
+		msg := "关播时没有可用媒体窗"
 		_ = w.repo.MarkIngestFailed(ctx, material.ID, material.IngestEpoch, msg)
 		return fmt.Errorf("%s", msg)
 	}
@@ -691,59 +649,44 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 	workDir := w.segmentDir(material)
 	_ = os.MkdirAll(workDir, 0o755)
 
-	segDurMS := map[int64]int64{}
-	_ = w.measureLocalRecordingDurationMS(ctx, material, segDurMS)
-	if err := w.sealReadyMediaWindows(ctx, material, segDurMS, true); err != nil {
-		return fmt.Errorf("关播合成主 MP4 失败: %w", err)
-	}
-	if latest2, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest2 != nil {
-		material.MediaWindows = latest2.MediaWindows
-		material.NextWindowSeg = latest2.NextWindowSeg
-		material.Duration = latest2.Duration
-		material.LiveURL = latest2.LiveURL
-		material.LiveASR = latest2.LiveASR
-		material.ASRCursorMS = latest2.ASRCursorMS
-	}
-
 	masterPath := filepath.Join(workDir, liveingest.MasterMP4FileName())
 	if st, err := os.Stat(masterPath); err != nil || st.Size() == 0 {
-		// 兜底：无主文件时直接用全部分片合成 master，并补一条覆盖窗元数据。
-		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, masterPath); err != nil {
-			return fmt.Errorf("合成最终主 MP4 失败: %w", err)
+		if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
+			return fmt.Errorf("关播拼接主 MP4 失败: %w", err)
 		}
-		if w.storage != nil {
-			url, uerr := w.storage.UploadFile(ctx, masterPath, liveingest.MasterObjectKey(material.RecordUUID))
-			if uerr != nil {
-				return fmt.Errorf("上传最终主 MP4 失败: %w", uerr)
-			}
-			material.LiveURL = url
-			dur := material.Duration
-			if w.prober != nil {
-				if tl, perr := w.prober.ProbeMediaTimeline(ctx, masterPath); perr == nil && tl.FormatDurationSec > 0 {
-					dur = int64(tl.FormatDurationSec * 1000)
-				}
-			}
-			if material.ParsedMediaWindows().ReadyCount() == 0 {
-				material.MediaWindows = model.MediaWindowList{}.Upsert(model.MediaWindow{
-					Index: 0, StartMS: 0, EndMS: dur, DurMS: dur,
-					SegStart: 0, SegEnd: material.NextSeg, Ready: true,
-				}).Marshal()
-			}
-			material.Duration = dur
-			_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextSeg, dur, url, true)
+		if latest2, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest2 != nil {
+			material.MediaWindows = latest2.MediaWindows
+			material.NextWindowSeg = latest2.NextWindowSeg
+			material.NextSeg = latest2.NextSeg
+			material.Duration = latest2.Duration
+			material.LiveURL = latest2.LiveURL
+			material.LiveASR = latest2.LiveASR
+			material.ASRCursorMS = latest2.ASRCursorMS
 		}
 	}
 
 	dur := material.Duration
 	if w.prober != nil {
-		if tl, err := w.prober.ProbeMediaTimeline(ctx, masterPath); err == nil && tl.FormatDurationSec > 0 {
-			dur = int64(tl.FormatDurationSec * 1000)
-			material.Width, material.Height = tl.Width, tl.Height
+		if tl, err := w.prober.ProbeMediaTimeline(ctx, masterPath); err == nil {
+			probedSec := tl.VideoDurationSec
+			if probedSec <= 0 {
+				probedSec = tl.FormatDurationSec
+			}
+			if probedSec > 0 {
+				dur = int64(probedSec * 1000)
+			}
+			if tl.Width > 0 {
+				material.Width = tl.Width
+			}
+			if tl.Height > 0 {
+				material.Height = tl.Height
+			}
 		}
 	}
 	if dur > 0 && dur != material.Duration {
 		material.Duration = dur
 		_ = w.repo.CommitMasterMP4(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg, dur, material.LiveURL, true)
+		material.NextSeg = material.NextWindowSeg
 	}
 
 	if err := w.repo.MarkEnded(ctx, material.ID, material.IngestEpoch, dur); err != nil {
@@ -1123,6 +1066,17 @@ func (w *liveIngestWorker) segmentDir(material *model.LiveMaterial) string {
 		root = os.TempDir()
 	}
 	return filepath.Join(root, "staging", "live_ingest", fmt.Sprintf("%d", material.ID), fmt.Sprintf("e%d", material.IngestEpoch))
+}
+
+// resetLiveIngestWorkDir 删除跟播工作目录，避免删库/重建同 ID 后扫到旧窗/master。
+func resetLiveIngestWorkDir(workDir string) error {
+	if strings.TrimSpace(workDir) == "" {
+		return nil
+	}
+	if err := os.RemoveAll(workDir); err != nil {
+		return err
+	}
+	return os.MkdirAll(workDir, 0o755)
 }
 
 func (w *liveIngestWorker) listUploadedSegmentFiles(ctx context.Context, material *model.LiveMaterial, resumeFrom int64) []string {

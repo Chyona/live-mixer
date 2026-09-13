@@ -8,7 +8,8 @@ import (
 )
 
 // MediaWindow 跟播离散媒体窗元数据（落库 media_windows jsonb）。
-// 每窗对应一份 window_N.mp4；预览 / ASR / 成片使用「前 N 窗拼接」的 master.mp4（live_url）。
+// 每窗对应一份 window_N.mp4（ffmpeg -t 直接录制）；预览 / ASR / 成片使用「前 N 窗拼接」的 master.mp4（live_url）。
+// SegStart/SegEnd 表示窗下标区间 [i, i+1)，兼容旧字段名。
 type MediaWindow struct {
 	Index     int    `json:"i"`
 	StartMS   int64  `json:"start_ms"`

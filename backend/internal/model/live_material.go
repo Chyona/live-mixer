@@ -50,7 +50,7 @@ const LiveEarlyProbe = 15 * time.Minute
 // LiveSegmentDurationSec 跟播分片时长（秒）。
 const LiveSegmentDurationSec = 6
 
-// LiveMediaWindowDuration 离散媒体窗步长：每满一步封一份 window_N.mp4，再拼前 N 窗为 master.mp4。
+// LiveMediaWindowDuration 离散媒体窗步长：每满一步直接 ffmpeg -t 录一份 window_N.mp4，再拼前 N 窗为 master.mp4。
 // 预览 / ASR / 一键成片始终同源该 master。
 const LiveMediaWindowDuration = 10 * time.Minute
 
@@ -104,19 +104,19 @@ type LiveMaterial struct {
 	ASRCursorMS       int64               `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
 	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:录像/收尾抢占代数" json:"ingest_epoch"`
 	ASREpoch          int64               `gorm:"column:asr_epoch;not null;default:0;comment:窗口ASR抢占代数" json:"asr_epoch"`
-	NextSeg           int64               `gorm:"column:next_seg;not null;default:0;comment:下一分片序号" json:"next_seg"`
+	NextSeg           int64               `gorm:"column:next_seg;not null;default:0;comment:下一媒体窗序号(与next_window_seg对齐)" json:"next_seg"`
 	LastHeartbeatAt   *time.Time          `gorm:"column:last_heartbeat_at;comment:录像/收尾心跳" json:"last_heartbeat_at,omitempty"`
 	ASRHeartbeatAt    *time.Time          `gorm:"column:asr_heartbeat_at;comment:窗口ASR心跳" json:"asr_heartbeat_at,omitempty"`
-	LastProgressAt    *time.Time          `gorm:"column:last_progress_at;comment:最近一次分片进度时间" json:"last_progress_at,omitempty"`
+	LastProgressAt    *time.Time          `gorm:"column:last_progress_at;comment:最近一次录像进度时间" json:"last_progress_at,omitempty"`
 	ASRDue            bool                `gorm:"column:asr_due;not null;default:false;comment:是否有待跑窗口ASR" json:"asr_due"`
-	IngestResumeSeg   int64               `gorm:"column:ingest_resume_seg;not null;default:0;comment:本场录像起始分片序号" json:"ingest_resume_seg"`
+	IngestResumeSeg   int64               `gorm:"column:ingest_resume_seg;not null;default:0;comment:本场录像起始窗序号" json:"ingest_resume_seg"`
 	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
 	// MediaWindowMS 主 MP4 递增步长（毫秒）；创建时写入，默认 LiveMediaWindowDuration。
 	MediaWindowMS int64 `gorm:"column:media_window_ms;not null;default:0;comment:主MP4递增步长毫秒" json:"media_window_ms"`
 	// MediaWindows 离散媒体窗元数据 JSON（window_0..N-1）；拼接主片见 live_url。
 	MediaWindows string `gorm:"column:media_windows;type:jsonb;not null;default:'[]';comment:媒体窗元数据JSON" json:"media_windows"`
-	// NextWindowSeg 下一未封入任何媒体窗的起始分片下标。
-	NextWindowSeg int64 `gorm:"column:next_window_seg;not null;default:0;comment:下一未封入媒体窗分片" json:"next_window_seg"`
+	// NextWindowSeg 下一要录的媒体窗下标（= 已就绪窗数）。
+	NextWindowSeg int64 `gorm:"column:next_window_seg;not null;default:0;comment:下一媒体窗下标" json:"next_window_seg"`
 	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
 	ASRParagraphs     []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
