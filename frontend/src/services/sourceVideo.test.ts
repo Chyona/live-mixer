@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { resetDebugSearchPersistForTests } from '~/utils/asrParagraphsKey';
 import { normalizeSourceVideo } from './sourceVideo';
-import { sourceVideoPlayUrl } from './sourceVideo.model';
+import { sourceVideoListDisplayUrl, sourceVideoPlayUrl } from './sourceVideo.model';
 
 function setSearch(search: string) {
   window.history.replaceState({}, '', search ? `/${search}` : '/');
@@ -53,6 +53,42 @@ describe('normalizeSourceVideo ASR 字段', () => {
       live_asr: [liveUtterance],
     });
     expect(video.asr_paragraphs).toEqual([liveUtterance]);
+  });
+});
+
+describe('sourceVideoListDisplayUrl', () => {
+  it('跟播进行中显示源站 m3u8', () => {
+    expect(
+      sourceVideoListDisplayUrl({
+        live_status: 'live',
+        m3u8_url: 'https://src.example/live.m3u8',
+        live_url: 'https://cdn.example/master.mp4',
+        duration: 600000,
+        play_url: '',
+      })
+    ).toBe('https://src.example/live.m3u8');
+  });
+
+  it('跟播结束后显示 master.mp4', () => {
+    expect(
+      sourceVideoListDisplayUrl({
+        live_status: 'ended',
+        m3u8_url: 'https://src.example/live.m3u8',
+        live_url: 'https://cdn.example/master.mp4',
+        duration: 600000,
+        play_url: '',
+        media_windows: [
+          {
+            i: 0,
+            start_ms: 0,
+            end_ms: 600000,
+            dur_ms: 600000,
+            url: 'https://cdn.example/windows/window_00000.mp4',
+            ready: true,
+          },
+        ],
+      })
+    ).toBe('https://cdn.example/master.mp4');
   });
 });
 
@@ -171,6 +207,19 @@ describe('sourceVideoPlayUrl 跟播预览时间轴', () => {
         ],
       })
     ).toBe('');
+  });
+
+  it('列表无 media_windows 但已有 duration 时显示 live_url（master）', () => {
+    expect(
+      sourceVideoPlayUrl({
+        play_url: '',
+        record_playlist_url: '',
+        m3u8_url: 'https://src.example/live.m3u8',
+        live_url: 'https://cdn.example/master.mp4',
+        live_status: 'live',
+        duration: 6000000,
+      })
+    ).toBe('https://cdn.example/master.mp4');
   });
 
   it('normalize 会纠正错误的 play_url', () => {

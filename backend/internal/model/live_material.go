@@ -226,7 +226,8 @@ func (m *LiveMaterial) MasterMP4URL() string {
 	if m.ParsedMediaWindows().ReadyCount() > 0 {
 		return u
 	}
-	if m.LiveStatus == LiveStatusEnded && m.Duration > 0 {
+	// duration 仅在 CommitMasterMP4 后写入；列表项可能不含 media_windows，用时长判断就绪。
+	if m.Duration > 0 {
 		return u
 	}
 	return ""

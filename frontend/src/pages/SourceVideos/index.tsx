@@ -27,7 +27,7 @@ import {
   retrySourceVideoIngest,
   updateSourceVideo,
   isLiveIngesting,
-  sourceVideoPlayUrl,
+  sourceVideoListDisplayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
 import { formatToDateTime } from '~/utils/date';
@@ -475,7 +475,7 @@ const SourceVideosPage = () => {
         ellipsis: true,
         render: (_url: string, record) => (
           <CopyableText
-            text={sourceVideoPlayUrl(record)}
+            text={sourceVideoListDisplayUrl(record)}
             layout="row"
             className="source-videos-url-cell"
             emptyFallback="-"

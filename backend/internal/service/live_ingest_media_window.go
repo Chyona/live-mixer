@@ -174,22 +174,23 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 	)
 
 	// 先写临时文件：上传失败时不覆盖正式 master，避免 ASR 读到坏片而预览仍用旧 CDN。
+	// 跟播路径优先 copy 拼接：连续轴重编码 2 窗就要十余分钟，会卡住下一窗录制。
 	if len(files) == 1 {
 		if err := copyFile(files[0], tmpPath); err != nil {
 			_ = os.Remove(tmpPath)
 			return fmt.Errorf("复制单窗为主片失败: %w", err)
 		}
 	} else {
-		if err := w.ffmpeg.ConcatMP4ContinuousTimeline(ctx, files, tmpPath); err != nil {
-			w.logger.Warn("连续时间轴拼接失败，回退 copy 拼接",
+		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, tmpPath); err != nil {
+			w.logger.Warn("copy 拼接主片失败，回退连续时间轴重编码",
 				zap.Uint("material_id", material.ID),
 				zap.Int("window_count", len(files)),
 				zap.Error(err),
 			)
 			_ = os.Remove(tmpPath)
-			if err2 := w.ffmpeg.ConcatMediaFiles(ctx, files, tmpPath); err2 != nil {
+			if err2 := w.ffmpeg.ConcatMP4ContinuousTimeline(ctx, files, tmpPath); err2 != nil {
 				_ = os.Remove(tmpPath)
-				return fmt.Errorf("拼接主 MP4 失败: continuous=%v fallback=%w", err, err2)
+				return fmt.Errorf("拼接主 MP4 失败: copy=%v continuous=%w", err, err2)
 			}
 		}
 	}

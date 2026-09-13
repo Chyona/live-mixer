@@ -52,6 +52,7 @@ func (m LiveMaterialListItem) PlayURL() string {
 		RecordPlaylistURL: m.RecordPlaylistURL,
 		URLType:           m.URLType,
 		LiveStatus:        m.LiveStatus,
+		Duration:          m.Duration,
 	}
 	return full.PlayURL()
 }

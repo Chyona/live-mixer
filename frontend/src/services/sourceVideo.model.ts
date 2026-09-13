@@ -160,21 +160,26 @@ function isLiveIngestStatus(status: string | undefined): boolean {
  * - 仅一窗就绪且尚无 master 时，可暂用该窗 MP4
  * - >=2 窗时必须使用 master，不得用单窗或 HLS
  */
-export function sourceVideoPlayUrl(
-  video: Pick<
-    SourceVideo,
-    'play_url' | 'record_playlist_url' | 'm3u8_url' | 'live_url' | 'live_status'
-  > & { media_windows?: MediaWindowMeta[] }
-): string {
+export type SourceVideoPlayUrlInput = Pick<
+  SourceVideo,
+  'play_url' | 'm3u8_url' | 'live_url' | 'live_status'
+> &
+  Partial<Pick<SourceVideo, 'record_playlist_url' | 'duration'>> & {
+    media_windows?: MediaWindowMeta[];
+  };
+
+export function sourceVideoPlayUrl(video: SourceVideoPlayUrlInput): string {
   const status = String(video.live_status ?? 'none');
   const backendPlay = video.play_url?.trim() || '';
   const live = video.live_url?.trim() || '';
   const remote = video.m3u8_url?.trim() || '';
   const windows = video.media_windows;
   const ready = readyMediaWindows(windows);
+  const duration = Number(video.duration ?? 0) || 0;
+  const masterReady = ready.length > 0 || status === 'ended' || duration > 0;
 
   if (isLiveIngestStatus(status)) {
-    if (live && !isProbablyM3u8Url(live) && (ready.length > 0 || status === 'ended')) {
+    if (live && !isProbablyM3u8Url(live) && masterReady) {
       return live;
     }
     if (ready.length === 1) {
@@ -185,7 +190,7 @@ export function sourceVideoPlayUrl(
       backendPlay &&
       backendPlay !== remote &&
       !isProbablyM3u8Url(backendPlay) &&
-      (ready.length > 0 || status === 'ended')
+      masterReady
     ) {
       return backendPlay;
     }
@@ -193,6 +198,35 @@ export function sourceVideoPlayUrl(
   }
 
   return backendPlay || live || remote || '';
+}
+
+/**
+ * 源视频列表「视频 URL」展示：
+ * - 跟播进行中（waiting/connecting/live/ending）：显示用户填写的源站 m3u8
+ * - 跟播结束（ended）：显示 master.mp4（live_url）
+ * - 失败：优先 m3u8，便于核对拉流地址
+ * 注意：切片预览请继续用 sourceVideoPlayUrl，禁止播源站滑动 m3u8。
+ */
+export function sourceVideoListDisplayUrl(video: SourceVideoPlayUrlInput): string {
+  const status = String(video.live_status ?? 'none');
+  const remote = video.m3u8_url?.trim() || '';
+  const live = video.live_url?.trim() || '';
+
+  if (status === 'ended') {
+    const master = sourceVideoPlayUrl(video);
+    if (master) return master;
+    if (live && !isProbablyM3u8Url(live)) return live;
+    return remote;
+  }
+
+  if (isLiveIngesting(status) || status === 'failed') {
+    if (remote) return remote;
+    if (live && isProbablyM3u8Url(live)) return live;
+    return '';
+  }
+
+  // 回放等：与可播地址一致
+  return sourceVideoPlayUrl(video) || live || remote || '';
 }
 
 export function isLiveIngesting(status: string | undefined): boolean {

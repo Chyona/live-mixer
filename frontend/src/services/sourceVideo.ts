@@ -24,6 +24,7 @@ export {
   hlsStartPositionForSourceVideo,
   isSourceVideoUrlDuplicateError,
   isLiveIngesting,
+  sourceVideoListDisplayUrl,
   sourceVideoPlayUrl,
   SOURCE_VIDEO_URL_DUPLICATE_CODE,
 } from './sourceVideo.model';
