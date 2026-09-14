@@ -11,6 +11,7 @@ import StreamVideoPlayer, {
   type StreamVideoPlayerProps,
 } from '~/components/StreamVideoPlayer';
 import { attachAvDriftResync } from '~/utils/avDriftResync';
+import { seekHtmlVideo } from '~/utils/seekMedia';
 import type { VideoPlayerTranscriptParagraph } from '~/utils/videoPlayerTools';
 import VideoPlayerToolbar from './VideoPlayerToolbar';
 
@@ -68,11 +69,8 @@ const SliceVideoPlayer = forwardRef<StreamVideoPlayerHandle, SliceVideoPlayerPro
         const video = playerRef.current?.video;
         if (!video) return;
 
-        video.currentTime = time;
-        setInternalCurrentTime(time);
-        if (video.paused) {
-          void video.play().catch(() => undefined);
-        }
+        const nextTime = seekHtmlVideo(video, time);
+        setInternalCurrentTime(nextTime);
       },
       [externalOnSeek]
     );

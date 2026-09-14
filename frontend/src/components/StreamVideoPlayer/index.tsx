@@ -217,6 +217,8 @@ function attachFirstFrameHandler(
 
   const attempt = () => {
     if (preparedRef.current || preparingRef.current || !video.paused) return;
+    // 用户已 seek/播过，不要再抢回片头
+    if ((video.currentTime || 0) > 1) return;
 
     preparingRef.current = true;
     void renderFirstFrame(video, firstFrameTime, skipPlaybackSeek).then((ok) => {
@@ -287,9 +289,13 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
     const sourceType = useMemo(() => detectVideoSourceType(sourceUrl), [sourceUrl]);
 
     useImperativeHandle(ref, () => ({
-      video: videoRef.current,
-      sourceType,
-    }));
+      get video() {
+        return videoRef.current;
+      },
+      get sourceType() {
+        return sourceType;
+      },
+    }), [sourceType]);
 
     const emitDuration = () => {
       let duration = readDuration(videoRef.current);

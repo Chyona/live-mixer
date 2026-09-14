@@ -230,7 +230,6 @@ const TranscriptPanel = ({
   const transcriptBodyRef = useRef<HTMLDivElement>(null);
   const lastAutoScrolledTargetRef = useRef<string | null>(null);
   const autoScrollPauseTimerRef = useRef<number>(0);
-  const pendingSeekTimerRef = useRef<number>(0);
   const suppressNextClickSeekRef = useRef(false);
   const [autoScrollPaused, setAutoScrollPaused] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(() => {
@@ -409,23 +408,7 @@ const TranscriptPanel = ({
   useEffect(() => {
     return () => {
       window.clearTimeout(autoScrollPauseTimerRef.current);
-      window.clearTimeout(pendingSeekTimerRef.current);
     };
-  }, []);
-
-  const scheduleSeek = useCallback(
-    (time: number) => {
-      window.clearTimeout(pendingSeekTimerRef.current);
-      pendingSeekTimerRef.current = window.setTimeout(() => {
-        onSeek(time);
-      }, 220);
-    },
-    [onSeek]
-  );
-
-  const cancelPendingSeek = useCallback(() => {
-    window.clearTimeout(pendingSeekTimerRef.current);
-    pendingSeekTimerRef.current = 0;
   }, []);
 
   useEffect(() => {
@@ -523,7 +506,7 @@ const TranscriptPanel = ({
     }
 
     const range = getParagraphRange(paragraph);
-    scheduleSeek(range.start);
+    onSeek(range.start);
   };
 
   const handleParagraphDoubleClick = (
@@ -533,7 +516,6 @@ const TranscriptPanel = ({
     if (readOnly) return;
     event.preventDefault();
     event.stopPropagation();
-    cancelPendingSeek();
     suppressNextClickSeekRef.current = false;
     window.getSelection()?.removeAllRanges();
 
@@ -556,7 +538,6 @@ const TranscriptPanel = ({
     const copySegment = paragraphSelectionToCopySegment(event.currentTarget, paragraph);
     if (copySegment) {
       suppressNextClickSeekRef.current = true;
-      cancelPendingSeek();
       onSelectSegment(copySegment);
       selection.removeAllRanges();
     }
@@ -569,7 +550,7 @@ const TranscriptPanel = ({
       suppressNextClickSeekRef.current = false;
       return;
     }
-    scheduleSeek(start);
+    onSeek(start);
   };
 
   const renderParagraphItem = (

@@ -33,6 +33,7 @@ import { formatToDateTime } from '~/utils/date';
 import { showAppError, toast } from '~/utils/toast';
 import { isPlayableVideoUrl, mediaResourceKey } from '~/utils/videoUrl';
 import { resolveSliceTimelineDurationSec } from '~/utils/duration';
+import { seekHtmlVideo } from '~/utils/seekMedia';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import type { SliceEditorEntryFrom } from '~/routes/links';
@@ -518,14 +519,9 @@ const ManualVideoSlicePage = () => {
 
   const handleSeek = useCallback((time: number) => {
     const videoEl = playerRef.current?.video;
-    if (videoEl) {
-      videoEl.currentTime = time;
-      if (videoEl.paused) {
-        void videoEl.play().catch(() => undefined);
-      }
-    }
-    lastCurrentTimeRef.current = time;
-    setCurrentTime(time);
+    const nextTime = videoEl ? seekHtmlVideo(videoEl, time) : time;
+    lastCurrentTimeRef.current = nextTime;
+    setCurrentTime(nextTime);
   }, []);
 
   const handleSelectSegment = useCallback((segment: SelectedCopySegment | null) => {

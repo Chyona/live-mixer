@@ -26,6 +26,7 @@ import {
 import { showAppError, toast } from '~/utils/toast';
 import { formatToDateTime } from '~/utils/date';
 import { formatVideoDuration, formatVideoDurationMs, resolveSliceTimelineDurationSec } from '~/utils/duration';
+import { seekHtmlVideo } from '~/utils/seekMedia';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import {
@@ -420,13 +421,8 @@ const SourceVideoSlicePage = () => {
 
   const handleTimeChange = useCallback((time: number) => {
     const video = playerRef.current?.video;
-    if (video) {
-      video.currentTime = time;
-      if (video.paused) {
-        void video.play().catch(() => undefined);
-      }
-    }
-    setCurrentTime(time);
+    const nextTime = video ? seekHtmlVideo(video, time) : time;
+    setCurrentTime(nextTime);
   }, []);
 
   const asrSelectableEndSec = useMemo(() => getAsrSelectableEndSec(video), [video]);

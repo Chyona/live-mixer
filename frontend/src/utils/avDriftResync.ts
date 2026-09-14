@@ -146,8 +146,13 @@ export function attachAvDriftResync(
     audio.pause();
   };
 
+  const onSeeking = () => {
+    lastCorrectAt = performance.now();
+  };
+
   const onSeeked = () => {
     if (syncingAudio) return;
+    lastCorrectAt = performance.now();
     syncAudioFromVideo(true);
     if (!video.paused) {
       void audio.play().catch(() => undefined);
@@ -173,6 +178,7 @@ export function attachAvDriftResync(
 
   video.addEventListener('play', onPlay);
   video.addEventListener('pause', onPause);
+  video.addEventListener('seeking', onSeeking);
   video.addEventListener('seeked', onSeeked);
   video.addEventListener('ratechange', onRateChange);
   video.addEventListener('waiting', onWaiting);
@@ -227,6 +233,7 @@ export function attachAvDriftResync(
       window.clearInterval(timer);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
+      video.removeEventListener('seeking', onSeeking);
       video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('ratechange', onRateChange);
       video.removeEventListener('waiting', onWaiting);
