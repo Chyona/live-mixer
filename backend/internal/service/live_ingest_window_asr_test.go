@@ -38,14 +38,128 @@ func TestRebuildLiveASRParagraphs_EmptyOrInvalid(t *testing.T) {
 	if got := w.rebuildLiveASRParagraphs("{}", 0); len(got) != 0 {
 		t.Fatalf("empty asr: %+v", got)
 	}
-	// 校验失败（text 有内容但 words 空）→ 隔离为空，不 panic
+	// 校验失败（text 有内容但 words 空）→ 降级保留段落，禁止写空 []
 	bad := `{
 		"result":{"utterances":[
 			{"start_time":0,"end_time":100,"text":"有字无词","additions":{"speaker":"1"},"words":[]}
 		]}
 	}`
-	if got := w.rebuildLiveASRParagraphs(bad, 100); len(got) != 0 {
-		t.Fatalf("invalid words should yield empty on isolation, got %+v", got)
+	got := w.rebuildLiveASRParagraphs(bad, 100)
+	if len(got) != 1 || got[0].Text != "有字无词" {
+		t.Fatalf("invalid words should degrade-keep paragraph, got %+v", got)
+	}
+}
+
+func TestCommitFullMasterASR_OverwritesAndClearsDue(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.LiveMaterial{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := repository.NewLiveIngestRepository(db)
+	mat := &model.LiveMaterial{
+		Name:         "full-asr",
+		LiveURL:      "https://example.com/master.mp4",
+		RecordUUID:   "u-full",
+		M3U8URL:      "https://example.com/x.m3u8",
+		SourceMode:   model.SourceModeLive,
+		LiveStatus:   model.LiveStatusLive,
+		ASREpoch:     3,
+		LiveASR:      `{"result":{"utterances":[{"text":"旧"}]}}`,
+		ASRStatus:    model.ASRStatusProcessing,
+		ASRCursorMS:  0,
+		Duration:     200,
+		ASRDue:       true,
+		CreatedBy:    1,
+	}
+	if err := db.Create(mat).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	w := &liveIngestWorker{repo: repo, logger: zap.NewNop()}
+	liveASR := `{
+		"result":{"utterances":[
+			{"start_time":0,"end_time":100,"text":"甲","additions":{"speaker":"1"},
+				"words":[{"text":"甲","start_time":0,"end_time":100}]},
+			{"start_time":120,"end_time":200,"text":"乙","additions":{"speaker":"1"},
+				"words":[{"text":"乙","start_time":120,"end_time":200}]}
+		]}
+	}`
+	if err := w.commitFullMasterASR(context.Background(), mat, 3, 200, liveASR, 200, 1.0, time.Now()); err != nil {
+		t.Fatalf("commitFullMasterASR: %v", err)
+	}
+	got, err := repo.GetByID(context.Background(), mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ASRCursorMS != 200 {
+		t.Fatalf("cursor=%d want 200 (readyMS)", got.ASRCursorMS)
+	}
+	if got.ASRDue {
+		t.Fatal("asr_due should be false when master unchanged")
+	}
+	if got.LiveASR != liveASR {
+		t.Fatalf("live_asr not overwritten")
+	}
+	if len(got.ASRParagraphs) != 1 || got.ASRParagraphs[0].Text != "甲乙" {
+		t.Fatalf("ASRParagraphs=%+v", got.ASRParagraphs)
+	}
+}
+
+func TestCommitFullMasterASR_StaleKeepsDue(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.LiveMaterial{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := repository.NewLiveIngestRepository(db)
+	mat := &model.LiveMaterial{
+		Name:       "stale-asr",
+		LiveURL:    "https://example.com/master.mp4",
+		RecordUUID: "u-stale",
+		M3U8URL:    "https://example.com/x.m3u8",
+		SourceMode: model.SourceModeLive,
+		LiveStatus: model.LiveStatusLive,
+		ASREpoch:   1,
+		LiveASR:    "{}",
+		ASRStatus:  model.ASRStatusProcessing,
+		Duration:   600000, // commit 前已变长到 10 分钟
+		CreatedBy:  1,
+	}
+	if err := db.Create(mat).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	w := &liveIngestWorker{repo: repo, logger: zap.NewNop()}
+	liveASR := `{
+		"result":{"utterances":[
+			{"start_time":0,"end_time":100,"text":"过渡","additions":{"speaker":"1"},
+				"words":[{"text":"过","start_time":0,"end_time":50},{"text":"渡","start_time":50,"end_time":100}]}
+		]}
+	}`
+	const targetReadyMS int64 = 300000 // 任务开始时是 5 分钟
+	if err := w.commitFullMasterASR(context.Background(), mat, 1, targetReadyMS, liveASR, targetReadyMS, 1.0, time.Now()); err != nil {
+		t.Fatalf("commitFullMasterASR: %v", err)
+	}
+	got, err := repo.GetByID(context.Background(), mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ASRCursorMS != targetReadyMS {
+		t.Fatalf("cursor=%d want %d", got.ASRCursorMS, targetReadyMS)
+	}
+	if !got.ASRDue {
+		t.Fatal("asr_due should stay true when master grew past targetReadyMS")
+	}
+	if got.Duration != 600000 {
+		t.Fatalf("duration=%d want 600000 (current ready)", got.Duration)
+	}
+	if got.LiveASR != liveASR {
+		t.Fatal("stale job should still write transitional live_asr")
 	}
 }
 
@@ -68,6 +182,7 @@ func TestCommitMasterASRProgress_RebuildsParagraphs(t *testing.T) {
 		ASREpoch:   3,
 		LiveASR:    "{}",
 		ASRStatus:  model.ASRStatusProcessing,
+		Duration:   200,
 		CreatedBy:  1,
 	}
 	if err := db.Create(mat).Error; err != nil {
@@ -90,8 +205,8 @@ func TestCommitMasterASRProgress_RebuildsParagraphs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
-	if got.ASRCursorMS != 100 {
-		t.Fatalf("cursor=%d want 100", got.ASRCursorMS)
+	if got.ASRCursorMS != 200 {
+		t.Fatalf("cursor=%d want 200 (full master readyMS)", got.ASRCursorMS)
 	}
 	if len(got.ASRParagraphs) != 1 || got.ASRParagraphs[0].Text != "甲乙" {
 		t.Fatalf("ASRParagraphs=%+v", got.ASRParagraphs)

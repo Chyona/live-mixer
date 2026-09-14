@@ -57,8 +57,9 @@ const LiveMediaWindowDuration = 10 * time.Minute
 // LiveASRWindowDuration 兼容旧名：媒体窗步长。
 const LiveASRWindowDuration = LiveMediaWindowDuration
 
-// MaxASRTranscribeDuration 单次送厂商转写的上限（从主 MP4 抽等长 MP3）。
-// 必须先保证抽音等长：若 MP3 比视频长，厂商按时长回报后再缩放会把字幕压歪。
+// MaxASRTranscribeDuration 历史短 chunk 上限（跟播曾按 ≤2min 切块 merge）。
+// 跟播现改为每次 master 变长后对整份 master 做 1 次全量 ASR，不再用此常量切块。
+// 仍保留供测试工具 / 旧脚本引用；生产跟播路径请勿再按此切分。
 const MaxASRTranscribeDuration = 2 * time.Minute
 
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。

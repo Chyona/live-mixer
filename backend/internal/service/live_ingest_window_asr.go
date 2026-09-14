@@ -15,18 +15,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// runWindowASR 对拼接主 MP4 处理一个短 ASR chunk（默认 ≤2min）。
-// 预览/成片/ASR 同源 master.mp4（由前 N 窗拼接）；按 [asr_cursor, cursor+chunk) 抽等长 MP3。
-func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
+// runFullMasterASR 对当前整份 master.mp4 做 1 次完整 ASR，覆盖写入 live_asr。
+// 每次 master 变长（asr_due）触发；不再按 2 分钟 cursor 切块 merge。
+// 若转写过程中 master 已再次变长：仍写入本次结果作过渡，并保持 asr_due 以便立即再跑全量。
+func (w *liveIngestWorker) runFullMasterASR(ctx context.Context, material *model.LiveMaterial) error {
 	logStep := func(step string, fields ...zap.Field) {
 		base := []zap.Field{
 			zap.Uint("material_id", material.ID),
 			zap.String("step", step),
 		}
-		w.logger.Info("主 MP4 ASR 步骤", append(base, fields...)...)
+		w.logger.Info("主 MP4 全量 ASR 步骤", append(base, fields...)...)
 	}
 	if w.asrService == nil {
-		w.logger.Warn("主 MP4 ASR 跳过：ASR 服务未配置", zap.Uint("material_id", material.ID))
+		w.logger.Warn("主 MP4 全量 ASR 跳过：ASR 服务未配置", zap.Uint("material_id", material.ID))
 		return nil
 	}
 	epoch := material.ASREpoch
@@ -37,48 +38,66 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		material.MediaWindows = latest.MediaWindows
 		material.Duration = latest.Duration
 		material.LiveURL = latest.LiveURL
+		material.ASRParagraphs = latest.ASRParagraphs
 		epoch = latest.ASREpoch
 	}
-	cursor := material.ASRCursorMS
-	readyMS := material.MasterReadyMS()
-	if readyMS <= 0 {
-		w.logger.Info("主 MP4 ASR 跳过：主文件尚未就绪",
+
+	targetReadyMS := material.MasterReadyMS()
+	if targetReadyMS <= 0 {
+		w.logger.Info("主 MP4 全量 ASR 跳过：主文件尚未就绪",
 			zap.Uint("material_id", material.ID),
-			zap.Int64("asr_cursor_ms", cursor),
+			zap.Int64("asr_cursor_ms", material.ASRCursorMS),
 		)
 		return nil
 	}
-	if cursor >= readyMS {
-		progress := windowASRProgress(readyMS, readyMS)
-		paras := w.rebuildLiveASRParagraphs(material.LiveASR, readyMS)
-		if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, material.LiveASR, readyMS, readyMS, progress, false, paras); err != nil {
+	if material.ASRCursorMS >= targetReadyMS {
+		progress := windowASRProgress(targetReadyMS, targetReadyMS)
+		paras := w.rebuildLiveASRParagraphs(material.LiveASR, targetReadyMS)
+		if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, material.LiveASR, targetReadyMS, targetReadyMS, progress, false, paras); err != nil {
 			return err
 		}
-		material.ASRCursorMS = readyMS
-		material.Duration = readyMS
+		material.ASRCursorMS = targetReadyMS
+		material.Duration = targetReadyMS
 		material.ASRProgress = progress
 		material.ASRDue = false
 		material.ASRParagraphs = paras
 		return nil
 	}
 
-	chunkMS := int64(model.MaxASRTranscribeDuration / time.Millisecond)
-	if chunkMS <= 0 {
-		chunkMS = int64((2 * time.Minute) / time.Millisecond)
-	}
-	remain := readyMS - cursor
-	thisChunkMS := chunkMS
-	if thisChunkMS > remain {
-		thisChunkMS = remain
-	}
-	offsetMS := cursor
 	asrStart := time.Now()
-	logStep("resolve_chunk",
-		zap.Int64("ready_ms", readyMS),
-		zap.Int64("chunk_ms", thisChunkMS),
-		zap.Int64("offset_ms", offsetMS),
-		zap.Int64("asr_cursor_ms", cursor),
+	logStep("resolve_full",
+		zap.Int64("target_ready_ms", targetReadyMS),
+		zap.Int64("asr_cursor_ms", material.ASRCursorMS),
 	)
+	// 厂商文档：单次 ≤5h / <512MB；10/30/60+ 分钟会显著增加耗时与费用（O(N²) 累计）。
+	readyDur := time.Duration(targetReadyMS) * time.Millisecond
+	if readyDur > asr.VendorMaxAudioDuration {
+		w.logger.Error("主 MP4 全量 ASR 超过厂商时长上限，仍将尝试提交（失败不推进游标）",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("target_ready_ms", targetReadyMS),
+			zap.Duration("target_ready", readyDur),
+			zap.Duration("vendor_max", asr.VendorMaxAudioDuration),
+		)
+	} else if readyDur >= 60*time.Minute {
+		w.logger.Warn("主 MP4 全量 ASR ≥60 分钟，关注轮询超时与 512MB/拒识码",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("target_ready_ms", targetReadyMS),
+			zap.Duration("target_ready", readyDur),
+		)
+	} else if readyDur >= 30*time.Minute {
+		w.logger.Warn("主 MP4 全量 ASR ≥30 分钟，关注厂商耗时与费用",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("target_ready_ms", targetReadyMS),
+			zap.Duration("target_ready", readyDur),
+		)
+	} else if readyDur >= 10*time.Minute {
+		w.logger.Info("主 MP4 全量 ASR ≥10 分钟",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("target_ready_ms", targetReadyMS),
+			zap.Duration("target_ready", readyDur),
+		)
+	}
+
 	localMaster := filepath.Join(w.segmentDir(material), "master.mp4")
 	existedBefore := false
 	if st, err := os.Stat(localMaster); err == nil && st.Size() > 0 {
@@ -90,11 +109,9 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	asrSource := resolveMasterASRSource(existedBefore)
 
-	startSec := float64(cursor) / 1000.0
-	durSec := float64(thisChunkMS) / 1000.0
+	durSec := float64(targetReadyMS) / 1000.0
 	align := media.ASRAlignOptions{TargetDurSec: durSec}
-	// 仅主文件起点 chunk 应用整文件 A/V 对齐；中段 seek 后再垫片会把时间轴再次弄歪。
-	if cursor == 0 && w.prober != nil {
+	if w.prober != nil {
 		if tl, perr := w.prober.ProbeMediaTimeline(ctx, mp4Path); perr == nil {
 			opts := tl.AlignOptions()
 			align.LeadPadMs = opts.LeadPadMs
@@ -104,12 +121,12 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 
 	chunkEv := AlignDiagEvent{
-		Event:        "asr_chunk_start",
+		Event:        "asr_full_start",
 		LocalPath:    mp4Path,
 		ASRSource:    asrSource,
-		ASRCursorMS:  cursor,
-		ReadyMS:      readyMS,
-		ChunkMS:      thisChunkMS,
+		ASRCursorMS:  material.ASRCursorMS,
+		ReadyMS:      targetReadyMS,
+		ChunkMS:      targetReadyMS,
 		LeadPadMS:    align.LeadPadMs,
 		TrimStartSec: align.TrimStartSec,
 	}
@@ -118,18 +135,18 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	w.emitAlignDiag(material, chunkEv)
 
-	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_master_%d.mp3", cursor))
+	tmpMP3 := filepath.Join(w.segmentDir(material), fmt.Sprintf("asr_master_full_%d.mp3", targetReadyMS))
 	logStep("mp3_start",
 		zap.String("mp4", mp4Path),
 		zap.String("asr_source", asrSource),
-		zap.Float64("start_sec", startSec),
+		zap.Float64("start_sec", 0),
 		zap.Float64("dur_sec", durSec),
 		zap.Float64("target_dur_sec", align.TargetDurSec),
 		zap.Int64("lead_pad_ms", align.LeadPadMs),
 	)
 	mp3Start := time.Now()
-	if err := w.ffmpeg.ConvertRangeToASRMP3Aligned(ctx, mp4Path, tmpMP3, startSec, durSec, align); err != nil {
-		return fmt.Errorf("从主 MP4 抽等长 ASR MP3 失败: %w", err)
+	if err := w.ffmpeg.ConvertRangeToASRMP3Aligned(ctx, mp4Path, tmpMP3, 0, durSec, align); err != nil {
+		return fmt.Errorf("从主 MP4 抽全量 ASR MP3 失败: %w", err)
 	}
 	defer os.Remove(tmpMP3)
 	logStep("mp3_ok", zap.Duration("elapsed", time.Since(mp3Start)), zap.Float64("target_dur_sec", align.TargetDurSec))
@@ -138,7 +155,7 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	logStep("upload_start")
 	uploadStart := time.Now()
-	objectKey := fmt.Sprintf("%s/live-asr-%d-master-%d.mp3", storage.SubDirTemp, material.ID, cursor)
+	objectKey := fmt.Sprintf("%s/live-asr-%d-master-full-%d.mp3", storage.SubDirTemp, material.ID, targetReadyMS)
 	audioURL, err := w.storage.UploadFile(ctx, tmpMP3, objectKey)
 	if err != nil {
 		return err
@@ -148,28 +165,46 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	transcribeStart := time.Now()
 	raw, err := w.asrService.Transcribe(ctx, audioURL)
 	if err != nil {
-		advanceReason := "识别失败跳过"
 		if asr.IsSilenceAudioError(err) {
-			advanceReason = "静音跳过"
+			w.logger.Warn("主 MP4 全量 ASR 静音，覆盖为空结果并推进游标",
+				zap.Uint("material_id", material.ID),
+				zap.Int64("target_ready_ms", targetReadyMS),
+				zap.Duration("elapsed", time.Since(transcribeStart)),
+				zap.Error(err),
+			)
+			w.emitAlignDiag(material, AlignDiagEvent{
+				Event:       "asr_full_skipped",
+				LocalPath:   mp4Path,
+				ASRSource:   asrSource,
+				ASRCursorMS: material.ASRCursorMS,
+				ReadyMS:     targetReadyMS,
+				ChunkMS:     targetReadyMS,
+				LeadPadMS:   align.LeadPadMs,
+				Error:       err.Error(),
+			})
+			empty := `{"audio_info":{"duration":0},"result":{"utterances":[]}}`
+			return w.commitFullMasterASR(ctx, material, epoch, targetReadyMS, empty, 0, 1.0, asrStart)
 		}
-		w.logger.Warn("主 MP4 ASR "+advanceReason+"，推进游标",
+		failKind := asr.ClassifyTranscribeFailure(err)
+		w.logger.Warn("主 MP4 全量 ASR 识别失败，不推进游标、不覆盖 live_asr",
 			zap.Uint("material_id", material.ID),
-			zap.Int64("cursor_ms", cursor),
-			zap.Int64("chunk_ms", thisChunkMS),
+			zap.Int64("target_ready_ms", targetReadyMS),
+			zap.Duration("target_ready", time.Duration(targetReadyMS)*time.Millisecond),
 			zap.Duration("elapsed", time.Since(transcribeStart)),
+			zap.String("failure_kind", string(failKind)),
 			zap.Error(err),
 		)
 		w.emitAlignDiag(material, AlignDiagEvent{
-			Event:       "asr_chunk_skipped",
+			Event:       "asr_full_failed",
 			LocalPath:   mp4Path,
 			ASRSource:   asrSource,
-			ASRCursorMS: cursor,
-			ReadyMS:     readyMS,
-			ChunkMS:     thisChunkMS,
+			ASRCursorMS: material.ASRCursorMS,
+			ReadyMS:     targetReadyMS,
+			ChunkMS:     targetReadyMS,
 			LeadPadMS:   align.LeadPadMs,
-			Error:       err.Error(),
+			Error:       fmt.Sprintf("%s: %v", failKind, err),
 		})
-		return w.commitMasterASRProgress(ctx, material, epoch, readyMS, thisChunkMS, cursor, material.LiveASR, 0, 1.0, asrStart)
+		return fmt.Errorf("主 MP4 全量 ASR 失败(%s): %w", failKind, err)
 	}
 	logStep("transcribe_ok", zap.Duration("elapsed", time.Since(transcribeStart)))
 
@@ -177,10 +212,10 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	minUttStart, maxUttEnd := utteranceBoundsMS(raw)
 	scaledRaw := raw
 	scaleFactor := 1.0
-	if asr.ShouldScaleUtteranceTimestamps(asrDur, thisChunkMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
-		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, thisChunkMS)
+	if asr.ShouldScaleUtteranceTimestamps(asrDur, targetReadyMS, maxUttEnd, asr.DefaultScaleSkewThresholdMS) {
+		scaled, scale, scaleErr := asr.ScaleTimestampsToDuration(raw, targetReadyMS)
 		if scaleErr != nil {
-			w.logger.Warn("主 MP4 ASR chunk 兜底缩放失败，沿用厂商时间戳",
+			w.logger.Warn("主 MP4 全量 ASR 兜底缩放失败，沿用厂商时间戳",
 				zap.Uint("material_id", material.ID),
 				zap.Error(scaleErr),
 			)
@@ -188,16 +223,16 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 			scaledRaw = scaled
 			scaleFactor = scale
 		}
-	} else if rewritten, err := asr.SetAudioInfoDuration(raw, thisChunkMS); err == nil {
+	} else if rewritten, err := asr.SetAudioInfoDuration(raw, targetReadyMS); err == nil {
 		scaledRaw = rewritten
 	}
 	w.emitAlignDiag(material, AlignDiagEvent{
-		Event:         "asr_chunk_done",
+		Event:         "asr_full_done",
 		LocalPath:     mp4Path,
 		ASRSource:     asrSource,
-		ASRCursorMS:   cursor,
-		ReadyMS:       readyMS,
-		ChunkMS:       thisChunkMS,
+		ASRCursorMS:   material.ASRCursorMS,
+		ReadyMS:       targetReadyMS,
+		ChunkMS:       targetReadyMS,
 		LeadPadMS:     align.LeadPadMs,
 		TrimStartSec:  align.TrimStartSec,
 		VendorDurMS:   asrDur,
@@ -205,13 +240,89 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 		MaxUttEndMS:   maxUttEnd,
 		ScaleFactor:   scaleFactor,
 	})
-	merged, _, err := asr.MergeWindowASR(material.LiveASR, scaledRaw, offsetMS, cursor)
-	if err != nil {
-		return err
-	}
-	return w.commitMasterASRProgress(ctx, material, epoch, readyMS, thisChunkMS, cursor, merged, asrDur, scaleFactor, asrStart)
+	return w.commitFullMasterASR(ctx, material, epoch, targetReadyMS, string(scaledRaw), asrDur, scaleFactor, asrStart)
 }
 
+// runWindowASR 兼容旧名：跟播路径已改为全量 master ASR。
+func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.LiveMaterial) error {
+	return w.runFullMasterASR(ctx, material)
+}
+
+// commitFullMasterASR 覆盖写入 live_asr / asr_paragraphs，游标推进到本次识别的 targetReadyMS。
+// 若提交前 master 已更长，保持 asr_due=true 以便再跑全量。
+func (w *liveIngestWorker) commitFullMasterASR(
+	ctx context.Context,
+	material *model.LiveMaterial,
+	epoch int64,
+	targetReadyMS int64,
+	liveASR string,
+	asrVendorDurMS int64,
+	scaleFactor float64,
+	asrStart time.Time,
+) error {
+	currentReadyMS := targetReadyMS
+	if latest, err := w.repo.GetByID(ctx, material.ID); err == nil && latest != nil {
+		material.MediaWindows = latest.MediaWindows
+		material.Duration = latest.Duration
+		material.LiveURL = latest.LiveURL
+		currentReadyMS = latest.MasterReadyMS()
+		if currentReadyMS <= 0 {
+			currentReadyMS = latest.Duration
+		}
+		if currentReadyMS < targetReadyMS {
+			currentReadyMS = targetReadyMS
+		}
+	}
+
+	stillPending := currentReadyMS > targetReadyMS
+	progress := windowASRProgress(currentReadyMS, targetReadyMS)
+	if !stillPending {
+		progress = windowASRProgress(targetReadyMS, targetReadyMS)
+	}
+
+	w.logger.Info("主 MP4 全量 ASR 步骤",
+		zap.Uint("material_id", material.ID),
+		zap.String("step", "db_start"),
+		zap.Int64("target_ready_ms", targetReadyMS),
+		zap.Int64("current_ready_ms", currentReadyMS),
+		zap.Bool("still_due", stillPending),
+	)
+
+	paras := w.rebuildLiveASRParagraphs(liveASR, targetReadyMS)
+	// duration 写库用当前 master 就绪时长，避免把已变长的 duration 写短。
+	durationMS := currentReadyMS
+	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, targetReadyMS, durationMS, progress, stillPending, paras); err != nil {
+		return err
+	}
+	material.ASRCursorMS = targetReadyMS
+	material.LiveASR = liveASR
+	material.ASRProgress = progress
+	material.ASRDue = stillPending
+	material.Duration = durationMS
+	material.ASRParagraphs = paras
+	w.logger.Info("主 MP4 全量 ASR 完成",
+		zap.Uint("material_id", material.ID),
+		zap.Duration("elapsed", time.Since(asrStart)),
+		zap.Int64("target_ready_ms", targetReadyMS),
+		zap.Int64("current_ready_ms", currentReadyMS),
+		zap.Int64("asr_cursor_ms", targetReadyMS),
+		zap.Int64("asr_vendor_duration_ms", asrVendorDurMS),
+		zap.Float64("asr_time_scale", scaleFactor),
+		zap.Int16("asr_progress", progress),
+		zap.Bool("asr_due", stillPending),
+		zap.Int("asr_paragraphs", len(paras)),
+	)
+	if stillPending {
+		w.logger.Info("全量 ASR 跑输：master 已变长，保持 asr_due 等待下一轮全量",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("target_ready_ms", targetReadyMS),
+			zap.Int64("current_ready_ms", currentReadyMS),
+		)
+	}
+	return nil
+}
+
+// commitMasterASRProgress 保留给单测：模拟「覆盖写 + 游标推进」；跟播生产路径走 commitFullMasterASR。
 func (w *liveIngestWorker) commitMasterASRProgress(
 	ctx context.Context,
 	material *model.LiveMaterial,
@@ -222,62 +333,33 @@ func (w *liveIngestWorker) commitMasterASRProgress(
 	scaleFactor float64,
 	asrStart time.Time,
 ) error {
-	newCursor := cursor + thisChunkMS
-	if newCursor > readyMS {
-		newCursor = readyMS
-	}
-	if newCursor < cursor {
-		newCursor = cursor
-	}
-	stillPending := newCursor < readyMS
-	progress := windowASRProgress(readyMS, newCursor)
-	w.logger.Info("主 MP4 ASR 步骤",
-		zap.Uint("material_id", material.ID),
-		zap.String("step", "db_start"),
-		zap.Int64("asr_cursor_ms", newCursor),
-		zap.Bool("still_due", stillPending),
-	)
-	paras := w.rebuildLiveASRParagraphs(liveASR, newCursor)
-	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, newCursor, readyMS, progress, stillPending, paras); err != nil {
-		return err
-	}
-	material.ASRCursorMS = newCursor
-	material.LiveASR = liveASR
-	material.ASRProgress = progress
-	material.ASRDue = stillPending
-	material.Duration = readyMS
-	material.ASRParagraphs = paras
-	w.logger.Info("主 MP4 ASR chunk 完成",
-		zap.Uint("material_id", material.ID),
-		zap.Duration("elapsed", time.Since(asrStart)),
-		zap.Int64("offset_ms", cursor),
-		zap.Int64("chunk_ms", thisChunkMS),
-		zap.Int64("asr_cursor_ms", newCursor),
-		zap.Int64("ready_ms", readyMS),
-		zap.Int64("asr_vendor_duration_ms", asrVendorDurMS),
-		zap.Float64("asr_time_scale", scaleFactor),
-		zap.Int16("asr_progress", progress),
-		zap.Int("asr_paragraphs", len(paras)),
-	)
-	return nil
+	_ = thisChunkMS
+	_ = cursor
+	return w.commitFullMasterASR(ctx, material, epoch, readyMS, liveASR, asrVendorDurMS, scaleFactor, asrStart)
 }
 
 // rebuildLiveASRParagraphs 跟播中对当前 live_asr 全量重算 asr_paragraphs。
-// 失败隔离：仅打 Warn，返回空切片，不阻断 cursor / live_asr 写库。
+// 硬校验失败时降级保留 MinGap+finalize 结果，禁止写空 [] 导致 UI 回退碎句。
 func (w *liveIngestWorker) rebuildLiveASRParagraphs(liveASR string, durationMs int64) []model.ASRParagraph {
 	utterances := asr.FormatUtterancesForAPI(liveASR)
 	if len(utterances) == 0 {
 		return []model.ASRParagraph{}
 	}
 	paras, _, err := BuildASRParagraphsAlgo(utterances, durationMs, asrParagraphMaxRunes, w.logger)
-	if err != nil {
-		w.logger.Warn("跟播重算 asr_paragraphs 失败，本次写空并继续推进 ASR",
-			zap.Error(err),
-			zap.Int("utterance_count", len(utterances)),
-			zap.Int64("duration_ms", durationMs),
-		)
-		return []model.ASRParagraph{}
+	if err == nil {
+		if paras == nil {
+			return []model.ASRParagraph{}
+		}
+		return paras
 	}
+	w.logger.Warn("跟播重算 asr_paragraphs 校验失败，降级保留未硬校验结果",
+		zap.Error(err),
+		zap.Int("utterance_count", len(utterances)),
+		zap.Int64("duration_ms", durationMs),
+	)
+	paras, _ = BuildASRParagraphsByMinGap(utterances, asrParagraphMaxRunes, w.logger)
+	paras, _ = enforceASRParagraphMaxRunes(paras)
+	finalizeASRParagraphTimeline(paras, durationMs)
 	if paras == nil {
 		return []model.ASRParagraph{}
 	}

@@ -165,6 +165,30 @@ func TestIsSilenceAudioError(t *testing.T) {
 	}
 }
 
+func TestClassifyTranscribeFailure(t *testing.T) {
+	cases := []struct {
+		err  error
+		want TranscribeFailureKind
+	}{
+		{fmt.Errorf("ASR 查询失败: 20000003 静音"), TranscribeFailureSilence},
+		{fmt.Errorf("ASR 任务轮询超时，已尝试 360 次"), TranscribeFailureTimeout},
+		{fmt.Errorf("ASR 提交失败: 45000132 音频超过厂商大小限制（<512MB）"), TranscribeFailureTooLarge},
+		{fmt.Errorf("ASR 提交失败: 45000131 半小时累计提交时长超限"), TranscribeFailureQuota},
+		{fmt.Errorf("ASR 查询失败: 55000031 厂商服务繁忙"), TranscribeFailureBusy},
+		{fmt.Errorf("ASR 提交失败: 45000001 bad"), TranscribeFailureReject},
+		{context.Canceled, TranscribeFailureCanceled},
+		{fmt.Errorf("network boom"), TranscribeFailureOther},
+	}
+	for _, tc := range cases {
+		if got := ClassifyTranscribeFailure(tc.err); got != tc.want {
+			t.Fatalf("ClassifyTranscribeFailure(%v)=%q want %q", tc.err, got, tc.want)
+		}
+	}
+	if VendorMaxAudioDuration != 5*time.Hour || VendorMaxAudioBytes != 512*1024*1024 {
+		t.Fatalf("vendor limits changed unexpectedly: %v / %d", VendorMaxAudioDuration, VendorMaxAudioBytes)
+	}
+}
+
 // TestClient_Transcribe_QueryTimeoutThenSuccess 单次 query 读超时后应继续轮询并最终成功。
 func TestClient_Transcribe_QueryTimeoutThenSuccess(t *testing.T) {
 	var queryCount atomic.Int32

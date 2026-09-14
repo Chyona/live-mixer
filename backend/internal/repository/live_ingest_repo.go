@@ -34,6 +34,7 @@ type LiveIngestRepository interface {
 	CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error
 	// CommitMediaWindow 兼容旧名，等价 CommitMasterMP4（playlistURL 忽略）。
 	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error
+	// AppendWindowASR 覆盖写入跟播 ASR（live_asr / paragraphs / cursor）；stillDue 表示 master 又变长需再跑全量。
 	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool, paragraphs []model.ASRParagraph) error
 	ClearASRDue(ctx context.Context, id uint, asrEpoch int64) error
 	ReleaseASRLease(ctx context.Context, id uint, asrEpoch int64) error
@@ -315,6 +316,8 @@ func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint,
 	return r.CommitMasterMP4(ctx, id, epoch, mediaWindowsJSON, nextWindowSeg, durationMS, "", asrDue)
 }
 
+// AppendWindowASR 覆盖写入跟播 ASR 结果（live_asr / asr_paragraphs / cursor）。
+// 全量 master ASR 路径下 live_asr 为整份覆盖，而非分 chunk merge 追加。
 func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool, paragraphs []model.ASRParagraph) error {
 	now := time.Now()
 	if progress < 0 {

@@ -329,7 +329,7 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 	}()
 
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
-	// 单次租约内按主 MP4 已就绪时长追平 ASR（累计覆盖 10/20/30…）。
+	// 单次租约内对当前 master 全量 ASR；master 若再变长则同租约内继续全量直到追上。
 	w.catchUpWindowASR(ctx, material)
 	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
 		if !latest.ParsedMediaWindows().ASRPending(latest.ASRCursorMS) {
@@ -749,11 +749,12 @@ func windowTimelineMS(workDir string, files []string, concatProbeMS, nominalSegM
 	return concatProbeMS
 }
 
+// catchUpWindowASR 在租约内对当前 master 做全量 ASR；若跑输（master 又变长）则再跑，直到 cursor 追上 ready。
 func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model.LiveMaterial) {
-	const maxRounds = 128
+	const maxRounds = 32 // 约等于媒体窗数量上限；每轮一次全量 Transcribe
 	for i := 0; i < maxRounds; i++ {
 		if err := ctx.Err(); err != nil {
-			w.logger.Warn("窗口 ASR 追平因上下文取消退出",
+			w.logger.Warn("全量 ASR 追平因上下文取消退出",
 				zap.Uint("material_id", material.ID),
 				zap.Int("round", i),
 				zap.Int64("asr_cursor_ms", material.ASRCursorMS),
@@ -762,23 +763,34 @@ func (w *liveIngestWorker) catchUpWindowASR(ctx context.Context, material *model
 			)
 			return
 		}
-		before := material.ASRCursorMS
-		if err := w.runWindowASR(ctx, material); err != nil {
-			w.logger.Warn("窗口 ASR 追平中断",
+		beforeCursor := material.ASRCursorMS
+		beforeReady := material.MasterReadyMS()
+		if err := w.runFullMasterASR(ctx, material); err != nil {
+			w.logger.Warn("全量 ASR 追平中断",
 				zap.Uint("material_id", material.ID),
 				zap.Int("round", i),
 				zap.Error(err),
 			)
 			return
 		}
-		if material.ASRCursorMS <= before {
+		if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
+			material.ASRCursorMS = latest.ASRCursorMS
+			material.LiveASR = latest.LiveASR
+			material.Duration = latest.Duration
+			material.MediaWindows = latest.MediaWindows
+			material.ASRDue = latest.ASRDue
+			material.ASRParagraphs = latest.ASRParagraphs
+			material.LiveURL = latest.LiveURL
+		}
+		if !material.ParsedMediaWindows().ASRPending(material.ASRCursorMS) && !material.ASRDue {
 			return
 		}
-		if !material.ParsedMediaWindows().ASRPending(material.ASRCursorMS) {
+		// 无进展且未标记再跑：结束，避免空转
+		if material.ASRCursorMS <= beforeCursor && material.MasterReadyMS() <= beforeReady && !material.ASRDue {
 			return
 		}
 	}
-	w.logger.Warn("窗口 ASR 追平达到轮次上限",
+	w.logger.Warn("全量 ASR 追平达到轮次上限",
 		zap.Uint("material_id", material.ID),
 		zap.Int64("asr_cursor_ms", material.ASRCursorMS),
 		zap.Int64("duration_ms", material.Duration),

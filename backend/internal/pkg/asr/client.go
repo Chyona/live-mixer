@@ -30,8 +30,21 @@ const (
 	statusProcessing2 = "20000002"
 	// statusSilenceAudio 豆包检测到无有效人声（常见于抽轨/对齐产出静音 MP3）。
 	statusSilenceAudio = "20000003"
+	// 厂商拒识/限流（文档：录音文件识别标准版 / seedasr）。
+	statusInvalidParam   = "45000001"
+	statusEmptyAudio     = "45000002"
+	statusSubmitQuota    = "45000131" // 半小时累计提交时长超限
+	statusAudioTooLarge  = "45000132" // 单文件 >512MB
+	statusBadAudioFormat = "45000151"
+	statusServerBusy     = "55000031"
+
 	defaultPollInterval = 10 * time.Second
 	defaultMaxPolls     = 360
+
+	// VendorMaxAudioDuration 豆包录音文件识别单次音频时长上限（文档：≤5 小时）。
+	VendorMaxAudioDuration = 5 * time.Hour
+	// VendorMaxAudioBytes 豆包录音文件识别单次文件大小上限（文档：<512MB）。
+	VendorMaxAudioBytes = 512 * 1024 * 1024
 )
 
 // Config 豆包 ASR 客户端配置。
@@ -260,15 +273,46 @@ func (c *Client) queryOnce(ctx context.Context, taskID string) (json.RawMessage,
 	}
 }
 
-// formatASRStatusError 将豆包状态码转为可读错误；静音音频给出可操作的中文说明。
+// formatASRStatusError 将豆包状态码转为可读错误；静音/拒识码给出可操作的中文说明。
 func formatASRStatusError(prefix, code, message string) string {
 	msg := strings.TrimSpace(message)
-	if code == statusSilenceAudio {
+	switch code {
+	case statusSilenceAudio:
 		detail := "源音频被识别为静音（无有效人声）"
 		if msg != "" {
 			detail = detail + ": " + msg
 		}
 		return fmt.Sprintf("%s: %s %s；请检查原片是否有人声，或点击重新解析", prefix, code, detail)
+	case statusAudioTooLarge:
+		detail := "音频超过厂商大小限制（<512MB）"
+		if msg != "" {
+			detail = detail + ": " + msg
+		}
+		return fmt.Sprintf("%s: %s %s", prefix, code, detail)
+	case statusSubmitQuota:
+		detail := "半小时累计提交时长超限（默认约 500 小时），需降速提交"
+		if msg != "" {
+			detail = detail + ": " + msg
+		}
+		return fmt.Sprintf("%s: %s %s", prefix, code, detail)
+	case statusEmptyAudio:
+		detail := "空音频"
+		if msg != "" {
+			detail = detail + ": " + msg
+		}
+		return fmt.Sprintf("%s: %s %s", prefix, code, detail)
+	case statusBadAudioFormat:
+		detail := "音频格式不正确"
+		if msg != "" {
+			detail = detail + ": " + msg
+		}
+		return fmt.Sprintf("%s: %s %s", prefix, code, detail)
+	case statusServerBusy:
+		detail := "厂商服务繁忙"
+		if msg != "" {
+			detail = detail + ": " + msg
+		}
+		return fmt.Sprintf("%s: %s %s", prefix, code, detail)
 	}
 	if msg == "" {
 		return fmt.Sprintf("%s: %s", prefix, code)
@@ -276,8 +320,53 @@ func formatASRStatusError(prefix, code, message string) string {
 	return fmt.Sprintf("%s: %s %s", prefix, code, msg)
 }
 
+// TranscribeFailureKind 跟播全量 ASR 对厂商错误的分类，便于日志与监控。
+type TranscribeFailureKind string
+
+const (
+	TranscribeFailureSilence   TranscribeFailureKind = "silence"
+	TranscribeFailureTimeout   TranscribeFailureKind = "poll_timeout"
+	TranscribeFailureReject    TranscribeFailureKind = "vendor_reject"
+	TranscribeFailureQuota     TranscribeFailureKind = "submit_quota"
+	TranscribeFailureTooLarge  TranscribeFailureKind = "audio_too_large"
+	TranscribeFailureBusy      TranscribeFailureKind = "server_busy"
+	TranscribeFailureCanceled  TranscribeFailureKind = "canceled"
+	TranscribeFailureOther     TranscribeFailureKind = "other"
+)
+
+// ClassifyTranscribeFailure 根据错误文案归类超时/拒识/静音等（不解析 HTTP，仅匹配已格式化错误）。
+func ClassifyTranscribeFailure(err error) TranscribeFailureKind {
+	if err == nil {
+		return TranscribeFailureOther
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return TranscribeFailureCanceled
+	}
+	msg := err.Error()
+	switch {
+	case IsSilenceAudioError(err):
+		return TranscribeFailureSilence
+	case strings.Contains(msg, "轮询超时"):
+		return TranscribeFailureTimeout
+	case strings.Contains(msg, statusAudioTooLarge) || strings.Contains(msg, "512MB"):
+		return TranscribeFailureTooLarge
+	case strings.Contains(msg, statusSubmitQuota) || strings.Contains(msg, "累计提交"):
+		return TranscribeFailureQuota
+	case strings.Contains(msg, statusServerBusy) || strings.Contains(msg, "服务繁忙"):
+		return TranscribeFailureBusy
+	case strings.Contains(msg, statusInvalidParam) ||
+		strings.Contains(msg, statusEmptyAudio) ||
+		strings.Contains(msg, statusBadAudioFormat) ||
+		strings.Contains(msg, "ASR 提交失败") ||
+		strings.Contains(msg, "ASR 查询失败"):
+		return TranscribeFailureReject
+	default:
+		return TranscribeFailureOther
+	}
+}
+
 // IsSilenceAudioError 是否为豆包「无有效人声」错误（20000003）。
-// 跟播窗口 ASR 遇此错误应推进游标，避免同一静音 chunk 被无限重试。
+// 跟播全量 ASR 遇此错误覆盖为空结果并推进游标，避免同一 master 被无限重试。
 func IsSilenceAudioError(err error) bool {
 	if err == nil {
 		return false
