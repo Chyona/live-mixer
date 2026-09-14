@@ -165,7 +165,7 @@ type ASRConfig struct {
 }
 
 // LLMConfig OpenAI 兼容协议大模型配置。
-// Model 用于 AI 切片等；FlashModel 用于添加视频后的 ASR 后处理（asr_summaries / asr_paragraphs）。
+// Model 用于 AI 切片等；FlashModel 用于添加视频后的 ASR 后处理（仅 asr_summaries；asr_paragraphs 为本地算法）。
 type LLMConfig struct {
 	APIKey     string `mapstructure:"api_key"`
 	BaseURL    string `mapstructure:"base_url"`

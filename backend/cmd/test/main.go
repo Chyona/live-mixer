@@ -2,7 +2,7 @@
 //
 // 模式：
 //
-//	paragraphs   — 从 live_asr JSON 只跑 asr_paragraphs
+//	paragraphs   — 从 live_asr JSON 用 MinGap 算法生成 asr_paragraphs（无 LLM）
 //	live-window  — 拉取跟播 m3u8 分片，按当前窗口 ASR 逻辑转写并输出 JSON
 //	add-live     — 模拟 UI 添加「正在直播」源视频，轮询直至 ASR 推进
 //	one-click    — 对源视频发起一键成片（POST /v1/tasks/ai-slice-draft），轮询至完成
@@ -92,7 +92,6 @@ func main() {
 			out = "asr_paragraphs.json"
 		}
 		runParagraphsMode(paragraphsArgs{
-			ConfigPath: *configPath,
 			ASRPath:    *asrPath,
 			OutPath:    out,
 			ReportPath: *reportPath,

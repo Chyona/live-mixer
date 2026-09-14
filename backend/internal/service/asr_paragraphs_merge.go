@@ -160,3 +160,27 @@ func mergeSegPair(a, b mergeSeg) mergeSeg {
 		words:   words,
 	}
 }
+
+// BuildASRParagraphsAlgo 生产路径唯一段落构建器：MinGap 合并 → 超长句号拆分 → 时间线对齐 → 校验。
+// maxLen≤0 时使用 asrParagraphMaxRunes（200）。空输入返回空切片；同说话人重叠仅打 Warn，不阻断。
+func BuildASRParagraphsAlgo(utterances []asr.Utterance, durationMs int64, maxLen int, logger *zap.Logger) ([]model.ASRParagraph, []SameSpeakerOverlapWarning, error) {
+	if len(utterances) == 0 {
+		return []model.ASRParagraph{}, nil, nil
+	}
+	if maxLen <= 0 {
+		maxLen = asrParagraphMaxRunes
+	}
+	paras, warnings := BuildASRParagraphsByMinGap(utterances, maxLen, logger)
+	paras, _ = enforceASRParagraphMaxRunes(paras)
+	finalizeASRParagraphTimeline(paras, durationMs)
+	if err := validateASRParagraphWordIdentity(utterances, paras); err != nil {
+		return nil, warnings, err
+	}
+	if err := validateASRParagraphContentAlign(paras); err != nil {
+		return nil, warnings, err
+	}
+	if err := validateASRParagraphTimeline(paras); err != nil {
+		return nil, warnings, err
+	}
+	return paras, warnings, nil
+}

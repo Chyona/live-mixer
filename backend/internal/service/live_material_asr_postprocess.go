@@ -35,7 +35,6 @@ const (
 	asrSummaryMaxDurationMs    = int64(60 * 60 * 1000) // 60 分钟
 	asrSummaryMergeGapMs       = int64(2 * 60 * 1000)  // 同主题合并允许的最大时间间隙
 	asrSummaryTitleMaxRunes    = 6
-	asrParagraphWindowMs       = int64(25 * 60 * 1000) // 段落窗口约 25 分钟
 	asrSummaryWindowMs         = int64(60 * 60 * 1000) // 总结窗口约 60 分钟
 	asrLLMTransportMaxAttempts = 3                     // 仅网络/接口异常重试（含首次）
 	asrLLMTransportBackoffBase = 100 * time.Millisecond
@@ -52,16 +51,7 @@ const asrSummariesSystemPrompt = `你是直播内容主题提炼助手。根据�
 6. start_index/end_index 必须落在输入句段编号范围内，且 start_index<=end_index。
 7. 可以输出 0 段（items 为空数组），表示本窗无合适主题。`
 
-const asrParagraphsSystemPrompt = `你是直播 ASR 段落划分助手。根据带编号的 ASR 句段列表，将全文划分为连续段落。
-要求：
-1. 只输出一个 JSON 对象，格式严格为 {"items":[...]}，不要输出其它文字或 markdown。
-2. items 每项格式：{"start_index":0,"end_index":3}，为句段编号闭区间（含两端）。
-3. 所有编号必须恰好覆盖输入中的全部句段一次：无遗漏、无重叠。
-4. 每个区间内只能有一个说话人（speaker 相同）。
-5. 每个区间拼接后的正文字数必须小于 200 字。
-6. 按时间顺序输出区间。`
-
-// asrParagraphRange LLM 返回的段落边界（utterance 闭区间下标）。
+// asrParagraphRange 段落边界（utterance 闭区间下标）；仅 stitch / 单测使用。
 type asrParagraphRange struct {
 	StartIndex int `json:"start_index"`
 	EndIndex   int `json:"end_index"`
@@ -87,7 +77,6 @@ type asrLLMWindowDebug struct {
 	RepairPrompt string                    `json:"repair_prompt,omitempty"`
 	RepairRaw    string                    `json:"repair_raw_response,omitempty"`
 	Segments     []model.ASRSummarySegment `json:"segments,omitempty"`
-	Ranges       []asrParagraphRange       `json:"ranges,omitempty"`
 }
 
 // RunASRPostprocess 根据完整 live_asr JSON 生成 asr_summaries 与 asr_paragraphs（供 CLI / 集成调用）。
@@ -100,13 +89,11 @@ func RunASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	return out.Summaries, out.Paragraphs, nil
 }
 
-// RunASRParagraphs 仅根据 live_asr 生成 asr_paragraphs（跳过 asr_summaries 与上游 ASR 识别）。
-// logger 可为 nil。
-func RunASRParagraphs(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64, logger *zap.Logger) ([]model.ASRParagraph, error) {
+// RunASRParagraphs 仅根据 live_asr 用 MinGap 算法生成 asr_paragraphs（跳过 asr_summaries 与上游 ASR 识别）。
+// logger 可为 nil。ctx 保留以兼容调用方，当前未用于取消。
+func RunASRParagraphs(ctx context.Context, liveASR string, durationMs int64, logger *zap.Logger) ([]model.ASRParagraph, error) {
+	_ = ctx
 	logger = asrPostLogger(logger)
-	if llmClient == nil {
-		return nil, fmt.Errorf("LLM 客户端未配置")
-	}
 	utterances := asr.FormatUtterancesForAPI(liveASR)
 	if len(utterances) == 0 {
 		return nil, fmt.Errorf("ASR 分句为空，无法生成段落")
@@ -115,24 +102,23 @@ func RunASRParagraphs(ctx context.Context, llmClient LLMChatClient, liveASR stri
 		durationMs = utterances[len(utterances)-1].EndTime
 	}
 	started := time.Now()
-	logger.Info("开始 ASR paragraphs 生成",
+	logger.Info("开始 ASR paragraphs 算法生成",
 		zap.Int("utterance_count", len(utterances)),
 		zap.Int64("duration_ms", durationMs),
-		zap.Int("paragraph_windows", len(splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrLLMWindowMaxRunes))),
 	)
-	paragraphs, err := generateASRParagraphs(ctx, llmClient, utterances, durationMs, nil, logger)
+	paragraphs, _, err := BuildASRParagraphsAlgo(utterances, durationMs, asrParagraphMaxRunes, logger)
 	if err != nil {
 		return nil, fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
 	}
-	logger.Info("ASR paragraphs 生成完成",
+	logger.Info("ASR paragraphs 算法生成完成",
 		zap.Int("paragraph_count", len(paragraphs)),
 		zap.Duration("elapsed", time.Since(started)),
 	)
 	return paragraphs, nil
 }
 
-// runASRPostprocess 调用 LLM 生成 summaries 与 paragraphs；任一步失败返回 error。
-// summaries 与 paragraphs 两路并行；rec 非空时将 LLM 中间过程写入 003/004 调试文件。
+// runASRPostprocess：asr_paragraphs 用 MinGap 算法；asr_summaries 仍走 Flash LLM。任一步失败返回 error。
+// rec 非空时将 summaries LLM 中间过程写入调试文件。
 func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR string, durationMs int64, rec *asrDebugRecorder, logger *zap.Logger) (asrPostprocessResult, error) {
 	var out asrPostprocessResult
 	logger = asrPostLogger(logger)
@@ -148,13 +134,11 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	}
 
 	summaryWindows := splitUtterancesByDuration(utterances, asrSummaryWindowMs, asrLLMWindowMaxRunes)
-	paragraphWindows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrLLMWindowMaxRunes)
 	started := time.Now()
-	logger.Info("开始 ASR LLM 后处理生成",
+	logger.Info("开始 ASR 后处理生成",
 		zap.Int("utterance_count", len(utterances)),
 		zap.Int64("duration_ms", durationMs),
 		zap.Int("summary_windows", len(summaryWindows)),
-		zap.Int("paragraph_windows", len(paragraphWindows)),
 	)
 
 	var (
@@ -166,19 +150,19 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		summaries, err = generateASRSummaries(gctx, llmClient, utterances, durationMs, rec, logger)
+		paragraphs, _, err = BuildASRParagraphsAlgo(utterances, durationMs, asrParagraphMaxRunes, logger)
 		if err != nil {
-			sumErr = fmt.Errorf("生成 asr_summaries 失败: %w", err)
-			return sumErr
+			paraErr = fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
+			return paraErr
 		}
 		return nil
 	})
 	g.Go(func() error {
 		var err error
-		paragraphs, err = generateASRParagraphs(gctx, llmClient, utterances, durationMs, rec, logger)
+		summaries, err = generateASRSummaries(gctx, llmClient, utterances, durationMs, rec, logger)
 		if err != nil {
-			paraErr = fmt.Errorf("生成 asr_paragraphs 失败: %w", err)
-			return paraErr
+			sumErr = fmt.Errorf("生成 asr_summaries 失败: %w", err)
+			return sumErr
 		}
 		return nil
 	})
@@ -196,7 +180,7 @@ func runASRPostprocess(ctx context.Context, llmClient LLMChatClient, liveASR str
 	}
 	out.Summaries = summaries
 	out.Paragraphs = paragraphs
-	logger.Info("ASR LLM 后处理生成完成",
+	logger.Info("ASR 后处理生成完成",
 		zap.Int("summary_count", len(summaries)),
 		zap.Int("paragraph_count", len(paragraphs)),
 		zap.Duration("elapsed", time.Since(started)),
@@ -375,156 +359,6 @@ func generateASRSummariesWindow(
 	return segs, dbg, nil
 }
 
-func generateASRParagraphs(ctx context.Context, llmClient LLMChatClient, utterances []asr.Utterance, durationMs int64, rec *asrDebugRecorder, logger *zap.Logger) ([]model.ASRParagraph, error) {
-	logger = asrPostLogger(logger).With(zap.String("phase", "paragraphs"))
-	// Map：按时长 + rune 预算切窗；各窗并行调 LLM（调用失败或结构不可用则窗内本地相邻合并）。
-	windows := splitUtterancesByDuration(utterances, asrParagraphWindowMs, asrLLMWindowMaxRunes)
-	type winOut struct {
-		ranges []asrParagraphRange
-		dbg    asrLLMWindowDebug
-	}
-	outs := make([]winOut, len(windows))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(asrLLMWindowParallelism)
-	for i, win := range windows {
-		i, win := i, win
-		g.Go(func() error {
-			local, dbg, err := generateASRParagraphsWindow(gctx, llmClient, win, logger)
-			outs[i] = winOut{ranges: local, dbg: dbg}
-			return err
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	var ranges []asrParagraphRange
-	debugWindows := make([]asrLLMWindowDebug, 0, len(windows))
-	for i, o := range outs {
-		debugWindows = append(debugWindows, o.dbg)
-		offset := windows[i].Offset
-		for _, r := range o.ranges {
-			ranges = append(ranges, asrParagraphRange{
-				StartIndex: r.StartIndex + offset,
-				EndIndex:   r.EndIndex + offset,
-			})
-		}
-	}
-	if rec != nil && len(debugWindows) > 0 {
-		rec.Write("004_llm_paragraphs.json", map[string]any{
-			"recorded_at": asrDebugRecordedAt(),
-			"windows":     debugWindows,
-		})
-	}
-
-	logger.Info("ASR paragraphs Map 完成",
-		zap.Int("windows", len(windows)),
-		zap.Int("range_count", len(ranges)),
-	)
-
-	// Reduce：局部 index + offset → 全局 ranges → stitch；失败则全文本地重建 → 时间线规范化。
-	paragraphs, err := stitchASRParagraphs(utterances, ranges)
-	if err != nil {
-		logger.Warn("ASR paragraphs 全局拼接失败，已全量本地重建",
-			zap.Error(err),
-			zap.Int("range_count", len(ranges)),
-		)
-		ranges = buildParagraphRangesLocally(utterances)
-		paragraphs, err = stitchASRParagraphs(utterances, ranges)
-		if err != nil {
-			return nil, err
-		}
-	}
-	paragraphs, splitCount := enforceASRParagraphMaxRunes(paragraphs)
-	finalizeASRParagraphTimeline(paragraphs, durationMs)
-	if err := validateASRParagraphWordIdentity(utterances, paragraphs); err != nil {
-		return nil, err
-	}
-	if err := validateASRParagraphContentAlign(paragraphs); err != nil {
-		return nil, err
-	}
-	if err := validateASRParagraphTimeline(paragraphs); err != nil {
-		return nil, err
-	}
-	logger.Info("ASR paragraphs 生成完成",
-		zap.Int("paragraph_count", len(paragraphs)),
-		zap.Int("split_by_max_runes", splitCount),
-	)
-	return paragraphs, nil
-}
-
-func generateASRParagraphsWindow(
-	ctx context.Context,
-	llmClient LLMChatClient,
-	win utteranceWindow,
-	logger *zap.Logger,
-) ([]asrParagraphRange, asrLLMWindowDebug, error) {
-	logger = asrPostLogger(logger)
-	userPrompt := buildASRParagraphsUserPrompt(win.Utterances)
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: asrParagraphsSystemPrompt},
-		{Role: "user", Content: userPrompt},
-	}
-	dbg := asrLLMWindowDebug{Offset: win.Offset, UserPrompt: userPrompt}
-
-	fallbackLocal := func(reason error) ([]asrParagraphRange, asrLLMWindowDebug, error) {
-		logger.Warn("ASR paragraphs 窗不可用，已本地相邻合并重建",
-			zap.Int("window_offset", win.Offset),
-			zap.Error(reason),
-			zap.String("raw_preview", truncateRunes(dbg.RawResponse, 256)),
-		)
-		local := buildParagraphRangesLocally(win.Utterances)
-		dbg.Ranges = local
-		return local, dbg, nil
-	}
-
-	content, err := asrChatStructured(ctx, llmClient, messages, logger)
-	dbg.RawResponse = content
-	if err != nil {
-		// LLM 传输/超时等失败：最差也回退为相邻句段合并，不中断整次 paragraphs。
-		return fallbackLocal(err)
-	}
-
-	// 模型已有输出：不再内容重试；结构不可用时本地按说话人相邻合并重建。
-	local, parseErr := parseASRParagraphRanges(content)
-	var stitchErr error
-	if parseErr == nil {
-		if _, stitchErr = stitchASRParagraphs(win.Utterances, local); stitchErr == nil {
-			dbg.Ranges = local
-			return local, dbg, nil
-		}
-	}
-	fallbackErr := parseErr
-	if fallbackErr == nil {
-		fallbackErr = stitchErr
-	}
-	return fallbackLocal(fallbackErr)
-}
-
-// buildParagraphRangesLocally 按说话人切换，并贪心打包使拼接文本 ≤ asrParagraphMaxRunes。
-// 单句本身超过上限时单独成段，交由后续句号拆分兜底。
-func buildParagraphRangesLocally(utterances []asr.Utterance) []asrParagraphRange {
-	if len(utterances) == 0 {
-		return nil
-	}
-	ranges := make([]asrParagraphRange, 0)
-	start := 0
-	runes := utf8.RuneCountInString(utterances[0].Text)
-	for i := 1; i < len(utterances); i++ {
-		sameSpeaker := strings.TrimSpace(utterances[i].Speaker) == strings.TrimSpace(utterances[start].Speaker)
-		nextRunes := utf8.RuneCountInString(utterances[i].Text)
-		if !sameSpeaker || runes+nextRunes > asrParagraphMaxRunes {
-			ranges = append(ranges, asrParagraphRange{StartIndex: start, EndIndex: i - 1})
-			start = i
-			runes = nextRunes
-			continue
-		}
-		runes += nextRunes
-	}
-	ranges = append(ranges, asrParagraphRange{StartIndex: start, EndIndex: len(utterances) - 1})
-	return ranges
-}
-
 type utteranceWindow struct {
 	Offset     int
 	Utterances []asr.Utterance
@@ -603,25 +437,6 @@ func buildASRSummariesRepairPrompt(prevErr error, prevContent string) string {
 	return b.String()
 }
 
-func buildASRParagraphsUserPrompt(utterances []asr.Utterance) string {
-	var b strings.Builder
-	b.WriteString("ASR 句段列表（本窗局部编号从 0 开始）：\n")
-	b.WriteString(formatASRTranscriptLines(utterances, 0))
-	b.WriteString("\n请输出覆盖本窗全部句段的 JSON 对象 {\"items\":[...]}。")
-	return b.String()
-}
-
-func buildASRParagraphsRepairPrompt(prevErr error, prevContent string, utteranceCount int) string {
-	var b strings.Builder
-	b.WriteString("上一次输出未通过校验：")
-	b.WriteString(prevErr.Error())
-	fmt.Fprintf(&b, "\n本窗共有 %d 个句段，局部编号 0~%d，必须恰好覆盖一次。", utteranceCount, utteranceCount-1)
-	b.WriteString("\n请只输出修正后的完整 JSON 对象 {\"items\":[...]}。")
-	b.WriteString("\n上次输出摘要：\n")
-	b.WriteString(truncateRunes(prevContent, 800))
-	return b.String()
-}
-
 func parseAndResolveASRSummaries(content string, win utteranceWindow, durationMs int64) ([]model.ASRSummarySegment, error) {
 	items, err := parseASRSummaryItems(content)
 	if err != nil {
@@ -679,25 +494,6 @@ func resolveASRSummaries(items []asrSummaryLLMItem, win utteranceWindow, duratio
 	return segs, nil
 }
 
-func parseASRParagraphRanges(content string) ([]asrParagraphRange, error) {
-	raw, err := extractLLMJSON(content)
-	if err != nil {
-		return nil, err
-	}
-	var wrapped struct {
-		Items []asrParagraphRange `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.Items != nil {
-		return wrapped.Items, nil
-	}
-	var ranges []asrParagraphRange
-	if err := json.Unmarshal(raw, &ranges); err != nil {
-		return nil, fmt.Errorf("解析 asr_paragraphs 边界 JSON 失败: %w", err)
-	}
-	return ranges, nil
-}
-
-// extractLLMJSON 提取 JSON 对象或数组（兼容 markdown 代码块）。
 func extractLLMJSON(content string) (json.RawMessage, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {

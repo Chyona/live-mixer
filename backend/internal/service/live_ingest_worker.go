@@ -952,7 +952,7 @@ func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *m
 
 	post, postErr := runASRPostprocess(ctx, w.llmClient, latest.LiveASR, duration, nil, w.logger)
 	if postErr != nil {
-		w.logger.Warn("关播 ASR LLM 后处理失败，回退本地段落并继续标记完成",
+		w.logger.Warn("关播 ASR summaries LLM 失败，回退为空 summaries；段落仍用 MinGap 算法并标记完成",
 			zap.Uint("material_id", latest.ID),
 			zap.Error(postErr),
 		)
@@ -971,21 +971,17 @@ func (w *liveIngestWorker) finishASRPostprocess(ctx context.Context, material *m
 	return nil
 }
 
-// localASRPostprocessFallback LLM 不可用时用本地规则生成段落，保证关播仍能到 ASR 完成态。
+// localASRPostprocessFallback summaries LLM 不可用时：summaries 为空，段落用 MinGap 算法（尽力产出，不做严格校验），保证关播仍能到 ASR 完成态。
 func localASRPostprocessFallback(liveASR string, durationMs int64) asrPostprocessResult {
 	out := asrPostprocessResult{}
 	utterances := asr.FormatUtterancesForAPI(liveASR)
 	if len(utterances) == 0 {
 		return out
 	}
-	ranges := buildParagraphRangesLocally(utterances)
-	paragraphs, err := stitchASRParagraphs(utterances, ranges)
-	if err != nil {
-		return out
-	}
-	paragraphs, _ = enforceASRParagraphMaxRunes(paragraphs)
-	finalizeASRParagraphTimeline(paragraphs, durationMs)
-	out.Paragraphs = paragraphs
+	paras, _ := BuildASRParagraphsByMinGap(utterances, asrParagraphMaxRunes, nil)
+	paras, _ = enforceASRParagraphMaxRunes(paras)
+	finalizeASRParagraphTimeline(paras, durationMs)
+	out.Paragraphs = paras
 	return out
 }
 

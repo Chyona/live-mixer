@@ -59,14 +59,17 @@ func main() {
 	defer logger.Sync() //nolint:errcheck
 
 	started := time.Now()
-	paragraphs, warnings := service.BuildASRParagraphsByMinGap(utterances, *maxlen, logger)
+	paragraphs, warnings, err := service.BuildASRParagraphsAlgo(utterances, durationMs, *maxlen, logger)
 	elapsed := time.Since(started).Round(time.Millisecond)
 
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "生成 asr_paragraphs 失败: %v\n", err)
+		os.Exit(1)
+	}
 	if paragraphs == nil {
 		paragraphs = []model.ASRParagraph{}
 	}
 
-	// 仅同说话人句级 gap<0 为异常；words 中 -1（空格等）为源 ASR 无效时间，1:1 保留，不告警。
 	printOverlapAlerts(warnings)
 
 	mergeCount := len(utterances) - len(paragraphs)

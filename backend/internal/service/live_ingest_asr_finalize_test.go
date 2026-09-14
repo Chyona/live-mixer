@@ -17,14 +17,14 @@ func TestLocalASRPostprocessFallback_BuildsParagraphs(t *testing.T) {
 		]}
 	}`
 	got := localASRPostprocessFallback(liveASR, 5000)
-	if len(got.Paragraphs) == 0 {
-		t.Fatal("expected local paragraphs")
+	if len(got.Paragraphs) != 1 {
+		t.Fatalf("expected 1 merged paragraph, got %d", len(got.Paragraphs))
 	}
 	if len(got.Summaries) != 0 {
 		t.Fatalf("summaries = %d, want 0", len(got.Summaries))
 	}
 	joined := got.Paragraphs[0].Text
-	if !strings.Contains(joined, "你好") {
+	if !strings.Contains(joined, "你好") || !strings.Contains(joined, "欢迎") {
 		t.Fatalf("paragraph text = %q", joined)
 	}
 }
