@@ -34,7 +34,7 @@ type LiveIngestRepository interface {
 	CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error
 	// CommitMediaWindow 兼容旧名，等价 CommitMasterMP4（playlistURL 忽略）。
 	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error
-	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool) error
+	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool, paragraphs []model.ASRParagraph) error
 	ClearASRDue(ctx context.Context, id uint, asrEpoch int64) error
 	ReleaseASRLease(ctx context.Context, id uint, asrEpoch int64) error
 	MarkASRProcessing(ctx context.Context, id uint, asrEpoch int64) error
@@ -315,13 +315,17 @@ func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint,
 	return r.CommitMasterMP4(ctx, id, epoch, mediaWindowsJSON, nextWindowSeg, durationMS, "", asrDue)
 }
 
-func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool) error {
+func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool, paragraphs []model.ASRParagraph) error {
 	now := time.Now()
 	if progress < 0 {
 		progress = 0
 	}
 	if progress > 99 {
 		progress = 99
+	}
+	paragraphsJSON, err := marshalASRJSONArray(paragraphs)
+	if err != nil {
+		return err
 	}
 	result := r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND asr_epoch = ?", id, asrEpoch).
@@ -334,6 +338,7 @@ func (r *liveMaterialRepository) AppendWindowASR(ctx context.Context, id uint, a
 			"asr_updated_at":   now,
 			"asr_heartbeat_at": now,
 			"asr_due":          stillDue,
+			"asr_paragraphs":   paragraphsJSON,
 		})
 	if result.Error != nil {
 		return result.Error

@@ -50,13 +50,15 @@ func (w *liveIngestWorker) runWindowASR(ctx context.Context, material *model.Liv
 	}
 	if cursor >= readyMS {
 		progress := windowASRProgress(readyMS, readyMS)
-		if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, material.LiveASR, readyMS, readyMS, progress, false); err != nil {
+		paras := w.rebuildLiveASRParagraphs(material.LiveASR, readyMS)
+		if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, material.LiveASR, readyMS, readyMS, progress, false, paras); err != nil {
 			return err
 		}
 		material.ASRCursorMS = readyMS
 		material.Duration = readyMS
 		material.ASRProgress = progress
 		material.ASRDue = false
+		material.ASRParagraphs = paras
 		return nil
 	}
 
@@ -235,7 +237,8 @@ func (w *liveIngestWorker) commitMasterASRProgress(
 		zap.Int64("asr_cursor_ms", newCursor),
 		zap.Bool("still_due", stillPending),
 	)
-	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, newCursor, readyMS, progress, stillPending); err != nil {
+	paras := w.rebuildLiveASRParagraphs(liveASR, newCursor)
+	if err := w.repo.AppendWindowASR(ctx, material.ID, epoch, liveASR, newCursor, readyMS, progress, stillPending, paras); err != nil {
 		return err
 	}
 	material.ASRCursorMS = newCursor
@@ -243,6 +246,7 @@ func (w *liveIngestWorker) commitMasterASRProgress(
 	material.ASRProgress = progress
 	material.ASRDue = stillPending
 	material.Duration = readyMS
+	material.ASRParagraphs = paras
 	w.logger.Info("主 MP4 ASR chunk 完成",
 		zap.Uint("material_id", material.ID),
 		zap.Duration("elapsed", time.Since(asrStart)),
@@ -253,8 +257,31 @@ func (w *liveIngestWorker) commitMasterASRProgress(
 		zap.Int64("asr_vendor_duration_ms", asrVendorDurMS),
 		zap.Float64("asr_time_scale", scaleFactor),
 		zap.Int16("asr_progress", progress),
+		zap.Int("asr_paragraphs", len(paras)),
 	)
 	return nil
+}
+
+// rebuildLiveASRParagraphs 跟播中对当前 live_asr 全量重算 asr_paragraphs。
+// 失败隔离：仅打 Warn，返回空切片，不阻断 cursor / live_asr 写库。
+func (w *liveIngestWorker) rebuildLiveASRParagraphs(liveASR string, durationMs int64) []model.ASRParagraph {
+	utterances := asr.FormatUtterancesForAPI(liveASR)
+	if len(utterances) == 0 {
+		return []model.ASRParagraph{}
+	}
+	paras, _, err := BuildASRParagraphsAlgo(utterances, durationMs, asrParagraphMaxRunes, w.logger)
+	if err != nil {
+		w.logger.Warn("跟播重算 asr_paragraphs 失败，本次写空并继续推进 ASR",
+			zap.Error(err),
+			zap.Int("utterance_count", len(utterances)),
+			zap.Int64("duration_ms", durationMs),
+		)
+		return []model.ASRParagraph{}
+	}
+	if paras == nil {
+		return []model.ASRParagraph{}
+	}
+	return paras
 }
 
 func windowASRProgress(readyMS, cursorMS int64) int16 {

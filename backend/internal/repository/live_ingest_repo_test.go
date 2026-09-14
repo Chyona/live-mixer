@@ -299,3 +299,51 @@ func TestLiveIngestRepository_ClaimEndedASRProcessing(t *testing.T) {
 		t.Fatalf("claimed = %+v, want ended processing material", claimed)
 	}
 }
+
+func TestLiveIngestRepository_AppendWindowASRWritesParagraphs(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	mat := &model.LiveMaterial{
+		Name:       "append-paras",
+		M3U8URL:    "https://example.com/append.m3u8",
+		LiveURL:    "https://cdn.example/final.mp4",
+		RecordUUID: "ap1",
+		SourceMode: model.SourceModeLive,
+		LiveStatus: model.LiveStatusLive,
+		ASREpoch:   2,
+		LiveASR:    "{}",
+		ASRStatus:  model.ASRStatusPending,
+		CreatedBy:  1,
+	}
+	if err := db.Create(mat).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	liveASR := `{"result":{"utterances":[{"start_time":0,"end_time":100,"text":"hi","additions":{"speaker":"1"},"words":[{"text":"hi","start_time":0,"end_time":100}]}]}}`
+	paras := []model.ASRParagraph{{
+		Speaker: "1", Text: "hi", StartTime: 0, EndTime: 100,
+		Words: []model.ClipWord{{Text: "hi", StartTime: 0, EndTime: 100}},
+	}}
+	if err := repo.AppendWindowASR(ctx, mat.ID, 2, liveASR, 100, 100, 50, true, paras); err != nil {
+		t.Fatalf("AppendWindowASR: %v", err)
+	}
+	got, err := repo.GetByID(ctx, mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ASRCursorMS != 100 || got.ASRProgress != 50 || !got.ASRDue {
+		t.Fatalf("cursor/progress/due = %d/%d/%v", got.ASRCursorMS, got.ASRProgress, got.ASRDue)
+	}
+	if got.ASRStatus != model.ASRStatusProcessing {
+		t.Fatalf("asr_status=%q", got.ASRStatus)
+	}
+	if len(got.ASRParagraphs) != 1 || got.ASRParagraphs[0].Text != "hi" {
+		t.Fatalf("ASRParagraphs=%+v", got.ASRParagraphs)
+	}
+	if got.LiveASR != liveASR {
+		t.Fatalf("LiveASR not updated")
+	}
+}
+
