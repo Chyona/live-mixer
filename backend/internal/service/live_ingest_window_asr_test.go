@@ -87,7 +87,11 @@ func TestCommitFullMasterASR_OverwritesAndClearsDue(t *testing.T) {
 				"words":[{"text":"乙","start_time":120,"end_time":200}]}
 		]}
 	}`
-	if err := w.commitFullMasterASR(context.Background(), mat, 3, 200, liveASR, 200, 1.0, time.Now()); err != nil {
+	if err := w.commitFullMasterASR(context.Background(), mat, 3, 200, liveASR, 200, 1.0, fullMasterASRTiming{
+		StartedAt:     time.Now(),
+		TargetReadyMS: 200,
+		Outcome:       "ok",
+	}); err != nil {
 		t.Fatalf("commitFullMasterASR: %v", err)
 	}
 	got, err := repo.GetByID(context.Background(), mat.ID)
@@ -142,7 +146,12 @@ func TestCommitFullMasterASR_StaleKeepsDue(t *testing.T) {
 		]}
 	}`
 	const targetReadyMS int64 = 300000 // 任务开始时是 5 分钟
-	if err := w.commitFullMasterASR(context.Background(), mat, 1, targetReadyMS, liveASR, targetReadyMS, 1.0, time.Now()); err != nil {
+	if err := w.commitFullMasterASR(context.Background(), mat, 1, targetReadyMS, liveASR, targetReadyMS, 1.0, fullMasterASRTiming{
+		StartedAt:     time.Now(),
+		TargetReadyMS: targetReadyMS,
+		WindowCount:   1,
+		Outcome:       "ok",
+	}); err != nil {
 		t.Fatalf("commitFullMasterASR: %v", err)
 	}
 	got, err := repo.GetByID(context.Background(), mat.ID)
