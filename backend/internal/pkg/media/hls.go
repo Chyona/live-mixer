@@ -21,6 +21,7 @@ type HLSProbeResult struct {
 	HasMedia     bool
 	Encrypted    bool
 	IsMaster     bool
+	HasEndList   bool // 含 #EXT-X-ENDLIST，通常表示已转为 VOD/回放
 	MediaURL     string
 	VariantCount int
 }
@@ -88,6 +89,9 @@ func probeHLSPlaylist(client *http.Client, playlistURL string, depth int) (HLSPr
 		}
 		if strings.HasPrefix(upper, "#EXTINF") {
 			result.HasMedia = true
+		}
+		if strings.HasPrefix(upper, "#EXT-X-ENDLIST") {
+			result.HasEndList = true
 		}
 		if strings.HasPrefix(line, "#") {
 			continue

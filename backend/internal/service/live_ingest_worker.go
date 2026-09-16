@@ -514,6 +514,19 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 	gotAnyWindow := material.ParsedMediaWindows().ReadyCount() > 0
 	emptyAttempts := 0
 	const maxEmptyAttempts = 8
+	const maxAccessFailStreak = 2
+
+	sawRealtimeWindow := gotAnyWindow // 续录已有窗时启用回放关播，避免重启后再次胀库
+	lastFingerprint := ""
+	accessFailStreak := 0
+	if gotAnyWindow {
+		if prev := nextWindowIndex(material) - 1; prev >= 0 {
+			prevPath := filepath.Join(winDir, liveingest.WindowMP4FileName(prev))
+			if fp, err := windowFileFingerprint(prevPath); err == nil {
+				lastFingerprint = fp
+			}
+		}
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -523,10 +536,57 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 		mp4Path := filepath.Join(winDir, liveingest.WindowMP4FileName(winIdx))
 		_ = os.Remove(mp4Path)
 
+		// 窗前探测：地址不可访问 → 已有窗则关播，否则沿用开播重试。
+		preProbe, preErr := media.ProbeHLSPlaylist(w.httpClient, material.M3U8URL)
+		hasEndList := preErr == nil && preProbe.HasEndList
+		if preErr != nil {
+			accessFailStreak++
+			w.logger.Warn("窗前 HLS 探测失败",
+				zap.Uint("material_id", material.ID),
+				zap.Int("window_index", winIdx),
+				zap.Int("access_fail_streak", accessFailStreak),
+				zap.Error(preErr),
+			)
+			if gotAnyWindow && accessFailStreak >= maxAccessFailStreak {
+				w.logger.Info("直播源不可访问，结束录像",
+					zap.Uint("material_id", material.ID),
+					zap.Int("access_fail_streak", accessFailStreak),
+					zap.Error(preErr),
+				)
+				break
+			}
+			if !gotAnyWindow {
+				emptyAttempts++
+				deadline := time.Now().Add(model.LiveConnectGrace)
+				if material.ConnectDeadlineAt != nil {
+					deadline = *material.ConnectDeadlineAt
+				}
+				if material.WaitDeadlineAt != nil {
+					deadline = *material.WaitDeadlineAt
+				}
+				if emptyAttempts >= maxEmptyAttempts || !time.Now().Before(deadline) {
+					msg := "未能录制到直播媒体窗"
+					if preErr != nil {
+						msg = fmt.Sprintf("%s: %v", msg, preErr)
+					}
+					_ = w.repo.MarkIngestFailed(ctx, material.ID, material.IngestEpoch, msg)
+					return fmt.Errorf("%s", msg)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(liveIngestProbeInterval):
+			}
+			continue
+		}
+		accessFailStreak = 0
+
 		w.logger.Info("开始 ffmpeg 按窗录像",
 			zap.Uint("material_id", material.ID),
 			zap.Int("window_index", winIdx),
 			zap.Int("duration_sec", windowSec),
+			zap.Bool("playlist_endlist", hasEndList),
 			zap.String("output", mp4Path),
 			zap.String("m3u8_url", material.M3U8URL),
 		)
@@ -552,11 +612,13 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 
 		if durMS < minRecordedWindowMS {
 			emptyAttempts++
+			accessFailStreak++
 			_ = os.Remove(mp4Path)
 			if gotAnyWindow {
-				w.logger.Info("按窗录像无有效输出且已有窗，结束录像",
+				w.logger.Info("直播源不可访问或无有效输出，结束录像",
 					zap.Uint("material_id", material.ID),
 					zap.Int("empty_attempts", emptyAttempts),
+					zap.Int("access_fail_streak", accessFailStreak),
 					zap.Error(recErr),
 				)
 				break
@@ -587,6 +649,76 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 			}
 			continue
 		}
+		accessFailStreak = 0
+
+		if isRealtimeWindowElapsed(elapsed, windowSec) {
+			sawRealtimeWindow = true
+		}
+
+		// 窗后补探测 ENDLIST（窗前可能尚无；回放切换常发生在本窗 remux 期间）。
+		if postProbe, postErr := media.ProbeHLSPlaylist(w.httpClient, material.M3U8URL); postErr == nil && postProbe.HasEndList {
+			hasEndList = true
+		}
+
+		fp, fpErr := windowFileFingerprint(mp4Path)
+		if fpErr != nil {
+			w.logger.Warn("计算媒体窗指纹失败，跳过指纹去重",
+				zap.Uint("material_id", material.ID),
+				zap.Int("window_index", winIdx),
+				zap.Error(fpErr),
+			)
+		}
+
+		replayHit, replayReason := replayEndSignal(sawRealtimeWindow, hasEndList, elapsed, durMS, windowSec, fullWindowMS)
+		dupFingerprint := fpErr == nil && lastFingerprint != "" && fp == lastFingerprint
+		if dupFingerprint && sawRealtimeWindow {
+			replayHit = true
+			if replayReason == "" {
+				replayReason = "dup_fingerprint"
+			} else {
+				replayReason = replayReason + "+dup_fingerprint"
+			}
+		}
+
+		if replayHit {
+			if dupFingerprint {
+				_ = os.Remove(mp4Path)
+				w.logger.Info("直播源已转为回放，丢弃重复窗并结束录像",
+					zap.Uint("material_id", material.ID),
+					zap.Int("window_index", winIdx),
+					zap.String("reason", replayReason),
+					zap.Bool("playlist_endlist", hasEndList),
+					zap.Duration("elapsed", elapsed),
+					zap.Int64("probed_dur_ms", durMS),
+					zap.String("fingerprint", fp),
+				)
+				break
+			}
+			// 回放信号但内容与上窗不同：提交本窗一次后关播。
+			partial := durMS < fullWindowMS || recErr != nil
+			if err := w.commitRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
+				w.logger.Warn("提交回放尾窗失败，仍结束录像",
+					zap.Uint("material_id", material.ID),
+					zap.Int("window_index", winIdx),
+					zap.String("reason", replayReason),
+					zap.Error(err),
+				)
+				break
+			}
+			gotAnyWindow = true
+			if fpErr == nil {
+				lastFingerprint = fp
+			}
+			w.logger.Info("直播源已转为回放，已提交本窗并结束录像",
+				zap.Uint("material_id", material.ID),
+				zap.Int("window_index", winIdx),
+				zap.String("reason", replayReason),
+				zap.Bool("playlist_endlist", hasEndList),
+				zap.Duration("elapsed", elapsed),
+				zap.Int64("probed_dur_ms", durMS),
+			)
+			break
+		}
 
 		partial := durMS < fullWindowMS || recErr != nil
 		if err := w.commitRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
@@ -612,6 +744,9 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 		}
 		gotAnyWindow = true
 		emptyAttempts = 0
+		if fpErr == nil {
+			lastFingerprint = fp
+		}
 
 		if partial {
 			w.logger.Info("媒体窗为 partial（断流或不足目标时长），结束录像",

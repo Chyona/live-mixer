@@ -77,6 +77,9 @@ seg0.ts
 	if !got.HasMedia {
 		t.Fatal("expected media")
 	}
+	if got.HasEndList {
+		t.Fatal("live playlist should not have ENDLIST")
+	}
 }
 
 func TestProbeHLSPlaylist_Encrypted(t *testing.T) {
@@ -88,6 +91,27 @@ seg0.ts
 	_, err := parseHLSPlaylistBody("https://ex.com/live.m3u8", body, 0)
 	if err == nil || !strings.Contains(err.Error(), "加密") {
 		t.Fatalf("err = %v, want encrypted", err)
+	}
+}
+
+func TestProbeHLSPlaylist_HasEndList(t *testing.T) {
+	body := `#EXTM3U
+#EXT-X-VERSION:3
+#EXTINF:6.0,
+seg0.ts
+#EXTINF:6.0,
+seg1.ts
+#EXT-X-ENDLIST
+`
+	got, err := parseHLSPlaylistBody("https://ex.com/vod.m3u8", body, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasMedia {
+		t.Fatal("expected media")
+	}
+	if !got.HasEndList {
+		t.Fatal("VOD playlist should have ENDLIST")
 	}
 }
 
@@ -107,6 +131,9 @@ func parseHLSPlaylistBody(playlistURL, text string, depth int) (HLSProbeResult, 
 		}
 		if strings.HasPrefix(upper, "#EXT-X-STREAM-INF") {
 			result.IsMaster = true
+		}
+		if strings.HasPrefix(upper, "#EXT-X-ENDLIST") {
+			result.HasEndList = true
 		}
 	}
 	if result.Encrypted {
