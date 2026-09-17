@@ -334,6 +334,27 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 	}()
 
 	_ = w.repo.MarkASRProcessing(ctx, material.ID, material.ASREpoch)
+
+	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
+		material.LiveStatus = latest.LiveStatus
+		material.MediaWindows = latest.MediaWindows
+		material.Duration = latest.Duration
+		material.ASRCursorMS = latest.ASRCursorMS
+		material.LiveASR = latest.LiveASR
+		material.ASRDue = latest.ASRDue
+	}
+	if w.shouldDeferLiveASR(material) {
+		w.logger.Info("直播中推迟全量 ASR（master 落后或队列积压）",
+			zap.Uint("material_id", material.ID),
+			zap.Int64("duration_ms", material.Duration),
+			zap.Int64("sealed_ms", material.ParsedMediaWindows().TotalReadyMS()),
+			zap.Int("master_pending", w.masterQueuePending(material.ID)),
+		)
+		// 清 due 避免空转抢占；后续 master 节流点或关播再置 asr_due。
+		_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
+		return nil
+	}
+
 	// 单次租约内对当前 master 全量 ASR；master 若再变长则同租约内继续全量直到追上。
 	w.catchUpWindowASR(ctx, material)
 	if latest, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest != nil {
@@ -819,7 +840,7 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 		needRebuild = true
 	}
 	if needRebuild {
-		if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
+		if err := w.rebuildMasterFromWindows(ctx, material, true); err != nil {
 			return fmt.Errorf("关播拼接主 MP4 失败: %w", err)
 		}
 		if latest3, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest3 != nil {

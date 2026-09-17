@@ -24,6 +24,12 @@ const minRecordedWindowMS int64 = 1000
 // masterAppendDurationSlackMS append 后探测时长相对「旧 master + 新窗」允许的偏差。
 const masterAppendDurationSlackMS int64 = 1500
 
+// asrLiveThrottleEveryNWindows 直播中每隔 N 个媒体窗才置 asr_due，降低全量 ASR 与录像抢资源。
+const asrLiveThrottleEveryNWindows = 3
+
+// asrLiveMaxMasterLagWindows 直播中若已 seal 媒体领先 master.duration 超过该窗数，推迟 ASR。
+const asrLiveMaxMasterLagWindows = 1
+
 // masterJob 异步上传窗并拼接 master；按素材串行处理。
 type masterJob struct {
 	materialID uint
@@ -312,6 +318,20 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		}
 	}
 	if !found {
+		// seal 与读库短暂不同步时再读一次；仍缺则失败重试。
+		if latest, gerr := w.repo.GetByID(ctx, job.materialID); gerr == nil && latest != nil {
+			material = latest
+			windows = material.ParsedMediaWindows()
+			for _, win := range windows {
+				if win.Index == job.winIdx {
+					winMeta = win
+					found = true
+					break
+				}
+			}
+		}
+	}
+	if !found {
 		return fmt.Errorf("media_windows 中缺少窗 %d", job.winIdx)
 	}
 
@@ -330,6 +350,8 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		material.MediaWindows = windows.Marshal()
 	}
 
+	asrDue := liveASRDueForMasterJob(material, job)
+
 	prevDur := material.Duration
 	masterPath := filepath.Join(w.segmentDir(material), liveingest.MasterMP4FileName())
 	useAppend := job.winIdx > 0 && prevDur > 0
@@ -341,17 +363,17 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 
 	var buildErr error
 	if useAppend {
-		buildErr = w.appendMasterWithWindow(ctx, material, job.localPath, winMeta.DurMS, prevDur)
+		buildErr = w.appendMasterWithWindow(ctx, material, job.localPath, winMeta.DurMS, prevDur, asrDue)
 		if buildErr != nil {
 			w.logger.Warn("append master 失败，回退全量重拼",
 				zap.Uint("material_id", material.ID),
 				zap.Int("window_index", job.winIdx),
 				zap.Error(buildErr),
 			)
-			buildErr = w.rebuildMasterFromWindows(ctx, material)
+			buildErr = w.rebuildMasterFromWindows(ctx, material, asrDue)
 		}
 	} else {
-		buildErr = w.rebuildMasterFromWindows(ctx, material)
+		buildErr = w.rebuildMasterFromWindows(ctx, material, asrDue)
 	}
 	if buildErr != nil {
 		w.emitAlignDiag(material, AlignDiagEvent{
@@ -367,12 +389,63 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		zap.Uint("material_id", material.ID),
 		zap.Int("window_index", job.winIdx),
 		zap.Bool("partial", job.partial),
+		zap.Bool("asr_due", asrDue),
 		zap.Int64("master_ready_ms", material.Duration),
 		zap.String("window_url", winMeta.URL),
 		zap.String("master_url", material.LiveURL),
 	)
-	enqueueWake(w.asrWake, 1)
+	if asrDue {
+		enqueueWake(w.asrWake, 1)
+	}
 	return nil
+}
+
+// liveASRDueForMasterJob 直播中按窗节流置 asr_due；首窗必跑以便尽快离开「等待解析」。
+// 关播尾窗 / 非 live 始终置位。
+func liveASRDueForMasterJob(material *model.LiveMaterial, job masterJob) bool {
+	if job.partial {
+		return true
+	}
+	if material == nil || material.LiveStatus != model.LiveStatusLive {
+		return true
+	}
+	// 首窗始终触发，避免直播前 20–30 分钟 UI 一直停在「等待解析」。
+	if job.winIdx == 0 {
+		return true
+	}
+	every := asrLiveThrottleEveryNWindows
+	if every <= 1 {
+		return true
+	}
+	// 之后每 N 窗：winIdx 2/5/8…（第 3/6/9 窗）
+	return (job.winIdx+1)%every == 0
+}
+
+// shouldDeferLiveASR 直播中 master 明显落后于已 seal 窗，或仍有待拼 master 任务时推迟全量 ASR。
+func (w *liveIngestWorker) shouldDeferLiveASR(material *model.LiveMaterial) bool {
+	if material == nil || material.LiveStatus != model.LiveStatusLive {
+		return false
+	}
+	if w.masterQueuePending(material.ID) > 0 {
+		return true
+	}
+	windowMS := material.EffectiveMediaWindowMS()
+	if windowMS <= 0 {
+		windowMS = int64(model.LiveMediaWindowDuration / time.Millisecond)
+	}
+	sealedMS := material.ParsedMediaWindows().TotalReadyMS()
+	lag := sealedMS - material.Duration
+	return lag > int64(asrLiveMaxMasterLagWindows)*windowMS
+}
+
+func (w *liveIngestWorker) masterQueuePending(materialID uint) int {
+	w.masterMu.Lock()
+	defer w.masterMu.Unlock()
+	q := w.masterQueues[materialID]
+	if q == nil {
+		return 0
+	}
+	return len(q.pending)
 }
 
 // appendMasterWithWindow 用已有 master + 新窗 copy-append；时长异常则报错由调用方 fallback。
@@ -381,6 +454,7 @@ func (w *liveIngestWorker) appendMasterWithWindow(
 	material *model.LiveMaterial,
 	windowPath string,
 	windowDurMS, prevMasterMS int64,
+	asrDue bool,
 ) error {
 	workDir := w.segmentDir(material)
 	masterPath := filepath.Join(workDir, liveingest.MasterMP4FileName())
@@ -427,11 +501,11 @@ func (w *liveIngestWorker) appendMasterWithWindow(
 		return fmt.Errorf("append 时长异常 got=%d want≈%d slack=%d", durMS, wantMS, masterAppendDurationSlackMS)
 	}
 
-	return w.finishMasterBuild(ctx, material, tmpPath, masterPath, durMS, 2, hasMasterTL, masterTL)
+	return w.finishMasterBuild(ctx, material, tmpPath, masterPath, durMS, 2, hasMasterTL, masterTL, asrDue)
 }
 
-// rebuildMasterFromWindows 将已就绪的前 N 个窗 MP4 拼成 master.mp4，写回 live_url / duration，并置 asr_due。
-func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, material *model.LiveMaterial) error {
+// rebuildMasterFromWindows 将已就绪的前 N 个窗 MP4 拼成 master.mp4，写回 live_url / duration，并按需置 asr_due。
+func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, material *model.LiveMaterial, asrDue bool) error {
 	if material == nil {
 		return nil
 	}
@@ -515,7 +589,7 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 		}
 	}
 
-	return w.finishMasterBuild(ctx, material, tmpPath, mp4Path, durMS, len(files), hasMasterTL, masterTL)
+	return w.finishMasterBuild(ctx, material, tmpPath, mp4Path, durMS, len(files), hasMasterTL, masterTL, asrDue)
 }
 
 func (w *liveIngestWorker) finishMasterBuild(
@@ -526,6 +600,7 @@ func (w *liveIngestWorker) finishMasterBuild(
 	windowCount int,
 	hasMasterTL bool,
 	masterTL media.MediaTimeline,
+	asrDue bool,
 ) error {
 	objectKey := liveingest.MasterObjectKey(material.RecordUUID)
 	var mp4URL string
@@ -564,7 +639,7 @@ func (w *liveIngestWorker) finishMasterBuild(
 	if mp4URL != "" {
 		material.LiveURL = mp4URL
 	}
-	material.ASRDue = true
+	material.ASRDue = material.ASRDue || asrDue
 
 	if err := w.repo.CommitMasterMP4(
 		ctx,
@@ -574,11 +649,21 @@ func (w *liveIngestWorker) finishMasterBuild(
 		material.NextWindowSeg,
 		durMS,
 		mp4URL,
-		true,
+		asrDue,
 	); err != nil {
 		return fmt.Errorf("写回主 MP4 元数据失败: %w", err)
 	}
-	material.NextSeg = material.NextWindowSeg
+	// 提交后回读，避免内存中的 media_windows / next_window_seg 落后于合并结果。
+	if latest, err := w.repo.GetByID(ctx, material.ID); err == nil && latest != nil {
+		material.MediaWindows = latest.MediaWindows
+		material.NextWindowSeg = latest.NextWindowSeg
+		material.NextSeg = latest.NextSeg
+		material.Duration = latest.Duration
+		material.LiveURL = latest.LiveURL
+		material.ASRDue = latest.ASRDue
+	} else {
+		material.NextSeg = material.NextWindowSeg
+	}
 
 	ok := uploadOK
 	ev := AlignDiagEvent{
@@ -598,8 +683,9 @@ func (w *liveIngestWorker) finishMasterBuild(
 	w.logger.Info("主 MP4 已就绪",
 		zap.Uint("material_id", material.ID),
 		zap.Int("window_count", windowCount),
-		zap.Int64("ready_ms", durMS),
-		zap.String("mp4_url", mp4URL),
+		zap.Bool("asr_due", asrDue),
+		zap.Int64("duration_ms", material.Duration),
+		zap.String("live_url", material.LiveURL),
 	)
 	return nil
 }

@@ -30,9 +30,12 @@ type LiveIngestRepository interface {
 	MarkConnecting(ctx context.Context, id uint, epoch int64) error
 	MarkLiveStarted(ctx context.Context, id uint, epoch int64, width, height int, resumeSeg int64) error
 	UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error
-	// CommitMasterMP4 写回离散媒体窗列表、拼接主片 duration 与 live_url（master.mp4）。
+	// CommitMasterMP4 写回拼接主片 duration 与 live_url（master.mp4）。
+	// media_windows 与库内现有列表按 Index 合并（不整表覆盖）；next_window_seg 只升不降。
+	// asrDue=true 时置 asr_due；false 时不清除已有 asr_due（避免节流提交冲掉待跑标记）。
 	CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error
 	// SealMediaWindow 仅登记媒体窗与下一窗游标（跟播快路径）；不改 duration / asr_due / live_url。
+	// media_windows 与库内按 Index 合并，避免抹掉异步 master 已回填的 URL。
 	SealMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg int64) error
 	// CommitMediaWindow 兼容旧名，等价 CommitMasterMP4（playlistURL 忽略）。
 	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error
@@ -293,24 +296,43 @@ func (r *liveMaterialRepository) CommitMasterMP4(ctx context.Context, id uint, e
 	if strings.TrimSpace(mediaWindowsJSON) == "" {
 		mediaWindowsJSON = "[]"
 	}
-	fields := map[string]interface{}{
-		"media_windows":     mediaWindowsJSON,
-		"next_window_seg":   nextWindowSeg,
-		// 按窗录制后 next_seg 与下一窗下标对齐，供进度卡住检测继续生效。
-		"next_seg":          nextWindowSeg,
-		"duration":          durationMS,
-		"asr_due":           asrDue,
-		"last_heartbeat_at": now,
-		"last_progress_at":  now,
-		"asr_updated_at":    now,
-		"updated_at":        now,
-	}
-	if u := strings.TrimSpace(masterURL); u != "" {
-		fields["live_url"] = u
-	}
-	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
-		Where("id = ? AND ingest_epoch = ?", id, epoch).
-		Updates(fields).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var cur model.LiveMaterial
+		if err := tx.Select("id", "ingest_epoch", "media_windows", "next_window_seg", "duration").
+			Where("id = ? AND ingest_epoch = ?", id, epoch).
+			First(&cur).Error; err != nil {
+			return err
+		}
+		merged := model.MergeMediaWindows(cur.ParsedMediaWindows(), model.ParseMediaWindows(mediaWindowsJSON)).Marshal()
+		next := cur.NextWindowSeg
+		if nextWindowSeg > next {
+			next = nextWindowSeg
+		}
+		dur := durationMS
+		if cur.Duration > dur {
+			// 串行队列下不应回退；防御旧任务/异常路径把已推进的 duration 写短。
+			dur = cur.Duration
+		}
+		fields := map[string]interface{}{
+			"media_windows":     merged,
+			"next_window_seg":   next,
+			"next_seg":          next,
+			"duration":          dur,
+			"last_heartbeat_at": now,
+			"last_progress_at":  now,
+			"asr_updated_at":    now,
+			"updated_at":        now,
+		}
+		if asrDue {
+			fields["asr_due"] = true
+		}
+		if u := strings.TrimSpace(masterURL); u != "" {
+			fields["live_url"] = u
+		}
+		return tx.Model(&model.LiveMaterial{}).
+			Where("id = ? AND ingest_epoch = ?", id, epoch).
+			Updates(fields).Error
+	})
 }
 
 func (r *liveMaterialRepository) SealMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg int64) error {
@@ -318,16 +340,29 @@ func (r *liveMaterialRepository) SealMediaWindow(ctx context.Context, id uint, e
 	if strings.TrimSpace(mediaWindowsJSON) == "" {
 		mediaWindowsJSON = "[]"
 	}
-	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
-		Where("id = ? AND ingest_epoch = ?", id, epoch).
-		Updates(map[string]interface{}{
-			"media_windows":     mediaWindowsJSON,
-			"next_window_seg":   nextWindowSeg,
-			"next_seg":          nextWindowSeg,
-			"last_heartbeat_at": now,
-			"last_progress_at":  now,
-			"updated_at":        now,
-		}).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var cur model.LiveMaterial
+		if err := tx.Select("id", "ingest_epoch", "media_windows", "next_window_seg").
+			Where("id = ? AND ingest_epoch = ?", id, epoch).
+			First(&cur).Error; err != nil {
+			return err
+		}
+		merged := model.MergeMediaWindows(cur.ParsedMediaWindows(), model.ParseMediaWindows(mediaWindowsJSON)).Marshal()
+		next := cur.NextWindowSeg
+		if nextWindowSeg > next {
+			next = nextWindowSeg
+		}
+		return tx.Model(&model.LiveMaterial{}).
+			Where("id = ? AND ingest_epoch = ?", id, epoch).
+			Updates(map[string]interface{}{
+				"media_windows":     merged,
+				"next_window_seg":   next,
+				"next_seg":          next,
+				"last_heartbeat_at": now,
+				"last_progress_at":  now,
+				"updated_at":        now,
+			}).Error
+	})
 }
 
 func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error {

@@ -188,6 +188,51 @@ func (l MediaWindowList) Upsert(w MediaWindow) MediaWindowList {
 	return l
 }
 
+// MergeMediaWindow 合并同 Index 窗：保留非空 URL/ObjectKey，Ready/时长取更完整一侧。
+// 用于 seal 与异步 master 并发写 media_windows，避免旧快照覆盖新窗或抹掉已上传 URL。
+func MergeMediaWindow(base, overlay MediaWindow) MediaWindow {
+	out := base
+	out.Index = overlay.Index
+	if overlay.DurMS > 0 {
+		out.DurMS = overlay.DurMS
+		out.StartMS = overlay.StartMS
+		out.EndMS = overlay.EndMS
+		out.SegStart = overlay.SegStart
+		out.SegEnd = overlay.SegEnd
+	}
+	if overlay.Ready {
+		out.Ready = true
+	}
+	if overlay.URL != "" {
+		out.URL = overlay.URL
+	}
+	if overlay.ObjectKey != "" {
+		out.ObjectKey = overlay.ObjectKey
+	}
+	return out
+}
+
+// MergeMediaWindows 以 base 为底，按 Index 合并 overlay（同 Index 走 MergeMediaWindow）。
+func MergeMediaWindows(base, overlay MediaWindowList) MediaWindowList {
+	out := make(MediaWindowList, len(base))
+	copy(out, base)
+	for _, w := range overlay {
+		found := false
+		for i := range out {
+			if out[i].Index == w.Index {
+				out[i] = MergeMediaWindow(out[i], w)
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, w)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	return out
+}
+
 // IsProbablyM3U8URL 粗判 HLS 地址（跟播禁止用源站/列表 m3u8 作预览权威源）。
 func IsProbablyM3U8URL(url string) bool {
 	u := strings.ToLower(strings.TrimSpace(url))

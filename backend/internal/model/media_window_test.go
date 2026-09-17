@@ -52,3 +52,30 @@ func TestMediaWindowList_ASRPendingAndUpsert(t *testing.T) {
 		t.Fatalf("ReadyWindows=%+v", ready)
 	}
 }
+
+func TestMergeMediaWindows_PreservesURLAndNewerWindow(t *testing.T) {
+	base := MediaWindowList{
+		{Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, URL: "https://cdn/w0.mp4", Ready: true},
+		{Index: 1, StartMS: 600000, EndMS: 1200000, DurMS: 600000, Ready: true},
+	}
+	// 旧 master 快照只有窗 0 且无 URL（不应抹掉库内 URL，也不应丢掉窗 1）
+	overlay := MediaWindowList{
+		{Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true},
+	}
+	merged := MergeMediaWindows(base, overlay)
+	if merged.ReadyCount() != 2 {
+		t.Fatalf("ReadyCount=%d, want 2", merged.ReadyCount())
+	}
+	if merged[0].URL != "https://cdn/w0.mp4" {
+		t.Fatalf("URL wiped: %q", merged[0].URL)
+	}
+
+	// overlay 回填 URL
+	overlay2 := MediaWindowList{
+		{Index: 1, StartMS: 600000, EndMS: 1200000, DurMS: 600000, URL: "https://cdn/w1.mp4", Ready: true},
+	}
+	merged = MergeMediaWindows(base, overlay2)
+	if merged[1].URL != "https://cdn/w1.mp4" {
+		t.Fatalf("URL not filled: %q", merged[1].URL)
+	}
+}
