@@ -186,6 +186,15 @@ func (w *liveIngestWorker) runFullMasterASR(ctx context.Context, material *model
 		w.logFullMasterASRTiming(material, timing, zap.String("error", err.Error()))
 		return err
 	}
+	snapPath, snapErr := w.snapshotMasterMP4(mp4Path, material.ID, targetReadyMS)
+	if snapErr != nil {
+		timing.Outcome = "failed"
+		timing.ResolveElapsed = time.Since(resolveStart)
+		w.logFullMasterASRTiming(material, timing, zap.String("error", snapErr.Error()))
+		return fmt.Errorf("快照主 MP4 失败: %w", snapErr)
+	}
+	defer os.Remove(snapPath)
+	mp4Path = snapPath
 	asrSource := resolveMasterASRSource(existedBefore)
 
 	durSec := float64(targetReadyMS) / 1000.0

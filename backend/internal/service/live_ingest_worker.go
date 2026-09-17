@@ -30,7 +30,7 @@ const (
 	liveIngestProbeInterval      = 12 * time.Second
 )
 
-// LiveIngestWorker 跟播门面：内部拆录像 / 窗口 ASR / Finalize 三流水线。
+// LiveIngestWorker 跟播门面：内部拆录像 / 异步 master / 窗口 ASR / Finalize 流水线。
 type LiveIngestWorker interface {
 	Enqueue()
 	Start(ctx context.Context)
@@ -61,6 +61,10 @@ type liveIngestWorker struct {
 	recorderCancels map[uint]*ingestCancelEntry
 	asrCancels      map[uint]*ingestCancelEntry
 	finalizeCancels map[uint]*ingestCancelEntry
+
+	// 进程内按素材串行的异步 master 队列（上传窗 + append/全量拼 master）。
+	masterMu     sync.Mutex
+	masterQueues map[uint]*materialMasterQueue
 }
 
 type storageLiveURLAllocator struct {
@@ -117,6 +121,7 @@ func NewLiveIngestWorker(
 		recorderCancels: make(map[uint]*ingestCancelEntry),
 		asrCancels:      make(map[uint]*ingestCancelEntry),
 		finalizeCancels: make(map[uint]*ingestCancelEntry),
+		masterQueues:    make(map[uint]*materialMasterQueue),
 	}
 }
 
@@ -135,9 +140,9 @@ func (w *liveIngestWorker) Start(ctx context.Context) {
 		}
 		go w.pollLoop(ctx)
 		w.Enqueue()
-		w.logger.Info("直播跟播三流水线已启动",
+		w.logger.Info("直播跟播四流水线已启动",
 			zap.Int("concurrency", w.concurrency),
-			zap.Strings("pipelines", []string{"recorder", "window_asr", "finalize"}),
+			zap.Strings("pipelines", []string{"recorder", "async_master", "window_asr", "finalize"}),
 		)
 	})
 }
@@ -499,6 +504,10 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 	if err := os.MkdirAll(winDir, 0o755); err != nil {
 		return err
 	}
+	// 续录：把已 seal 但尚未进入 master 的本地窗重新投递异步拼接。
+	if winIdx > 0 {
+		w.requeuePendingMasterBuilds(material)
+	}
 
 	windowMS := material.EffectiveMediaWindowMS()
 	windowSec := int(windowMS / 1000)
@@ -694,9 +703,9 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 				)
 				break
 			}
-			// 回放信号但内容与上窗不同：提交本窗一次后关播。
+			// 回放信号但内容与上窗不同：快路径登记本窗后关播（master 异步）。
 			partial := durMS < fullWindowMS || recErr != nil
-			if err := w.commitRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
+			if err := w.sealRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
 				w.logger.Warn("提交回放尾窗失败，仍结束录像",
 					zap.Uint("material_id", material.ID),
 					zap.Int("window_index", winIdx),
@@ -721,14 +730,14 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 		}
 
 		partial := durMS < fullWindowMS || recErr != nil
-		if err := w.commitRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
-			w.logger.Warn("提交媒体窗失败",
+		if err := w.sealRecordedWindow(ctx, material, winIdx, mp4Path, partial); err != nil {
+			w.logger.Warn("登记媒体窗失败",
 				zap.Uint("material_id", material.ID),
 				zap.Int("window_index", winIdx),
 				zap.Bool("partial", partial),
 				zap.Error(err),
 			)
-			// 满窗提交失败不应直接关播：可能只是 master 拼接失败，稍后重试该窗或继续下一窗。
+			// 满窗登记失败可稍后重试同一窗；partial 且已有窗则关播。
 			if partial {
 				if gotAnyWindow {
 					break
@@ -784,6 +793,14 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 		material = latest
 	}
 
+	// 等异步 master 队列排空，再校验/补拼主片。
+	if err := w.waitMasterQueueDrain(ctx, material.ID); err != nil {
+		return fmt.Errorf("等待异步 master 完成失败: %w", err)
+	}
+	if latest2, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest2 != nil {
+		material = latest2
+	}
+
 	windows := material.ParsedMediaWindows().ReadyWindows()
 	if len(windows) == 0 {
 		msg := "关播时没有可用媒体窗"
@@ -795,18 +812,24 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 	_ = os.MkdirAll(workDir, 0o755)
 
 	masterPath := filepath.Join(workDir, liveingest.MasterMP4FileName())
+	needRebuild := false
 	if st, err := os.Stat(masterPath); err != nil || st.Size() == 0 {
+		needRebuild = true
+	} else if material.ParsedMediaWindows().TotalReadyMS() > material.Duration+masterAppendDurationSlackMS {
+		needRebuild = true
+	}
+	if needRebuild {
 		if err := w.rebuildMasterFromWindows(ctx, material); err != nil {
 			return fmt.Errorf("关播拼接主 MP4 失败: %w", err)
 		}
-		if latest2, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest2 != nil {
-			material.MediaWindows = latest2.MediaWindows
-			material.NextWindowSeg = latest2.NextWindowSeg
-			material.NextSeg = latest2.NextSeg
-			material.Duration = latest2.Duration
-			material.LiveURL = latest2.LiveURL
-			material.LiveASR = latest2.LiveASR
-			material.ASRCursorMS = latest2.ASRCursorMS
+		if latest3, gerr := w.repo.GetByID(ctx, material.ID); gerr == nil && latest3 != nil {
+			material.MediaWindows = latest3.MediaWindows
+			material.NextWindowSeg = latest3.NextWindowSeg
+			material.NextSeg = latest3.NextSeg
+			material.Duration = latest3.Duration
+			material.LiveURL = latest3.LiveURL
+			material.LiveASR = latest3.LiveASR
+			material.ASRCursorMS = latest3.ASRCursorMS
 		}
 	}
 

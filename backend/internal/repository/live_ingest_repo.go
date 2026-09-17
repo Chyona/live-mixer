@@ -32,6 +32,8 @@ type LiveIngestRepository interface {
 	UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error
 	// CommitMasterMP4 写回离散媒体窗列表、拼接主片 duration 与 live_url（master.mp4）。
 	CommitMasterMP4(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, masterURL string, asrDue bool) error
+	// SealMediaWindow 仅登记媒体窗与下一窗游标（跟播快路径）；不改 duration / asr_due / live_url。
+	SealMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg int64) error
 	// CommitMediaWindow 兼容旧名，等价 CommitMasterMP4（playlistURL 忽略）。
 	CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error
 	// AppendWindowASR 覆盖写入跟播 ASR（live_asr / paragraphs / cursor）；stillDue 表示 master 又变长需再跑全量。
@@ -309,6 +311,23 @@ func (r *liveMaterialRepository) CommitMasterMP4(ctx context.Context, id uint, e
 	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(fields).Error
+}
+
+func (r *liveMaterialRepository) SealMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg int64) error {
+	now := time.Now()
+	if strings.TrimSpace(mediaWindowsJSON) == "" {
+		mediaWindowsJSON = "[]"
+	}
+	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+		Where("id = ? AND ingest_epoch = ?", id, epoch).
+		Updates(map[string]interface{}{
+			"media_windows":     mediaWindowsJSON,
+			"next_window_seg":   nextWindowSeg,
+			"next_seg":          nextWindowSeg,
+			"last_heartbeat_at": now,
+			"last_progress_at":  now,
+			"updated_at":        now,
+		}).Error
 }
 
 func (r *liveMaterialRepository) CommitMediaWindow(ctx context.Context, id uint, epoch int64, mediaWindowsJSON string, nextWindowSeg, durationMS int64, playlistURL string, asrDue bool) error {

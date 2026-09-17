@@ -1,0 +1,153 @@
+package service
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/webroot"
+	"live-mixer/internal/repository"
+
+	"github.com/glebarez/sqlite"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+func TestSealMediaWindow_DoesNotSetASRDueOrDuration(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.LiveMaterial{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := repository.NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	m := &model.LiveMaterial{
+		Name:         "seal-test",
+		M3U8URL:      "https://example.com/a.m3u8",
+		LiveURL:      "https://cdn.example/pre.mp4",
+		RecordUUID:   "sealuuid1",
+		SourceMode:   model.SourceModeLive,
+		LiveStatus:   model.LiveStatusLive,
+		IngestEpoch:  1,
+		MediaWindows: "[]",
+		Duration:     0,
+		ASRDue:       false,
+		LiveASR:      "{}",
+		ASRStatus:    model.ASRStatusPending,
+		CreatedBy:    1,
+	}
+	if err := db.Create(m).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	windows := model.MediaWindowList{
+		{Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true, ObjectKey: "k0"},
+	}.Marshal()
+	if err := repo.SealMediaWindow(ctx, m.ID, 1, windows, 1); err != nil {
+		t.Fatalf("SealMediaWindow: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ASRDue {
+		t.Fatal("seal must not set asr_due")
+	}
+	if got.Duration != 0 {
+		t.Fatalf("seal must not set duration, got %d", got.Duration)
+	}
+	if got.NextWindowSeg != 1 {
+		t.Fatalf("NextWindowSeg=%d, want 1", got.NextWindowSeg)
+	}
+	if got.ParsedMediaWindows().ReadyCount() != 1 {
+		t.Fatalf("ready windows=%d, want 1", got.ParsedMediaWindows().ReadyCount())
+	}
+}
+
+func TestCommitMasterMP4_SetsASRDue(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.LiveMaterial{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := repository.NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	m := &model.LiveMaterial{
+		Name:         "master-commit",
+		M3U8URL:      "https://example.com/b.m3u8",
+		LiveURL:      "https://cdn.example/pre.mp4",
+		RecordUUID:   "masteruuid1",
+		SourceMode:   model.SourceModeLive,
+		LiveStatus:   model.LiveStatusLive,
+		IngestEpoch:  2,
+		MediaWindows: "[]",
+		LiveASR:      "{}",
+		ASRStatus:    model.ASRStatusPending,
+		CreatedBy:    1,
+	}
+	if err := db.Create(m).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	windows := model.MediaWindowList{
+		{Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true, URL: "https://cdn/w0.mp4"},
+	}.Marshal()
+	if err := repo.CommitMasterMP4(ctx, m.ID, 2, windows, 1, 600000, "https://cdn/master.mp4", true); err != nil {
+		t.Fatalf("CommitMasterMP4: %v", err)
+	}
+	got, err := repo.GetByID(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !got.ASRDue {
+		t.Fatal("CommitMasterMP4 should set asr_due")
+	}
+	if got.Duration != 600000 {
+		t.Fatalf("Duration=%d, want 600000", got.Duration)
+	}
+}
+
+func TestMasterAppendDurationSlackConstant(t *testing.T) {
+	if masterAppendDurationSlackMS < 500 {
+		t.Fatalf("slack too tight: %d", masterAppendDurationSlackMS)
+	}
+}
+
+func TestWaitMasterQueueDrain_Empty(t *testing.T) {
+	raw := NewLiveIngestWorker(nil, nil, nil, nil, nil, webroot.Config{}, zap.NewNop(), 1).(*liveIngestWorker)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := raw.waitMasterQueueDrain(ctx, 42); err != nil {
+		t.Fatalf("empty drain: %v", err)
+	}
+}
+
+func TestSnapshotMasterMP4(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "master.mp4")
+	if err := os.WriteFile(src, []byte("fake-mp4-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := &liveIngestWorker{logger: zap.NewNop()}
+	snap, err := w.snapshotMasterMP4(src, 9, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(snap)
+	got, err := os.ReadFile(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fake-mp4-bytes" {
+		t.Fatalf("snapshot content mismatch: %q", got)
+	}
+}
