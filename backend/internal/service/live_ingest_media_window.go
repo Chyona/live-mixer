@@ -129,11 +129,14 @@ func (w *liveIngestWorker) sealRecordedWindow(
 	w.emitAlignDiag(material, winEv)
 
 	w.logger.Info("媒体窗已登记，投递异步 master 拼接",
-		zap.Uint("material_id", material.ID),
-		zap.Int("window_index", winIdx),
-		zap.Int64("window_dur_ms", durMS),
-		zap.Bool("partial", partial),
-		zap.String("local_path", mp4Path),
+		liveRecordFields("seal_ok", material.ID,
+			zap.Int("window_index", winIdx),
+			zap.Int64("window_dur_ms", durMS),
+			zap.Int64("ready_ms", startMS+durMS),
+			zap.Bool("partial", partial),
+			zap.Int("window_count", windows.ReadyCount()),
+			zap.String("local_path", mp4Path),
+		)...,
 	)
 
 	w.enqueueMasterJob(masterJob{
@@ -170,16 +173,36 @@ func (w *liveIngestWorker) enqueueMasterJob(job masterJob) {
 	// 同窗去重，避免续录重复投递。
 	for _, pending := range q.pending {
 		if pending.winIdx == job.winIdx && pending.epoch == job.epoch {
+			pendingCount := len(q.pending)
+			running := q.running
 			w.masterMu.Unlock()
+			w.logger.Info("异步 master 任务去重跳过",
+				liveRecordFields("master_enqueue_dedup", job.materialID,
+					zap.Int("window_index", job.winIdx),
+					zap.Int64("epoch", job.epoch),
+					zap.Int("pending", pendingCount),
+					zap.Bool("running", running),
+				)...,
+			)
 			return
 		}
 	}
 	q.pending = append(q.pending, job)
+	pendingCount := len(q.pending)
 	start := !q.running
 	if start {
 		q.running = true
 	}
 	w.masterMu.Unlock()
+	w.logger.Info("异步 master 任务已入队",
+		liveRecordFields("master_enqueue", job.materialID,
+			zap.Int("window_index", job.winIdx),
+			zap.Bool("partial", job.partial),
+			zap.Int("pending", pendingCount),
+			zap.Bool("start_runner", start),
+			zap.String("local_path", job.localPath),
+		)...,
+	)
 	if start {
 		go w.runMasterQueue(job.materialID)
 	}
@@ -201,13 +224,21 @@ func (w *liveIngestWorker) requeuePendingMasterBuilds(material *model.LiveMateri
 		}
 		localPath := filepath.Join(winDir, liveingest.WindowMP4FileName(win.Index))
 		if st, err := os.Stat(localPath); err != nil || st.Size() == 0 {
+			w.logger.Warn("续录补投递跳过：本地窗文件缺失",
+				liveRecordFields("requeue_skip_missing_file", material.ID,
+					zap.Int("window_index", win.Index),
+					zap.String("local_path", localPath),
+					zap.Error(err),
+				)...,
+			)
 			continue
 		}
 		w.logger.Info("续录补投递异步 master",
-			zap.Uint("material_id", material.ID),
-			zap.Int("window_index", win.Index),
-			zap.Int64("window_end_ms", win.EndMS),
-			zap.Int64("master_duration_ms", material.Duration),
+			liveRecordFields("requeue_master_job", material.ID,
+				zap.Int("window_index", win.Index),
+				zap.Int64("window_end_ms", win.EndMS),
+				zap.Int64("master_duration_ms", material.Duration),
+			)...,
 		)
 		w.enqueueMasterJob(masterJob{
 			materialID: material.ID,
@@ -220,6 +251,9 @@ func (w *liveIngestWorker) requeuePendingMasterBuilds(material *model.LiveMateri
 }
 
 func (w *liveIngestWorker) runMasterQueue(materialID uint) {
+	w.logger.Info("异步 master 队列 runner 启动",
+		liveRecordFields("master_runner_start", materialID)...,
+	)
 	for {
 		w.masterMu.Lock()
 		q := w.masterQueues[materialID]
@@ -235,18 +269,30 @@ func (w *liveIngestWorker) runMasterQueue(materialID uint) {
 				}
 			}
 			w.masterMu.Unlock()
+			w.logger.Info("异步 master 队列 runner 退出",
+				liveRecordFields("master_runner_exit", materialID)...,
+			)
 			return
 		}
 		job := q.pending[0]
 		q.pending = q.pending[1:]
+		remain := len(q.pending)
 		w.masterMu.Unlock()
 
+		w.logger.Info("异步 master 开始处理任务",
+			liveRecordFields("master_job_start", job.materialID,
+				zap.Int("window_index", job.winIdx),
+				zap.Bool("partial", job.partial),
+				zap.Int("pending_remain", remain),
+			)...,
+		)
 		ctx := context.Background()
 		if err := w.processMasterJob(ctx, job); err != nil {
 			w.logger.Warn("异步 master 任务失败，稍后重试",
-				zap.Uint("material_id", job.materialID),
-				zap.Int("window_index", job.winIdx),
-				zap.Error(err),
+				liveRecordFields("master_job_fail", job.materialID,
+					zap.Int("window_index", job.winIdx),
+					zap.Error(err),
+				)...,
 			)
 			select {
 			case <-time.After(3 * time.Second):
@@ -267,6 +313,7 @@ func (w *liveIngestWorker) runMasterQueue(materialID uint) {
 
 // waitMasterQueueDrain 等待指定素材的异步 master 队列排空（Finalize 前调用）。
 func (w *liveIngestWorker) waitMasterQueueDrain(ctx context.Context, materialID uint) error {
+	waitRound := 0
 	for {
 		w.masterMu.Lock()
 		q := w.masterQueues[materialID]
@@ -274,16 +321,34 @@ func (w *liveIngestWorker) waitMasterQueueDrain(ctx context.Context, materialID 
 			w.masterMu.Unlock()
 			return nil
 		}
+		pending := len(q.pending)
+		running := q.running
 		ch := make(chan struct{})
 		q.waiters = append(q.waiters, ch)
 		w.masterMu.Unlock()
+
+		waitRound++
+		if waitRound == 1 || waitRound%2 == 0 {
+			w.logger.Info("等待异步 master 队列排空",
+				liveRecordFields("master_drain_wait", materialID,
+					zap.Int("wait_round", waitRound),
+					zap.Int("pending", pending),
+					zap.Bool("running", running),
+				)...,
+			)
+		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ch:
 		case <-time.After(30 * time.Second):
-			// 继续轮询，避免永久卡死
+			w.logger.Warn("等待 master 队列超时轮询续等",
+				liveRecordFields("master_drain_timeout", materialID,
+					zap.Int("wait_round", waitRound),
+					zap.Int("pending", w.masterQueuePending(materialID)),
+				)...,
+			)
 		}
 	}
 }
@@ -319,6 +384,11 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 	}
 	if !found {
 		// seal 与读库短暂不同步时再读一次；仍缺则失败重试。
+		w.logger.Warn("master 任务首次未找到媒体窗，重读库",
+			liveRecordFields("master_window_missing_retry", job.materialID,
+				zap.Int("window_index", job.winIdx),
+			)...,
+		)
 		if latest, gerr := w.repo.GetByID(ctx, job.materialID); gerr == nil && latest != nil {
 			material = latest
 			windows = material.ParsedMediaWindows()
@@ -340,8 +410,20 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		objectKey = liveingest.WindowMP4ObjectKey(material.RecordUUID, job.winIdx)
 	}
 	if strings.TrimSpace(winMeta.URL) == "" && w.storage != nil {
+		w.logger.Info("开始上传媒体窗 MP4",
+			liveRecordFields("master_upload_window", job.materialID,
+				zap.Int("window_index", job.winIdx),
+				zap.String("object_key", objectKey),
+			)...,
+		)
 		mp4URL, uerr := w.storage.UploadFile(ctx, job.localPath, objectKey)
 		if uerr != nil {
+			w.logger.Error("上传媒体窗 mp4 失败",
+				liveRecordFields("master_upload_window_fail", job.materialID,
+					zap.Int("window_index", job.winIdx),
+					zap.Error(uerr),
+				)...,
+			)
 			return fmt.Errorf("上传媒体窗 mp4 失败: %w", uerr)
 		}
 		winMeta.URL = mp4URL
@@ -357,22 +439,42 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 	useAppend := job.winIdx > 0 && prevDur > 0
 	if useAppend {
 		if st, err := os.Stat(masterPath); err != nil || st.Size() == 0 {
+			w.logger.Info("本地 master 缺失，改用全量重拼",
+				liveRecordFields("master_append_fallback_missing", job.materialID,
+					zap.Int("window_index", job.winIdx),
+					zap.Error(err),
+				)...,
+			)
 			useAppend = false
 		}
 	}
 
 	var buildErr error
 	if useAppend {
+		w.logger.Info("选用 append 拼接 master",
+			liveRecordFields("master_build_append", job.materialID,
+				zap.Int("window_index", job.winIdx),
+				zap.Int64("prev_ms", prevDur),
+				zap.Bool("asr_due", asrDue),
+			)...,
+		)
 		buildErr = w.appendMasterWithWindow(ctx, material, job.localPath, winMeta.DurMS, prevDur, asrDue)
 		if buildErr != nil {
 			w.logger.Warn("append master 失败，回退全量重拼",
-				zap.Uint("material_id", material.ID),
-				zap.Int("window_index", job.winIdx),
-				zap.Error(buildErr),
+				liveRecordFields("master_append_fail", job.materialID,
+					zap.Int("window_index", job.winIdx),
+					zap.Error(buildErr),
+				)...,
 			)
 			buildErr = w.rebuildMasterFromWindows(ctx, material, asrDue)
 		}
 	} else {
+		w.logger.Info("选用全量重拼 master",
+			liveRecordFields("master_build_rebuild", job.materialID,
+				zap.Int("window_index", job.winIdx),
+				zap.Bool("asr_due", asrDue),
+			)...,
+		)
 		buildErr = w.rebuildMasterFromWindows(ctx, material, asrDue)
 	}
 	if buildErr != nil {
@@ -386,13 +488,14 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 	}
 
 	w.logger.Info("异步 master 拼接完成",
-		zap.Uint("material_id", material.ID),
-		zap.Int("window_index", job.winIdx),
-		zap.Bool("partial", job.partial),
-		zap.Bool("asr_due", asrDue),
-		zap.Int64("master_ready_ms", material.Duration),
-		zap.String("window_url", winMeta.URL),
-		zap.String("master_url", material.LiveURL),
+		liveRecordFields("master_job_ok", material.ID,
+			zap.Int("window_index", job.winIdx),
+			zap.Bool("partial", job.partial),
+			zap.Bool("asr_due", asrDue),
+			zap.Int64("master_ready_ms", material.Duration),
+			zap.String("window_url", winMeta.URL),
+			zap.String("master_url", material.LiveURL),
+		)...,
 	)
 	if asrDue {
 		enqueueWake(w.asrWake, 1)
@@ -462,11 +565,12 @@ func (w *liveIngestWorker) appendMasterWithWindow(
 	_ = os.Remove(tmpPath)
 
 	w.logger.Info("开始 append 拼接主 MP4",
-		zap.Uint("material_id", material.ID),
-		zap.String("master", masterPath),
-		zap.String("window", windowPath),
-		zap.Int64("prev_ms", prevMasterMS),
-		zap.Int64("window_ms", windowDurMS),
+		liveRecordFields("master_append_start", material.ID,
+			zap.String("master", masterPath),
+			zap.String("window", windowPath),
+			zap.Int64("prev_ms", prevMasterMS),
+			zap.Int64("window_ms", windowDurMS),
+		)...,
 	)
 
 	if err := w.ffmpeg.ConcatMediaFiles(ctx, []string{masterPath, windowPath}, tmpPath); err != nil {
@@ -507,10 +611,17 @@ func (w *liveIngestWorker) appendMasterWithWindow(
 // rebuildMasterFromWindows 将已就绪的前 N 个窗 MP4 拼成 master.mp4，写回 live_url / duration，并按需置 asr_due。
 func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, material *model.LiveMaterial, asrDue bool) error {
 	if material == nil {
+		w.logger.Warn("全量重拼 master 跳过：material 为空",
+			zap.String("pipeline", liveRecordPipeline),
+			zap.String("stage", "master_rebuild_skip_nil"),
+		)
 		return nil
 	}
 	ready := material.ParsedMediaWindows().ReadyWindows()
 	if len(ready) == 0 {
+		w.logger.Warn("全量重拼 master 跳过：无就绪媒体窗",
+			liveRecordFields("master_rebuild_skip_empty", material.ID)...,
+		)
 		return nil
 	}
 
@@ -541,9 +652,10 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 	_ = os.Remove(tmpPath)
 
 	w.logger.Info("开始拼接前 N 窗主 MP4",
-		zap.Uint("material_id", material.ID),
-		zap.Int("window_count", len(files)),
-		zap.String("tmp", tmpPath),
+		liveRecordFields("master_rebuild_start", material.ID,
+			zap.Int("window_count", len(files)),
+			zap.String("tmp", tmpPath),
+		)...,
 	)
 
 	// 先写临时文件：上传失败时不覆盖正式 master，避免 ASR 读到坏片而预览仍用旧 CDN。
@@ -555,9 +667,10 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 	} else {
 		if err := w.ffmpeg.ConcatMediaFiles(ctx, files, tmpPath); err != nil {
 			w.logger.Warn("copy 拼接主片失败，回退连续时间轴重编码",
-				zap.Uint("material_id", material.ID),
-				zap.Int("window_count", len(files)),
-				zap.Error(err),
+				liveRecordFields("master_rebuild_copy_fail", material.ID,
+					zap.Int("window_count", len(files)),
+					zap.Error(err),
+				)...,
 			)
 			_ = os.Remove(tmpPath)
 			if err2 := w.ffmpeg.ConcatMP4ContinuousTimeline(ctx, files, tmpPath); err2 != nil {
@@ -606,6 +719,13 @@ func (w *liveIngestWorker) finishMasterBuild(
 	var mp4URL string
 	uploadOK := false
 	if w.storage != nil {
+		w.logger.Info("开始上传主 MP4",
+			liveRecordFields("master_upload_start", material.ID,
+				zap.Int("window_count", windowCount),
+				zap.String("object_key", objectKey),
+				zap.Int64("duration_ms", durMS),
+			)...,
+		)
 		var err error
 		mp4URL, err = w.storage.UploadFile(ctx, tmpPath, objectKey)
 		if err != nil {
@@ -619,9 +739,21 @@ func (w *liveIngestWorker) finishMasterBuild(
 				Error:       err.Error(),
 				ReadyMS:     durMS,
 			})
+			w.logger.Error("上传主 MP4 失败",
+				liveRecordFields("master_upload_fail", material.ID,
+					zap.Int("window_count", windowCount),
+					zap.Error(err),
+				)...,
+			)
 			return fmt.Errorf("上传主 MP4 失败: %w", err)
 		}
 		uploadOK = true
+	} else {
+		w.logger.Warn("存储未配置，跳过主 MP4 上传，沿用已有 live_url",
+			liveRecordFields("master_upload_skip", material.ID,
+				zap.Int("window_count", windowCount),
+			)...,
+		)
 	}
 	if strings.TrimSpace(mp4URL) == "" {
 		mp4URL = strings.TrimSpace(material.LiveURL)
@@ -651,6 +783,14 @@ func (w *liveIngestWorker) finishMasterBuild(
 		mp4URL,
 		asrDue,
 	); err != nil {
+		w.logger.Error("写回主 MP4 元数据失败",
+			liveRecordFields("master_commit_fail", material.ID,
+				zap.Int("window_count", windowCount),
+				zap.Int64("duration_ms", durMS),
+				zap.Bool("asr_due", asrDue),
+				zap.Error(err),
+			)...,
+		)
 		return fmt.Errorf("写回主 MP4 元数据失败: %w", err)
 	}
 	// 提交后回读，避免内存中的 media_windows / next_window_seg 落后于合并结果。
@@ -662,6 +802,11 @@ func (w *liveIngestWorker) finishMasterBuild(
 		material.LiveURL = latest.LiveURL
 		material.ASRDue = latest.ASRDue
 	} else {
+		if err != nil {
+			w.logger.Warn("master 提交后回读素材失败",
+				liveRecordFields("master_commit_reread_fail", material.ID, zap.Error(err))...,
+			)
+		}
 		material.NextSeg = material.NextWindowSeg
 	}
 
@@ -681,11 +826,12 @@ func (w *liveIngestWorker) finishMasterBuild(
 	w.emitAlignDiag(material, ev)
 
 	w.logger.Info("主 MP4 已就绪",
-		zap.Uint("material_id", material.ID),
-		zap.Int("window_count", windowCount),
-		zap.Bool("asr_due", asrDue),
-		zap.Int64("duration_ms", material.Duration),
-		zap.String("live_url", material.LiveURL),
+		liveRecordFields("master_ready", material.ID,
+			zap.Int("window_count", windowCount),
+			zap.Bool("asr_due", asrDue),
+			zap.Int64("duration_ms", material.Duration),
+			zap.String("live_url", material.LiveURL),
+		)...,
 	)
 	return nil
 }

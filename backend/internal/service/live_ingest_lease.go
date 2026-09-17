@@ -76,7 +76,14 @@ func (w *liveIngestWorker) startHeartbeat(ctx context.Context, id uint, epoch in
 			case <-done:
 				return
 			case <-ticker.C:
-				_ = w.repo.HeartbeatIngest(ctx, id, epoch)
+				if err := w.repo.HeartbeatIngest(ctx, id, epoch); err != nil {
+					w.logger.Warn("录像心跳写库失败",
+						liveRecordFields("heartbeat_fail", id,
+							zap.Int64("ingest_epoch", epoch),
+							zap.Error(err),
+						)...,
+					)
+				}
 			}
 		}
 	}()
@@ -95,7 +102,15 @@ func (w *liveIngestWorker) startASRHeartbeat(ctx context.Context, id uint, asrEp
 			case <-done:
 				return
 			case <-ticker.C:
-				_ = w.repo.HeartbeatASR(ctx, id, asrEpoch)
+				if err := w.repo.HeartbeatASR(ctx, id, asrEpoch); err != nil {
+					w.logger.Warn("ASR 心跳写库失败",
+						zap.String("pipeline", liveRecordPipeline),
+						zap.String("stage", "asr_heartbeat_fail"),
+						zap.Uint("material_id", id),
+						zap.Int64("asr_epoch", asrEpoch),
+						zap.Error(err),
+					)
+				}
 			}
 		}
 	}()
