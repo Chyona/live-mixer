@@ -457,14 +457,14 @@ export default [
         name,
         live_url: /\.m3u8(\?|$)/i.test(live_url) ? '' : live_url,
         ...defaultLiveFields(live_url),
-        source_mode: (body.source_mode as SourceVideo['source_mode']) || 'replay',
+        source_mode:
+          body.source_mode === 'upcoming' || body.source_mode === 'live' ? 'live' : 'replay',
         live_status:
-          body.source_mode === 'upcoming'
-            ? 'waiting'
-            : body.source_mode === 'live'
-              ? 'connecting'
-              : 'none',
-        scheduled_at: body.scheduled_at || '',
+          body.source_mode === 'upcoming' || body.source_mode === 'live' ? 'waiting' : 'none',
+        scheduled_at:
+          body.source_mode === 'upcoming' || body.source_mode === 'live'
+            ? body.scheduled_at || now
+            : '',
         remark: body.remark?.trim() || '',
         duration: 0,
         ext: '',
@@ -615,7 +615,7 @@ export default [
         item.m3u8_url = body.m3u8_url.trim();
         item.play_url = item.m3u8_url;
       }
-      item.live_status = item.source_mode === 'upcoming' ? 'waiting' : 'connecting';
+      item.live_status = item.scheduled_at ? 'waiting' : 'connecting';
       item.ingest_error_msg = '';
       Object.assign(item, createInitialAsrState());
       item.updated_at = nowIso();

@@ -397,9 +397,9 @@ func (w *liveIngestWorker) waitForMedia(ctx context.Context, material *model.Liv
 	defer ticker.Stop()
 	for {
 		if time.Now().After(deadline) {
-			msg := "计划开播后 2 小时内未检测到直播"
-			if material.SourceMode == model.SourceModeLive {
-				msg = "添加后 2 小时内未检测到直播"
+			msg := "添加后 2 小时内未检测到直播"
+			if material.ScheduledAt != nil {
+				msg = "开播后 2 小时内未检测到直播"
 			}
 			_ = w.repo.MarkIngestFailed(ctx, material.ID, material.IngestEpoch, msg)
 			return fmt.Errorf("%s", msg)

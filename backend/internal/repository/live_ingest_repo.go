@@ -440,7 +440,7 @@ func (r *liveMaterialRepository) ResetFailedIngest(ctx context.Context, id uint,
 		return err
 	}
 	status := model.LiveStatusConnecting
-	if material.SourceMode == model.SourceModeUpcoming {
+	if material.ScheduledAt != nil {
 		status = model.LiveStatusWaiting
 	}
 	fields := map[string]interface{}{
@@ -470,11 +470,10 @@ func (r *liveMaterialRepository) ResetFailedIngest(ctx context.Context, id uint,
 	if m3u8URL != "" {
 		fields["m3u8_url"] = m3u8URL
 	}
-	if material.SourceMode == model.SourceModeUpcoming && material.ScheduledAt != nil {
+	if material.ScheduledAt != nil {
 		deadline := material.ScheduledAt.Add(model.LiveWaitGrace)
 		fields["wait_deadline_at"] = deadline
-	}
-	if material.SourceMode == model.SourceModeLive {
+	} else {
 		deadline := now.Add(model.LiveConnectGrace)
 		fields["connect_deadline_at"] = deadline
 	}

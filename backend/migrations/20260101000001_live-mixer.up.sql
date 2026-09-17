@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS live_material (
     record_playlist_url VARCHAR(2048) NOT NULL DEFAULT '',
     -- 当前主地址：file=对象存储 mp4（live_url），m3u8=HLS（用户流或自有分片列表）
     url_type     VARCHAR(16)  NOT NULL DEFAULT 'file',
-    -- 创建模式：upcoming=将要直播 live=正在直播 replay=回放/文件
+    -- 创建模式：live=直播 replay=回放/文件；upcoming 仅历史兼容
     source_mode  VARCHAR(16)  NOT NULL DEFAULT 'replay',
     -- 跟播生命周期
     live_status  VARCHAR(16)  NOT NULL DEFAULT 'none',
@@ -107,7 +107,7 @@ COMMENT ON COLUMN live_material.m3u8_url IS '用户 HLS 拉流地址';
 COMMENT ON COLUMN live_material.record_uuid IS '直播录像对象键 UUID，与 live_url 一同创建';
 COMMENT ON COLUMN live_material.record_playlist_url IS '自有分片 HLS 播放列表，跟播过程中更新';
 COMMENT ON COLUMN live_material.url_type IS '当前主地址：file=live_url mp4；m3u8=HLS';
-COMMENT ON COLUMN live_material.source_mode IS '创建模式：upcoming将要直播 live正在直播 replay回放';
+COMMENT ON COLUMN live_material.source_mode IS '创建模式：live直播 replay回放；upcoming仅历史兼容';
 COMMENT ON COLUMN live_material.live_status IS '跟播状态：none/waiting/connecting/live/ending/ended/failed';
 COMMENT ON COLUMN live_material.live_asr IS '直播视频 ASR 识别结果（JSON），默认为空对象';
 COMMENT ON COLUMN live_material.asr_summaries IS 'AI 总结分段（JSON 数组），格式：[{"title":"...","summary":"...","start_time":0,"end_time":100}]；title≤6字，单段时长宜5~60分钟，时间单位毫秒';

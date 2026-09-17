@@ -35,10 +35,9 @@ func (staticLiveURLAllocator) PublicLiveURL(recordUUID string) string {
 }
 
 var (
-	ErrInvalidSourceMode     = errors.New("source_mode 无效，应为 upcoming / live / replay")
-	ErrScheduledAtRequired   = errors.New("将要直播必须选择计划开播时间")
-	ErrScheduledAtExpired    = errors.New("计划开播已超过 2 小时容错窗口，请改选正在直播或更新时间")
-	ErrUpcomingRequiresM3U8  = errors.New("将要直播 / 正在直播必须填写 m3u8 地址")
+	ErrInvalidSourceMode     = errors.New("source_mode 无效，应为 live / replay（upcoming 视为 live）")
+	ErrScheduledAtExpired    = errors.New("开播时间已超过 2 小时容错窗口，请更新时间")
+	ErrUpcomingRequiresM3U8  = errors.New("直播必须填写 m3u8 地址")
 	ErrInvalidSourceURL      = errors.New("请输入有效的 http/https 地址")
 	ErrIngestRetryOnlyFailed = errors.New("仅跟播失败的素材可重试")
 )
@@ -52,7 +51,9 @@ func normalizeSourceMode(mode, sourceURL string) (string, error) {
 		return model.SourceModeReplay, nil
 	}
 	switch mode {
-	case model.SourceModeUpcoming, model.SourceModeLive, model.SourceModeReplay:
+	case model.SourceModeUpcoming, model.SourceModeLive:
+		return model.SourceModeLive, nil
+	case model.SourceModeReplay:
 		return mode, nil
 	default:
 		return "", ErrInvalidSourceMode
@@ -113,7 +114,7 @@ func buildCreateMaterial(createdBy uint, in CreateLiveMaterialInput, alloc LiveR
 			material.URLType = model.URLTypeFile
 			material.LiveStatus = model.LiveStatusNone
 		}
-	case model.SourceModeUpcoming, model.SourceModeLive:
+	case model.SourceModeLive:
 		if !media.IsM3U8URL(sourceURL) {
 			return nil, ErrUpcomingRequiresM3U8
 		}
@@ -125,23 +126,17 @@ func buildCreateMaterial(createdBy uint, in CreateLiveMaterialInput, alloc LiveR
 		material.LiveURL = alloc.PublicLiveURL(recordUUID)
 		material.M3U8URL = sourceURL
 		material.URLType = model.URLTypeM3U8
-		if mode == model.SourceModeUpcoming {
-			if in.ScheduledAt == nil || in.ScheduledAt.IsZero() {
-				return nil, ErrScheduledAtRequired
-			}
-			scheduled := in.ScheduledAt.UTC()
-			deadline := scheduled.Add(model.LiveWaitGrace)
-			if !now.Before(deadline) {
-				return nil, ErrScheduledAtExpired
-			}
-			material.ScheduledAt = &scheduled
-			material.WaitDeadlineAt = &deadline
-			material.LiveStatus = model.LiveStatusWaiting
-		} else {
-			deadline := now.Add(model.LiveConnectGrace)
-			material.ConnectDeadlineAt = &deadline
-			material.LiveStatus = model.LiveStatusConnecting
+		scheduled := now.UTC()
+		if in.ScheduledAt != nil && !in.ScheduledAt.IsZero() {
+			scheduled = in.ScheduledAt.UTC()
 		}
+		deadline := scheduled.Add(model.LiveWaitGrace)
+		if !now.Before(deadline) {
+			return nil, ErrScheduledAtExpired
+		}
+		material.ScheduledAt = &scheduled
+		material.WaitDeadlineAt = &deadline
+		material.LiveStatus = model.LiveStatusWaiting
 	}
 	return material, nil
 }

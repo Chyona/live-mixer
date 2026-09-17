@@ -287,7 +287,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 
 // CreateLiveMaterial 创建直播素材
 // @Summary      创建直播素材
-// @Description  添加直播素材。source_mode=upcoming|live|replay；将要/正在直播填 m3u8_url（或 live_url 中的 m3u8）；回放可填 m3u8 或 mp4。live_url 在直播类创建时由服务端预分配且之后不可改。
+// @Description  添加直播素材。source_mode=live|replay（upcoming 兼容为 live）；直播填 m3u8_url（或 live_url 中的 m3u8），可带 scheduled_at（缺省为当前时间）；回放可填 m3u8 或 mp4。live_url 在直播类创建时由服务端预分配且之后不可改。
 // @Tags         直播素材
 // @Accept       json
 // @Produce      json

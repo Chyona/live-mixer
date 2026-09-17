@@ -152,6 +152,9 @@ func ensureLiveMaterialIngestSchema(db *gorm.DB, logger *zap.Logger) error {
 		if err := db.Exec(`ALTER TABLE live_material ADD CONSTRAINT chk_live_material_source_mode CHECK (source_mode IN ('upcoming', 'live', 'replay'))`).Error; err != nil {
 			logger.Warn("更新 source_mode 约束失败（可能已是新约束）", zap.Error(err))
 		}
+		if err := db.Exec(`UPDATE live_material SET source_mode = 'live' WHERE source_mode = 'upcoming'`).Error; err != nil {
+			return fmt.Errorf("回填 source_mode upcoming→live 失败: %w", err)
+		}
 		if err := db.Exec(`DROP INDEX IF EXISTS idx_live_material_live_url`).Error; err != nil {
 			return fmt.Errorf("删除旧 live_url 唯一索引失败: %w", err)
 		}

@@ -76,7 +76,7 @@ func runAddLiveMode(a addLiveArgs) {
 	}
 	m3u8 := strings.TrimSpace(a.M3U8URL)
 	if m3u8 == "" {
-		fmt.Fprintln(os.Stderr, "请用 -url 指定直播 m3u8（与 UI「正在直播」添加一致）")
+		fmt.Fprintln(os.Stderr, "请用 -url 指定直播 m3u8（与 UI「直播」添加一致）")
 		os.Exit(2)
 	}
 	mode := strings.TrimSpace(a.SourceMode)
@@ -86,7 +86,7 @@ func runAddLiveMode(a addLiveArgs) {
 	switch mode {
 	case "live", "upcoming", "replay":
 	default:
-		fmt.Fprintf(os.Stderr, "不支持的 source_mode=%q（live|upcoming|replay）\n", mode)
+		fmt.Fprintf(os.Stderr, "不支持的 source_mode=%q（live|replay；upcoming 视为 live）\n", mode)
 		os.Exit(2)
 	}
 	name := strings.TrimSpace(a.Name)

@@ -10,7 +10,7 @@ import (
 )
 
 // live-e2e：打真实 webserver，串联 UI 同款链路：
-// 添加正在直播 → 跟播录像满 duration → 等到窗口 ASR 覆盖该时长 → 一键成片。
+// 添加直播 → 跟播录像满 duration → 等到窗口 ASR 覆盖该时长 → 一键成片。
 // 用于验证 live_ingest / 窗口 ASR / ai-slice-draft 现有逻辑的正确性与可靠性。
 
 type liveE2EArgs struct {
@@ -63,7 +63,7 @@ func runLiveE2EMode(a liveE2EArgs) {
 	}
 	m3u8 := strings.TrimSpace(a.M3U8URL)
 	if m3u8 == "" {
-		fmt.Fprintln(os.Stderr, "请用 -url 指定正在直播的 m3u8")
+		fmt.Fprintln(os.Stderr, "请用 -url 指定直播 m3u8")
 		os.Exit(2)
 	}
 	recordFor := a.RecordFor
@@ -115,7 +115,7 @@ func runLiveE2EMode(a liveE2EArgs) {
 
 	fmt.Printf("=== live-e2e ===\nbase=%s\nurl=%s\nduration=%s record_for=%s max_clip_ms=%d wait=%s\n",
 		base, m3u8, e2eDur, recordFor, maxClipMS, wait)
-	fmt.Println("1/3 创建源视频（模拟 UI 正在直播）…")
+	fmt.Println("1/3 创建源视频（模拟 UI 直播）…")
 	created, err := apiCreateLiveMaterial(ctx, client, base, token, reqBody)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "创建失败: %v\n", err)

@@ -4,7 +4,7 @@
 //
 //	paragraphs   — 从 live_asr JSON 用 MinGap 算法生成 asr_paragraphs（无 LLM）
 //	live-window  — 拉取跟播 m3u8 分片，按当前窗口 ASR 逻辑转写并输出 JSON
-//	add-live     — 模拟 UI 添加「正在直播」源视频，轮询直至 ASR 推进
+//	add-live     — 模拟 UI 添加「直播」源视频，轮询直至 ASR 推进
 //	one-click    — 对源视频发起一键成片（POST /v1/tasks/ai-slice-draft），轮询至完成
 //	live-e2e     — 直播 m3u8 → 跟播满 -duration → 等 ASR 覆盖 → 一键成片（打真实 webserver）
 package main
@@ -45,7 +45,7 @@ func main() {
 	userID := flag.Uint("user-id", 1, "本地签发 JWT 的用户 ID（默认 1）")
 	forceLogin := flag.Bool("login", false, "强制密码登录（默认用配置 JWT 签发）")
 	name := flag.String("name", "", "源视频名称（add-live；默认 test-live-时间戳）")
-	sourceMode := flag.String("source-mode", "live", "upcoming|live|replay（add-live，默认 live）")
+	sourceMode := flag.String("source-mode", "live", "live|replay（add-live，默认 live；upcoming 兼容为 live）")
 	remark := flag.String("remark", "", "备注（add-live）")
 	pollEvery := flag.Duration("poll", 15*time.Second, "轮询间隔（add-live / one-click）")
 	waitFor := flag.Duration("wait", 0, "最长等待（add-live 默认 15m；one-click 默认 30m；live-e2e 默认 duration+15m）")

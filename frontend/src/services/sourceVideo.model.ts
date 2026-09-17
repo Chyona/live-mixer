@@ -1,5 +1,6 @@
 export type AsrStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+/** upcoming 仅历史数据兼容；新建直播一律 live。 */
 export type SourceMode = 'upcoming' | 'live' | 'replay';
 
 export type LiveStatus =

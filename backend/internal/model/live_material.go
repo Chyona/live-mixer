@@ -22,29 +22,29 @@ const (
 
 // 创建时用户选择的源模式。
 const (
-	SourceModeUpcoming = "upcoming" // 将要直播
-	SourceModeLive     = "live"     // 正在直播
+	SourceModeUpcoming = "upcoming" // 历史「将要直播」，创建时映射为 live
+	SourceModeLive     = "live"     // 直播
 	SourceModeReplay   = "replay"   // 回放 / 点播文件
 )
 
 // 推流直播生命周期状态（live_status）。
 const (
 	LiveStatusNone       = "none"       // 回放 / 文件，不跟播
-	LiveStatusWaiting    = "waiting"    // 将要直播，等待开播窗
-	LiveStatusConnecting = "connecting" // 正在直播，尚未读到媒体
+	LiveStatusWaiting    = "waiting"    // 等待开播窗
+	LiveStatusConnecting = "connecting" // 尚未读到媒体
 	LiveStatusLive       = "live"       // 已读到媒体，分片录像中
 	LiveStatusEnding     = "ending"     // 关播，正在合成 final.mp4
 	LiveStatusEnded      = "ended"      // 合成成功
 	LiveStatusFailed     = "failed"     // 截止前无流或不可恢复错误
 )
 
-// LiveWaitGrace 将要直播：计划开播后允许延迟开播的时长。
+// LiveWaitGrace 直播：开播后允许延迟出流的时长。
 const LiveWaitGrace = 2 * time.Hour
 
-// LiveConnectGrace 正在直播：创建后允许尚未读到媒体的时长。
+// LiveConnectGrace 历史「正在直播」无 scheduled_at 时：创建后允许尚未读到媒体的时长。
 const LiveConnectGrace = 2 * time.Hour
 
-// LiveEarlyProbe 将要直播：计划时间前提前开始探测，减少早开丢片。
+// LiveEarlyProbe 开播前提前开始探测，减少早开丢片。
 const LiveEarlyProbe = 15 * time.Minute
 
 // LiveSegmentDurationSec 跟播分片时长（秒）。
@@ -95,12 +95,12 @@ type LiveMaterial struct {
 	// URLType 当前成片/点播主地址：m3u8 或 file。
 	URLType string `gorm:"column:url_type;size:16;not null;default:file;comment:当前主地址file或m3u8" json:"url_type"`
 	// SourceMode 创建模式：upcoming/live/replay。
-	SourceMode string `gorm:"column:source_mode;size:16;not null;default:replay;comment:upcoming/live/replay" json:"source_mode"`
+	SourceMode string `gorm:"column:source_mode;size:16;not null;default:replay;comment:live/replay（upcoming 历史兼容）" json:"source_mode"`
 	// LiveStatus 跟播生命周期。
 	LiveStatus        string              `gorm:"column:live_status;size:16;not null;default:none;index;comment:跟播状态" json:"live_status"`
 	ScheduledAt       *time.Time          `gorm:"column:scheduled_at;comment:计划开播时间" json:"scheduled_at,omitempty"`
-	WaitDeadlineAt    *time.Time          `gorm:"column:wait_deadline_at;comment:将要直播开播截止" json:"wait_deadline_at,omitempty"`
-	ConnectDeadlineAt *time.Time          `gorm:"column:connect_deadline_at;comment:正在直播连上截止" json:"connect_deadline_at,omitempty"`
+	WaitDeadlineAt    *time.Time          `gorm:"column:wait_deadline_at;comment:开播探测截止" json:"wait_deadline_at,omitempty"`
+	ConnectDeadlineAt *time.Time          `gorm:"column:connect_deadline_at;comment:历史无 scheduled_at 的连上截止" json:"connect_deadline_at,omitempty"`
 	StreamStartedAt   *time.Time          `gorm:"column:stream_started_at;comment:第一次读到媒体的时间" json:"stream_started_at,omitempty"`
 	ASRCursorMS       int64               `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
 	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:录像/收尾抢占代数" json:"ingest_epoch"`
@@ -150,7 +150,7 @@ func (m *LiveMaterial) IsReplaySource() bool {
 	return m.SourceMode == SourceModeReplay || m.SourceMode == "" || m.LiveStatus == LiveStatusNone
 }
 
-// NeedsLiveIngest 将要直播或正在直播（含失败后可重试）。
+// NeedsLiveIngest 直播跟播（含失败后可重试；upcoming 为历史行）。
 func (m *LiveMaterial) NeedsLiveIngest() bool {
 	if m == nil {
 		return false

@@ -723,6 +723,9 @@ func TestLiveMaterialService_Create_UpcomingAndLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upcoming Create() error = %v", err)
 	}
+	if upcoming.SourceMode != model.SourceModeLive {
+		t.Errorf("upcoming SourceMode = %q, want live", upcoming.SourceMode)
+	}
 	if upcoming.LiveStatus != model.LiveStatusWaiting {
 		t.Errorf("upcoming LiveStatus = %q, want waiting", upcoming.LiveStatus)
 	}
@@ -735,27 +738,55 @@ func TestLiveMaterialService_Create_UpcomingAndLive(t *testing.T) {
 	if upcoming.URLType != model.URLTypeM3U8 {
 		t.Errorf("upcoming URLType = %q", upcoming.URLType)
 	}
+	if upcoming.ScheduledAt == nil || upcoming.WaitDeadlineAt == nil {
+		t.Fatal("upcoming should set scheduled_at and wait_deadline_at")
+	}
 
+	before := time.Now().UTC()
 	live, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{
-		Name: "正在直播", SourceMode: model.SourceModeLive,
+		Name: "直播缺省开播时间", SourceMode: model.SourceModeLive,
 		SourceURL: "https://example.com/now/index.m3u8",
 	})
+	after := time.Now().UTC()
 	if err != nil {
 		t.Fatalf("live Create() error = %v", err)
 	}
-	if live.LiveStatus != model.LiveStatusConnecting {
-		t.Errorf("live LiveStatus = %q, want connecting", live.LiveStatus)
+	if live.LiveStatus != model.LiveStatusWaiting {
+		t.Errorf("live LiveStatus = %q, want waiting", live.LiveStatus)
 	}
-	if live.ConnectDeadlineAt == nil {
-		t.Fatal("live ConnectDeadlineAt should be set")
+	if live.ConnectDeadlineAt != nil {
+		t.Fatal("new live should not set connect_deadline_at")
+	}
+	if live.ScheduledAt == nil || live.WaitDeadlineAt == nil {
+		t.Fatal("live should default scheduled_at and wait_deadline_at")
+	}
+	if live.ScheduledAt.Before(before.Add(-time.Second)) || live.ScheduledAt.After(after.Add(time.Second)) {
+		t.Errorf("default scheduled_at = %v, want around now", live.ScheduledAt)
 	}
 
-	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{
-		Name: "缺计划", SourceMode: model.SourceModeUpcoming,
-		SourceURL: "https://example.com/miss/index.m3u8",
+	future := time.Now().UTC().Add(time.Hour)
+	futureLive, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "未来开播", SourceMode: model.SourceModeLive,
+		SourceURL: "https://example.com/future/index.m3u8", ScheduledAt: &future,
 	})
-	if !errors.Is(err, ErrScheduledAtRequired) {
-		t.Errorf("missing scheduled_at error = %v", err)
+	if err != nil {
+		t.Fatalf("future live Create() error = %v", err)
+	}
+	if futureLive.LiveStatus != model.LiveStatusWaiting {
+		t.Errorf("future LiveStatus = %q, want waiting", futureLive.LiveStatus)
+	}
+	wantDeadline := future.Add(model.LiveWaitGrace)
+	if futureLive.WaitDeadlineAt == nil || !futureLive.WaitDeadlineAt.Equal(wantDeadline) {
+		t.Errorf("future WaitDeadlineAt = %v, want %v", futureLive.WaitDeadlineAt, wantDeadline)
+	}
+
+	expired := time.Now().UTC().Add(-3 * time.Hour)
+	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "过期开播", SourceMode: model.SourceModeLive,
+		SourceURL: "https://example.com/old/index.m3u8", ScheduledAt: &expired,
+	})
+	if !errors.Is(err, ErrScheduledAtExpired) {
+		t.Errorf("expired scheduled_at error = %v", err)
 	}
 
 	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{

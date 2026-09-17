@@ -20,7 +20,7 @@ func TestLiveIngestRepository_ClaimWaitingNearSchedule(t *testing.T) {
 		M3U8URL:        "https://example.com/a.m3u8",
 		LiveURL:        "https://cdn.example/final.mp4",
 		RecordUUID:     "abc",
-		SourceMode:     model.SourceModeUpcoming,
+		SourceMode:     model.SourceModeLive,
 		LiveStatus:     model.LiveStatusWaiting,
 		ScheduledAt:    &soon,
 		WaitDeadlineAt: &deadline,
@@ -51,7 +51,7 @@ func TestLiveIngestRepository_SkipFarFutureWaiting(t *testing.T) {
 	waiting := &model.LiveMaterial{
 		Name:           "很久以后",
 		M3U8URL:        "https://example.com/b.m3u8",
-		SourceMode:     model.SourceModeUpcoming,
+		SourceMode:     model.SourceModeLive,
 		LiveStatus:     model.LiveStatusWaiting,
 		ScheduledAt:    &later,
 		WaitDeadlineAt: &deadline,
