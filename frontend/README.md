@@ -29,15 +29,13 @@
 ## 快速开始
 
 ```bash
-# 在仓库根目录安装（含 Git hooks）
-pnpm install
-
 cd frontend
+pnpm install                  # 安装依赖并注册 Git hooks（frontend/.husky）
 cp .env.example .env          # 按需修改
 pnpm dev                      # http://localhost:8008
 ```
 
-要求：Node ≥ 20，pnpm ≥ 10。依赖与 Husky 在仓库根目录统一管理。
+要求：Node ≥ 20，pnpm ≥ 10。前端依赖与 Husky 均在 `frontend/` 目录管理。
 
 ## 常用命令
 
