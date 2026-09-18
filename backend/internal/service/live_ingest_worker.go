@@ -767,12 +767,11 @@ func (w *liveIngestWorker) recordOnly(ctx context.Context, material *model.LiveM
 		)
 		recStart := time.Now()
 		onProgress := func() {
-			dur := material.MasterReadyMS()
-			if err := w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, int64(winIdx), dur, ""); err != nil {
+			// 不传已封窗总长：录像协程的 Duration 常为 0，MasterReadyMS 会返回尚未拼进主片的窗长。
+			if err := w.repo.UpdateRecordingProgress(ctx, material.ID, material.IngestEpoch, int64(winIdx), 0, ""); err != nil {
 				w.logger.Warn("更新录像进度失败",
 					liveRecordFields("progress_update_fail", material.ID,
 						zap.Int("window_index", winIdx),
-						zap.Int64("duration_ms", dur),
 						zap.Error(err),
 					)...,
 				)
@@ -1090,6 +1089,9 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 			)...,
 		)
 		if err := w.rebuildMasterFromWindows(ctx, material, true); err != nil {
+			if errors.Is(err, errWindowUnrecoverable) {
+				w.markIngestFailedLogged(ctx, material, "finalize_window_missing", err.Error())
+			}
 			w.logger.Error("Finalize 补拼 master 失败",
 				liveRecordFields("finalize_rebuild_fail", material.ID, zap.Error(err))...,
 			)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -30,6 +31,32 @@ const asrLiveThrottleEveryNWindows = 3
 // asrLiveMaxMasterLagWindows 直播中若已 seal 媒体领先 master.duration 超过该窗数，推迟 ASR。
 const asrLiveMaxMasterLagWindows = 1
 
+// maxUnrecoverableWindowAttempts 窗文件确定找不到时的尝试次数，超过后放弃该任务，避免堵住 Finalize。
+const maxUnrecoverableWindowAttempts = 3
+
+// errWindowUnrecoverable 当前目录、旧代数目录、URL、对象键都无法得到窗文件。
+var errWindowUnrecoverable = errors.New("窗文件不可恢复")
+
+// windowUnrecoverableError 缺窗且无法找回。网络或上传失败不是这类错误。
+type windowUnrecoverableError struct {
+	index int
+}
+
+func (e *windowUnrecoverableError) Error() string {
+	if e == nil {
+		return errWindowUnrecoverable.Error()
+	}
+	return fmt.Sprintf("拼接主片缺少窗 %d 本地文件且无 URL", e.index)
+}
+
+func (e *windowUnrecoverableError) Is(target error) bool {
+	return target == errWindowUnrecoverable
+}
+
+func abandonUnrecoverableWindowJob(err error, tries int) bool {
+	return errors.Is(err, errWindowUnrecoverable) && tries >= maxUnrecoverableWindowAttempts
+}
+
 // masterJob 异步上传窗并拼接 master；按素材串行处理。
 type masterJob struct {
 	materialID uint
@@ -37,6 +64,8 @@ type masterJob struct {
 	localPath  string
 	epoch      int64
 	partial    bool
+	// unrecoverableTries 连续「窗文件不可恢复」次数；网络错误不计入。
+	unrecoverableTries int
 }
 
 type materialMasterQueue struct {
@@ -223,15 +252,19 @@ func (w *liveIngestWorker) requeuePendingMasterBuilds(material *model.LiveMateri
 			continue
 		}
 		localPath := filepath.Join(winDir, liveingest.WindowMP4FileName(win.Index))
-		if st, err := os.Stat(localPath); err != nil || st.Size() == 0 {
-			w.logger.Warn("续录补投递跳过：本地窗文件缺失",
-				liveRecordFields("requeue_skip_missing_file", material.ID,
-					zap.Int("window_index", win.Index),
-					zap.String("local_path", localPath),
-					zap.Error(err),
-				)...,
-			)
-			continue
+		if !nonEmptyFile(localPath) {
+			resolved, rerr := w.resolveWindowFile(context.Background(), material, win)
+			if rerr != nil {
+				w.logger.Warn("续录补投递跳过：窗文件不可用",
+					liveRecordFields("requeue_skip_missing_file", material.ID,
+						zap.Int("window_index", win.Index),
+						zap.String("local_path", localPath),
+						zap.Error(rerr),
+					)...,
+				)
+				continue
+			}
+			localPath = resolved
 		}
 		w.logger.Info("续录补投递异步 master",
 			liveRecordFields("requeue_master_job", material.ID,
@@ -248,6 +281,176 @@ func (w *liveIngestWorker) requeuePendingMasterBuilds(material *model.LiveMateri
 			partial:    false,
 		})
 	}
+}
+
+func nonEmptyFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Size() > 0
+}
+
+func downloadStatusMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "status code: 404") || strings.Contains(msg, "status code: 410")
+}
+
+func (w *liveIngestWorker) ingestEpochDir(material *model.LiveMaterial, epoch int64) string {
+	root := ""
+	if w != nil {
+		root = w.web.RootDir
+	}
+	if root == "" {
+		root = os.TempDir()
+	}
+	if material == nil {
+		return ""
+	}
+	return liveingest.LiveIngestSegmentDir(root, material.ID, epoch)
+}
+
+func windowMP4Path(epochDir string, index int) string {
+	return filepath.Join(epochDir, liveingest.WindowsDirName(), liveingest.WindowMP4FileName(index))
+}
+
+// masterOmitsEarlierWindow 更早的已封窗还没进入已提交 master，不能 append，否则主片会缺段。
+func masterOmitsEarlierWindow(material *model.LiveMaterial, winIdx int, masterDur int64) bool {
+	if material == nil || winIdx <= 0 {
+		return false
+	}
+	for _, win := range material.ParsedMediaWindows().ReadyWindows() {
+		if win.Index >= winIdx {
+			continue
+		}
+		if win.EndMS > masterDur+masterAppendDurationSlackMS {
+			return true
+		}
+	}
+	return false
+}
+
+// persistWindowMeta 合并写回单个窗的 URL / ObjectKey，不改 duration。
+func (w *liveIngestWorker) persistWindowMeta(ctx context.Context, material *model.LiveMaterial, win model.MediaWindow) error {
+	if material == nil {
+		return fmt.Errorf("material 为空")
+	}
+	windows := material.ParsedMediaWindows().Upsert(win)
+	material.MediaWindows = windows.Marshal()
+	if err := w.repo.SealMediaWindow(ctx, material.ID, material.IngestEpoch, material.MediaWindows, material.NextWindowSeg); err != nil {
+		return err
+	}
+	if latest, err := w.repo.GetByID(ctx, material.ID); err == nil && latest != nil {
+		material.MediaWindows = latest.MediaWindows
+		material.NextWindowSeg = latest.NextWindowSeg
+		material.NextSeg = latest.NextSeg
+	}
+	return nil
+}
+
+// uploadAndPersistWindow 把已有本地窗补传到对象存储。上传失败不阻断本次拼接。
+func (w *liveIngestWorker) uploadAndPersistWindow(ctx context.Context, material *model.LiveMaterial, win model.MediaWindow, localPath string) {
+	if w == nil || w.storage == nil || material == nil || strings.TrimSpace(win.URL) != "" {
+		return
+	}
+	objectKey := win.ObjectKey
+	if objectKey == "" {
+		objectKey = liveingest.WindowMP4ObjectKey(material.RecordUUID, win.Index)
+	}
+	mp4URL, err := w.storage.UploadFile(ctx, localPath, objectKey)
+	if err != nil {
+		w.logger.Warn("补传媒体窗失败，继续使用本地文件",
+			liveRecordFields("master_upload_window_fail", material.ID,
+				zap.Int("window_index", win.Index),
+				zap.Error(err),
+			)...,
+		)
+		return
+	}
+	win.URL = mp4URL
+	win.ObjectKey = objectKey
+	if err := w.persistWindowMeta(ctx, material, win); err != nil {
+		w.logger.Warn("写回媒体窗 URL 失败",
+			liveRecordFields("master_window_url_commit_fail", material.ID,
+				zap.Int("window_index", win.Index),
+				zap.Error(err),
+			)...,
+		)
+	}
+}
+
+// resolveWindowFile 按当前目录、更早代数目录、URL、对象键找回窗 MP4。
+// 找到旧目录文件时复制到当前代数并补上传。对象不存在返回 errWindowUnrecoverable；下载网络错误原样返回以便重试。
+func (w *liveIngestWorker) resolveWindowFile(ctx context.Context, material *model.LiveMaterial, win model.MediaWindow) (string, error) {
+	if material == nil {
+		return "", &windowUnrecoverableError{index: win.Index}
+	}
+	dest := windowMP4Path(w.segmentDir(material), win.Index)
+	if nonEmptyFile(dest) {
+		return dest, nil
+	}
+	for epoch := material.IngestEpoch - 1; epoch >= 1; epoch-- {
+		old := windowMP4Path(w.ingestEpochDir(material, epoch), win.Index)
+		if !nonEmptyFile(old) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return "", err
+		}
+		if err := copyFile(old, dest); err != nil {
+			w.logger.Warn("复制旧代数窗文件失败，改用原路径",
+				liveRecordFields("window_copy_old_epoch_fail", material.ID,
+					zap.Int("window_index", win.Index),
+					zap.Int64("epoch", epoch),
+					zap.Error(err),
+				)...,
+			)
+			w.uploadAndPersistWindow(ctx, material, win, old)
+			return old, nil
+		}
+		w.uploadAndPersistWindow(ctx, material, win, dest)
+		return dest, nil
+	}
+
+	url := strings.TrimSpace(win.URL)
+	fromObjectKey := false
+	if url == "" {
+		objectKey := strings.TrimSpace(win.ObjectKey)
+		if w.storage != nil && objectKey != "" {
+			url = strings.TrimSpace(w.storage.PublicURL(objectKey))
+			fromObjectKey = url != ""
+		}
+	}
+	if url == "" {
+		return "", &windowUnrecoverableError{index: win.Index}
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return "", err
+	}
+	if _, err := utils.DownloadFileWithConfigContext(ctx, url, dest, utils.DownloadConfig{}); err != nil {
+		_ = os.Remove(dest)
+		if downloadStatusMissing(err) {
+			return "", &windowUnrecoverableError{index: win.Index}
+		}
+		return "", fmt.Errorf("下载窗 %d 失败: %w", win.Index, err)
+	}
+	if !nonEmptyFile(dest) {
+		_ = os.Remove(dest)
+		return "", &windowUnrecoverableError{index: win.Index}
+	}
+	if fromObjectKey && strings.TrimSpace(win.URL) == "" {
+		win.URL = url
+		win.ObjectKey = strings.TrimSpace(win.ObjectKey)
+		if err := w.persistWindowMeta(ctx, material, win); err != nil && w.logger != nil {
+			w.logger.Warn("写回对象键下载的窗 URL 失败",
+				liveRecordFields("master_window_url_commit_fail", material.ID,
+					zap.Int("window_index", win.Index),
+					zap.Error(err),
+				)...,
+			)
+		}
+	}
+	return dest, nil
 }
 
 func (w *liveIngestWorker) runMasterQueue(materialID uint) {
@@ -294,10 +497,20 @@ func (w *liveIngestWorker) runMasterQueue(materialID uint) {
 					zap.Error(err),
 				)...,
 			)
-			select {
-			case <-time.After(3 * time.Second):
-			default:
+			if errors.Is(err, errWindowUnrecoverable) {
+				job.unrecoverableTries++
 			}
+			if abandonUnrecoverableWindowJob(err, job.unrecoverableTries) {
+				w.logger.Error("窗文件不可恢复，放弃该 master 任务",
+					liveRecordFields("master_job_abandon", job.materialID,
+						zap.Int("window_index", job.winIdx),
+						zap.Int("tries", job.unrecoverableTries),
+						zap.Error(err),
+					)...,
+				)
+				continue
+			}
+			time.Sleep(5 * time.Second)
 			w.masterMu.Lock()
 			q = w.masterQueues[materialID]
 			if q == nil {
@@ -306,7 +519,6 @@ func (w *liveIngestWorker) runMasterQueue(materialID uint) {
 			}
 			q.pending = append([]masterJob{job}, q.pending...)
 			w.masterMu.Unlock()
-			time.Sleep(5 * time.Second)
 		}
 	}
 }
@@ -367,11 +579,6 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		return nil
 	}
 
-	st, err := os.Stat(job.localPath)
-	if err != nil || st.Size() == 0 {
-		return fmt.Errorf("本地窗文件无效: %s", job.localPath)
-	}
-
 	windows := material.ParsedMediaWindows()
 	var winMeta model.MediaWindow
 	found := false
@@ -405,6 +612,15 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		return fmt.Errorf("media_windows 中缺少窗 %d", job.winIdx)
 	}
 
+	localPath := job.localPath
+	if !nonEmptyFile(localPath) {
+		resolved, rerr := w.resolveWindowFile(ctx, material, winMeta)
+		if rerr != nil {
+			return rerr
+		}
+		localPath = resolved
+	}
+
 	objectKey := winMeta.ObjectKey
 	if objectKey == "" {
 		objectKey = liveingest.WindowMP4ObjectKey(material.RecordUUID, job.winIdx)
@@ -416,7 +632,7 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 				zap.String("object_key", objectKey),
 			)...,
 		)
-		mp4URL, uerr := w.storage.UploadFile(ctx, job.localPath, objectKey)
+		mp4URL, uerr := w.storage.UploadFile(ctx, localPath, objectKey)
 		if uerr != nil {
 			w.logger.Error("上传媒体窗 mp4 失败",
 				liveRecordFields("master_upload_window_fail", job.materialID,
@@ -428,8 +644,9 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 		}
 		winMeta.URL = mp4URL
 		winMeta.ObjectKey = objectKey
-		windows = windows.Upsert(winMeta)
-		material.MediaWindows = windows.Marshal()
+		if err := w.persistWindowMeta(ctx, material, winMeta); err != nil {
+			return fmt.Errorf("写回媒体窗 URL 失败: %w", err)
+		}
 	}
 
 	asrDue := liveASRDueForMasterJob(material, job)
@@ -437,6 +654,15 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 	prevDur := material.Duration
 	masterPath := filepath.Join(w.segmentDir(material), liveingest.MasterMP4FileName())
 	useAppend := job.winIdx > 0 && prevDur > 0
+	if useAppend && masterOmitsEarlierWindow(material, job.winIdx, prevDur) {
+		w.logger.Info("更早的窗尚未进入 master，改用全量重拼",
+			liveRecordFields("master_append_fallback_gap", job.materialID,
+				zap.Int("window_index", job.winIdx),
+				zap.Int64("prev_ms", prevDur),
+			)...,
+		)
+		useAppend = false
+	}
 	if useAppend {
 		if st, err := os.Stat(masterPath); err != nil || st.Size() == 0 {
 			w.logger.Info("本地 master 缺失，改用全量重拼",
@@ -458,7 +684,7 @@ func (w *liveIngestWorker) processMasterJob(ctx context.Context, job masterJob) 
 				zap.Bool("asr_due", asrDue),
 			)...,
 		)
-		buildErr = w.appendMasterWithWindow(ctx, material, job.localPath, winMeta.DurMS, prevDur, asrDue)
+		buildErr = w.appendMasterWithWindow(ctx, material, localPath, winMeta.DurMS, prevDur, asrDue)
 		if buildErr != nil {
 			w.logger.Warn("append master 失败，回退全量重拼",
 				liveRecordFields("master_append_fail", job.materialID,
@@ -633,16 +859,9 @@ func (w *liveIngestWorker) rebuildMasterFromWindows(ctx context.Context, materia
 
 	files := make([]string, 0, len(ready))
 	for _, win := range ready {
-		local := filepath.Join(winDir, liveingest.WindowMP4FileName(win.Index))
-		if st, err := os.Stat(local); err != nil || st.Size() == 0 {
-			url := strings.TrimSpace(win.URL)
-			if url == "" {
-				return fmt.Errorf("拼接主片缺少窗 %d 本地文件且无 URL", win.Index)
-			}
-			if _, err := utils.DownloadFileWithConfigContext(ctx, url, local, utils.DownloadConfig{}); err != nil {
-				_ = os.Remove(local)
-				return fmt.Errorf("下载窗 %d 失败: %w", win.Index, err)
-			}
+		local, err := w.resolveWindowFile(ctx, material, win)
+		if err != nil {
+			return err
 		}
 		files = append(files, local)
 	}

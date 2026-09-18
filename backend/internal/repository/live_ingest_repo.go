@@ -29,6 +29,7 @@ type LiveIngestRepository interface {
 	HeartbeatASR(ctx context.Context, id uint, asrEpoch int64) error
 	MarkConnecting(ctx context.Context, id uint, epoch int64) error
 	MarkLiveStarted(ctx context.Context, id uint, epoch int64, width, height int, resumeSeg int64) error
+	// UpdateRecordingProgress 刷新录像心跳与下一窗游标。durationMS 忽略：不能把内存中的 0 或已封窗总长写进 duration。
 	UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error
 	// CommitMasterMP4 写回拼接主片 duration 与 live_url（master.mp4）。
 	// media_windows 与库内现有列表按 Index 合并（不整表覆盖）；next_window_seg 只升不降。
@@ -262,22 +263,23 @@ func (r *liveMaterialRepository) MarkLiveStarted(ctx context.Context, id uint, e
 	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(map[string]interface{}{
-			"live_status":        model.LiveStatusLive,
-			"stream_started_at":  now,
-			"width":              width,
-			"height":             height,
-			"ingest_resume_seg":  resumeSeg,
-			"last_heartbeat_at":  now,
-			"last_progress_at":   now,
-			"ingest_error_msg":   "",
+			"live_status":       model.LiveStatusLive,
+			"stream_started_at": now,
+			"width":             width,
+			"height":            height,
+			"ingest_resume_seg": resumeSeg,
+			"last_heartbeat_at": now,
+			"last_progress_at":  now,
+			"ingest_error_msg":  "",
 		}).Error
 }
 
 func (r *liveMaterialRepository) UpdateRecordingProgress(ctx context.Context, id uint, epoch int64, nextSeg int64, durationMS int64, playlistURL string) error {
+	// duration 只在 CommitMasterMP4 成功后增加。进度回调若写入已封窗总长，续录会把未拼进主片的窗当成已完成。
+	_ = durationMS
 	now := time.Now()
 	fields := map[string]interface{}{
 		"next_seg":          nextSeg,
-		"duration":          durationMS,
 		"last_heartbeat_at": now,
 		"last_progress_at":  now,
 		"asr_updated_at":    now,
