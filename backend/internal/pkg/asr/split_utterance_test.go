@@ -277,8 +277,15 @@ func TestSplitUtteranceForCaptions_ShortUnchanged(t *testing.T) {
 
 func TestCaptionLexiconSize(t *testing.T) {
 	n := CaptionLexiconSize()
-	if n < 200 || n > 500 {
-		t.Fatalf("lexicon size=%d, want about 200-500", n)
+	if n < 300 {
+		t.Fatalf("lexicon size=%d, want at least ~300 finance terms", n)
+	}
+	ensureCaptionLexicon()
+	for w := range captionLexiconSet {
+		r := utf8.RuneCountInString(w)
+		if r != 2 && r != 3 {
+			t.Fatalf("word %q has %d runes, want 2 or 3", w, r)
+		}
 	}
 }
 
