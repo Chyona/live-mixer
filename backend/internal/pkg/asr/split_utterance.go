@@ -18,11 +18,11 @@ type TimedSegment struct {
 
 type captionAtom struct {
 	text       string
-	keepIntact bool // 英文词 / 数字词整段不拆
+	keepIntact bool // 英文词 / 数字词 / 中文词典词整段不拆
 	runes      int
 }
 
-// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文词与数字词不拆），并切分时间。
+// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文/数字/中文词典词不拆），并切分时间。
 // 成片每行会剥离首尾断句标点，保证行首行尾均非标点。
 func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 	text := strings.TrimSpace(u.Text)
@@ -30,13 +30,14 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 		return nil
 	}
 
+	extra := buildExtraCJKWords(u.Words)
 	var lines []string
 	for _, clause := range splitByPunctuation(text) {
 		clause = trimCaptionEdgePunct(clause)
 		if clause == "" {
 			continue
 		}
-		for _, line := range splitBalancedPreferIntact(clause, MaxCaptionRunes) {
+		for _, line := range splitBalancedPreferIntact(clause, MaxCaptionRunes, extra) {
 			line = trimCaptionEdgePunct(line)
 			if line == "" {
 				continue
@@ -136,7 +137,7 @@ func isBreakPunctRune(r rune) bool {
 	}
 }
 
-func tokenizeCaptionAtoms(text string) []captionAtom {
+func tokenizeCaptionAtoms(text string, extra map[string]struct{}) []captionAtom {
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return nil
@@ -157,6 +158,12 @@ func tokenizeCaptionAtoms(text string) []captionAtom {
 			s := string(runes[i:j])
 			out = append(out, captionAtom{text: s, keepIntact: true, runes: j - i})
 			i = j
+			continue
+		}
+		if end := matchCJKWord(runes, i, extra); end > i {
+			s := string(runes[i:end])
+			out = append(out, captionAtom{text: s, keepIntact: true, runes: end - i})
+			i = end
 			continue
 		}
 		out = append(out, captionAtom{text: string(runes[i]), keepIntact: false, runes: 1})
@@ -224,8 +231,9 @@ func isLatinLetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
-// splitBalancedPreferIntact 超长时按最少行数均分；英文词与数字词整段不拆。
-func splitBalancedPreferIntact(text string, max int) []string {
+// splitBalancedPreferIntact 超长时按最少行数均分；英文/数字/中文词典词整段不拆。
+// 切点只能落在原子边界；keepIntact 原子不会被按 rune 切开。
+func splitBalancedPreferIntact(text string, max int, extra map[string]struct{}) []string {
 	if text == "" {
 		return nil
 	}
@@ -234,7 +242,7 @@ func splitBalancedPreferIntact(text string, max int) []string {
 		return []string{text}
 	}
 
-	atoms := tokenizeCaptionAtoms(text)
+	atoms := tokenizeCaptionAtoms(text, extra)
 	parts := (n + max - 1) / max
 	base, rem := n/parts, n%parts
 	targets := make([]int, parts)
@@ -280,16 +288,8 @@ func splitBalancedPreferIntact(text string, max int) []string {
 			curLen = next
 			continue
 		}
-		// 超过当前行目标。
+		// 超过当前行目标：优先在原子边界换行，不切开 keepIntact。
 		if next <= max {
-			if atom.keepIntact {
-				// 英文/数字整词优先换行，避免为凑目标而跨行切开。
-				flush()
-				cur.WriteString(atom.text)
-				curLen = atom.runes
-				continue
-			}
-			// 单字 Other：封口后起新行，保证纯中文均分与 targets 一致。
 			flush()
 			cur.WriteString(atom.text)
 			curLen = atom.runes
@@ -306,7 +306,7 @@ func splitBalancedPreferIntact(text string, max int) []string {
 
 // splitBalancedPreferLatin 保留旧名，供既有测试与调用兼容。
 func splitBalancedPreferLatin(text string, max int) []string {
-	return splitBalancedPreferIntact(text, max)
+	return splitBalancedPreferIntact(text, max, nil)
 }
 
 func stripBreakPunct(s string) string {

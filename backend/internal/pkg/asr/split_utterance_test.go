@@ -108,7 +108,7 @@ func assertTokenIntactAcrossLines(t *testing.T, lines []string, token string) {
 func TestSplitBalancedPreferIntact_KeepsNumberIntact(t *testing.T) {
 	// 优惠力度达到(6) + 100(3) + 真的很香(4) = 13 → 目标 7+6，切点易落在 100 中
 	text := "优惠力度达到100真的很香"
-	got := splitBalancedPreferIntact(text, MaxCaptionRunes)
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
 	joined := strings.Join(got, "")
 	if joined != text {
 		t.Fatalf("joined %q != original", joined)
@@ -118,7 +118,7 @@ func TestSplitBalancedPreferIntact_KeepsNumberIntact(t *testing.T) {
 
 func TestSplitBalancedPreferIntact_KeepsPercentIntact(t *testing.T) {
 	text := "优惠力度达到100%真的很香" // 14 runes → 7+7
-	got := splitBalancedPreferIntact(text, MaxCaptionRunes)
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
 	joined := strings.Join(got, "")
 	if joined != text {
 		t.Fatalf("joined %q != original", joined)
@@ -128,7 +128,7 @@ func TestSplitBalancedPreferIntact_KeepsPercentIntact(t *testing.T) {
 
 func TestSplitBalancedPreferIntact_LongNumber(t *testing.T) {
 	num := "1234567890123" // 13 digits > 12
-	got := splitBalancedPreferIntact(num, MaxCaptionRunes)
+	got := splitBalancedPreferIntact(num, MaxCaptionRunes, nil)
 	if len(got) != 1 || got[0] != num {
 		t.Fatalf("got %v, want whole number on one line", got)
 	}
@@ -156,7 +156,7 @@ func TestSplitByPunctuation_KeepsDecimalIntact(t *testing.T) {
 
 func TestSplitBalancedPreferIntact_KeepsDecimalIntact(t *testing.T) {
 	text := "今天价格只要3.14元起"
-	got := splitBalancedPreferIntact(text, MaxCaptionRunes)
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
 	joined := strings.Join(got, "")
 	if joined != text {
 		t.Fatalf("joined %q != original", joined)
@@ -272,5 +272,103 @@ func TestSplitUtteranceForCaptions_ShortUnchanged(t *testing.T) {
 	got := SplitUtteranceForCaptions(u)
 	if len(got) != 1 || got[0].Text != "第一段话" || got[0].StartTime != 100 || got[0].EndTime != 800 {
 		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestCaptionLexiconSize(t *testing.T) {
+	n := CaptionLexiconSize()
+	if n < 200 || n > 500 {
+		t.Fatalf("lexicon size=%d, want about 200-500", n)
+	}
+}
+
+func TestSplitBalancedPreferIntact_KeepsChineseWordIntact(t *testing.T) {
+	// 构造超长句，使均分切点容易落在「金融」「银行」中间。
+	text := "今天我们来聊聊金融银行市场和经济投资风险问题"
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
+	joined := strings.Join(got, "")
+	if joined != text {
+		t.Fatalf("joined %q != original", joined)
+	}
+	assertTokenIntactAcrossLines(t, got, "金融")
+	assertTokenIntactAcrossLines(t, got, "银行")
+	assertTokenIntactAcrossLines(t, got, "市场")
+	assertTokenIntactAcrossLines(t, got, "经济")
+	assertTokenIntactAcrossLines(t, got, "投资")
+	assertTokenIntactAcrossLines(t, got, "风险")
+	for _, line := range got {
+		if utf8.RuneCountInString(line) > MaxCaptionRunes {
+			t.Errorf("line too long: %q (%d)", line, utf8.RuneCountInString(line))
+		}
+	}
+}
+
+func TestSplitBalancedPreferIntact_ChineseAndEnglishIntact(t *testing.T) {
+	text := "一二三四五六七ChatGPT金融八九十"
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
+	joined := strings.Join(got, "")
+	if joined != text {
+		t.Fatalf("joined %q != original", joined)
+	}
+	assertTokenIntactAcrossLines(t, got, "ChatGPT")
+	assertTokenIntactAcrossLines(t, got, "金融")
+}
+
+func TestSplitBalancedPreferIntact_ExtraASRWords(t *testing.T) {
+	// 「蓝莓果酱」不在静态词表；通过 extra 注入后应整词保留。
+	text := "一二三四五六七蓝莓果酱八九十十一"
+	extra := map[string]struct{}{"蓝莓果酱": {}}
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, extra)
+	assertTokenIntactAcrossLines(t, got, "蓝莓果酱")
+}
+
+func TestSplitBalancedPreferIntact_LongChineseWordExceedsMax(t *testing.T) {
+	// 通过 extra 注入超长词（>12），应整词独占一行并允许超 max。
+	word := "一二三四五六七八九十一二三"
+	extra := map[string]struct{}{word: {}}
+	got := splitBalancedPreferIntact(word, MaxCaptionRunes, extra)
+	if len(got) != 1 || got[0] != word {
+		t.Fatalf("got %v, want whole long word on one line", got)
+	}
+	if utf8.RuneCountInString(got[0]) <= MaxCaptionRunes {
+		t.Fatalf("expected word longer than max, got %d", utf8.RuneCountInString(got[0]))
+	}
+}
+
+func TestSplitUtteranceForCaptions_ChineseWordsIntact(t *testing.T) {
+	u := Utterance{
+		StartTime: 0,
+		EndTime:   12000,
+		Text:      "今天我们来聊聊金融银行市场和经济投资风险问题",
+		Words: []Word{
+			{Text: "金融", StartTime: 3000, EndTime: 4000},
+			{Text: "银行", StartTime: 4000, EndTime: 5000},
+		},
+	}
+	got := SplitUtteranceForCaptions(u)
+	if len(got) < 2 {
+		t.Fatalf("expected multiple segments, got %#v", got)
+	}
+	lines := make([]string, len(got))
+	for i, seg := range got {
+		lines[i] = seg.Text
+		assertNoEdgePunct(t, seg.Text)
+		if utf8.RuneCountInString(seg.Text) > MaxCaptionRunes {
+			t.Errorf("seg too long: %q", seg.Text)
+		}
+	}
+	assertTokenIntactAcrossLines(t, lines, "金融")
+	assertTokenIntactAcrossLines(t, lines, "银行")
+}
+
+func TestMatchCJKWord_ForwardMax(t *testing.T) {
+	runes := []rune("金融市场")
+	end := matchCJKWord(runes, 0, nil)
+	if end != 2 || string(runes[0:end]) != "金融" {
+		t.Fatalf("got end=%d word=%q, want 金融", end, string(runes[0:end]))
+	}
+	end = matchCJKWord(runes, 2, nil)
+	if end != 4 || string(runes[2:end]) != "市场" {
+		t.Fatalf("got end=%d word=%q, want 市场", end, string(runes[2:end]))
 	}
 }
