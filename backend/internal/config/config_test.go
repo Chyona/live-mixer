@@ -197,6 +197,9 @@ func TestLoad_CapCutMateAndWebDefaults(t *testing.T) {
 	if cfg.Web.SourceCacheMaxDirs != DefaultSourceCacheMaxDirs {
 		t.Errorf("Web.SourceCacheMaxDirs = %d, want %d", cfg.Web.SourceCacheMaxDirs, DefaultSourceCacheMaxDirs)
 	}
+	if cfg.Web.LiveIngestMaxDirs != DefaultLiveIngestMaxDirs {
+		t.Errorf("Web.LiveIngestMaxDirs = %d, want %d", cfg.Web.LiveIngestMaxDirs, DefaultLiveIngestMaxDirs)
+	}
 	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
 		t.Errorf("Web.StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)
 	}
@@ -266,6 +269,7 @@ func TestLoad_WebStagingCleanupEnvOverride(t *testing.T) {
 	t.Setenv("APP_WEB_STAGING_MAX_DIRS", "120")
 	t.Setenv("APP_WEB_ASR_STAGING_MAX_DIRS", "8")
 	t.Setenv("APP_WEB_SOURCE_CACHE_MAX_DIRS", "5")
+	t.Setenv("APP_WEB_LIVE_INGEST_MAX_DIRS", "12")
 	t.Setenv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN", "30")
 
 	cfg, err := Load("")
@@ -281,6 +285,9 @@ func TestLoad_WebStagingCleanupEnvOverride(t *testing.T) {
 	if cfg.Web.SourceCacheMaxDirs != 5 {
 		t.Errorf("SourceCacheMaxDirs = %d, want 5", cfg.Web.SourceCacheMaxDirs)
 	}
+	if cfg.Web.LiveIngestMaxDirs != 12 {
+		t.Errorf("LiveIngestMaxDirs = %d, want 12", cfg.Web.LiveIngestMaxDirs)
+	}
 	if cfg.Web.StagingCleanupIntervalMin != 30 {
 		t.Errorf("StagingCleanupIntervalMin = %d, want 30", cfg.Web.StagingCleanupIntervalMin)
 	}
@@ -290,6 +297,7 @@ func TestLoad_WebStagingCleanupInvalidEnvFallsBackToDefault(t *testing.T) {
 	t.Setenv("APP_WEB_STAGING_MAX_DIRS", "0")
 	t.Setenv("APP_WEB_ASR_STAGING_MAX_DIRS", "0")
 	t.Setenv("APP_WEB_SOURCE_CACHE_MAX_DIRS", "0")
+	t.Setenv("APP_WEB_LIVE_INGEST_MAX_DIRS", "0")
 	t.Setenv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN", "-1")
 
 	cfg, err := Load("")
@@ -304,6 +312,9 @@ func TestLoad_WebStagingCleanupInvalidEnvFallsBackToDefault(t *testing.T) {
 	}
 	if cfg.Web.SourceCacheMaxDirs != DefaultSourceCacheMaxDirs {
 		t.Errorf("SourceCacheMaxDirs = %d, want %d", cfg.Web.SourceCacheMaxDirs, DefaultSourceCacheMaxDirs)
+	}
+	if cfg.Web.LiveIngestMaxDirs != DefaultLiveIngestMaxDirs {
+		t.Errorf("LiveIngestMaxDirs = %d, want %d", cfg.Web.LiveIngestMaxDirs, DefaultLiveIngestMaxDirs)
 	}
 	if cfg.Web.StagingCleanupIntervalMin != DefaultStagingCleanupIntervalMin {
 		t.Errorf("StagingCleanupIntervalMin = %d, want %d", cfg.Web.StagingCleanupIntervalMin, DefaultStagingCleanupIntervalMin)

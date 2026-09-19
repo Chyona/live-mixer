@@ -1171,6 +1171,7 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 		w.logger.Warn("关播 ASR 后处理失败，将保留 ended+processing 供重试",
 			liveRecordFields("finalize_asr_post_fail", material.ID, zap.Error(err))...,
 		)
+		// 只清当前代数工作目录；素材 ID 父目录留给 cleanup-live-ingest 按配额淘汰。
 		_ = os.RemoveAll(workDir)
 		return err
 	}
@@ -1180,6 +1181,7 @@ func (w *liveIngestWorker) finalizeRecording(ctx context.Context, material *mode
 			zap.Int64("duration_ms", dur),
 		)...,
 	)
+	// 只清当前 e{epoch}；不删 staging/live_ingest/{id}，由配额 GC 统一保留最近 N 个。
 	_ = os.RemoveAll(workDir)
 	return nil
 }

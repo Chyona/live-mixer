@@ -235,6 +235,36 @@ func main() {
 			}
 		},
 	})
+	sched.Register(scheduler.Job{
+		Name:     "cleanup-live-ingest",
+		Interval: cfg.Web.StagingCleanupInterval(),
+		Run: func(jobCtx context.Context) {
+			result, cleanErr := service.CleanupLiveIngest(
+				jobCtx,
+				cfg.Web.RootDir,
+				cfg.Web.LiveIngestMaxDirs,
+				liveMaterialRepo,
+				logger,
+			)
+			if cleanErr != nil {
+				logger.Warn("清理 live_ingest 失败",
+					zap.Error(cleanErr),
+					zap.Int("removed_ids", result.RemovedIDs),
+					zap.Int("removed_epochs", result.RemovedEpoch),
+				)
+				return
+			}
+			if result.RemovedIDs > 0 || result.RemovedEpoch > 0 {
+				logger.Info("已清理 live_ingest 目录",
+					zap.Int("scanned", result.Scanned),
+					zap.Int("protected", result.Protected),
+					zap.Int("kept", result.Kept),
+					zap.Int("removed_ids", result.RemovedIDs),
+					zap.Int("removed_epochs", result.RemovedEpoch),
+				)
+			}
+		},
+	})
 	sched.Start(ctx)
 
 	gin.SetMode(cfg.Server.Mode)

@@ -54,6 +54,17 @@ func (m *mockLiveRepoForTask) GetByID(ctx context.Context, id uint) (*model.Live
 	}
 	return m.material, nil
 }
+func (m *mockLiveRepoForTask) ListByIDs(ctx context.Context, ids []uint) (map[uint]*model.LiveMaterial, error) {
+	out := make(map[uint]*model.LiveMaterial, len(ids))
+	for _, id := range ids {
+		mat, err := m.GetByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		out[id] = mat
+	}
+	return out, nil
+}
 func (m *mockLiveRepoForTask) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {
 	return nil, gorm.ErrRecordNotFound
 }
