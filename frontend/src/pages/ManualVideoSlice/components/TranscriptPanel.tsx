@@ -37,6 +37,8 @@ interface TranscriptPanelProps {
   onLocateParagraph?: (paragraph: TranscriptParagraph, timeSec: number) => void;
   /** 只读：可定位播放，不可点选/拖选文案 */
   readOnly?: boolean;
+  /** 录像时长超过 ASR 覆盖时，在文案列表末尾提示字幕仍在生成 */
+  asrPending?: boolean;
 }
 
 const TRANSCRIPT_AUTO_SCROLL_KEY = 'manual-slice-transcript-auto-scroll';
@@ -233,6 +235,7 @@ const TranscriptPanel = ({
   onSelectSegment,
   onLocateParagraph,
   readOnly = false,
+  asrPending = false,
 }: TranscriptPanelProps) => {
   const transcriptBodyRef = useRef<HTMLDivElement>(null);
   const lastAutoScrolledTargetRef = useRef<string | null>(null);
@@ -682,6 +685,7 @@ const TranscriptPanel = ({
             );
           })
         )}
+        {asrPending ? <p className="slice-editor-transcript-asr-pending">ASR字幕生成中</p> : null}
       </div>
       <p className="slice-editor-transcript-tip">
         {readOnly

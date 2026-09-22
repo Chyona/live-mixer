@@ -21,7 +21,7 @@ import {
   sourceVideoPlayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
-import { shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
+import { getAsrSelectableEndSec, shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
 import {
   fetchSliceProjectDetail,
   saveSliceProject,
@@ -213,6 +213,11 @@ const ManualVideoSlicePage = () => {
     () => findActiveSegment(paragraphs, currentTime),
     [paragraphs, currentTime]
   );
+
+  const asrPending = useMemo(() => {
+    const asrEndSec = getAsrSelectableEndSec(video);
+    return asrEndSec != null && videoDuration - asrEndSec > 1;
+  }, [video, videoDuration]);
 
   const activeParagraphId = activeSync?.paragraphId ?? null;
   const activeTranscriptSegmentId = activeSync?.segmentId ?? null;
@@ -1155,6 +1160,7 @@ const ManualVideoSlicePage = () => {
                 onSelectSegment={handleSelectSegment}
                 onLocateParagraph={handleLocateParagraph}
                 readOnly={projectTaskReadOnly}
+                asrPending={asrPending}
               />
             </div>
           </div>

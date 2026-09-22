@@ -653,6 +653,14 @@
   color: inherit;
 }
 
+.slice-editor-transcript-asr-pending {
+  flex-shrink: 0;
+  margin: 4px 0 0;
+  color: var(--text-gray);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .slice-editor-transcript-tip,
 .slice-editor-copy-tip {
   flex-shrink: 0;
