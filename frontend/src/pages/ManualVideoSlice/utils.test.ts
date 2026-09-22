@@ -7,6 +7,7 @@ import {
   attachSourceParagraphIdToCopySegment,
   buildCopySegmentFromParagraphRange,
   buildCopySegmentsFromAiSegment,
+  findCopySegmentForTranscriptClick,
   buildSelectedCopyHighlightRanges,
   clampCopySegmentPlaybackBounds,
   deleteSelectedRangeFromSegment,
@@ -1635,5 +1636,56 @@ describe('deleteSelectedRangeFromSegment', () => {
     expect(segments).toHaveLength(1);
     expect(segments[0]!.text).toBe('手机的销量跌了10%');
     expect(segments[0]!.start).toBeCloseTo(3503.5, 1);
+  });
+});
+
+describe('findCopySegmentForTranscriptClick', () => {
+  const paragraph: TranscriptParagraph = {
+    id: 'p1',
+    speaker: '1',
+    speakerName: '说话人1',
+    segments: [
+      { id: 's1', start: 10, end: 20, text: '前半' },
+      { id: 's2', start: 20, end: 30, text: '后半' },
+    ],
+  };
+
+  it('picks the partial segment that contains the click time', () => {
+    const earlier = { ...makeCopySegment('a', 10, 20), sourceParagraphId: 'p1' };
+    const later = { ...makeCopySegment('b', 20, 30), sourceParagraphId: 'p1' };
+
+    expect(findCopySegmentForTranscriptClick([later, earlier], paragraph, 22)?.id).toBe('b');
+    expect(findCopySegmentForTranscriptClick([later, earlier], paragraph, 12)?.id).toBe('a');
+  });
+
+  it('falls back to time overlap when sourceParagraphId is missing', () => {
+    const overlap = makeCopySegment('hit', 12, 18);
+    const other = makeCopySegment('miss', 40, 50);
+
+    expect(findCopySegmentForTranscriptClick([other, overlap], paragraph, 15)?.id).toBe('hit');
+  });
+
+  it('returns null when nothing matches', () => {
+    const otherParagraph: TranscriptParagraph = {
+      id: 'p2',
+      speaker: '2',
+      speakerName: '说话人2',
+      segments: [{ id: 's3', start: 100, end: 110, text: '别处' }],
+    };
+
+    expect(
+      findCopySegmentForTranscriptClick(
+        [{ ...makeCopySegment('a', 10, 20), sourceParagraphId: 'p1' }],
+        otherParagraph,
+        105
+      )
+    ).toBeNull();
+  });
+
+  it('uses the nearest start when the click time falls in a gap', () => {
+    const earlier = { ...makeCopySegment('a', 10, 14), sourceParagraphId: 'p1' };
+    const later = { ...makeCopySegment('b', 24, 30), sourceParagraphId: 'p1' };
+
+    expect(findCopySegmentForTranscriptClick([earlier, later], paragraph, 20)?.id).toBe('b');
   });
 });

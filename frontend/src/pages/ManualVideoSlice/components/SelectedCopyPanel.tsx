@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Checkbox } from 'antd';
 import {
@@ -23,6 +23,7 @@ import {
   getTextSelectionOffsets,
   getTotalSelectedDuration,
   reorderSegments,
+  scrollElementIntoViewPreferUpper,
   SEGMENT_EXTEND_STEP_SEC,
 } from '../utils';
 import { formatVideoDuration } from '~/utils/duration';
@@ -76,6 +77,10 @@ function wouldReorder(fromIndex: number, target: DropMarker, length: number) {
   return insertIndex !== fromIndex;
 }
 
+export type SelectedCopyPanelHandle = {
+  scrollToSegment: (id: string) => void;
+};
+
 interface SelectedCopyPanelProps {
   segments: SelectedCopySegment[];
   /** 文案分段原始数据，用于前后留白边界 */
@@ -113,7 +118,7 @@ interface SelectedCopyPanelProps {
   readOnly?: boolean;
 }
 
-const SelectedCopyPanel = ({
+const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelProps>(function SelectedCopyPanel({
   segments,
   paragraphs,
   aiSegments = [],
@@ -141,7 +146,7 @@ const SelectedCopyPanel = ({
   onExportDraft,
   onSubmit,
   readOnly = false,
-}: SelectedCopyPanelProps) => {
+}, ref) {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropMarker, setDropMarker] = useState<DropMarker | null>(null);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
@@ -150,6 +155,16 @@ const SelectedCopyPanel = ({
   const panelRef = useRef<HTMLDivElement>(null);
   const aiBlockRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    scrollToSegment(id: string) {
+      const container = listRef.current;
+      if (!container) return;
+      const node = container.querySelector<HTMLElement>(`[data-copy-id="${CSS.escape(id)}"]`);
+      if (!node) return;
+      scrollElementIntoViewPreferUpper(container, node);
+    },
+  }));
   const pointerDraggingRef = useRef(false);
   const suppressItemClickRef = useRef(false);
   const textSelectionRef = useRef<{ segmentId: string; start: number; end: number } | null>(null);
@@ -533,6 +548,7 @@ const SelectedCopyPanel = ({
             return (
               <div
                 key={segment.id}
+                data-copy-id={segment.id}
                 className={[
                   'slice-editor-copy-item',
                   isActive ? 'active' : '',
@@ -817,6 +833,6 @@ const SelectedCopyPanel = ({
         : null}
     </div>
   );
-};
+});
 
 export default SelectedCopyPanel;

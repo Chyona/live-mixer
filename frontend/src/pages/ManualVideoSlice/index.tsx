@@ -49,7 +49,7 @@ import { serializeManualSliceProjectState } from '~/utils/sliceProjectDirty';
 import AlignDiagDebugPanel from './components/AlignDiagDebugPanel';
 import TranscriptPanel from './components/TranscriptPanel';
 import VideoTranscriptResizeHandle from './components/VideoTranscriptResizeHandle';
-import SelectedCopyPanel from './components/SelectedCopyPanel';
+import SelectedCopyPanel, { type SelectedCopyPanelHandle } from './components/SelectedCopyPanel';
 import SegmentPreviewModal from './components/SegmentPreviewModal';
 import SaveDraftModal from './components/SaveDraftModal';
 import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from './types';
@@ -58,6 +58,7 @@ import {
   resolveCopySegmentWords,
   adjustSegmentEdge,
   findActiveSegment,
+  findCopySegmentForTranscriptClick,
   buildTranscriptHighlight,
   buildSelectedCopyHighlightRanges,
   getParagraphText,
@@ -95,6 +96,7 @@ const ManualVideoSlicePage = () => {
   const location = useLocation();
   const entryFrom = useSliceEntryFrom();
   const playerRef = useRef<StreamVideoPlayerHandle>(null);
+  const copyPanelRef = useRef<SelectedCopyPanelHandle>(null);
   const panelLeftRef = useRef<HTMLDivElement>(null);
   const videoBlockRef = useRef<HTMLDivElement>(null);
   const lastCurrentTimeRef = useRef(0);
@@ -523,6 +525,15 @@ const ManualVideoSlicePage = () => {
     lastCurrentTimeRef.current = nextTime;
     setCurrentTime(nextTime);
   }, []);
+
+  const handleLocateParagraph = useCallback(
+    (paragraph: TranscriptParagraph, timeSec: number) => {
+      const match = findCopySegmentForTranscriptClick(selectedSegments, paragraph, timeSec);
+      if (!match) return;
+      copyPanelRef.current?.scrollToSegment(match.id);
+    },
+    [selectedSegments]
+  );
 
   const handleSelectSegment = useCallback((segment: SelectedCopySegment | null) => {
     if (!segment) return;
@@ -1142,12 +1153,14 @@ const ManualVideoSlicePage = () => {
                 matchParagraphIds={matchParagraphIds}
                 onSeek={handleSeek}
                 onSelectSegment={handleSelectSegment}
+                onLocateParagraph={handleLocateParagraph}
                 readOnly={projectTaskReadOnly}
               />
             </div>
           </div>
 
           <SelectedCopyPanel
+            ref={copyPanelRef}
             segments={selectedSegments}
             paragraphs={paragraphs}
             aiSegments={aiSegments}

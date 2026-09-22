@@ -62,6 +62,50 @@ export function getParagraphRange(paragraph: TranscriptParagraph) {
   };
 }
 
+function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/**
+ * 定位跟随时，把左侧单击映射到右侧已选片段。
+ * 优先 sourceParagraphId；否则用时间相交。多个候选时优先包含 seek 时间的、列表中靠前的；
+ * 都不包含该时间时取起点最近的。
+ */
+export function findCopySegmentForTranscriptClick(
+  segments: SelectedCopySegment[],
+  paragraph: TranscriptParagraph,
+  timeSec: number
+): SelectedCopySegment | null {
+  const linked = segments.filter((item) => item.sourceParagraphId === paragraph.id);
+  let candidates = linked;
+  if (candidates.length === 0) {
+    const range = getParagraphRange(paragraph);
+    candidates = segments.filter((item) =>
+      rangesOverlap(item.start, item.end, range.start, range.end)
+    );
+  }
+  if (candidates.length === 0) return null;
+
+  const containing = candidates.filter(
+    (item) => item.start <= timeSec && timeSec <= item.end
+  );
+  if (containing.length > 0) return containing[0] ?? null;
+
+  let closest = candidates[0];
+  if (!closest) return null;
+  let bestDistance = Math.abs(closest.start - timeSec);
+  for (let index = 1; index < candidates.length; index += 1) {
+    const item = candidates[index];
+    if (!item) continue;
+    const distance = Math.abs(item.start - timeSec);
+    if (distance < bestDistance) {
+      closest = item;
+      bestDistance = distance;
+    }
+  }
+  return closest;
+}
+
 /**
  * 按字符区间切出对应 words。
  * 传入 sourceText 时按完整原文对齐（words 常不含标点）；否则退回「words 顺序拼接」假设。

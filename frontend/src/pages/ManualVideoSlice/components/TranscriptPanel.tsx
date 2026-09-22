@@ -33,6 +33,8 @@ interface TranscriptPanelProps {
   matchParagraphIds: string[];
   onSeek: (time: number) => void;
   onSelectSegment: (segment: ReturnType<typeof paragraphToCopySegment>) => void;
+  /** 定位跟随开启时，单击文案通知页面滚动右侧预览 */
+  onLocateParagraph?: (paragraph: TranscriptParagraph, timeSec: number) => void;
   /** 只读：可定位播放，不可点选/拖选文案 */
   readOnly?: boolean;
 }
@@ -84,7 +86,11 @@ type TranscriptParagraphItemProps = {
   onParagraphClick: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
   onParagraphDoubleClick: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
   onTextSelection: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
-  onSegmentClick: (event: React.MouseEvent<HTMLSpanElement>, start: number) => void;
+  onSegmentClick: (
+    event: React.MouseEvent<HTMLSpanElement>,
+    paragraph: TranscriptParagraph,
+    start: number
+  ) => void;
 };
 
 const TranscriptParagraphItem = ({
@@ -165,7 +171,7 @@ const TranscriptParagraphItem = ({
           ]
             .filter(Boolean)
             .join(' ')}
-          onClick={(event) => onSegmentClick(event, segment.start)}
+          onClick={(event) => onSegmentClick(event, paragraph, segment.start)}
         >
           {inner}
         </span>
@@ -225,6 +231,7 @@ const TranscriptPanel = ({
   matchParagraphIds,
   onSeek,
   onSelectSegment,
+  onLocateParagraph,
   readOnly = false,
 }: TranscriptPanelProps) => {
   const transcriptBodyRef = useRef<HTMLDivElement>(null);
@@ -507,6 +514,9 @@ const TranscriptPanel = ({
 
     const range = getParagraphRange(paragraph);
     onSeek(range.start);
+    if (autoScrollEnabled) {
+      onLocateParagraph?.(paragraph, range.start);
+    }
   };
 
   const handleParagraphDoubleClick = (
@@ -543,7 +553,11 @@ const TranscriptPanel = ({
     }
   };
 
-  const handleSegmentClick = (event: React.MouseEvent<HTMLSpanElement>, start: number) => {
+  const handleSegmentClick = (
+    event: React.MouseEvent<HTMLSpanElement>,
+    paragraph: TranscriptParagraph,
+    start: number
+  ) => {
     event.stopPropagation();
     if (event.detail > 1) return;
     if (suppressNextClickSeekRef.current) {
@@ -551,6 +565,9 @@ const TranscriptPanel = ({
       return;
     }
     onSeek(start);
+    if (autoScrollEnabled) {
+      onLocateParagraph?.(paragraph, start);
+    }
   };
 
   const renderParagraphItem = (
@@ -590,7 +607,7 @@ const TranscriptPanel = ({
         <div className="slice-editor-transcript-head">
           <div className="slice-editor-transcript-head-main">
             <div className="slice-editor-panel-title">文案分段</div>
-            <Tooltip title="开启后，播放视频时文案列表会自动滚动，将当前朗读段落居中显示">
+            <Tooltip title="开启后，播放视频时文案列表会自动滚动，将当前朗读段落居中显示；单击文案时，右侧预览会滚到对应片段">
               <label className="slice-editor-transcript-follow">
                 <Switch
                   size="small"
