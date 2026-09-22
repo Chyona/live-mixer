@@ -231,6 +231,47 @@ func TestShouldDeferLiveASR_Lag(t *testing.T) {
 	}
 }
 
+// TestShouldDeferLiveASR_RealWindowDrift 回归线上事故：真实媒体窗落盘时长比标称 600000ms
+// 多出几十毫秒，累计进窗的 EndMS（TotalReadyMS 取的是 EndMS，不是标称窗数×步长），
+// 于是「master 恰好落后 1 个窗」这个直播稳态被判成落后 2 个窗，
+// 每个节流点都推迟、ASR 整场停在 30 分钟。数值取自事故日志。
+func TestShouldDeferLiveASR_RealWindowDrift(t *testing.T) {
+	w := &liveIngestWorker{
+		logger:       zap.NewNop(),
+		masterQueues: make(map[uint]*materialMasterQueue),
+	}
+	// 每窗真实落盘 ~600037ms：窗的 StartMS/EndMS 按真实时长推进，累计漂移落在 EndMS 上。
+	const realWindowMS int64 = 600037
+	windows := make(model.MediaWindowList, 0, 7)
+	for i := 0; i < 7; i++ {
+		windows = append(windows, model.MediaWindow{
+			Index:   i,
+			StartMS: int64(i) * realWindowMS,
+			EndMS:   int64(i+1) * realWindowMS,
+			DurMS:   realWindowMS,
+			Ready:   true,
+		})
+	}
+	// sealed 7 窗 = 4200259ms，master 6 窗 = 3600210ms → lag = 600049（1 个窗 + 49ms 漂移）。
+	m := &model.LiveMaterial{
+		LiveStatus:    model.LiveStatusLive,
+		MediaWindowMS: 600000,
+		Duration:      3600210,
+		MediaWindows:  windows.Marshal(),
+	}
+	if got := m.ParsedMediaWindows().TotalReadyMS(); got != 4200259 {
+		t.Fatalf("sealed_ms=%d, want 4200259（本用例依赖累计真实时长，不是标称窗宽）", got)
+	}
+	if w.shouldDeferLiveASR(m) {
+		t.Fatal("lag of one window plus sub-second drift must not defer")
+	}
+	// 落后 2 个窗（master 5 窗 = 3000184ms）才推迟。
+	m.Duration = 3000184
+	if !w.shouldDeferLiveASR(m) {
+		t.Fatal("expected defer when master lags two windows")
+	}
+}
+
 func TestMasterAppendDurationSlackConstant(t *testing.T) {
 	if masterAppendDurationSlackMS < 500 {
 		t.Fatalf("slack too tight: %d", masterAppendDurationSlackMS)

@@ -31,6 +31,11 @@ const asrLiveThrottleEveryNWindows = 3
 // asrLiveMaxMasterLagWindows 直播中若已 seal 媒体领先 master.duration 超过该窗数，推迟 ASR。
 const asrLiveMaxMasterLagWindows = 1
 
+// asrLiveMasterLagSlackMS 判定「master 落后几个窗」时的亚秒容差。
+// 真实媒体窗落盘时长会比标称 600000ms 多出几十毫秒（实测 600016–600048ms），
+// 不补偿的话「恰好落后 1 个窗」这个直播稳态会被误判成落后 2 个窗，导致 ASR 被永久推迟。
+const asrLiveMasterLagSlackMS int64 = 2000
+
 // maxUnrecoverableWindowAttempts 窗文件确定找不到时的尝试次数，超过后放弃该任务，避免堵住 Finalize。
 const maxUnrecoverableWindowAttempts = 3
 
@@ -764,7 +769,9 @@ func (w *liveIngestWorker) shouldDeferLiveASR(material *model.LiveMaterial) bool
 	}
 	sealedMS := material.ParsedMediaWindows().TotalReadyMS()
 	lag := sealedMS - material.Duration
-	return lag > int64(asrLiveMaxMasterLagWindows)*windowMS
+	// 按整窗判定并留亚秒容差：见 asrLiveMasterLagSlackMS。
+	maxLag := int64(asrLiveMaxMasterLagWindows)*windowMS + asrLiveMasterLagSlackMS
+	return lag > maxLag
 }
 
 func (w *liveIngestWorker) masterQueuePending(materialID uint) int {
