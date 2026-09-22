@@ -88,6 +88,21 @@
   width: 100%;
 }
 
+.source-videos-live-status {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.3;
+}
+
+.source-videos-live-status__time {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-danger);
+  white-space: nowrap;
+}
+
 .source-videos-form-date {
   width: 100%;
 }

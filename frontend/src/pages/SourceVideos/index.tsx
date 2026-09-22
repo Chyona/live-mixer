@@ -30,7 +30,7 @@ import {
   sourceVideoListDisplayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
-import { formatToDateTime } from '~/utils/date';
+import { formatToDateTime, formatToDateTimeMin } from '~/utils/date';
 import { formatVideoDurationMs } from '~/utils/duration';
 import KeywordSearchInput from '~/components/KeywordSearchInput';
 import { parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
@@ -486,14 +486,24 @@ const SourceVideosPage = () => {
         title: '跟播状态',
         dataIndex: 'live_status',
         key: 'live_status',
-        width: 110,
+        width: 168,
         render: (status: string, record) => {
           const label = LIVE_STATUS_LABEL[status] || status || '-';
+          const scheduledAt = status === 'waiting' ? record.scheduled_at?.trim() : '';
+          const scheduledLabel = scheduledAt ? formatToDateTimeMin(scheduledAt) : '';
           if (status === 'failed') {
             const msg = record.ingest_error_msg?.trim();
             return (
               <span title={msg || label} className="source-videos-live-status is-failed">
                 {label}
+              </span>
+            );
+          }
+          if (scheduledAt && scheduledLabel && scheduledLabel !== '-') {
+            return (
+              <span className="source-videos-live-status">
+                <span>{label}</span>
+                <span className="source-videos-live-status__time">{scheduledLabel}</span>
               </span>
             );
           }
