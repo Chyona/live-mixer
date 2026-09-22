@@ -287,6 +287,11 @@ func TestCaptionLexiconSize(t *testing.T) {
 			t.Fatalf("word %q has %d runes, want 2 or 3", w, r)
 		}
 	}
+	for _, w := range []string{"生产", "产生", "我们", "因为", "所以", "问题"} {
+		if _, ok := captionLexiconSet[w]; !ok {
+			t.Errorf("missing common word %q", w)
+		}
+	}
 }
 
 func TestSplitBalancedPreferIntact_KeepsChineseWordIntact(t *testing.T) {
@@ -366,6 +371,23 @@ func TestSplitUtteranceForCaptions_ChineseWordsIntact(t *testing.T) {
 	}
 	assertTokenIntactAcrossLines(t, lines, "金融")
 	assertTokenIntactAcrossLines(t, lines, "银行")
+}
+
+func TestSplitBalancedPreferIntact_KeepsCommonWordsIntact(t *testing.T) {
+	text := "企业通过生产活动产生了大量的新产品和新需求"
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
+	joined := strings.Join(got, "")
+	if joined != text {
+		t.Fatalf("joined %q != original", joined)
+	}
+	for _, word := range []string{"通过", "生产", "活动", "产生", "大量", "产品", "需求"} {
+		assertTokenIntactAcrossLines(t, got, word)
+	}
+	for _, line := range got {
+		if utf8.RuneCountInString(line) > MaxCaptionRunes {
+			t.Errorf("line too long: %q (%d)", line, utf8.RuneCountInString(line))
+		}
+	}
 }
 
 func TestMatchCJKWord_ForwardMax(t *testing.T) {
