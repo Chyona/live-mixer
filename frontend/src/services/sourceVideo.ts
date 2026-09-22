@@ -416,8 +416,8 @@ export async function retrySourceVideoIngest(
 }
 
 /**
- * 下载 ASR 字幕（原始 asr JSON）。
- * 仅 asr_status=completed 且内容非空时可下载。
+ * 下载 ASR 字幕（TXT）。
+ * asr_paragraphs 非空即可下载，不要求 ASR 完成；没有已识别段落时接口返回错误。
  */
 export async function downloadSourceVideoAsrSubtitle(
   id: SourceVideoId,

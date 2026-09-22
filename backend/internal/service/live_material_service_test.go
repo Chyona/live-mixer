@@ -685,17 +685,31 @@ func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_DownloadASRSubtitle_NotReady 验证未完成 ASR 时拒绝导出。
-func TestLiveMaterialService_DownloadASRSubtitle_NotReady(t *testing.T) {
+// TestLiveMaterialService_DownloadASRSubtitle_Partial 验证 ASR 未完成但已有段落时导出当前内容。
+func TestLiveMaterialService_DownloadASRSubtitle_Partial(t *testing.T) {
 	repo := &mockLiveMaterialRepo{
 		materials: map[uint]*model.LiveMaterial{
-			1: {ID: 1, ASRStatus: model.ASRStatusProcessing, LiveASR: `{"result":{}}`},
+			1: {
+				ID:        1,
+				ASRStatus: model.ASRStatusProcessing,
+				ASRParagraphs: []model.ASRParagraph{
+					{Speaker: "1", StartTime: 2000, EndTime: 4000, Text: "已识别片段"},
+				},
+			},
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)
-	_, _, err := svc.DownloadASRSubtitle(context.Background(), 1)
-	if !errors.Is(err, ErrASRSubtitleNotReady) {
-		t.Errorf("error = %v, want %v", err, ErrASRSubtitleNotReady)
+
+	content, fileName, err := svc.DownloadASRSubtitle(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("DownloadASRSubtitle() error = %v", err)
+	}
+	want := "关键词\n\n\n文字记录\n说话人1 00:02\n已识别片段\n"
+	if string(content) != want {
+		t.Errorf("content =\n%q\nwant\n%q", content, want)
+	}
+	if fileName != "asr_subtitle_1.txt" {
+		t.Errorf("fileName = %q, want asr_subtitle_1.txt", fileName)
 	}
 }
 

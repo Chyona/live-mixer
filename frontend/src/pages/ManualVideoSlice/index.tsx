@@ -937,12 +937,20 @@ const ManualVideoSlicePage = () => {
       toast.notify.warning('暂无字幕文案');
       return;
     }
+    if (paragraphs.length === 0) {
+      toast.notify.warning('暂无已识别字幕，无法导出');
+      return;
+    }
 
     setDownloadingSubtitle(true);
     try {
       const filename = `${sanitizeDownloadFilename(video?.name ?? 'subtitle')}-字幕.json`;
       await downloadSourceVideoAsrSubtitle(sourceVideoId, filename);
-      toast.notify.success('字幕文件已开始下载');
+      if (video?.asr_status !== 'completed') {
+        toast.notify.info('已下载当前已识别字幕');
+      } else {
+        toast.notify.success('字幕文件已开始下载');
+      }
     } catch (error) {
       if (error instanceof AppError) {
         showAppError(error);
@@ -952,7 +960,7 @@ const ManualVideoSlicePage = () => {
     } finally {
       setDownloadingSubtitle(false);
     }
-  }, [sourceVideoId, video?.name]);
+  }, [paragraphs.length, sourceVideoId, video?.asr_status, video?.name]);
 
   const handleSwitchToTimeline = useCallback(() => {
     confirmLeave(() => {

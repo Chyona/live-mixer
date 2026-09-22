@@ -482,7 +482,7 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 
 // DownloadASRSubtitle 下载直播素材 ASR 字幕（TXT 文件）
 // @Summary      下载 ASR 字幕
-// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；仅 asr_status=completed 且 asr_paragraphs 非空时可下载
+// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；asr_paragraphs 非空即可下载，不要求 ASR 完成
 // @Tags         直播素材
 // @Produce      text/plain
 // @Param        id   path  int  true  "素材 ID"
@@ -504,7 +504,7 @@ func (h *LiveMaterialHandler) DownloadASRSubtitle(c *gin.Context) {
 			response.NotFound(c, err.Error())
 			return
 		}
-		if errors.Is(err, service.ErrASRSubtitleNotReady) || errors.Is(err, service.ErrASRSubtitleEmpty) {
+		if errors.Is(err, service.ErrASRSubtitleEmpty) {
 			response.BadRequest(c, err.Error())
 			return
 		}

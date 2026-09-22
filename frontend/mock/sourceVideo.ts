@@ -639,25 +639,13 @@ export default [
         return;
       }
 
-      if (item.asr_status !== 'completed') {
-        res.statusCode = 400;
-        res.end(
-          JSON.stringify({
-            code: 400,
-            message: 'ASR 未完成，暂不可下载字幕',
-            data: null,
-          })
-        );
-        return;
-      }
-
       const liveAsr = getTranscript(String(item.id));
       if (!liveAsr.length) {
         res.statusCode = 400;
         res.end(
           JSON.stringify({
             code: 400,
-            message: '字幕内容为空，暂不可下载',
+            message: '暂无已识别字幕，无法导出',
             data: null,
           })
         );

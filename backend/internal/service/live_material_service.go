@@ -73,11 +73,8 @@ var ErrASRAlreadyProcessing = errors.New("ASR 进行中，请勿重复提交")
 // ErrASRRetryOnlyFailed 仅失败状态允许重试 ASR。
 var ErrASRRetryOnlyFailed = errors.New("仅 ASR 失败状态可重试")
 
-// ErrASRSubtitleNotReady ASR 未完成，无法导出字幕。
-var ErrASRSubtitleNotReady = errors.New("ASR 未完成，无法导出字幕")
-
-// ErrASRSubtitleEmpty ASR 字幕内容为空。
-var ErrASRSubtitleEmpty = errors.New("ASR 字幕为空，无法导出")
+// ErrASRSubtitleEmpty 当前没有已识别字幕，无法导出。
+var ErrASRSubtitleEmpty = errors.New("暂无已识别字幕，无法导出")
 
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
@@ -372,10 +369,6 @@ func (s *liveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) 
 			return nil, "", ErrLiveMaterialNotFound
 		}
 		return nil, "", err
-	}
-
-	if material.ASRStatus != model.ASRStatusCompleted {
-		return nil, "", ErrASRSubtitleNotReady
 	}
 
 	if len(material.ASRParagraphs) == 0 {
