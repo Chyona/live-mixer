@@ -112,6 +112,10 @@ type LiveMaterial struct {
 	ASRDue            bool                `gorm:"column:asr_due;not null;default:false;comment:是否有待跑窗口ASR" json:"asr_due"`
 	IngestResumeSeg   int64               `gorm:"column:ingest_resume_seg;not null;default:0;comment:本场录像起始窗序号" json:"ingest_resume_seg"`
 	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
+	// ASRNextAttemptAt 直播中推迟全量 ASR 后的最早重试时间门；非空且未到时不可被抢占。
+	ASRNextAttemptAt  *time.Time          `gorm:"column:asr_next_attempt_at;comment:ASR最早重试时间门" json:"asr_next_attempt_at,omitempty"`
+	// ASRDeferredSince 连续推迟的起点（只在推迟链首写一次）；用于保底强制跑判定，真正跑到 ASR 时清空。
+	ASRDeferredSince  *time.Time          `gorm:"column:asr_deferred_since;comment:ASR连续推迟起点" json:"asr_deferred_since,omitempty"`
 	// MediaWindowMS 主 MP4 递增步长（毫秒）；创建时写入，默认 LiveMediaWindowDuration。
 	MediaWindowMS int64 `gorm:"column:media_window_ms;not null;default:0;comment:主MP4递增步长毫秒" json:"media_window_ms"`
 	// MediaWindows 离散媒体窗元数据 JSON（window_0..N-1）；拼接主片见 live_url。

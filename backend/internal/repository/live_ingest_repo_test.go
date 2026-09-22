@@ -347,3 +347,159 @@ func TestLiveIngestRepository_AppendWindowASRWritesParagraphs(t *testing.T) {
 	}
 }
 
+// newLiveASRGateMaterial 造一条可直接被 ClaimWindowASRWork 抢占的直播素材。
+func newLiveASRGateMaterial(name string) *model.LiveMaterial {
+	return &model.LiveMaterial{
+		Name:         name,
+		M3U8URL:      "https://example.com/" + name + ".m3u8",
+		LiveURL:      "https://cdn.example/" + name + ".mp4",
+		RecordUUID:   name,
+		SourceMode:   model.SourceModeLive,
+		LiveStatus:   model.LiveStatusLive,
+		LiveASR:      "{}",
+		MediaWindows: "[]",
+		ASRStatus:    model.ASRStatusPending,
+		ASRDue:       true,
+		CreatedBy:    1,
+	}
+}
+
+// TestLiveIngestRepository_ClaimWindowASRWorkRespectsNextAttemptGate 重试时间门未到时不可抢占，
+// 到点后必须可抢占（避免推迟后 ASR 永久停摆）。
+func TestLiveIngestRepository_ClaimWindowASRWorkRespectsNextAttemptGate(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	future := time.Now().Add(5 * time.Minute)
+	mat := newLiveASRGateMaterial("asr-gate")
+	mat.ASRNextAttemptAt = &future
+	if err := db.Create(mat).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	claimed, err := repo.ClaimWindowASRWork(ctx)
+	if err != nil {
+		t.Fatalf("ClaimWindowASRWork: %v", err)
+	}
+	if claimed != nil {
+		t.Fatalf("时间门未到时不应被抢占，got id=%d", claimed.ID)
+	}
+
+	past := time.Now().Add(-time.Second)
+	if err := db.Model(&model.LiveMaterial{}).Where("id = ?", mat.ID).
+		Update("asr_next_attempt_at", past).Error; err != nil {
+		t.Fatalf("set past gate: %v", err)
+	}
+	claimed, err = repo.ClaimWindowASRWork(ctx)
+	if err != nil {
+		t.Fatalf("ClaimWindowASRWork: %v", err)
+	}
+	if claimed == nil || claimed.ID != mat.ID {
+		t.Fatalf("时间门过后应可抢占，got %+v", claimed)
+	}
+}
+
+// TestLiveIngestRepository_DeferASRDueKeepsStreakAnchor 推迟必须保留 asr_due、清心跳，
+// 且连续推迟起点只写一次（否则保底计时每次重试都被清零，永远等不到强制跑）。
+func TestLiveIngestRepository_DeferASRDueKeepsStreakAnchor(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	mat := newLiveASRGateMaterial("asr-defer")
+	mat.ASRDue = false
+	if err := db.Create(mat).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	first := time.Now().Add(90 * time.Second)
+	if err := repo.DeferASRDue(ctx, mat.ID, 0, first); err != nil {
+		t.Fatalf("DeferASRDue: %v", err)
+	}
+	got, err := repo.GetByID(ctx, mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !got.ASRDue {
+		t.Fatal("推迟不应清掉 asr_due（否则丢掉待跑状态）")
+	}
+	if got.ASRNextAttemptAt == nil || !got.ASRNextAttemptAt.After(time.Now()) {
+		t.Fatalf("asr_next_attempt_at 未写为未来时间: %+v", got.ASRNextAttemptAt)
+	}
+	if got.ASRHeartbeatAt != nil {
+		t.Fatalf("推迟应清 ASR 心跳以免被心跳门挡住，got %+v", got.ASRHeartbeatAt)
+	}
+	if got.ASRDeferredSince == nil {
+		t.Fatal("推迟链首应写入 asr_deferred_since")
+	}
+	anchor := *got.ASRDeferredSince
+
+	second := first.Add(90 * time.Second)
+	if err := repo.DeferASRDue(ctx, mat.ID, 0, second); err != nil {
+		t.Fatalf("DeferASRDue(second): %v", err)
+	}
+	got, err = repo.GetByID(ctx, mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ASRDeferredSince == nil || !got.ASRDeferredSince.Equal(anchor) {
+		t.Fatalf("连续推迟起点被刷新：got %+v want %s", got.ASRDeferredSince, anchor)
+	}
+	if got.ASRNextAttemptAt == nil || !got.ASRNextAttemptAt.After(first) {
+		t.Fatalf("重试时间门未前移：got %+v want after %s", got.ASRNextAttemptAt, first)
+	}
+
+	if err := repo.ClearASRDefer(ctx, mat.ID, 0); err != nil {
+		t.Fatalf("ClearASRDefer: %v", err)
+	}
+	got, err = repo.GetByID(ctx, mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ASRNextAttemptAt != nil || got.ASRDeferredSince != nil {
+		t.Fatalf("ClearASRDefer 未清干净: %+v / %+v", got.ASRNextAttemptAt, got.ASRDeferredSince)
+	}
+	if !got.ASRDue {
+		t.Fatal("ClearASRDefer 不应动 asr_due")
+	}
+}
+
+// TestLiveIngestRepository_MarkEndingClearsASRDeferGate 关播收尾的全量补跑不能被直播期的
+// 重试时间门挡住（这是新引入的时间门最容易踩的坑）。
+func TestLiveIngestRepository_MarkEndingClearsASRDeferGate(t *testing.T) {
+	db := setupLiveMaterialTestDB(t)
+	repo := NewLiveIngestRepository(db)
+	ctx := context.Background()
+
+	future := time.Now().Add(5 * time.Minute)
+	mat := newLiveASRGateMaterial("asr-ending")
+	mat.ASRDue = false
+	mat.ASRNextAttemptAt = &future
+	if err := db.Create(mat).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := repo.MarkEnding(ctx, mat.ID, 0); err != nil {
+		t.Fatalf("MarkEnding: %v", err)
+	}
+	got, err := repo.GetByID(ctx, mat.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.LiveStatus != model.LiveStatusEnding || !got.ASRDue {
+		t.Fatalf("MarkEnding 后 status/due = %q/%v", got.LiveStatus, got.ASRDue)
+	}
+	if got.ASRNextAttemptAt != nil || got.ASRDeferredSince != nil {
+		t.Fatalf("MarkEnding 应清 ASR 推迟门: %+v / %+v", got.ASRNextAttemptAt, got.ASRDeferredSince)
+	}
+
+	claimed, err := repo.ClaimWindowASRWork(ctx)
+	if err != nil {
+		t.Fatalf("ClaimWindowASRWork: %v", err)
+	}
+	if claimed == nil || claimed.ID != mat.ID {
+		t.Fatalf("关播后必须立刻可抢 ASR，got %+v", claimed)
+	}
+}
+

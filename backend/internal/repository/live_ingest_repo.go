@@ -43,6 +43,11 @@ type LiveIngestRepository interface {
 	// AppendWindowASR 覆盖写入跟播 ASR（live_asr / paragraphs / cursor）；stillDue 表示 master 又变长需再跑全量。
 	AppendWindowASR(ctx context.Context, id uint, asrEpoch int64, liveASR string, asrCursorMS, durationMS int64, progress int16, stillDue bool, paragraphs []model.ASRParagraph) error
 	ClearASRDue(ctx context.Context, id uint, asrEpoch int64) error
+	// DeferASRDue 直播中推迟全量 ASR：保留 asr_due（不丢待跑状态），只写最早重试时间门，
+	// 并清 ASR 心跳以免 2 分钟心跳门挡住到点重试。连续推迟起点只写一次，供保底判定使用。
+	DeferASRDue(ctx context.Context, id uint, asrEpoch int64, nextAttemptAt time.Time) error
+	// ClearASRDefer 清除 ASR 重试时间门与连续推迟起点（真正跑到 ASR 或进入关播收尾时调用）。
+	ClearASRDefer(ctx context.Context, id uint, asrEpoch int64) error
 	ReleaseASRLease(ctx context.Context, id uint, asrEpoch int64) error
 	MarkASRProcessing(ctx context.Context, id uint, asrEpoch int64) error
 	MarkEnding(ctx context.Context, id uint, epoch int64) error
@@ -131,7 +136,7 @@ func (r *liveMaterialRepository) ClaimRecorderWork(ctx context.Context) (*model.
 	return nil, nil
 }
 
-// ClaimWindowASRWork 抢占窗口 ASR（不 bump ingest_epoch）：仅当 asr_due（媒体窗已就绪）。
+// ClaimWindowASRWork 抢占窗口 ASR（不 bump ingest_epoch）：仅当 asr_due（媒体窗已就绪）且已过推迟重试时间门。
 func (r *liveMaterialRepository) ClaimWindowASRWork(ctx context.Context) (*model.LiveMaterial, error) {
 	tried := make(map[uint]struct{})
 	now := time.Now()
@@ -142,10 +147,12 @@ func (r *liveMaterialRepository) ClaimWindowASRWork(ctx context.Context) (*model
 			`live_status IN (?, ?, ?)
 			 AND asr_status IN (?, ?)
 			 AND asr_due = ?
+			 AND (asr_next_attempt_at IS NULL OR asr_next_attempt_at <= ?)
 			 AND (asr_heartbeat_at IS NULL OR asr_heartbeat_at < ?)`,
 			model.LiveStatusLive, model.LiveStatusEnding, model.LiveStatusEnded,
 			model.ASRStatusPending, model.ASRStatusProcessing,
 			true,
+			now,
 			staleBefore,
 		)
 		if len(tried) > 0 {
@@ -417,6 +424,30 @@ func (r *liveMaterialRepository) ClearASRDue(ctx context.Context, id uint, asrEp
 		}).Error
 }
 
+// DeferASRDue 写推迟时间门。连续推迟起点用 COALESCE 只写一次：推迟链上的后续重试不刷新它，
+// asrDeferMaxWait 保底计时才有意义（否则每次重试都会把保底计时清零，永远等不到强制跑）。
+func (r *liveMaterialRepository) DeferASRDue(ctx context.Context, id uint, asrEpoch int64, nextAttemptAt time.Time) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+		Where("id = ? AND asr_epoch = ?", id, asrEpoch).
+		Updates(map[string]interface{}{
+			"asr_due":             true,
+			"asr_next_attempt_at": nextAttemptAt,
+			"asr_deferred_since":  gorm.Expr("COALESCE(asr_deferred_since, ?)", now),
+			"asr_heartbeat_at":    nil,
+			"updated_at":          now,
+		}).Error
+}
+
+func (r *liveMaterialRepository) ClearASRDefer(ctx context.Context, id uint, asrEpoch int64) error {
+	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
+		Where("id = ? AND asr_epoch = ?", id, asrEpoch).
+		Updates(map[string]interface{}{
+			"asr_next_attempt_at": nil,
+			"asr_deferred_since":  nil,
+		}).Error
+}
+
 // ReleaseASRLease 主动结束本窗后清 ASR 心跳：若仍 asr_due 则置空以便立刻再抢下一窗。
 func (r *liveMaterialRepository) ReleaseASRLease(ctx context.Context, id uint, asrEpoch int64) error {
 	var due bool
@@ -451,12 +482,15 @@ func (r *liveMaterialRepository) MarkASRProcessing(ctx context.Context, id uint,
 
 func (r *liveMaterialRepository) MarkEnding(ctx context.Context, id uint, epoch int64) error {
 	// 清空录像心跳，便于 Finalize 立刻接手（避免等 stale）。
+	// 同时清 ASR 推迟时间门：关播收尾的全量补跑不能被直播期的重试门挡住。
 	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(map[string]interface{}{
-			"live_status":       model.LiveStatusEnding,
-			"last_heartbeat_at": nil,
-			"asr_due":           true,
+			"live_status":         model.LiveStatusEnding,
+			"last_heartbeat_at":   nil,
+			"asr_due":             true,
+			"asr_next_attempt_at": nil,
+			"asr_deferred_since":  nil,
 		}).Error
 }
 
@@ -465,12 +499,14 @@ func (r *liveMaterialRepository) MarkEnded(ctx context.Context, id uint, epoch i
 	return r.db.WithContext(ctx).Model(&model.LiveMaterial{}).
 		Where("id = ? AND ingest_epoch = ?", id, epoch).
 		Updates(map[string]interface{}{
-			"live_status":       model.LiveStatusEnded,
-			"url_type":          model.URLTypeFile,
-			"duration":          durationMS,
-			"last_heartbeat_at": now,
-			"asr_due":           true,
-			"updated_at":        now,
+			"live_status":         model.LiveStatusEnded,
+			"url_type":            model.URLTypeFile,
+			"duration":            durationMS,
+			"last_heartbeat_at":   now,
+			"asr_due":             true,
+			"asr_next_attempt_at": nil,
+			"asr_deferred_since":  nil,
+			"updated_at":          now,
 		}).Error
 }
 
@@ -519,6 +555,8 @@ func (r *liveMaterialRepository) ResetFailedIngest(ctx context.Context, id uint,
 		"asr_heartbeat_at":    nil,
 		"last_progress_at":    nil,
 		"asr_due":             false,
+		"asr_next_attempt_at": nil,
+		"asr_deferred_since":  nil,
 		"asr_epoch":           int64(0),
 		"ingest_resume_seg":   int64(0),
 		"asr_version":         gorm.Expr("asr_version + 1"),

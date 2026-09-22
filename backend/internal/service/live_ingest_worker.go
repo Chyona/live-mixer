@@ -387,17 +387,53 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 		material.ASRCursorMS = latest.ASRCursorMS
 		material.LiveASR = latest.LiveASR
 		material.ASRDue = latest.ASRDue
+		material.ASRNextAttemptAt = latest.ASRNextAttemptAt
+		material.ASRDeferredSince = latest.ASRDeferredSince
 	}
+	now := time.Now()
 	if w.shouldDeferLiveASR(material) {
-		w.logger.Info("直播中推迟全量 ASR（master 落后或队列积压）",
+		// 保底：连续推迟已超过 asrDeferMaxWait 时不再推迟，直接跑一次，
+		// 避免推迟判定长期不收敛（master 持续落后 / 队列长期积压）导致整场直播没有新字幕。
+		if !asrDeferExceeded(material, now) {
+			nextAttemptAt := now.Add(asrDeferRetryInterval)
+			w.logger.Info("直播中推迟全量 ASR（master 落后或队列积压）",
+				zap.Uint("material_id", material.ID),
+				zap.Int64("duration_ms", material.Duration),
+				zap.Int64("sealed_ms", material.ParsedMediaWindows().TotalReadyMS()),
+				zap.Int("master_pending", w.masterQueuePending(material.ID)),
+				zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+				zap.Time("next_attempt_at", nextAttemptAt),
+				zap.Time("deferred_since", deferredSince(material)),
+			)
+			// 保留 asr_due 并写重试时间门；到点由重试唤醒或下一次 master 节流点再抢。清心跳避免被心跳门挡住。
+			if err := w.repo.DeferASRDue(ctx, material.ID, material.ASREpoch, nextAttemptAt); err != nil {
+				w.logger.Warn("写 ASR 重试时间门失败",
+					zap.Uint("material_id", material.ID),
+					zap.Error(err),
+				)
+			}
+			w.scheduleASRRetry(asrDeferRetryInterval)
+			return nil
+		}
+		w.logger.Info("ASR 连续推迟超过保底上限，强制全量 ASR",
 			zap.Uint("material_id", material.ID),
 			zap.Int64("duration_ms", material.Duration),
 			zap.Int64("sealed_ms", material.ParsedMediaWindows().TotalReadyMS()),
 			zap.Int("master_pending", w.masterQueuePending(material.ID)),
+			zap.Int64("asr_cursor_ms", material.ASRCursorMS),
+			zap.Time("deferred_since", deferredSince(material)),
+			zap.Duration("deferred_for", now.Sub(*material.ASRDeferredSince)),
 		)
-		// 清 due 避免空转抢占；后续 master 节流点或关播再置 asr_due。
-		_ = w.repo.ClearASRDue(ctx, material.ID, material.ASREpoch)
-		return nil
+	}
+
+	// 真正要跑：结束推迟状态（保底计时清零），并撤掉可能存在的重试时间门。
+	if material.ASRNextAttemptAt != nil || material.ASRDeferredSince != nil {
+		if err := w.repo.ClearASRDefer(ctx, material.ID, material.ASREpoch); err != nil {
+			w.logger.Warn("清除 ASR 推迟状态失败",
+				zap.Uint("material_id", material.ID),
+				zap.Error(err),
+			)
+		}
 	}
 
 	// 单次租约内对当前 master 全量 ASR；master 若再变长则同租约内继续全量直到追上。
@@ -408,6 +444,24 @@ func (w *liveIngestWorker) processWindowASR(ctx context.Context, material *model
 		}
 	}
 	return nil
+}
+
+// scheduleASRRetry 推迟后按重试间隔唤醒 ASR Worker。定时器只是「尽早提醒」的优化：
+// 真正的时间门在库里（asr_next_attempt_at），定时器丢失（进程重启）只会退化成等下一次
+// master 节流点或保底判定，不会像纯内存方案那样把 ASR 永久搁死。
+func (w *liveIngestWorker) scheduleASRRetry(delay time.Duration) {
+	if w.asrWake == nil || delay <= 0 {
+		return
+	}
+	time.AfterFunc(delay, func() { enqueueWake(w.asrWake, 1) })
+}
+
+// deferredSince 取连续推迟起点用于日志；未在推迟链上时返回零值时间。
+func deferredSince(material *model.LiveMaterial) time.Time {
+	if material == nil || material.ASRDeferredSince == nil {
+		return time.Time{}
+	}
+	return *material.ASRDeferredSince
 }
 
 func (w *liveIngestWorker) processFinalize(ctx context.Context, material *model.LiveMaterial) error {

@@ -36,6 +36,13 @@ const asrLiveMaxMasterLagWindows = 1
 // 不补偿的话「恰好落后 1 个窗」这个直播稳态会被误判成落后 2 个窗，导致 ASR 被永久推迟。
 const asrLiveMasterLagSlackMS int64 = 2000
 
+// asrDeferRetryInterval 直播中推迟全量 ASR 后的重试间隔。
+const asrDeferRetryInterval = 90 * time.Second
+
+// asrDeferMaxWait 连续推迟的保底上限：超过后无视推迟条件强制跑一次全量 ASR，
+// 避免推迟判定长期不收敛（master 持续落后 / 队列长期积压）导致整场直播没有新字幕。
+const asrDeferMaxWait = 10 * time.Minute
+
 // maxUnrecoverableWindowAttempts 窗文件确定找不到时的尝试次数，超过后放弃该任务，避免堵住 Finalize。
 const maxUnrecoverableWindowAttempts = 3
 
@@ -772,6 +779,14 @@ func (w *liveIngestWorker) shouldDeferLiveASR(material *model.LiveMaterial) bool
 	// 按整窗判定并留亚秒容差：见 asrLiveMasterLagSlackMS。
 	maxLag := int64(asrLiveMaxMasterLagWindows)*windowMS + asrLiveMasterLagSlackMS
 	return lag > maxLag
+}
+
+// asrDeferExceeded 连续推迟是否已达保底上限；达到后必须真正跑一次，不再理会推迟条件。
+func asrDeferExceeded(material *model.LiveMaterial, now time.Time) bool {
+	if material == nil || material.ASRDeferredSince == nil {
+		return false
+	}
+	return now.Sub(*material.ASRDeferredSince) >= asrDeferMaxWait
 }
 
 func (w *liveIngestWorker) masterQueuePending(materialID uint) int {

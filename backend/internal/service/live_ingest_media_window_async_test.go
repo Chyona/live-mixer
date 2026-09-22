@@ -272,6 +272,41 @@ func TestShouldDeferLiveASR_RealWindowDrift(t *testing.T) {
 	}
 }
 
+// TestASRDeferExceeded 保底判定：连续推迟到 asrDeferMaxWait 必须强制跑一次。
+func TestASRDeferExceeded(t *testing.T) {
+	now := time.Now()
+	if asrDeferExceeded(nil, now) {
+		t.Fatal("nil material must not exceed")
+	}
+	if asrDeferExceeded(&model.LiveMaterial{}, now) {
+		t.Fatal("material without defer streak must not exceed")
+	}
+	below := now.Add(-asrDeferMaxWait + time.Second)
+	if asrDeferExceeded(&model.LiveMaterial{ASRDeferredSince: &below}, now) {
+		t.Fatal("streak below max wait must not exceed")
+	}
+	atLimit := now.Add(-asrDeferMaxWait)
+	if !asrDeferExceeded(&model.LiveMaterial{ASRDeferredSince: &atLimit}, now) {
+		t.Fatal("streak at max wait must exceed")
+	}
+}
+
+// TestASRDeferKnobs 保底参数必须小于等于一个媒体窗，否则直播期字幕会长期停在旧进度。
+func TestASRDeferKnobs(t *testing.T) {
+	if asrDeferRetryInterval <= 0 {
+		t.Fatalf("retry interval must be positive: %s", asrDeferRetryInterval)
+	}
+	if asrDeferRetryInterval >= asrDeferMaxWait {
+		t.Fatalf("retry interval %s must be below max wait %s", asrDeferRetryInterval, asrDeferMaxWait)
+	}
+	if asrDeferMaxWait > model.LiveMediaWindowDuration {
+		t.Fatalf("max wait %s must not exceed one media window %s", asrDeferMaxWait, model.LiveMediaWindowDuration)
+	}
+	if asrLiveMasterLagSlackMS < 500 || asrLiveMasterLagSlackMS > 5000 {
+		t.Fatalf("lag slack out of range: %d", asrLiveMasterLagSlackMS)
+	}
+}
+
 func TestMasterAppendDurationSlackConstant(t *testing.T) {
 	if masterAppendDurationSlackMS < 500 {
 		t.Fatalf("slack too tight: %d", masterAppendDurationSlackMS)

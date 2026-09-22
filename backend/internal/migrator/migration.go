@@ -117,6 +117,8 @@ var liveMaterialIngestColumns = []struct {
 	{name: "asr_heartbeat_at", pg: "TIMESTAMPTZ"},
 	{name: "last_progress_at", pg: "TIMESTAMPTZ"},
 	{name: "asr_due", pg: "BOOLEAN NOT NULL DEFAULT FALSE"},
+	{name: "asr_next_attempt_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_deferred_since", pg: "TIMESTAMPTZ"},
 	{name: "ingest_resume_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "ingest_error_msg", pg: "TEXT"},
 	{name: "media_window_ms", pg: "BIGINT NOT NULL DEFAULT 0"},
