@@ -31,7 +31,7 @@ import {
 import { submitDraft } from '~/services/slice';
 import { formatToDateTime } from '~/utils/date';
 import { showAppError, toast } from '~/utils/toast';
-import { isPlayableVideoUrl, mediaResourceKey } from '~/utils/videoUrl';
+import { isPlayableVideoUrl, LIVE_PREVIEW_DECODE_MESSAGE, mediaResourceKey } from '~/utils/videoUrl';
 import { resolveSliceTimelineDurationSec } from '~/utils/duration';
 import { seekHtmlVideo } from '~/utils/seekMedia';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
@@ -1112,6 +1112,11 @@ const ManualVideoSlicePage = () => {
                     onSeek={handleSeek}
                     screenshotBaseName={video?.name ?? 'video-screenshot'}
                     onDurationChange={handleDurationChange}
+                    decodeErrorMessage={
+                      video && isLiveIngesting(video.live_status)
+                        ? LIVE_PREVIEW_DECODE_MESSAGE
+                        : undefined
+                    }
                     hlsStartPosition={hlsStartPositionForSourceVideo(video)}
                   />
                 </div>

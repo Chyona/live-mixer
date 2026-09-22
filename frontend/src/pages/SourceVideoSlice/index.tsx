@@ -36,7 +36,13 @@ import {
 } from '~/routes/links';
 import { buildSliceBreadcrumbItems, resolveSlicePageTitle } from '~/utils/sliceBreadcrumbs';
 import { serializeTimelineSliceProjectState } from '~/utils/sliceProjectDirty';
-import { getVideoFormatLabel, isPlayableVideoUrl, isSameMediaResource, mediaResourceKey } from '~/utils/videoUrl';
+import {
+  getVideoFormatLabel,
+  isPlayableVideoUrl,
+  isSameMediaResource,
+  LIVE_PREVIEW_DECODE_MESSAGE,
+  mediaResourceKey,
+} from '~/utils/videoUrl';
 import SelectedSegmentsPanel from './SelectedSegmentsPanel';
 import SourceVideoSlicePageSkeleton from './SourceVideoSlicePageSkeleton';
 import TimelineLoadingSkeleton from './TimelineLoadingSkeleton';
@@ -766,6 +772,11 @@ const SourceVideoSlicePage = () => {
                 screenshotBaseName={video?.name ?? 'video-screenshot'}
                 onDurationChange={handleDurationChange}
                 onPlaybackError={handlePlaybackError}
+                decodeErrorMessage={
+                  video && isLiveIngesting(video.live_status)
+                    ? LIVE_PREVIEW_DECODE_MESSAGE
+                    : undefined
+                }
                 hlsStartPosition={hlsStartPositionForSourceVideo(video)}
               />
             </div>
