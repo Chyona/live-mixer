@@ -206,6 +206,24 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	if material.ASRProgress != 0 {
 		t.Errorf("ASRProgress = %d, want 0", material.ASRProgress)
 	}
+	if material.MediaWindowMS != int64(model.LiveMediaWindowDuration/time.Millisecond) {
+		t.Errorf("MediaWindowMS = %d, want %d", material.MediaWindowMS, model.LiveMediaWindowDuration/time.Millisecond)
+	}
+}
+
+func TestLiveMaterialService_Create_CustomMediaWindow(t *testing.T) {
+	repo := &mockLiveMaterialRepo{}
+	svc := NewLiveMaterialServiceFull(repo, nil, nil, nil, nil, 5*time.Minute)
+
+	material, err := svc.Create(context.Background(), 2, CreateLiveMaterialInput{
+		Name: "窗长素材", SourceURL: "https://example.com/live.mp4",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if material.MediaWindowMS != 5*60*1000 {
+		t.Errorf("MediaWindowMS = %d, want %d", material.MediaWindowMS, 5*60*1000)
+	}
 }
 
 // TestLiveMaterialService_Create_EmptyName 验证名称为纯空格时拒绝创建。
@@ -608,7 +626,7 @@ func TestLiveMaterialService_Delete_Success(t *testing.T) {
 			cancelOrder = seq
 		},
 	}
-	svc := NewLiveMaterialServiceFull(repo, nil, ingest, nil, nil)
+	svc := NewLiveMaterialServiceFull(repo, nil, ingest, nil, nil, 0)
 	if err := svc.Delete(context.Background(), 3); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}

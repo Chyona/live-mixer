@@ -65,7 +65,7 @@ func isValidHTTPURL(raw string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
-func buildCreateMaterial(createdBy uint, in CreateLiveMaterialInput, alloc LiveRecordURLAllocator) (*model.LiveMaterial, error) {
+func buildCreateMaterial(createdBy uint, in CreateLiveMaterialInput, alloc LiveRecordURLAllocator, mediaWindow time.Duration) (*model.LiveMaterial, error) {
 	name := strings.TrimSpace(in.Name)
 	sourceURL := strings.TrimSpace(in.SourceURL)
 	if name == "" {
@@ -81,9 +81,12 @@ func buildCreateMaterial(createdBy uint, in CreateLiveMaterialInput, alloc LiveR
 	if err != nil {
 		return nil, err
 	}
+	if mediaWindow <= 0 {
+		mediaWindow = model.LiveMediaWindowDuration
+	}
 	now := time.Now()
 	material := &model.LiveMaterial{
-		MediaWindowMS: int64(model.LiveMediaWindowDuration / time.Millisecond),
+		MediaWindowMS: mediaWindow.Milliseconds(),
 		MediaWindows:  "[]",
 		Name:          name,
 		Remark:        in.Remark,

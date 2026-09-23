@@ -562,3 +562,43 @@ func TestWorkerConfig_StaleTimeoutHelpers(t *testing.T) {
 		t.Errorf("empty AISliceDraftStaleTimeout = %v", got)
 	}
 }
+
+func TestLoad_IngestMediaWindowMinDefault(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Ingest.MediaWindowMin != DefaultIngestMediaWindowMin {
+		t.Errorf("MediaWindowMin = %d, want %d", cfg.Ingest.MediaWindowMin, DefaultIngestMediaWindowMin)
+	}
+	if got := cfg.Ingest.MediaWindowDuration(); got != 10*time.Minute {
+		t.Errorf("MediaWindowDuration = %v, want 10m", got)
+	}
+}
+
+func TestLoad_IngestMediaWindowMinEnvOverride(t *testing.T) {
+	t.Setenv("APP_INGEST_MEDIA_WINDOW_MIN", "5")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Ingest.MediaWindowMin != 5 {
+		t.Errorf("MediaWindowMin = %d, want 5", cfg.Ingest.MediaWindowMin)
+	}
+	if got := cfg.Ingest.MediaWindowDuration(); got != 5*time.Minute {
+		t.Errorf("MediaWindowDuration = %v, want 5m", got)
+	}
+}
+
+func TestLoad_IngestMediaWindowMinInvalidEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("APP_INGEST_MEDIA_WINDOW_MIN", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Ingest.MediaWindowMin != DefaultIngestMediaWindowMin {
+		t.Errorf("MediaWindowMin = %d, want %d", cfg.Ingest.MediaWindowMin, DefaultIngestMediaWindowMin)
+	}
+}

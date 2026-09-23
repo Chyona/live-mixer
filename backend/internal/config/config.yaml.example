@@ -99,6 +99,11 @@ web:
   live_ingest_max_dirs: 20          # 跟播本地素材 ID 目录最多保留数（进行中永不删）
   staging_cleanup_interval_min: 60  # 全局定时清理间隔（分钟）
 
+# 跟播录像；媒体窗步长可用 APP_INGEST_MEDIA_WINDOW_MIN 覆盖（分钟）
+# 创建素材时写入 media_window_ms，只影响新建素材；已有素材沿用库里的步长
+ingest:
+  media_window_min: 10
+
 # 后台 Worker 调度；可用 APP_WORKER_*_CONCURRENCY / APP_WORKER_*_STALE_TIMEOUT_MIN 覆盖
 worker:
   ai_slice_concurrency: 6      # 单实例同时执行的 AI 切片任务数

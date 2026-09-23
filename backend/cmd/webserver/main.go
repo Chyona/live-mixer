@@ -195,6 +195,7 @@ func main() {
 		ingestWorker,
 		liveIngestRepo,
 		service.NewStorageLiveURLAllocator(storageClient),
+		cfg.Ingest.MediaWindowDuration(),
 	)
 	llmPromptService := service.NewLLMSystemPromptService(llmPromptRepo)
 	videoProjectService := service.NewVideoProjectServiceWithLogger(videoProjectRepo, liveMaterialRepo, logger)

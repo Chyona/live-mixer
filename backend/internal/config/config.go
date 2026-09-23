@@ -27,10 +27,17 @@ type Config struct {
 	CapCutMate CapCutMateConfig `mapstructure:"capcut_mate"`
 	Web        WebConfig        `mapstructure:"web"`
 	Worker     WorkerConfig     `mapstructure:"worker"`
+	Ingest     IngestConfig     `mapstructure:"ingest"`
 	Download   DownloadConfig   `mapstructure:"download"`
 
 	// CaptionSegment 成片字幕断句（LLM 语义断行）全局开关；缺省即开启，显式关闭后字幕行由规则折行决定。
 	CaptionSegment CaptionSegmentConfig `mapstructure:"caption_segment"`
+}
+
+// IngestConfig 跟播录像参数。媒体窗步长在创建素材时写入 media_window_ms，之后按该素材自己的值切窗。
+type IngestConfig struct {
+	// MediaWindowMin 媒体窗步长（分钟）。未配置或 ≤0 时使用 DefaultIngestMediaWindowMin。
+	MediaWindowMin int `mapstructure:"media_window_min"`
 }
 
 // WorkerConfig 后台任务 Worker 并发等调度配置。
@@ -257,6 +264,7 @@ func Load(configPath string) (*Config, error) {
 	applyEnvOverrides(&cfg)
 	normalizeServerConfig(&cfg.Server)
 	normalizeWorkerConfig(&cfg.Worker)
+	normalizeIngestConfig(&cfg.Ingest)
 	normalizeWebConfig(&cfg.Web)
 	return &cfg, nil
 }
@@ -275,6 +283,9 @@ const DefaultASRConcurrency = 6
 
 // DefaultIngestConcurrency 跟播 Worker 默认并发数。
 const DefaultIngestConcurrency = 6
+
+// DefaultIngestMediaWindowMin 跟播媒体窗默认步长（分钟）。
+const DefaultIngestMediaWindowMin = 10
 
 // DefaultDraftConcurrency 剪映草稿 Worker 默认并发数。
 const DefaultDraftConcurrency = 3
@@ -459,6 +470,22 @@ func (w WorkerConfig) AISliceDraftStaleTimeout() time.Duration {
 	min := w.AISliceDraftStaleTimeoutMin
 	if min <= 0 {
 		min = DefaultAISliceDraftStaleTimeoutMin
+	}
+	return time.Duration(min) * time.Minute
+}
+
+// normalizeIngestConfig 将未配置或非法的跟播参数回落到内置默认值。
+func normalizeIngestConfig(c *IngestConfig) {
+	if c.MediaWindowMin <= 0 {
+		c.MediaWindowMin = DefaultIngestMediaWindowMin
+	}
+}
+
+// MediaWindowDuration 返回跟播媒体窗步长；≤0 时回落默认 10 分钟。
+func (c IngestConfig) MediaWindowDuration() time.Duration {
+	min := c.MediaWindowMin
+	if min <= 0 {
+		min = DefaultIngestMediaWindowMin
 	}
 	return time.Duration(min) * time.Minute
 }
@@ -684,6 +711,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_DRAFT_STALE_TIMEOUT_MIN"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Worker.AISliceDraftStaleTimeoutMin = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_INGEST_MEDIA_WINDOW_MIN"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Ingest.MediaWindowMin = n
 		}
 	}
 

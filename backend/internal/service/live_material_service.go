@@ -94,32 +94,39 @@ type liveMaterialService struct {
 	ingestWorker     LiveIngestWorker
 	ingestRepo       repository.LiveIngestRepository
 	allocator        LiveRecordURLAllocator
+	mediaWindow      time.Duration
 }
 
 // NewLiveMaterialService 创建直播素材业务服务实例。
 func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository, asrWorker LiveMaterialASRWorker) LiveMaterialService {
-	return NewLiveMaterialServiceFull(liveMaterialRepo, asrWorker, nil, nil, nil)
+	return NewLiveMaterialServiceFull(liveMaterialRepo, asrWorker, nil, nil, nil, 0)
 }
 
-// NewLiveMaterialServiceFull 注入跟播 Worker 与对象存储预分配。
+// NewLiveMaterialServiceFull 注入跟播 Worker、对象存储预分配与媒体窗步长。
+// mediaWindow ≤0 时使用 model.LiveMediaWindowDuration。
 func NewLiveMaterialServiceFull(
 	liveMaterialRepo repository.LiveMaterialRepository,
 	asrWorker LiveMaterialASRWorker,
 	ingestWorker LiveIngestWorker,
 	ingestRepo repository.LiveIngestRepository,
 	allocator LiveRecordURLAllocator,
+	mediaWindow time.Duration,
 ) LiveMaterialService {
+	if mediaWindow <= 0 {
+		mediaWindow = model.LiveMediaWindowDuration
+	}
 	return &liveMaterialService{
 		liveMaterialRepo: liveMaterialRepo,
 		asrWorker:        asrWorker,
 		ingestWorker:     ingestWorker,
 		ingestRepo:       ingestRepo,
 		allocator:        allocator,
+		mediaWindow:      mediaWindow,
 	}
 }
 
 func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, in CreateLiveMaterialInput) (*model.LiveMaterial, error) {
-	material, err := buildCreateMaterial(createdBy, in, s.allocator)
+	material, err := buildCreateMaterial(createdBy, in, s.allocator, s.mediaWindow)
 	if err != nil {
 		return nil, err
 	}

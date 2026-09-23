@@ -50,8 +50,9 @@ const LiveEarlyProbe = 15 * time.Minute
 // LiveSegmentDurationSec 跟播分片时长（秒）。
 const LiveSegmentDurationSec = 6
 
-// LiveMediaWindowDuration 离散媒体窗步长：每满一步直接 ffmpeg -t 录一份 window_N.mp4，再拼前 N 窗为 master.mp4。
+// LiveMediaWindowDuration 离散媒体窗默认步长：每满一步直接 ffmpeg -t 录一份 window_N.mp4，再拼前 N 窗为 master.mp4。
 // 预览 / ASR / 一键成片始终同源该 master。
+// 进程默认值可由 APP_INGEST_MEDIA_WINDOW_MIN 覆盖，并在创建素材时写入 media_window_ms。
 const LiveMediaWindowDuration = 10 * time.Minute
 
 // LiveASRWindowDuration 兼容旧名：媒体窗步长。
