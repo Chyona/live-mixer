@@ -16,7 +16,7 @@ type GeneratorDeps struct {
 	// Uploader 将本地切片上传到对象存储；add_videos 使用其返回的公网 URL。
 	Uploader steps.ObjectUploader
 	Logger   *zap.Logger
-	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定。
+	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定（开关关闭或未配置 LLM key 时）。
 	Segmenter CaptionSegmenter
 	// NewDownloader 当 Downloader 为 nil 时的工厂。
 	NewDownloader func(logger *zap.Logger) prepare.FileDownloader

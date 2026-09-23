@@ -68,8 +68,6 @@ type CaptionSegmenter struct {
 	Logger *zap.Logger
 	// Model 用于缓存 key 与日志（模型换代后旧缓存不再命中）；可空。
 	Model string
-	// MaxRunes 单行字数上限；<=0 时回落 asr.MaxCaptionRunes。
-	MaxRunes int
 	// Timeout 单条文案的调用总预算（含重试）；<=0 时回落 15s。
 	Timeout time.Duration
 	// Concurrency 并发调用上限；<=0 时回落 4。
@@ -99,7 +97,7 @@ func (s *CaptionSegmenter) SegmentTexts(ctx context.Context, texts []string) [][
 		i, text := i, text
 		trimmed := strings.TrimSpace(text)
 		// 一行放得下就不必问模型：规则折行本来就只有一行。
-		if trimmed == "" || utf8.RuneCountInString(trimmed) <= s.maxRunes() {
+		if trimmed == "" || utf8.RuneCountInString(trimmed) <= asr.MaxCaptionRunes {
 			continue
 		}
 		if cached, ok := s.cache.get(s.cacheKey(trimmed)); ok {
@@ -125,7 +123,7 @@ func (s *CaptionSegmenter) segmentOne(ctx context.Context, text string) ([]strin
 	defer cancel()
 
 	messages := []llm.ChatMessage{
-		{Role: "system", Content: CaptionSegmentPrompt(s.maxRunes())},
+		{Role: "system", Content: CaptionSegmentPrompt(asr.MaxCaptionRunes)},
 		{Role: "user", Content: "文本：" + text},
 	}
 	logger := s.logger()
@@ -151,7 +149,7 @@ func (s *CaptionSegmenter) segmentOne(ctx context.Context, text string) ([]strin
 			lastErr = err
 			break
 		}
-		valid, err := asr.ValidateCaptionLines(text, lines, s.maxRunes())
+		valid, err := asr.ValidateCaptionLines(text, lines, asr.MaxCaptionRunes)
 		if err != nil {
 			logger.Warn("LLM 断句未通过校验，回退规则折行",
 				zap.Error(err),
@@ -184,16 +182,10 @@ func isRetryableSegmentErr(err error) bool {
 }
 
 // cacheKey 缓存标识：文案 + 行宽 + 提示词版本 + 模型，任一变化都视为不同断句请求。
+// 行宽是代码常量（asr.MaxCaptionRunes），写进 key 是为了语义完整：将来行宽若变，旧缓存自然失效。
 func (s *CaptionSegmenter) cacheKey(text string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%s", text, s.maxRunes(), captionSegmentPromptVersion, s.Model)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%s", text, asr.MaxCaptionRunes, captionSegmentPromptVersion, s.Model)))
 	return hex.EncodeToString(sum[:])
-}
-
-func (s *CaptionSegmenter) maxRunes() int {
-	if s.MaxRunes <= 0 {
-		return asr.MaxCaptionRunes
-	}
-	return s.MaxRunes
 }
 
 func (s *CaptionSegmenter) timeout() time.Duration {

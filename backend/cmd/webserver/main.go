@@ -86,7 +86,8 @@ func main() {
 	}
 
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
-	asrLLM := llm.NewClient(cfg.LLM.LLMClientConfigForASR())
+	asrLLMConfig := cfg.LLM.LLMClientConfigForASR()
+	asrLLM := llm.NewClient(asrLLMConfig)
 	sliceLLM := llm.NewClient(cfg.LLM.LLMClientConfig())
 	chatLLM := llm.NewClient(cfg.LLM.LLMClientConfig())
 
@@ -111,24 +112,27 @@ func main() {
 
 	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())
 
-	// 成片字幕 LLM 断句：默认关闭（caption_segment.enabled=false），此时 Segmenter 为 nil，字幕行由规则折行决定。
+	// 成片字幕 LLM 断句：默认开启（caption_segment.enabled 缺省即开启，显式 false 关闭）。
+	// 未配置 LLM api_key 时保持 nil：否则每条切片都会撞一次注定失败的调用，不如直接走规则折行。
 	var captionSegmenter draft.CaptionSegmenter
-	if cfg.CaptionSegment.Enabled {
-		captionSegmenter = &service.CaptionSegmenter{
-			Client:      asrLLM,
-			Logger:      logger,
-			Model:       cfg.LLM.FlashModelOrDefault(),
-			MaxRunes:    cfg.CaptionSegment.MaxRunesOrDefault(),
-			Timeout:     cfg.CaptionSegment.Timeout(),
-			Concurrency: cfg.CaptionSegment.ConcurrencyOrDefault(),
-			CacheSize:   cfg.CaptionSegment.CacheSizeOrDefault(),
+	if cfg.CaptionSegment.EnabledOrDefault() {
+		if asrLLMConfig.APIKey == "" {
+			logger.Warn("成片字幕 LLM 断句已开启但未配置 llm.api_key，本次跳过，字幕走规则折行")
+		} else {
+			captionSegmenter = &service.CaptionSegmenter{
+				Client:      asrLLM,
+				Logger:      logger,
+				Model:       cfg.LLM.FlashModelOrDefault(),
+				Timeout:     cfg.CaptionSegment.Timeout(),
+				Concurrency: cfg.CaptionSegment.ConcurrencyOrDefault(),
+				CacheSize:   cfg.CaptionSegment.CacheSizeOrDefault(),
+			}
+			logger.Info("成片字幕 LLM 断句已启用",
+				zap.String("model", cfg.LLM.FlashModelOrDefault()),
+				zap.Int("concurrency", cfg.CaptionSegment.ConcurrencyOrDefault()),
+				zap.Duration("timeout", cfg.CaptionSegment.Timeout()),
+			)
 		}
-		logger.Info("成片字幕 LLM 断句已启用",
-			zap.String("model", cfg.LLM.FlashModelOrDefault()),
-			zap.Int("max_runes", cfg.CaptionSegment.MaxRunesOrDefault()),
-			zap.Int("concurrency", cfg.CaptionSegment.ConcurrencyOrDefault()),
-			zap.Duration("timeout", cfg.CaptionSegment.Timeout()),
-		)
 	}
 
 	generator := draft.NewGenerator(draft.GeneratorDeps{

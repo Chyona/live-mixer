@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"live-mixer/internal/pkg/asr"
-
 	"github.com/spf13/viper"
 )
 
@@ -31,7 +29,7 @@ type Config struct {
 	Worker     WorkerConfig     `mapstructure:"worker"`
 	Download   DownloadConfig   `mapstructure:"download"`
 
-	// CaptionSegment 成片字幕断句（LLM 语义断行）全局开关；默认关闭，关闭时字幕行由规则折行决定。
+	// CaptionSegment 成片字幕断句（LLM 语义断行）全局开关；缺省即开启，显式关闭后字幕行由规则折行决定。
 	CaptionSegment CaptionSegmentConfig `mapstructure:"caption_segment"`
 }
 
@@ -181,17 +179,16 @@ type LLMConfig struct {
 }
 
 // CaptionSegmentConfig 成片字幕断句配置：用 LLM 做语义断行，替代纯规则折行。
-// 默认关闭；关闭时与历史行为一致（标点断句 + 超长均分 + 词表不切词）。
+// 默认开启；关闭时与历史行为一致（标点断句 + 超长均分 + 词表不切词）。
 type CaptionSegmentConfig struct {
-	// Enabled 是否启用 LLM 断句；默认 false（关闭时不构造断句器，零额外调用与耗时）。
+	// Enabled 是否启用 LLM 断句；nil/未配置时默认开启，显式 false 才关闭。
+	// 可用 APP_CAPTION_SEGMENT_ENABLED 覆盖（true/false、1/0、yes/no、on/off）。
 	// 开启后每条切片文案一次调用，单条失败只回退该条的规则折行，不影响成片。
-	Enabled bool `mapstructure:"enabled"`
+	Enabled *bool `mapstructure:"enabled"`
 	// TimeoutMS 单条文案的调用总预算（含重试），单位毫秒；<=0 时回落 15000。
 	TimeoutMS int `mapstructure:"timeout_ms"`
 	// Concurrency 同时打向 LLM 的断句请求上限；<=0 时回落 4。
 	Concurrency int `mapstructure:"concurrency"`
-	// MaxRunes 单行字数上限；<=0 时回落 asr.MaxCaptionRunes（当前 12）。
-	MaxRunes int `mapstructure:"max_runes"`
 	// CacheSize 断句结果的进程内缓存条数上限；<=0 时回落 512。
 	CacheSize int `mapstructure:"cache_size"`
 }
@@ -312,6 +309,14 @@ const DefaultCaptionSegmentConcurrency = 4
 // DefaultCaptionSegmentCacheSize LLM 断句结果默认缓存条数上限。
 const DefaultCaptionSegmentCacheSize = 512
 
+// EnabledOrDefault 返回是否启用 LLM 断句；未配置时默认启用（出厂即开启，显式 false 才关闭）。
+func (c CaptionSegmentConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
 // Timeout 返回单条文案的断句调用总预算；<=0 时回落默认 15 秒。
 func (c CaptionSegmentConfig) Timeout() time.Duration {
 	if c.TimeoutMS <= 0 {
@@ -326,14 +331,6 @@ func (c CaptionSegmentConfig) ConcurrencyOrDefault() int {
 		return DefaultCaptionSegmentConcurrency
 	}
 	return c.Concurrency
-}
-
-// MaxRunesOrDefault 返回单行字数上限；<=0 时回落 asr.MaxCaptionRunes（与规则折行同一上限）。
-func (c CaptionSegmentConfig) MaxRunesOrDefault() int {
-	if c.MaxRunes <= 0 {
-		return asr.MaxCaptionRunes
-	}
-	return c.MaxRunes
 }
 
 // CacheSizeOrDefault 返回断句结果缓存条数上限；<=0 时回落默认 512。
@@ -751,7 +748,7 @@ func applyEnvOverrides(cfg *Config) {
 	// caption_segment 未写入内嵌 config.yaml 时 viper 无法从环境变量补全，故显式覆盖。
 	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_ENABLED"); ok {
 		if b, err := parseEnvBool(val); err == nil {
-			cfg.CaptionSegment.Enabled = b
+			cfg.CaptionSegment.Enabled = &b
 		}
 	}
 	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_TIMEOUT_MS"); ok {
@@ -762,11 +759,6 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_CONCURRENCY"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.CaptionSegment.Concurrency = n
-		}
-	}
-	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_MAX_RUNES"); ok {
-		if n, err := strconv.Atoi(val); err == nil {
-			cfg.CaptionSegment.MaxRunes = n
 		}
 	}
 	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_CACHE_SIZE"); ok {

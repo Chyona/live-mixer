@@ -18,7 +18,7 @@ type Builder struct {
 	API      CapCutMateAPI
 	Uploader steps.ObjectUploader
 	Logger   *zap.Logger
-	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定（默认）。
+	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定（开关关闭或未配置 LLM key 时）。
 	Segmenter CaptionSegmenter
 }
 

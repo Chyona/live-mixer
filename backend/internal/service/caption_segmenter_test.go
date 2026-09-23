@@ -363,22 +363,16 @@ func TestCaptionSegmenter_CacheReusesResult(t *testing.T) {
 	}
 }
 
-func TestCaptionSegmenter_CacheIsolatesDifferentMaxRunes(t *testing.T) {
+func TestCaptionSegmenter_CacheKeyIncludesRunesAndModel(t *testing.T) {
+	// 行宽与模型都是缓存 key 的成员：模型换代或行宽常量变化时旧缓存必须失效。
 	text := "今天我们来聊一聊人工智能在医疗领域的应用"
-	mock := &captionMockLLM{replies: textsReply(text)}
-	seg := &CaptionSegmenter{Client: mock}
-
-	seg.SegmentTexts(context.Background(), []string{text})
-	seg.MaxRunes = 8
-	got := seg.SegmentTexts(context.Background(), []string{text})
-
-	if mock.callCount() != 2 {
-		t.Errorf("调用次数 = %d, want 2（行宽变化应视为不同请求）", mock.callCount())
+	a := &CaptionSegmenter{Model: "model-a"}
+	b := &CaptionSegmenter{Model: "model-b"}
+	if a.cacheKey(text) == b.cacheKey(text) {
+		t.Error("模型不同应产生不同缓存 key")
 	}
-	for i, line := range got[0] {
-		if n := utf8.RuneCountInString(line); n > 8 {
-			t.Errorf("lines[%d] = %q 长度 %d > 8", i, line, n)
-		}
+	if a.cacheKey(text) == a.cacheKey(text+"。") {
+		t.Error("文案不同应产生不同缓存 key")
 	}
 }
 
