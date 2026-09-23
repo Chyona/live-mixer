@@ -47,6 +47,10 @@ type CaptionDiagReport struct {
 	Captions        []CaptionDiagItem  `json:"captions"`
 	Summary         CaptionDiagSummary `json:"summary"`
 	Hint            string             `json:"hint"`
+
+	// CaptionLinesSource 标注切片文案的断行来源：llm（LLM 断句）/ rule（规则折行）/ mixed（部分切片用了 LLM）。
+	// 与 CaptionSource 正交：后者说「文本从哪来」，本字段说「怎么断行」。
+	CaptionLinesSource string `json:"caption_lines_source"`
 }
 
 // CaptionDiagClip 单段切片时长对比。
@@ -120,17 +124,27 @@ func BuildCaptionsFromASR(liveASRJSON string, placements []session.ClipPlacement
 // 人工删掉的文字不会回灌，行时间来自词级时间戳而非线性插值；
 // clipTexts 缺失（无 clips1 / 未对齐）时逐段回退 live_asr 按时间重叠映射。
 func BuildCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText) []capcutmate.CaptionItem {
-	items, _ := mapCaptionsForPlacements(liveASRJSON, placements, clipTexts)
+	return BuildCaptionsForPlacementsWithLines(liveASRJSON, placements, clipTexts, nil)
+}
+
+// BuildCaptionsForPlacementsWithLines 与 BuildCaptionsForPlacements 同逻辑，
+// 额外接受与 clipTexts 一一对应的断行建议 clipLines（来自 LLM）：该条为 nil 时按规则折行。
+func BuildCaptionsForPlacementsWithLines(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText, clipLines [][]string) []capcutmate.CaptionItem {
+	items, _ := mapCaptionsForPlacements(liveASRJSON, placements, clipTexts, clipLines)
 	return items
 }
 
-func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText) ([]capcutmate.CaptionItem, []mappedCaption) {
+func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText, clipLines [][]string) ([]capcutmate.CaptionItem, []mappedCaption) {
 	if len(placements) == 0 {
 		return nil, nil
 	}
 	// 只在完全对齐时按文案生成，否则整场回退 ASR，避免错行。
 	if len(clipTexts) != len(placements) {
 		clipTexts = nil
+	}
+	// 断行建议同样要求一一对齐，否则整体忽略。
+	if len(clipLines) != len(clipTexts) {
+		clipLines = nil
 	}
 	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
 	if len(utterances) == 0 && clipTexts == nil {
@@ -146,7 +160,7 @@ func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlace
 			continue
 		}
 		scale := float64(draftDurUS) / float64(sourceDurMS*1000)
-		for _, seg := range placementCaptionSegments(utterances, clipTexts, pi, p) {
+		for _, seg := range placementCaptionSegments(utterances, clipTexts, clipLines, pi, p) {
 			text := strings.TrimSpace(seg.Text)
 			if text == "" {
 				continue
@@ -196,10 +210,14 @@ func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlace
 
 // placementCaptionSegments 取第 idx 段切片的字幕行：有该段文案时以文案为准（词级时间拆行），
 // 否则回退到与该切片区间有重叠的 ASR 分句。
-func placementCaptionSegments(utterances []asr.Utterance, clipTexts []model.ClipWithText, idx int, p session.ClipPlacement) []asr.TimedSegment {
+func placementCaptionSegments(utterances []asr.Utterance, clipTexts []model.ClipWithText, clipLines [][]string, idx int, p session.ClipPlacement) []asr.TimedSegment {
 	if clipTexts != nil {
 		if c := clipTexts[idx]; strings.TrimSpace(c.Text) != "" {
-			return splitClipTextForCaptions(c)
+			var lines []string
+			if idx < len(clipLines) {
+				lines = clipLines[idx]
+			}
+			return splitClipTextForCaptions(c, lines)
 		}
 	}
 	return splitUtterancesForPlacement(utterances, p)
@@ -220,15 +238,28 @@ func splitUtterancesForPlacement(utterances []asr.Utterance, p session.ClipPlace
 	return out
 }
 
-// splitClipTextForCaptions 将切片文案拆成字幕行：断句/折行规则与 ASR 一致（标点 + 12 字），
-// 行时间优先取 clips1 词级时间戳；词级时间缺失或与文案不一致时在切片区间内按比例分配。
-func splitClipTextForCaptions(c model.ClipWithText) []asr.TimedSegment {
-	segs := asr.SplitUtteranceForCaptions(asr.Utterance{
+// splitClipTextForCaptions 将切片文案拆成字幕行：lines 非空且通过校验时用外部断行建议（LLM 断句），
+// 否则按规则折行（标点 + 12 字）。
+// lines 在此重新走一遍 asr.ValidateCaptionLines：断句器已校验过一次，这里再校验是边界防线——
+// 无论上游怎么改，进入字幕的文本都不能改动切片文案的内容，绝不把改写过的文本写进成片。
+// 两条路径共用同一时间分配：行时间优先取 clips1 词级时间戳；词级时间缺失或与文案不一致时在切片区间内按比例分配。
+func splitClipTextForCaptions(c model.ClipWithText, lines []string) []asr.TimedSegment {
+	u := asr.Utterance{
 		Text:      c.Text,
 		StartTime: c.StartTime,
 		EndTime:   c.EndTime,
 		Words:     toASRWords(c.Words),
-	})
+	}
+	var segs []asr.TimedSegment
+	if len(lines) > 0 {
+		if valid, err := asr.ValidateCaptionLines(c.Text, lines, asr.MaxCaptionRunes); err == nil {
+			segs = asr.TimedSegmentsForLines(u, valid)
+		} else {
+			segs = asr.SplitUtteranceForCaptions(u)
+		}
+	} else {
+		segs = asr.SplitUtteranceForCaptions(u)
+	}
 	// 夹紧到切片区间：clips1 与合并后区间有出入时不越界。
 	for i := range segs {
 		if segs[i].StartTime < c.StartTime {
@@ -264,16 +295,17 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 	if s.Material != nil {
 		liveASR = s.Material.LiveASR
 	}
-	_, mapped := mapCaptionsForPlacements(liveASR, s.ClipPlacements, s.ClipTexts)
+	_, mapped := mapCaptionsForPlacements(liveASR, s.ClipPlacements, s.ClipTexts, s.CaptionLines)
 
 	report := &CaptionDiagReport{
-		JobID:           s.JobID,
-		CutMode:         s.CutMode,
-		FastKeyframe:    s.FastKeyframe,
-		SourceMode:      s.SourceMode,
-		CaptionsEnabled: true,
-		Clips:           make([]CaptionDiagClip, 0, len(s.ClipPlacements)),
-		Captions:        make([]CaptionDiagItem, 0, len(mapped)),
+		JobID:              s.JobID,
+		CutMode:            s.CutMode,
+		FastKeyframe:       s.FastKeyframe,
+		SourceMode:         s.SourceMode,
+		CaptionsEnabled:    true,
+		Clips:              make([]CaptionDiagClip, 0, len(s.ClipPlacements)),
+		Captions:           make([]CaptionDiagItem, 0, len(mapped)),
+		CaptionLinesSource: captionLinesSourceLabel(s.ClipTexts, s.CaptionLines),
 	}
 	if s.Project != nil {
 		report.CaptionsEnabled = s.Project.EnableCaptions != model.EnableCaptionsOff
@@ -696,6 +728,28 @@ func captionSourceLabel(clipTexts []model.ClipWithText, placements []session.Cli
 		return "clips1"
 	case withText == 0:
 		return "asr"
+	default:
+		return "mixed"
+	}
+}
+
+// captionLinesSourceLabel 标注断行来源：llm / rule / mixed（仅统计有文案的切片）。
+func captionLinesSourceLabel(clipTexts []model.ClipWithText, captionLines [][]string) string {
+	withText, withLLM := 0, 0
+	for i, c := range clipTexts {
+		if strings.TrimSpace(c.Text) == "" {
+			continue
+		}
+		withText++
+		if i < len(captionLines) && len(captionLines[i]) > 0 {
+			withLLM++
+		}
+	}
+	switch {
+	case withText == 0 || withLLM == 0:
+		return "rule"
+	case withLLM == withText:
+		return "llm"
 	default:
 		return "mixed"
 	}

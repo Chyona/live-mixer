@@ -331,6 +331,94 @@ func TestBuildCaptionsForPlacements_FallsBackWhenNotAligned(t *testing.T) {
 	}
 }
 
+// 传入 LLM 断行建议时，字幕按建议拆行；该条无建议则仍按规则折行（不动其他切片）。
+func TestBuildCaptionsForPlacements_UsesProvidedLines(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 11000, SourceEndMS: 13000, DraftStartUS: 400_000, DraftEndUS: 2_400_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{
+			Text: "注意到这个细节", StartTime: 11000, EndTime: 13000,
+			Words: []model.ClipWord{
+				{Text: "注意", StartTime: 11000, EndTime: 11500},
+				{Text: "到", StartTime: 11500, EndTime: 11700},
+				{Text: "这个", StartTime: 11700, EndTime: 12200},
+				{Text: "细节", StartTime: 12200, EndTime: 13000},
+			},
+		},
+	}
+
+	// 规则折行：7 字 ≤ 12，整句一行。
+	byRule := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, nil)
+	if len(byRule) != 1 || byRule[0].Text != "注意到这个细节" {
+		t.Fatalf("规则折行 = %#v, want 单行整句", byRule)
+	}
+
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"注意到这个", "细节"}})
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	// 行时间仍取词级时间戳：源 11000/12200/13000 → 草稿 400000/1600000/2400000
+	wantTexts := []string{"注意到这个", "细节"}
+	wantStarts := []int64{400_000, 1_600_000}
+	wantEnds := []int64{1_600_000, 2_400_000}
+	for i := range wantTexts {
+		if got[i].Text != wantTexts[i] || got[i].Start != wantStarts[i] || got[i].End != wantEnds[i] {
+			t.Errorf("caption[%d] = %#v, want %q [%d,%d]",
+				i, got[i], wantTexts[i], wantStarts[i], wantEnds[i])
+		}
+	}
+}
+
+// 断行建议条数与切片文案不一致时整体忽略，避免错位。
+func TestBuildCaptionsForPlacements_IgnoresMismatchedLines(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+		{SourceStartMS: 2000, SourceEndMS: 3000, DraftStartUS: 1_000_000, DraftEndUS: 2_000_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{Text: "第一段话", StartTime: 0, EndTime: 1000},
+		{Text: "第二段话", StartTime: 2000, EndTime: 3000},
+	}
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"第一段话"}})
+	if len(got) != 2 || got[0].Text != "第一段话" || got[1].Text != "第二段话" {
+		t.Fatalf("条数不一致时应整体忽略断行建议，got %#v", got)
+	}
+}
+
+// 断行建议若不是原文的无损切分（上游实现有 bug 或伪造），字幕必须回退规则折行，不把改写文本写进成片。
+func TestBuildCaptionsForPlacements_RejectsLinesThatRewriteText(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 11000, SourceEndMS: 13000, DraftStartUS: 0, DraftEndUS: 2_000_000},
+	}
+	clipTexts := []model.ClipWithText{{Text: "注意到这个细节", StartTime: 11000, EndTime: 13000}}
+
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"注意到", "这个细节真好"}})
+	if len(got) != 1 || got[0].Text != "注意到这个细节" {
+		t.Fatalf("非无损切分应回退规则折行，got %#v", got)
+	}
+	if captionsContain(got, "真好") {
+		t.Errorf("改写的文字进入了字幕：%#v", got)
+	}
+}
+
+func TestCaptionLinesSourceLabel(t *testing.T) {
+	clipTexts := []model.ClipWithText{{Text: "甲"}, {Text: "乙"}}
+	if got := captionLinesSourceLabel(clipTexts, nil); got != "rule" {
+		t.Errorf("无断行建议 = %q, want rule", got)
+	}
+	if got := captionLinesSourceLabel(clipTexts, [][]string{{"甲"}, {"乙"}}); got != "llm" {
+		t.Errorf("全部有断行建议 = %q, want llm", got)
+	}
+	if got := captionLinesSourceLabel(clipTexts, [][]string{nil, {"乙"}}); got != "mixed" {
+		t.Errorf("部分有断行建议 = %q, want mixed", got)
+	}
+	// 文案为空的切片不计入分母。
+	if got := captionLinesSourceLabel([]model.ClipWithText{{Text: " "}, {Text: "乙"}}, [][]string{nil, {"乙"}}); got != "llm" {
+		t.Errorf("空文案切片应被跳过 = %q, want llm", got)
+	}
+}
+
 func TestCaptionSourceLabel(t *testing.T) {
 	placements := []session.ClipPlacement{{SourceStartMS: 0, SourceEndMS: 1}, {SourceStartMS: 2, SourceEndMS: 3}}
 	asrOnly := BuildCaptionsFromASR("", placements)

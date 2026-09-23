@@ -16,6 +16,8 @@ type GeneratorDeps struct {
 	// Uploader 将本地切片上传到对象存储；add_videos 使用其返回的公网 URL。
 	Uploader steps.ObjectUploader
 	Logger   *zap.Logger
+	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定。
+	Segmenter CaptionSegmenter
 	// NewDownloader 当 Downloader 为 nil 时的工厂。
 	NewDownloader func(logger *zap.Logger) prepare.FileDownloader
 }
@@ -35,5 +37,7 @@ func NewGenerator(deps GeneratorDeps) Generator {
 		downloader = deps.NewDownloader(logger)
 	}
 	prep := prepare.NewPipeline(downloader, cutter, logger)
-	return NewBuilder(prep, deps.CapCut, deps.Uploader, logger)
+	builder := NewBuilder(prep, deps.CapCut, deps.Uploader, logger)
+	builder.Segmenter = deps.Segmenter
+	return builder
 }

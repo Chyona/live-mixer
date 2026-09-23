@@ -64,6 +64,18 @@ llm:
   model: "qwen3.7-max"
   flash_model: "qwen3.7-flash"
 
+# 成片字幕断句：用 LLM（flash_model）做语义断行，解决"词表枚举不全导致切词"的问题。
+# 默认关闭；关闭时字幕行完全由规则折行决定（标点断句 + 超长均分 + 词表不切词）。
+# 开启后每条切片文案一次调用（并发受 concurrency 限制），单条失败只回退该条的规则折行。
+# 提示词为代码常量（service.CaptionSegmentPrompt），改提示词需发版；输出仍受无损校验 + 行宽 + 不切词硬约束。
+# 环境变量：APP_CAPTION_SEGMENT_ENABLED / _TIMEOUT_MS / _CONCURRENCY / _MAX_RUNES / _CACHE_SIZE
+caption_segment:
+  enabled: false       # 全局开关：true 时启用 LLM 断句
+  timeout_ms: 15000    # 单条文案调用总预算（含重试）
+  concurrency: 4       # 同时打向 LLM 的断句请求上限
+  max_runes: 12        # 单行字数上限，默认与 asr 规则折行一致（12）
+  cache_size: 512      # 断句结果进程内缓存条数（重跑复用同一断句）
+
 # 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖
 # 视频生成密钥可用 APP_CAPCUT_MATE_API_KEY 或 CAPCUT_MATE_API_KEY 覆盖
 # gen_video / gen_video_status 可共用独立根地址（未配置时走 base_url）

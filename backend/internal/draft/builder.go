@@ -18,6 +18,8 @@ type Builder struct {
 	API      CapCutMateAPI
 	Uploader steps.ObjectUploader
 	Logger   *zap.Logger
+	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定（默认）。
+	Segmenter CaptionSegmenter
 }
 
 // NewBuilder 创建草稿组装器。
@@ -82,6 +84,7 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 		LocalIngestDir: req.LocalIngestDir,
 		Clips:          clips,
 		ClipTexts:      clipTexts,
+		CaptionLines:   b.segmentCaptionLines(ctx, req.JobID, clipTexts, req.Project),
 		CanvasW:        req.CanvasW,
 		CanvasH:        req.CanvasH,
 		Timeline:       session.NewTimeline(),
@@ -154,6 +157,42 @@ func resolveAlignedClipTexts(req Request, clips []model.ClipRange, logger *zap.L
 		return nil
 	}
 	return merged
+}
+
+// segmentCaptionLines 用 LLM 为切片文案生成断行建议。
+// 未配置断句器、项目未开字幕、无文案或全部失败时返回 nil，字幕步骤据此走规则折行；
+// 部分失败时保留 nil 元素，字幕步骤只对该条回退规则。
+func (b *Builder) segmentCaptionLines(ctx context.Context, jobID string, clipTexts []model.ClipWithText, project *model.VideoProject) [][]string {
+	if b.Segmenter == nil || len(clipTexts) == 0 {
+		return nil
+	}
+	// 项目未开字幕时字幕步骤会整段跳过，先别花这次调用。
+	if project != nil && project.EnableCaptions == model.EnableCaptionsOff {
+		return nil
+	}
+	texts := make([]string, len(clipTexts))
+	for i, c := range clipTexts {
+		texts[i] = c.Text
+	}
+	lines := b.Segmenter.SegmentTexts(ctx, texts)
+	if len(lines) != len(clipTexts) {
+		return nil
+	}
+	used := 0
+	for _, item := range lines {
+		if len(item) > 0 {
+			used++
+		}
+	}
+	if used == 0 {
+		return nil
+	}
+	b.Logger.Info("LLM 断句完成",
+		zap.String("job_id", jobID),
+		zap.Int("clips", len(clipTexts)),
+		zap.Int("llm_clips", used),
+	)
+	return lines
 }
 
 // 确保 steps 包被引用（DefaultRecipe 已引用）。

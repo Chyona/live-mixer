@@ -110,12 +110,34 @@ func main() {
 	)
 
 	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())
+
+	// 成片字幕 LLM 断句：默认关闭（caption_segment.enabled=false），此时 Segmenter 为 nil，字幕行由规则折行决定。
+	var captionSegmenter draft.CaptionSegmenter
+	if cfg.CaptionSegment.Enabled {
+		captionSegmenter = &service.CaptionSegmenter{
+			Client:      asrLLM,
+			Logger:      logger,
+			Model:       cfg.LLM.FlashModelOrDefault(),
+			MaxRunes:    cfg.CaptionSegment.MaxRunesOrDefault(),
+			Timeout:     cfg.CaptionSegment.Timeout(),
+			Concurrency: cfg.CaptionSegment.ConcurrencyOrDefault(),
+			CacheSize:   cfg.CaptionSegment.CacheSizeOrDefault(),
+		}
+		logger.Info("成片字幕 LLM 断句已启用",
+			zap.String("model", cfg.LLM.FlashModelOrDefault()),
+			zap.Int("max_runes", cfg.CaptionSegment.MaxRunesOrDefault()),
+			zap.Int("concurrency", cfg.CaptionSegment.ConcurrencyOrDefault()),
+			zap.Duration("timeout", cfg.CaptionSegment.Timeout()),
+		)
+	}
+
 	generator := draft.NewGenerator(draft.GeneratorDeps{
 		CapCut:     capcutClient,
 		Cutter:     media.NewFFmpegConverter(""),
 		Downloader: downloader,
 		Uploader:   storageClient,
 		Logger:     logger,
+		Segmenter:  captionSegmenter,
 	})
 	enableGenVideo := cfg.CapCutMate.GenVideoEnabled()
 	draftWorker := service.NewDraftWorker(service.DraftWorkerDeps{

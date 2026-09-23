@@ -63,7 +63,7 @@ func (st CaptionsStep) Run(ctx context.Context, s *session.Session) error {
 	if s.Material != nil {
 		liveASR = s.Material.LiveASR
 	}
-	items := BuildCaptionsForPlacements(liveASR, s.ClipPlacements, s.ClipTexts)
+	items := BuildCaptionsForPlacementsWithLines(liveASR, s.ClipPlacements, s.ClipTexts, s.CaptionLines)
 	if len(items) == 0 {
 		logger.Info("无可用字幕，跳过 add_captions",
 			zap.String("job_id", s.JobID),

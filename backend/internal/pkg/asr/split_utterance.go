@@ -25,19 +25,54 @@ type captionAtom struct {
 // SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文/数字/中文词典词不拆），并切分时间。
 // 成片每行会剥离首尾断句标点，保证行首行尾均非标点。
 func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
-	text := strings.TrimSpace(u.Text)
+	lines := splitLinesForText(strings.TrimSpace(u.Text), buildExtraCJKWords(u.Words), MaxCaptionRunes)
+	if len(lines) == 0 {
+		return nil
+	}
+	return TimedSegmentsForLines(u, lines)
+}
+
+// SplitLinesByRule 按产品折行规则把文本切成字幕行：标点断句 → 剥离首尾标点 → 超长按最少行数均分，
+// 静态词表里的中文词、西文词与数字词整段不拆。
+// 供外部断句（如 LLM 折行）的兜底与超长行修正复用，不涉及时间。
+func SplitLinesByRule(text string) []string {
+	return splitLinesForText(strings.TrimSpace(text), nil, MaxCaptionRunes)
+}
+
+// SplitLinesByRuleMax 与 SplitLinesByRule 同规则，行宽上限由调用方指定。
+func SplitLinesByRuleMax(text string, max int) []string {
+	if max <= 0 {
+		max = MaxCaptionRunes
+	}
+	return splitLinesForText(strings.TrimSpace(text), nil, max)
+}
+
+// TimedSegmentsForLines 为已切好的字幕行分配时间：词级对齐优先，失败整条回退比例分配。
+// 行必须是原文的连续切分（字符与顺序与原文一致），否则词级对齐必然失败并整体降级为比例分配——
+// 这也意味着「换一种断句」不影响时间分配的可达性，只是分组不同。
+func TimedSegmentsForLines(u Utterance, lines []string) []TimedSegment {
+	if len(lines) == 0 {
+		return nil
+	}
+	if segs, ok := assignTimesWithWords(u, lines); ok {
+		return segs
+	}
+	return assignTimesProportional(u, lines)
+}
+
+// splitLinesForText 折行管线：标点断句 → 边缘清理 → 超长均分 → 再清理。
+// extra 为当次动态补充的中文词（来自 ASR Words），nil 表示只用静态词表。
+func splitLinesForText(text string, extra map[string]struct{}, max int) []string {
 	if text == "" {
 		return nil
 	}
-
-	extra := buildExtraCJKWords(u.Words)
 	var lines []string
 	for _, clause := range splitByPunctuation(text) {
 		clause = trimCaptionEdgePunct(clause)
 		if clause == "" {
 			continue
 		}
-		for _, line := range splitBalancedPreferIntact(clause, MaxCaptionRunes, extra) {
+		for _, line := range splitBalancedPreferIntact(clause, max, extra) {
 			line = trimCaptionEdgePunct(line)
 			if line == "" {
 				continue
@@ -45,14 +80,7 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 			lines = append(lines, line)
 		}
 	}
-	if len(lines) == 0 {
-		return nil
-	}
-
-	if segs, ok := assignTimesWithWords(u, lines); ok {
-		return segs
-	}
-	return assignTimesProportional(u, lines)
+	return lines
 }
 
 // trimCaptionEdgePunct 去掉首尾空白与断句标点（含 … / ...），使成片行首行尾非标点。

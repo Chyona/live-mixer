@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"live-mixer/internal/pkg/asr"
+
 	"github.com/spf13/viper"
 )
 
@@ -28,6 +30,9 @@ type Config struct {
 	Web        WebConfig        `mapstructure:"web"`
 	Worker     WorkerConfig     `mapstructure:"worker"`
 	Download   DownloadConfig   `mapstructure:"download"`
+
+	// CaptionSegment 成片字幕断句（LLM 语义断行）全局开关；默认关闭，关闭时字幕行由规则折行决定。
+	CaptionSegment CaptionSegmentConfig `mapstructure:"caption_segment"`
 }
 
 // WorkerConfig 后台任务 Worker 并发等调度配置。
@@ -175,6 +180,22 @@ type LLMConfig struct {
 	FlashModel string `mapstructure:"flash_model"`
 }
 
+// CaptionSegmentConfig 成片字幕断句配置：用 LLM 做语义断行，替代纯规则折行。
+// 默认关闭；关闭时与历史行为一致（标点断句 + 超长均分 + 词表不切词）。
+type CaptionSegmentConfig struct {
+	// Enabled 是否启用 LLM 断句；默认 false（关闭时不构造断句器，零额外调用与耗时）。
+	// 开启后每条切片文案一次调用，单条失败只回退该条的规则折行，不影响成片。
+	Enabled bool `mapstructure:"enabled"`
+	// TimeoutMS 单条文案的调用总预算（含重试），单位毫秒；<=0 时回落 15000。
+	TimeoutMS int `mapstructure:"timeout_ms"`
+	// Concurrency 同时打向 LLM 的断句请求上限；<=0 时回落 4。
+	Concurrency int `mapstructure:"concurrency"`
+	// MaxRunes 单行字数上限；<=0 时回落 asr.MaxCaptionRunes（当前 12）。
+	MaxRunes int `mapstructure:"max_runes"`
+	// CacheSize 断句结果的进程内缓存条数上限；<=0 时回落 512。
+	CacheSize int `mapstructure:"cache_size"`
+}
+
 // TOSStorageConfig 火山引擎对象存储（TOS）连接配置。
 type TOSStorageConfig struct {
 	AccessKeyID     string `mapstructure:"access_key_id"`
@@ -281,6 +302,47 @@ const DefaultStagingMaxDirs = 80
 
 // DefaultASRStagingMaxDirs staging/asr 下默认最多保留的 ASR 调试子目录数。
 const DefaultASRStagingMaxDirs = 20
+
+// DefaultCaptionSegmentTimeout 单条文案 LLM 断句的默认调用总预算（含重试）。
+const DefaultCaptionSegmentTimeout = 15 * time.Second
+
+// DefaultCaptionSegmentConcurrency LLM 断句默认并发上限。
+const DefaultCaptionSegmentConcurrency = 4
+
+// DefaultCaptionSegmentCacheSize LLM 断句结果默认缓存条数上限。
+const DefaultCaptionSegmentCacheSize = 512
+
+// Timeout 返回单条文案的断句调用总预算；<=0 时回落默认 15 秒。
+func (c CaptionSegmentConfig) Timeout() time.Duration {
+	if c.TimeoutMS <= 0 {
+		return DefaultCaptionSegmentTimeout
+	}
+	return time.Duration(c.TimeoutMS) * time.Millisecond
+}
+
+// ConcurrencyOrDefault 返回断句并发上限；<=0 时回落默认 4。
+func (c CaptionSegmentConfig) ConcurrencyOrDefault() int {
+	if c.Concurrency <= 0 {
+		return DefaultCaptionSegmentConcurrency
+	}
+	return c.Concurrency
+}
+
+// MaxRunesOrDefault 返回单行字数上限；<=0 时回落 asr.MaxCaptionRunes（与规则折行同一上限）。
+func (c CaptionSegmentConfig) MaxRunesOrDefault() int {
+	if c.MaxRunes <= 0 {
+		return asr.MaxCaptionRunes
+	}
+	return c.MaxRunes
+}
+
+// CacheSizeOrDefault 返回断句结果缓存条数上限；<=0 时回落默认 512。
+func (c CaptionSegmentConfig) CacheSizeOrDefault() int {
+	if c.CacheSize <= 0 {
+		return DefaultCaptionSegmentCacheSize
+	}
+	return c.CacheSize
+}
 
 // DefaultSourceCacheMaxDirs staging/source_cache 下默认最多保留的直播源缓存数。
 const DefaultSourceCacheMaxDirs = 3
@@ -684,6 +746,33 @@ func applyEnvOverrides(cfg *Config) {
 
 	if val, ok := os.LookupEnv("APP_DOWNLOAD_HOST_MAPPINGS"); ok {
 		cfg.Download.HostMappings = hostMappingsFromEnv(val)
+	}
+
+	// caption_segment 未写入内嵌 config.yaml 时 viper 无法从环境变量补全，故显式覆盖。
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_ENABLED"); ok {
+		if b, err := parseEnvBool(val); err == nil {
+			cfg.CaptionSegment.Enabled = b
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_TIMEOUT_MS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.TimeoutMS = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_CONCURRENCY"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.Concurrency = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_MAX_RUNES"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.MaxRunes = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_CACHE_SIZE"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.CacheSize = n
+		}
 	}
 }
 

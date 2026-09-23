@@ -32,6 +32,10 @@ type Session struct {
 	// 仅当与 Clips 完全对齐时由 Builder 写入；为空表示字幕回退 live_asr 映射。
 	// 人工二次编辑（如局部删除）后字幕必须以此为准，否则会回灌已被剪掉的文字。
 	ClipTexts []model.ClipWithText
+	// CaptionLines 与 ClipTexts 一一对应的 LLM 断行建议（nil 元素或整片为空表示该条走规则折行）。
+	// 由 Builder 在开关开启时写入；行不得改动 ClipTexts[i].Text 的内容（只允许丢行首尾标点与空白），
+	// 否则字幕步骤自行回退规则。
+	CaptionLines [][]string
 	// ClipPlacements 由 VideosStep 写入：每段切片在源时间轴与草稿时间轴的映射，供字幕同步。
 	ClipPlacements []ClipPlacement
 	// FastKeyframe / CutMode 由 Prepare 写入，供字幕对齐诊断报告使用。

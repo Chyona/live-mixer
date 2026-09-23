@@ -96,6 +96,49 @@ func TestBuildCaptionDiagReport_MapSelfConsistent(t *testing.T) {
 	}
 }
 
+// session.CaptionLines（LLM 断行建议）应既影响字幕拆行，也体现在诊断报告的 caption_lines_source。
+func TestBuildCaptionDiagReport_CaptionLinesSource(t *testing.T) {
+	s := &session.Session{
+		JobID:   "diag-3",
+		CutMode: "precise",
+		Project: &model.VideoProject{EnableCaptions: model.EnableCaptionsOn},
+		Material: &model.LiveMaterial{
+			LiveASR: `{"result":{"utterances":[
+				{"start_time":0,"end_time":900,"text":"原句","words":[]}
+			]}}`,
+		},
+		ClipPlacements: []session.ClipPlacement{
+			{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+		},
+		ClipTexts:    []model.ClipWithText{{Text: "第一段话", StartTime: 0, EndTime: 1000}},
+		CaptionLines: [][]string{{"第一段", "话"}},
+	}
+
+	report, err := BuildCaptionDiagReport(context.Background(), s, stubTimelineProber{})
+	if err != nil {
+		t.Fatalf("BuildCaptionDiagReport: %v", err)
+	}
+	if report.CaptionLinesSource != "llm" {
+		t.Errorf("caption_lines_source = %q, want llm", report.CaptionLinesSource)
+	}
+	if len(report.Captions) != 2 || report.Captions[0].Text != "第一段" {
+		t.Fatalf("未按断行建议拆行: %#v", report.Captions)
+	}
+
+	// 无断行建议时回退规则折行，并标注 rule。
+	s.CaptionLines = nil
+	report, err = BuildCaptionDiagReport(context.Background(), s, stubTimelineProber{})
+	if err != nil {
+		t.Fatalf("BuildCaptionDiagReport: %v", err)
+	}
+	if report.CaptionLinesSource != "rule" {
+		t.Errorf("caption_lines_source = %q, want rule", report.CaptionLinesSource)
+	}
+	if len(report.Captions) != 1 || report.Captions[0].Text != "第一段话" {
+		t.Fatalf("规则折行结果异常: %#v", report.Captions)
+	}
+}
+
 func TestWriteCaptionDiagReport(t *testing.T) {
 	dir := t.TempDir()
 	report := &CaptionDiagReport{
