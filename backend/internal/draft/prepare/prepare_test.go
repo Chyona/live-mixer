@@ -400,3 +400,56 @@ func TestPipeline_Run_PreferFinalMP4WhenEnded(t *testing.T) {
 		t.Fatalf("download urls=%v", dl.urls)
 	}
 }
+
+func TestMergeAdjacentClipTexts_KeepsLockstepWithRanges(t *testing.T) {
+	in := []model.ClipWithText{
+		{Text: "前半句", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{{Text: "前半句", StartTime: 100, EndTime: 900}}},
+		// gap = 500 → 与 MergeAdjacentClipRanges 同样合并
+		{Text: "后半句", StartTime: 1500, EndTime: 2000, Words: []model.ClipWord{{Text: "后半句", StartTime: 1500, EndTime: 1900}}},
+		// gap = 501 → 不合并
+		{Text: "另起一段", StartTime: 2501, EndTime: 3000},
+	}
+	got := MergeAdjacentClipTexts(in, ClipMergeGapMS)
+
+	ranges := MergeAdjacentClipRanges(clipsWithTextToRanges(in), ClipMergeGapMS)
+	if !ClipTextsMatchRanges(ranges, got) {
+		t.Fatalf("texts 与 ranges 未对齐: texts=%#v ranges=%#v", got, ranges)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Text != "前半句后半句" || got[0].StartTime != 0 || got[0].EndTime != 2000 {
+		t.Errorf("merged[0] = %#v", got[0])
+	}
+	if len(got[0].Words) != 2 || got[0].Words[1].Text != "后半句" {
+		t.Errorf("merged[0].Words = %#v", got[0].Words)
+	}
+	if got[1].Text != "另起一段" || len(got[1].Words) != 0 {
+		t.Errorf("merged[1] = %#v", got[1])
+	}
+	// 入参不被修改
+	if in[0].Text != "前半句" || in[0].EndTime != 1000 {
+		t.Errorf("input mutated: %#v", in[0])
+	}
+}
+
+func clipsWithTextToRanges(clips []model.ClipWithText) []model.ClipRange {
+	out := make([]model.ClipRange, 0, len(clips))
+	for _, c := range clips {
+		out = append(out, model.ClipRange{StartTime: c.StartTime, EndTime: c.EndTime})
+	}
+	return out
+}
+
+func TestClipTextsMatchRanges(t *testing.T) {
+	ranges := []model.ClipRange{{StartTime: 0, EndTime: 100}}
+	if !ClipTextsMatchRanges(ranges, []model.ClipWithText{{StartTime: 0, EndTime: 100}}) {
+		t.Error("identical should match")
+	}
+	if ClipTextsMatchRanges(ranges, nil) {
+		t.Error("count mismatch should not match")
+	}
+	if ClipTextsMatchRanges(ranges, []model.ClipWithText{{StartTime: 0, EndTime: 101}}) {
+		t.Error("end mismatch should not match")
+	}
+}

@@ -32,7 +32,8 @@ type CaptionsStep struct {
 // Name 返回步骤名。
 func (CaptionsStep) Name() string { return NameCaptions }
 
-// Run 从 Material.LiveASR 解析分句，按 VideosStep 写入的 ClipPlacements 映射到草稿时间轴后批量添加字幕。
+// Run 生成字幕：优先用 ClipTexts（人工编辑后的切片文案 + 词级时间），
+// 缺失时回退 Material.LiveASR 分句，按 VideosStep 写入的 ClipPlacements 映射到草稿时间轴后批量添加。
 // 无可用字幕时跳过接口调用（不视为失败），保证无 ASR 场景仍可产出草稿。
 func (st CaptionsStep) Run(ctx context.Context, s *session.Session) error {
 	if s == nil {
@@ -62,11 +63,12 @@ func (st CaptionsStep) Run(ctx context.Context, s *session.Session) error {
 	if s.Material != nil {
 		liveASR = s.Material.LiveASR
 	}
-	items := BuildCaptionsFromASR(liveASR, s.ClipPlacements)
+	items := BuildCaptionsForPlacements(liveASR, s.ClipPlacements, s.ClipTexts)
 	if len(items) == 0 {
-		logger.Info("无可用 ASR 字幕，跳过 add_captions",
+		logger.Info("无可用字幕，跳过 add_captions",
 			zap.String("job_id", s.JobID),
 			zap.Int("placements", len(s.ClipPlacements)),
+			zap.Int("clip_texts", len(s.ClipTexts)),
 		)
 		s.ReportProgress(95)
 		return nil

@@ -239,3 +239,123 @@ func TestCaptionsStep_Run_APIError(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// 人工二次编辑（局部删除）后，字幕必须以切片文案为准，不能再回灌已被剪掉的文字。
+func TestBuildCaptionsForPlacements_PrefersEditedClipText(t *testing.T) {
+	// 源句在 [10000,13000]，人工删掉中间的「有没有」，切片被拆成两段：
+	// [10000,10400]="大家"、[11000,13000]="注意到这个细节"。
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 10000, SourceEndMS: 10400, DraftStartUS: 0, DraftEndUS: 400_000},
+		{SourceStartMS: 11000, SourceEndMS: 13000, DraftStartUS: 400_000, DraftEndUS: 2_400_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{
+			Text: "大家", StartTime: 10000, EndTime: 10400,
+			Words: []model.ClipWord{{Text: "大家", StartTime: 10000, EndTime: 10400}},
+		},
+		{
+			Text: "注意到这个细节", StartTime: 11000, EndTime: 13000,
+			Words: []model.ClipWord{
+				{Text: "注意", StartTime: 11000, EndTime: 11500},
+				{Text: "到", StartTime: 11500, EndTime: 11700},
+				{Text: "这个", StartTime: 11700, EndTime: 12200},
+				{Text: "细节", StartTime: 12200, EndTime: 13000},
+			},
+		},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":10000,"end_time":13000,"text":"大家有没有注意到这个细节","words":[]}
+	]}}`
+
+	// 兜底路径（无切片文案）会把这句原样挂到两段上 —— 即问题现象，先确认夹具能复现。
+	fromASR := BuildCaptionsFromASR(liveASR, placements)
+	if !captionsContain(fromASR, "有没有") {
+		t.Fatalf("夹具未复现旧问题：%#v", fromASR)
+	}
+
+	got := BuildCaptionsForPlacements(liveASR, placements, clipTexts)
+	if captionsContain(got, "有没有") {
+		t.Errorf("字幕回灌了已删除的文字：%#v", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Text != "大家" || got[0].Start != 0 || got[0].End != 400_000 {
+		t.Errorf("caption[0] = %#v", got[0])
+	}
+	// 第二段按词级时间映射：源 11000/13000 → 草稿 400000/2400000
+	if got[1].Text != "注意到这个细节" || got[1].Start != 400_000 || got[1].End != 2_400_000 {
+		t.Errorf("caption[1] = %#v", got[1])
+	}
+}
+
+// 片段文案没有词级时间时，字幕按比例分配在片段区间内（不越界、不回灌）。
+func TestBuildCaptionsForPlacements_TextWithoutWordsProportional(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{Text: "好，我里面给你们去搭个这个嗯蕾丝美学的米色", StartTime: 0, EndTime: 1000},
+	}
+	got := BuildCaptionsForPlacements("{}", placements, clipTexts)
+	if len(got) < 2 {
+		t.Fatalf("len = %d, want >= 2: %#v", len(got), got)
+	}
+	for i, c := range got {
+		if c.Start < 0 || c.End > 1_000_000 || c.End <= c.Start {
+			t.Errorf("caption[%d] 越界或时长非法: %#v", i, c)
+		}
+	}
+	// 每行仍受 12 字上限约束
+	for _, c := range got {
+		if n := len([]rune(c.Text)); n > 12 {
+			t.Errorf("caption 超长: %q", c.Text)
+		}
+	}
+}
+
+// 文案与切片不齐（数量不一致）时整场回退 ASR，避免错行。
+func TestBuildCaptionsForPlacements_FallsBackWhenNotAligned(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":0,"end_time":800,"text":"原句","words":[]}
+	]}}`
+	got := BuildCaptionsForPlacements(liveASR, placements, []model.ClipWithText{
+		{Text: "甲", StartTime: 0, EndTime: 100},
+		{Text: "乙", StartTime: 200, EndTime: 300},
+	})
+	if len(got) != 1 || got[0].Text != "原句" {
+		t.Fatalf("got = %#v, want 回退 ASR 的「原句」", got)
+	}
+}
+
+func TestCaptionSourceLabel(t *testing.T) {
+	placements := []session.ClipPlacement{{SourceStartMS: 0, SourceEndMS: 1}, {SourceStartMS: 2, SourceEndMS: 3}}
+	asrOnly := BuildCaptionsFromASR("", placements)
+	if asrOnly != nil {
+		t.Errorf("空 ASR 应返回 nil，got %#v", asrOnly)
+	}
+	if got := captionSourceLabel(nil, placements); got != "asr" {
+		t.Errorf("nil clipTexts = %q, want asr", got)
+	}
+	if got := captionSourceLabel([]model.ClipWithText{{Text: "甲"}, {Text: "乙"}}, placements); got != "clips1" {
+		t.Errorf("all text = %q, want clips1", got)
+	}
+	if got := captionSourceLabel([]model.ClipWithText{{Text: "甲"}, {Text: " "}}, placements); got != "mixed" {
+		t.Errorf("partial text = %q, want mixed", got)
+	}
+	if got := captionSourceLabel([]model.ClipWithText{{Text: "甲"}}, placements); got != "asr" {
+		t.Errorf("count mismatch = %q, want asr", got)
+	}
+}
+
+func captionsContain(items []capcutmate.CaptionItem, sub string) bool {
+	for _, c := range items {
+		if strings.Contains(c.Text, sub) {
+			return true
+		}
+	}
+	return false
+}

@@ -33,6 +33,7 @@ const (
 )
 
 // CaptionDiagReport 字幕/音画对齐诊断报告（方案 A）。
+// CaptionSource 标注本次字幕来源：clips1（切片文案）/ asr（兜底）/ mixed（部分切片无文案）。
 type CaptionDiagReport struct {
 	JobID           string             `json:"job_id"`
 	SourceURL       string             `json:"source_url,omitempty"`
@@ -41,6 +42,7 @@ type CaptionDiagReport struct {
 	FastKeyframe    bool               `json:"fast_keyframe"`
 	TotalWantMS     int64              `json:"total_want_ms"`
 	CaptionsEnabled bool               `json:"captions_enabled"`
+	CaptionSource   string             `json:"caption_source"`
 	Clips           []CaptionDiagClip  `json:"clips"`
 	Captions        []CaptionDiagItem  `json:"captions"`
 	Summary         CaptionDiagSummary `json:"summary"`
@@ -108,15 +110,30 @@ type mappedCaption struct {
 	Scale      float64
 }
 
-// BuildCaptionsFromASR 将 live_asr JSON 分句映射到草稿字幕时间轴。
+// BuildCaptionsFromASR 仅按 live_asr 分句映射到草稿字幕时间轴（无切片文案时的兜底，保持旧行为）。
 func BuildCaptionsFromASR(liveASRJSON string, placements []session.ClipPlacement) []capcutmate.CaptionItem {
-	items, _ := mapCaptionsFromASR(liveASRJSON, placements)
+	return BuildCaptionsForPlacements(liveASRJSON, placements, nil)
+}
+
+// BuildCaptionsForPlacements 生成字幕条目。
+// 优先使用与切片一一对应的 clipTexts（人工编辑后的文案 + 词级时间）：字幕文本与画面一致，
+// 人工删掉的文字不会回灌，行时间来自词级时间戳而非线性插值；
+// clipTexts 缺失（无 clips1 / 未对齐）时逐段回退 live_asr 按时间重叠映射。
+func BuildCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText) []capcutmate.CaptionItem {
+	items, _ := mapCaptionsForPlacements(liveASRJSON, placements, clipTexts)
 	return items
 }
 
-func mapCaptionsFromASR(liveASRJSON string, placements []session.ClipPlacement) ([]capcutmate.CaptionItem, []mappedCaption) {
+func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText) ([]capcutmate.CaptionItem, []mappedCaption) {
+	if len(placements) == 0 {
+		return nil, nil
+	}
+	// 只在完全对齐时按文案生成，否则整场回退 ASR，避免错行。
+	if len(clipTexts) != len(placements) {
+		clipTexts = nil
+	}
 	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
-	if len(utterances) == 0 || len(placements) == 0 {
+	if len(utterances) == 0 && clipTexts == nil {
 		return nil, nil
 	}
 
@@ -129,60 +146,110 @@ func mapCaptionsFromASR(liveASRJSON string, placements []session.ClipPlacement) 
 			continue
 		}
 		scale := float64(draftDurUS) / float64(sourceDurMS*1000)
-		for _, u := range utterances {
-			if strings.TrimSpace(u.Text) == "" {
+		for _, seg := range placementCaptionSegments(utterances, clipTexts, pi, p) {
+			text := strings.TrimSpace(seg.Text)
+			if text == "" {
 				continue
 			}
-			if u.EndTime <= p.SourceStartMS || u.StartTime >= p.SourceEndMS {
+			if seg.EndTime <= p.SourceStartMS || seg.StartTime >= p.SourceEndMS {
 				continue
 			}
-			for _, seg := range asr.SplitUtteranceForCaptions(u) {
-				text := strings.TrimSpace(seg.Text)
-				if text == "" {
-					continue
-				}
-				if seg.EndTime <= p.SourceStartMS || seg.StartTime >= p.SourceEndMS {
-					continue
-				}
-				overlapStartMS := seg.StartTime
-				if overlapStartMS < p.SourceStartMS {
-					overlapStartMS = p.SourceStartMS
-				}
-				overlapEndMS := seg.EndTime
-				if overlapEndMS > p.SourceEndMS {
-					overlapEndMS = p.SourceEndMS
-				}
-				if overlapEndMS <= overlapStartMS {
-					continue
-				}
-				draftStartUS := p.DraftStartUS + int64(float64((overlapStartMS-p.SourceStartMS)*1000)*scale)
-				draftEndUS := p.DraftStartUS + int64(float64((overlapEndMS-p.SourceStartMS)*1000)*scale)
-				if draftEndUS > p.DraftEndUS {
-					draftEndUS = p.DraftEndUS
-				}
-				if draftStartUS < p.DraftStartUS {
-					draftStartUS = p.DraftStartUS
-				}
-				if draftEndUS <= draftStartUS {
-					continue
-				}
-				item := capcutmate.CaptionItem{
-					Start: draftStartUS,
-					End:   draftEndUS,
-					Text:  text,
-				}
-				out = append(out, item)
-				mapped = append(mapped, mappedCaption{
-					Item:       item,
-					ClipIndex:  pi,
-					ASRStartMS: overlapStartMS,
-					ASREndMS:   overlapEndMS,
-					Scale:      scale,
-				})
+			overlapStartMS := seg.StartTime
+			if overlapStartMS < p.SourceStartMS {
+				overlapStartMS = p.SourceStartMS
 			}
+			overlapEndMS := seg.EndTime
+			if overlapEndMS > p.SourceEndMS {
+				overlapEndMS = p.SourceEndMS
+			}
+			if overlapEndMS <= overlapStartMS {
+				continue
+			}
+			draftStartUS := p.DraftStartUS + int64(float64((overlapStartMS-p.SourceStartMS)*1000)*scale)
+			draftEndUS := p.DraftStartUS + int64(float64((overlapEndMS-p.SourceStartMS)*1000)*scale)
+			if draftEndUS > p.DraftEndUS {
+				draftEndUS = p.DraftEndUS
+			}
+			if draftStartUS < p.DraftStartUS {
+				draftStartUS = p.DraftStartUS
+			}
+			if draftEndUS <= draftStartUS {
+				continue
+			}
+			item := capcutmate.CaptionItem{
+				Start: draftStartUS,
+				End:   draftEndUS,
+				Text:  text,
+			}
+			out = append(out, item)
+			mapped = append(mapped, mappedCaption{
+				Item:       item,
+				ClipIndex:  pi,
+				ASRStartMS: overlapStartMS,
+				ASREndMS:   overlapEndMS,
+				Scale:      scale,
+			})
 		}
 	}
 	return out, mapped
+}
+
+// placementCaptionSegments 取第 idx 段切片的字幕行：有该段文案时以文案为准（词级时间拆行），
+// 否则回退到与该切片区间有重叠的 ASR 分句。
+func placementCaptionSegments(utterances []asr.Utterance, clipTexts []model.ClipWithText, idx int, p session.ClipPlacement) []asr.TimedSegment {
+	if clipTexts != nil {
+		if c := clipTexts[idx]; strings.TrimSpace(c.Text) != "" {
+			return splitClipTextForCaptions(c)
+		}
+	}
+	return splitUtterancesForPlacement(utterances, p)
+}
+
+// splitUtterancesForPlacement 取与切片区间有重叠的 ASR 分句并按标点/长度拆行。
+func splitUtterancesForPlacement(utterances []asr.Utterance, p session.ClipPlacement) []asr.TimedSegment {
+	var out []asr.TimedSegment
+	for _, u := range utterances {
+		if strings.TrimSpace(u.Text) == "" {
+			continue
+		}
+		if u.EndTime <= p.SourceStartMS || u.StartTime >= p.SourceEndMS {
+			continue
+		}
+		out = append(out, asr.SplitUtteranceForCaptions(u)...)
+	}
+	return out
+}
+
+// splitClipTextForCaptions 将切片文案拆成字幕行：断句/折行规则与 ASR 一致（标点 + 12 字），
+// 行时间优先取 clips1 词级时间戳；词级时间缺失或与文案不一致时在切片区间内按比例分配。
+func splitClipTextForCaptions(c model.ClipWithText) []asr.TimedSegment {
+	segs := asr.SplitUtteranceForCaptions(asr.Utterance{
+		Text:      c.Text,
+		StartTime: c.StartTime,
+		EndTime:   c.EndTime,
+		Words:     toASRWords(c.Words),
+	})
+	// 夹紧到切片区间：clips1 与合并后区间有出入时不越界。
+	for i := range segs {
+		if segs[i].StartTime < c.StartTime {
+			segs[i].StartTime = c.StartTime
+		}
+		if segs[i].EndTime > c.EndTime {
+			segs[i].EndTime = c.EndTime
+		}
+	}
+	return segs
+}
+
+func toASRWords(words []model.ClipWord) []asr.Word {
+	if len(words) == 0 {
+		return nil
+	}
+	out := make([]asr.Word, len(words))
+	for i, w := range words {
+		out[i] = asr.Word{Text: w.Text, StartTime: w.StartTime, EndTime: w.EndTime}
+	}
+	return out
 }
 
 // BuildCaptionDiagReport 根据 Session 切片与 ASR 映射生成对齐诊断报告。
@@ -197,7 +264,7 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 	if s.Material != nil {
 		liveASR = s.Material.LiveASR
 	}
-	_, mapped := mapCaptionsFromASR(liveASR, s.ClipPlacements)
+	_, mapped := mapCaptionsForPlacements(liveASR, s.ClipPlacements, s.ClipTexts)
 
 	report := &CaptionDiagReport{
 		JobID:           s.JobID,
@@ -211,6 +278,7 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 	if s.Project != nil {
 		report.CaptionsEnabled = s.Project.EnableCaptions != model.EnableCaptionsOff
 	}
+	report.CaptionSource = captionSourceLabel(s.ClipTexts, s.ClipPlacements)
 	if s.Material != nil {
 		report.SourceURL = s.SourcePath
 		if report.SourceURL == "" {
@@ -610,6 +678,27 @@ func absInt64(v int64) int64 {
 		return -v
 	}
 	return v
+}
+
+// captionSourceLabel 标注本次字幕来源：clips1（切片文案）/ asr（兜底）/ mixed（部分切片无文案）。
+func captionSourceLabel(clipTexts []model.ClipWithText, placements []session.ClipPlacement) string {
+	if len(placements) == 0 || len(clipTexts) != len(placements) {
+		return "asr"
+	}
+	withText := 0
+	for _, c := range clipTexts {
+		if strings.TrimSpace(c.Text) != "" {
+			withText++
+		}
+	}
+	switch {
+	case withText == len(placements):
+		return "clips1"
+	case withText == 0:
+		return "asr"
+	default:
+		return "mixed"
+	}
 }
 
 func sortedCopy(vals []int64) []int64 {

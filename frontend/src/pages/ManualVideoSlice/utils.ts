@@ -1,4 +1,5 @@
 import type { AsrParagraphs, AsrSummary, LiveAsrSegment } from '~/services/sourceVideo.model';
+import { toSliceProjectClips, type SliceProjectClip } from '~/services/sliceProject';
 import type {
   AiSegment,
   SelectedCopySegment,
@@ -1777,6 +1778,40 @@ function boundsForPartialDeletePiece(
     start: startTimeAfterCharOffset(ctx, charStart),
     end: endTimeBeforeCharOffset(ctx, charEnd),
   };
+}
+
+/**
+ * 片段提交给后端的字级时间：优先按当前文案从原文案分段解析，其次用片段自带的 words，
+ * 并裁到片段区间内——局部删除后区间外的词（含被删的字）不会随 clips1 提交，
+ * 后端生成字幕时也就不会再出现「画面里没有、字幕里有」。
+ */
+export function resolveSegmentClipWords(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): TranscriptWord[] {
+  const resolved = resolveCopySegmentWords(segment, paragraphs);
+  const words = resolved.length ? resolved : segment.words ?? [];
+  return words.filter(
+    (word) =>
+      isTimingTranscriptWord(word) &&
+      word.end > segment.start &&
+      word.start < segment.end
+  );
+}
+
+/** 组装提交给后端的 clips1：片段文案 + 字级时间（毫秒转换在 toSliceProjectClips 内完成） */
+export function buildClips1Payload(
+  segments: SelectedCopySegment[],
+  paragraphs: TranscriptParagraph[]
+): SliceProjectClip[] {
+  return toSliceProjectClips(
+    segments.map((segment) => ({
+      start: segment.start,
+      end: segment.end,
+      text: segment.text,
+      words: resolveSegmentClipWords(segment, paragraphs),
+    }))
+  );
 }
 
 /** 从 transcript 中解析 copy 片段对应的字级时间轴 */

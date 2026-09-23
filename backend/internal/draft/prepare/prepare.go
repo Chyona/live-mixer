@@ -499,6 +499,63 @@ func ValidateClipRanges(clips []model.ClipRange) error {
 	return nil
 }
 
+// MergeAdjacentClipTexts 与 MergeAdjacentClipRanges 使用同一合并规则，对带文本/词级时间的切片
+// 做同步合并：text 按顺序拼接、words 依序追加，时间取 [cur.Start, max(cur.End, next.End)]。
+// 规则只依赖 (Start, End)，因此结果与 MergeAdjacentClipRanges 的区间一一对应。
+func MergeAdjacentClipTexts(clips []model.ClipWithText, maxGapMS int64) []model.ClipWithText {
+	if len(clips) == 0 {
+		return nil
+	}
+
+	out := make([]model.ClipWithText, 0, len(clips))
+	cur := cloneClipWithText(clips[0])
+	for i := 1; i < len(clips); i++ {
+		next := clips[i]
+		gap := next.StartTime - cur.EndTime
+		// 列表顺序优先：时间上回跳的相邻项不合，避免负 gap 误吞片段。
+		if next.StartTime >= cur.StartTime && gap <= maxGapMS {
+			cur.Text += next.Text
+			if next.EndTime > cur.EndTime {
+				cur.EndTime = next.EndTime
+			}
+			if len(next.Words) > 0 {
+				cur.Words = append(cur.Words, append([]model.ClipWord(nil), next.Words...)...)
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = cloneClipWithText(next)
+	}
+	out = append(out, cur)
+	return out
+}
+
+// ClipTextsMatchRanges 校验带文本切片与切片区间是否一一对应（起止时间完全一致）。
+// 不一致时字幕不能按文本生成，调用方应回退 ASR 映射。
+func ClipTextsMatchRanges(ranges []model.ClipRange, texts []model.ClipWithText) bool {
+	if len(ranges) != len(texts) {
+		return false
+	}
+	for i := range ranges {
+		if ranges[i].StartTime != texts[i].StartTime || ranges[i].EndTime != texts[i].EndTime {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneClipWithText(c model.ClipWithText) model.ClipWithText {
+	out := model.ClipWithText{
+		Text:      c.Text,
+		StartTime: c.StartTime,
+		EndTime:   c.EndTime,
+	}
+	if len(c.Words) > 0 {
+		out.Words = append([]model.ClipWord(nil), c.Words...)
+	}
+	return out
+}
+
 // MergeAdjacentClipRanges 按列表顺序合并相邻片段：严格保留入参顺序，不排序。
 // 仅当列表中相邻两项满足 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS
 // （含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。

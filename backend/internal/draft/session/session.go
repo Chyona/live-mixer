@@ -28,6 +28,10 @@ type Session struct {
 	SourcePath string
 	ClipPaths  []string
 	Clips      []model.ClipRange
+	// ClipTexts 与 Clips 一一对应的切片文案（含词级时间），来自 video_project.clips1。
+	// 仅当与 Clips 完全对齐时由 Builder 写入；为空表示字幕回退 live_asr 映射。
+	// 人工二次编辑（如局部删除）后字幕必须以此为准，否则会回灌已被剪掉的文字。
+	ClipTexts []model.ClipWithText
 	// ClipPlacements 由 VideosStep 写入：每段切片在源时间轴与草稿时间轴的映射，供字幕同步。
 	ClipPlacements []ClipPlacement
 	// FastKeyframe / CutMode 由 Prepare 写入，供字幕对齐诊断报告使用。

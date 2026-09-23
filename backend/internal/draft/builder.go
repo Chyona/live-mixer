@@ -7,6 +7,7 @@ import (
 	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/draft/steps"
+	"live-mixer/internal/model"
 
 	"go.uber.org/zap"
 )
@@ -56,6 +57,7 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	}
 	beforeMerge := len(clips)
 	clips = prepare.MergeAdjacentClipRanges(clips, prepare.ClipMergeGapMS)
+	clipTexts := resolveAlignedClipTexts(req, clips, b.Logger)
 	b.Logger.Info("草稿裁剪前合并相邻片段",
 		zap.String("job_id", req.JobID),
 		zap.Int("clips_before", beforeMerge),
@@ -79,6 +81,7 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 		RecordDir:      req.RecordDir,
 		LocalIngestDir: req.LocalIngestDir,
 		Clips:          clips,
+		ClipTexts:      clipTexts,
 		CanvasW:        req.CanvasW,
 		CanvasH:        req.CanvasH,
 		Timeline:       session.NewTimeline(),
@@ -132,6 +135,25 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 		result.ClipsTarURL = clipsTarURL
 	}
 	return result, nil
+}
+
+// resolveAlignedClipTexts 取 video_project.clips1，按同一合并规则与切片区间对齐。
+// 对齐成功返回带 text/words 的切片（字幕据此生成，人工删除的文字不会再回到字幕）；
+// 未对齐（如显式传入 clips、clips1 与区间不一致）返回 nil，字幕回退 live_asr 映射。
+func resolveAlignedClipTexts(req Request, clips []model.ClipRange, logger *zap.Logger) []model.ClipWithText {
+	if req.Project == nil || len(req.Project.Clips1) == 0 {
+		return nil
+	}
+	merged := prepare.MergeAdjacentClipTexts(req.Project.Clips1, prepare.ClipMergeGapMS)
+	if !prepare.ClipTextsMatchRanges(clips, merged) {
+		logger.Warn("clips1 与切片区间不一致，字幕回退 ASR 时间轴",
+			zap.String("job_id", req.JobID),
+			zap.Int("clip_count", len(clips)),
+			zap.Int("clip_text_count", len(merged)),
+		)
+		return nil
+	}
+	return merged
 }
 
 // 确保 steps 包被引用（DefaultRecipe 已引用）。

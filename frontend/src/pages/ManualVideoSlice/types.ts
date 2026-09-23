@@ -32,6 +32,11 @@ export interface SelectedCopySegment {
   end: number;
   /** 来源文案分段 id，用于部分删除时在原文中定位字级时间 */
   sourceParagraphId?: string;
+  /**
+   * 字级时间轴（秒），来自原文案分段或项目接口 clips1.words。
+   * 提交成片时随 clips1 一起提交：字幕按剪辑后的文案 + 词级时间生成，避免人工删除的文字回到字幕。
+   */
+  words?: TranscriptWord[];
   /** 选入时的原始起点；用于计算前方留白，并限制收回时不切入原文案 */
   originStart?: number;
   /** 选入时的原始终点；用于计算后方留白，并限制收回时不切入原文案 */

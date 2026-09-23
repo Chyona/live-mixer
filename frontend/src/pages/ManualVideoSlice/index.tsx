@@ -54,6 +54,7 @@ import SegmentPreviewModal from './components/SegmentPreviewModal';
 import SaveDraftModal from './components/SaveDraftModal';
 import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from './types';
 import {
+  buildClips1Payload,
   deleteSelectedRangeFromSegment,
   resolveCopySegmentWords,
   adjustSegmentEdge,
@@ -706,7 +707,7 @@ const ManualVideoSlicePage = () => {
         project_source: 'manual' as const,
         enable_captions: enableCaptions,
         clips0: [] as ReturnType<typeof toSliceProjectClips>,
-        clips1: toSliceProjectClips(selectedSegments),
+        clips1: buildClips1Payload(selectedSegments, paragraphs),
       };
 
       setSavingProject(true);
@@ -755,6 +756,7 @@ const ManualVideoSlicePage = () => {
     [
       draftName,
       enableCaptions,
+      paragraphs,
       projectId,
       projectRemark,
       resetDirtyBaseline,
@@ -875,7 +877,7 @@ const ManualVideoSlicePage = () => {
           description: projectDescription,
           topics: projectTopics,
           clips0: [],
-          clips1: toSliceProjectClips(selectedSegments),
+          clips1: buildClips1Payload(selectedSegments, paragraphs),
         });
 
         if (response.code !== 0) {
@@ -913,6 +915,7 @@ const ManualVideoSlicePage = () => {
     [
       handleSaveProject,
       enableCaptions,
+      paragraphs,
       projectId,
       projectDescription,
       projectRemark,
