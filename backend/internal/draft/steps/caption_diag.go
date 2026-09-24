@@ -30,6 +30,9 @@ const (
 	captionDiagMaxSkewMS      = 2500 // 与 resolveClipDraftDurationMS 一致
 	captionDiagOnsetSuspectMS = 120  // |onset_shift_ms| 超过则 suspect_content
 	captionDiagOnsetWindowMS  = 400  // 片头抽样音频长度
+	// captionDiagProportionalSpanMS 切片时长超过它、且时间来自按字数均分时，算「长条均分」：
+	// 均分的漂移与切片时长成正比，短条看不出来，这里只统计肉眼可感的那些。
+	captionDiagProportionalSpanMS = 6000
 )
 
 // CaptionDiagReport 字幕/音画对齐诊断报告（方案 A）。
@@ -83,6 +86,8 @@ type CaptionDiagItem struct {
 	RelDraftMS   int64  `json:"rel_draft_ms"`
 	MapErrMS     int64  `json:"map_err_ms"`
 	SuspectMap   bool   `json:"suspect_map"`
+	// TimingSource 行时间来源：words=ASR 词级时间戳对齐；proportional=整条按字数均分（会随语速漂移）。
+	TimingSource string `json:"timing_source,omitempty"`
 }
 
 // CaptionDiagSummary 汇总统计，便于快速分流 L1/L2/L3/L4。
@@ -101,17 +106,23 @@ type CaptionDiagSummary struct {
 	ASRWindowGapCount      int     `json:"asr_window_gap_count"`
 	ASRMaxWindowGapMS      int64   `json:"asr_max_window_gap_ms"`
 	ASRWindowGapBoundaries []int64 `json:"asr_window_gap_boundaries_ms,omitempty"`
-	LikelyLayer            string  `json:"likely_layer"`
-	LikelyLayerDescription string  `json:"likely_layer_description"`
+	// ProportionalCaptions 时间来自「按字数均分」的字幕数（词级时间戳对齐失败）。
+	ProportionalCaptions int `json:"proportional_captions,omitempty"`
+	// ProportionalLongCaptions 其中所属切片时长 ≥ captionDiagProportionalSpanMS 的条数：
+	// 均分的漂移量与切片时长成正比，这类是肉眼能看出音字不同步的部分。
+	ProportionalLongCaptions int    `json:"proportional_long_captions,omitempty"`
+	LikelyLayer              string `json:"likely_layer"`
+	LikelyLayerDescription   string `json:"likely_layer_description"`
 }
 
 // mappedCaption 内部：字幕条目 + 源 ASR 时间，供诊断复用同一映射结果。
 type mappedCaption struct {
-	Item       capcutmate.CaptionItem
-	ClipIndex  int
-	ASRStartMS int64
-	ASREndMS   int64
-	Scale      float64
+	Item         capcutmate.CaptionItem
+	ClipIndex    int
+	ASRStartMS   int64
+	ASREndMS     int64
+	Scale        float64
+	TimingSource asr.CaptionTimingSource
 }
 
 // BuildCaptionsFromASR 仅按 live_asr 分句映射到草稿字幕时间轴（无切片文案时的兜底，保持旧行为）。
@@ -197,11 +208,12 @@ func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlace
 			}
 			out = append(out, item)
 			mapped = append(mapped, mappedCaption{
-				Item:       item,
-				ClipIndex:  pi,
-				ASRStartMS: overlapStartMS,
-				ASREndMS:   overlapEndMS,
-				Scale:      scale,
+				Item:         item,
+				ClipIndex:    pi,
+				ASRStartMS:   overlapStartMS,
+				ASREndMS:     overlapEndMS,
+				Scale:        scale,
+				TimingSource: seg.TimingSource,
 			})
 		}
 	}
@@ -378,11 +390,18 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 			RelDraftMS:   relDraftMS,
 			MapErrMS:     mapErr,
 			SuspectMap:   absInt64(mapErr) >= captionDiagMapErrSuspect,
+			TimingSource: string(m.TimingSource),
 		}
 		report.Captions = append(report.Captions, item)
 		mapErrsAbs = append(mapErrsAbs, absInt64(mapErr))
 		if item.SuspectMap {
 			report.Summary.SuspectMapCaptions++
+		}
+		if m.TimingSource == asr.CaptionTimingProportional {
+			report.Summary.ProportionalCaptions++
+			if p.SourceEndMS-p.SourceStartMS >= captionDiagProportionalSpanMS {
+				report.Summary.ProportionalLongCaptions++
+			}
 		}
 	}
 
@@ -395,7 +414,7 @@ func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober medi
 	report.Summary.DeltaMSP90 = percentileSortedInt64(sortedCopyAbs(deltas), 90)
 	report.Summary.MapErrMSMedianAbs = percentileSortedInt64(sortedCopy(mapErrsAbs), 50)
 	report.Summary.MapErrMSP90Abs = percentileSortedInt64(sortedCopy(mapErrsAbs), 90)
-	fillASRWindowGapSummary(liveASR, &report.Summary)
+	fillASRWindowGapSummary(liveASR, usedSourceRanges(s.ClipPlacements), &report.Summary)
 	report.Summary.LikelyLayer, report.Summary.LikelyLayerDescription = classifyCaptionDiag(report.Summary)
 	report.Hint = report.Summary.LikelyLayerDescription
 	return report, nil
@@ -562,6 +581,10 @@ func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 	windowGapHeavy := sum.ASRWindowGapCount > 0 && sum.ASRMaxWindowGapMS >= 3000
 	contentHeavy := sum.ClipCount > 0 && sum.SuspectContentClips > 0 &&
 		(sum.SuspectContentClips >= 2 || float64(sum.SuspectContentClips)/float64(sum.ClipCount) >= 0.3)
+	// propHeavy：均分漂移与切片时长、行数成正比，短切片单行均分等于「整条时间就是这句 ASR 时间」，
+	// 本来就没得选（words 缺失时唯一的分配方式），不算异常——只有长切片均分，或整批字幕大面积均分时才算。
+	propHeavy := sum.ProportionalLongCaptions > 0 ||
+		(sum.ProportionalCaptions >= 3 && float64(sum.ProportionalCaptions) >= 0.5*float64(sum.CaptionCount))
 
 	switch {
 	case sum.CaptionCount == 0 && sum.ClipCount == 0:
@@ -570,8 +593,13 @@ func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 		return "content_seek_mismatch", "片头 onset 校验显示裁切内容与源起点错位（map 可能仍自洽）；优先修 seg+offset / seek"
 	case contentHeavy && mapHeavy:
 		return "content_seek_mismatch", "onset 与映射误差同时异常，优先排查裁切内容错位"
+	case propHeavy && !cutHeavy && !contentHeavy:
+		return "L4_timing_proportional", fmt.Sprintf(
+			"有 %d 条字幕（其中 %d 条位于 ≥%dms 的长切片）时间来自按字数均分：words 词级对齐失败，"+
+				"行时间按字数摊平，语速/停顿差异全丢，长条会整体漂移（裁切与映射本身自洽）",
+			sum.ProportionalCaptions, sum.ProportionalLongCaptions, captionDiagProportionalSpanMS)
 	case windowGapHeavy && !cutHeavy && !mapHeavy && !contentHeavy:
-		return "L1_window_boundary", "live_asr 在窗口边界附近出现异常空隙/跳跃，优先怀疑窗口 ASR 起点用标称 6s 反推导致跳段"
+		return "L1_window_boundary", "本次用到的源区间内，live_asr 在窗口边界附近出现异常空隙/跳跃；成片选中跨接缝的片段会整体错位"
 	case sum.CaptionCount == 0:
 		if contentHeavy {
 			return "content_seek_mismatch", "无字幕条目；onset 显示裁切内容错位"
@@ -596,8 +624,27 @@ func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
 	}
 }
 
-// fillASRWindowGapSummary 扫描完整 live_asr：在调度窗口倍数附近的大空隙，提示窗间接缝问题。
-func fillASRWindowGapSummary(liveASRJSON string, sum *CaptionDiagSummary) {
+// sourceRangeMS 源时间轴上的一个半开区间 [StartMS, EndMS)，用于把整场扫描限定在草稿实际用到的范围。
+type sourceRangeMS struct {
+	StartMS int64
+	EndMS   int64
+}
+
+// usedSourceRanges 取本次草稿用到的源区间；跳过非正区间。
+func usedSourceRanges(placements []session.ClipPlacement) []sourceRangeMS {
+	out := make([]sourceRangeMS, 0, len(placements))
+	for _, p := range placements {
+		if p.SourceEndMS > p.SourceStartMS {
+			out = append(out, sourceRangeMS{StartMS: p.SourceStartMS, EndMS: p.SourceEndMS})
+		}
+	}
+	return out
+}
+
+// fillASRWindowGapSummary 扫描 live_asr：在调度窗口倍数附近的大空隙，提示窗间接缝问题。
+// ranges 为本草稿实际用到的源区间（一般由 ClipPlacements 得来）：非空时只统计与这些区间相交的空隙。
+// 整场 ASR 里别处的接缝与本次成片无关，扫全量会把无关窗口的空隙报成本次问题（曾据此误判成 L1）。
+func fillASRWindowGapSummary(liveASRJSON string, ranges []sourceRangeMS, sum *CaptionDiagSummary) {
 	if sum == nil {
 		return
 	}
@@ -616,7 +663,7 @@ func fillASRWindowGapSummary(liveASRJSON string, sum *CaptionDiagSummary) {
 	for _, u := range utterances {
 		if prevEnd >= 0 {
 			gap := u.StartTime - prevEnd
-			if gap >= gapSuspectMS {
+			if gap >= gapSuspectMS && gapWithinRanges(prevEnd, u.StartTime, ranges) {
 				mid := prevEnd + gap/2
 				boundary := ((mid + windowMS/2) / windowMS) * windowMS
 				if boundary > 0 && absInt64(mid-boundary) <= nearMS {
@@ -632,6 +679,20 @@ func fillASRWindowGapSummary(liveASRJSON string, sum *CaptionDiagSummary) {
 			prevEnd = u.EndTime
 		}
 	}
+}
+
+// gapWithinRanges ranges 为空表示不限制；否则空隙须与某个使用区间相交。
+// 半开区间判交：紧贴区间端点的空隙（切片外的停顿）不算在内。
+func gapWithinRanges(gapStartMS, gapEndMS int64, ranges []sourceRangeMS) bool {
+	if len(ranges) == 0 {
+		return true
+	}
+	for _, r := range ranges {
+		if gapStartMS < r.EndMS && gapEndMS > r.StartMS {
+			return true
+		}
+	}
+	return false
 }
 
 func appendUniqueInt64(vals []int64, v int64) []int64 {

@@ -9,11 +9,24 @@ import (
 // MaxCaptionRunes 单条字幕最大字数（按 Unicode rune 计，含标点与英文字母）。
 const MaxCaptionRunes = 12
 
+// CaptionTimingSource 字幕行时间的来源。
+type CaptionTimingSource string
+
+const (
+	// CaptionTimingWords 词级时间戳对齐（正常路径）：行时间取自 ASR 字级时间。
+	CaptionTimingWords CaptionTimingSource = "words"
+	// CaptionTimingProportional 整条按字数均分（词级对齐失败的降级）：语音的停顿/语速变化无法体现，
+	// 行长越长漂移越大（实测典型 1s、可达数秒），诊断里要能一眼看出。
+	CaptionTimingProportional CaptionTimingSource = "proportional"
+)
+
 // TimedSegment 断句后的字幕片段（源时间轴，毫秒）。
 type TimedSegment struct {
 	Text      string
 	StartTime int64
 	EndTime   int64
+	// TimingSource 该行时间是怎么来的，见 CaptionTimingSource。
+	TimingSource CaptionTimingSource
 }
 
 type captionAtom struct {
@@ -51,13 +64,20 @@ func SplitLinesByRuleMax(text string, max int) []string {
 // 行必须是原文的连续切分（字符与顺序与原文一致），否则词级对齐必然失败并整体降级为比例分配——
 // 这也意味着「换一种断句」不影响时间分配的可达性，只是分组不同。
 func TimedSegmentsForLines(u Utterance, lines []string) []TimedSegment {
+	segs, _ := TimedSegmentsForLinesWithSource(u, lines)
+	return segs
+}
+
+// TimedSegmentsForLinesWithSource 同 TimedSegmentsForLines，并返回时间来源：
+// words=词级对齐成功，proportional=整条按字数均分（字幕会随语速/停顿漂移，诊断要能区分）。
+func TimedSegmentsForLinesWithSource(u Utterance, lines []string) ([]TimedSegment, CaptionTimingSource) {
 	if len(lines) == 0 {
-		return nil
+		return nil, ""
 	}
 	if segs, ok := assignTimesWithWords(u, lines); ok {
-		return segs
+		return segs, CaptionTimingWords
 	}
-	return assignTimesProportional(u, lines)
+	return assignTimesProportional(u, lines), CaptionTimingProportional
 }
 
 // splitLinesForText 折行管线：标点断句 → 边缘清理 → 超长按最少行数折行 → 再清理。
@@ -456,7 +476,7 @@ func assignTimesWithWords(u Utterance, lines []string) ([]TimedSegment, bool) {
 				end = start + 1
 			}
 		}
-		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end})
+		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end, TimingSource: CaptionTimingWords})
 	}
 	return out, true
 }
@@ -486,6 +506,18 @@ func (c *wordCursor) peekTime(words []Word, fallbackStart, fallbackEnd int64) (i
 	return fallbackStart, fallbackEnd
 }
 
+// isASRFillerRune 词流里的填充字符：空白、省略号、断句标点。
+// 厂商会给这些字符单独成词（空格条目甚至带 start=end=-1），而待对齐的文本已由 stripBreakPunct
+// 去掉它们，两侧逐字比对必然在第一个填充字符处失败——一个空格就能让整条切片退化成均分。
+func isASRFillerRune(r rune) bool {
+	return unicode.IsSpace(r) || r == '…' || isBreakPunctRune(r)
+}
+
+// validWordTime 词是否带可用时间戳；厂商的空格填充词写的是 start=end=-1。
+func validWordTime(w Word) bool {
+	return w.StartTime >= 0 && w.EndTime >= w.StartTime
+}
+
 func (c *wordCursor) consume(need string, words []Word) (startTime, endTime int64, ok bool) {
 	needRunes := []rune(need)
 	if len(needRunes) == 0 {
@@ -506,19 +538,31 @@ func (c *wordCursor) consume(need string, words []Word) (startTime, endTime int6
 				c.runeOffset = 0
 				continue
 			}
+			w := words[c.idx]
+			// 填充字符不参与对齐：跳过它继续找 need 里的下一个字。need 来自 stripBreakPunct，
+			// 本身不含这些字符，所以跳过不会漏掉任何一个待匹配的字。
+			if isASRFillerRune(wr[c.runeOffset]) {
+				c.runeOffset++
+				continue
+			}
 			if wr[c.runeOffset] != nr {
 				return 0, 0, false
 			}
-			w := words[c.idx]
-			t := interpolateWordTime(w, c.runeOffset, len(wr))
-			tEnd := interpolateWordTimeEnd(w, c.runeOffset, len(wr))
+			at := c.runeOffset
+			c.runeOffset++
+			matched = true
+			if !validWordTime(w) {
+				// 字对上了但没有有效时间（厂商的空格/占位词）：字符照样消费，时间另取，
+				// 免得 -1 渗进行时间。
+				break
+			}
+			t := interpolateWordTime(w, at, len(wr))
+			tEnd := interpolateWordTimeEnd(w, at, len(wr))
 			if first {
 				startTime = t
 				first = false
 			}
 			endTime = tEnd
-			c.runeOffset++
-			matched = true
 			break
 		}
 		if !matched {
@@ -577,7 +621,7 @@ func assignTimesProportional(u Utterance, lines []string) []TimedSegment {
 		if end <= start {
 			end = start + 1
 		}
-		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end})
+		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end, TimingSource: CaptionTimingProportional})
 	}
 	return out
 }

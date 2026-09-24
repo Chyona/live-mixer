@@ -400,6 +400,148 @@ func TestSplitUtteranceForCaptions_ShortUnchanged(t *testing.T) {
 	}
 }
 
+// 厂商 words 会在拉丁/数字旁、标点后塞入空格填充词（start=end=-1）。它们不该打断词级对齐：
+// 一个空格就让整条切片（可达数十秒）退化成按字数均分，字幕会随语速/停顿漂移数秒。
+func TestTimedSegmentsForLines_SkipsFillerSpaceWords(t *testing.T) {
+	u := Utterance{
+		StartTime: 0,
+		EndTime:   8000,
+		Text:      "今天我们聊 K 型时代，再见",
+		Words: []Word{
+			{Text: "今", StartTime: 0, EndTime: 200},
+			{Text: "天", StartTime: 200, EndTime: 400},
+			{Text: "我", StartTime: 400, EndTime: 600},
+			{Text: "们", StartTime: 600, EndTime: 800},
+			{Text: "聊", StartTime: 800, EndTime: 1000},
+			{Text: " ", StartTime: -1, EndTime: -1},
+			{Text: "K", StartTime: 3000, EndTime: 3600},
+			{Text: " ", StartTime: -1, EndTime: -1},
+			{Text: "型", StartTime: 3600, EndTime: 3800},
+			{Text: "时", StartTime: 3800, EndTime: 4000},
+			{Text: "代", StartTime: 4000, EndTime: 4200},
+			{Text: "再", StartTime: 7000, EndTime: 7500},
+			{Text: "见", StartTime: 7500, EndTime: 8000},
+		},
+	}
+	segs, source := TimedSegmentsForLinesWithSource(u, []string{"今天我们聊 K 型时代", "再见"})
+	if source != CaptionTimingWords {
+		t.Fatalf("source = %q, want words（空格填充词不该打断对齐）", source)
+	}
+	if len(segs) != 2 {
+		t.Fatalf("len = %d, want 2", len(segs))
+	}
+	if segs[0].StartTime != 0 || segs[0].EndTime != 4200 {
+		t.Errorf("seg0 = %d-%d, want 0-4200（真实停顿不被均分抹平）", segs[0].StartTime, segs[0].EndTime)
+	}
+	if segs[1].StartTime != 7000 || segs[1].EndTime != 8000 {
+		t.Errorf("seg1 = %d-%d, want 7000-8000", segs[1].StartTime, segs[1].EndTime)
+	}
+}
+
+// 小数点 '.' 属于断句标点，会被 stripBreakPunct 从待对齐文本里去掉，但它在词流里是存在的：
+// 同样要跳过，不能当作不匹配。
+func TestTimedSegmentsForLines_KeepsDecimalPointWord(t *testing.T) {
+	u := Utterance{
+		StartTime: 0,
+		EndTime:   3000,
+		Text:      "增长了2.4个百分点",
+		Words: []Word{
+			{Text: "增", StartTime: 0, EndTime: 300},
+			{Text: "长", StartTime: 300, EndTime: 600},
+			{Text: "了", StartTime: 600, EndTime: 900},
+			{Text: "2.4", StartTime: 900, EndTime: 1300},
+			{Text: "个", StartTime: 1300, EndTime: 1500},
+			{Text: "百", StartTime: 1500, EndTime: 1700},
+			{Text: "分", StartTime: 1700, EndTime: 1900},
+			{Text: "点", StartTime: 1900, EndTime: 3000},
+		},
+	}
+	segs, source := TimedSegmentsForLinesWithSource(u, []string{"增长了2.4", "个百分点"})
+	if source != CaptionTimingWords {
+		t.Fatalf("source = %q, want words（小数点不该打断对齐）", source)
+	}
+	if len(segs) != 2 || segs[0].EndTime != 1300 || segs[1].StartTime != 1300 {
+		t.Fatalf("segs = %#v", segs)
+	}
+}
+
+// 词流里没有有效时间的占位词不产生 -1 时间。
+func TestTimedSegmentsForLines_NoTimeWordKeepsLineTime(t *testing.T) {
+	u := Utterance{
+		StartTime: 0,
+		EndTime:   2000,
+		Text:      "今天",
+		Words: []Word{
+			{Text: "今", StartTime: -1, EndTime: -1},
+			{Text: "天", StartTime: 1200, EndTime: 2000},
+		},
+	}
+	segs, source := TimedSegmentsForLinesWithSource(u, []string{"今天"})
+	if source != CaptionTimingWords {
+		t.Fatalf("source = %q, want words", source)
+	}
+	if segs[0].StartTime != 1200 || segs[0].EndTime != 2000 {
+		t.Fatalf("seg = %d-%d, want 1200-2000（不得出现 -1）", segs[0].StartTime, segs[0].EndTime)
+	}
+}
+
+// 文本真的对不上词流时才降级为比例分配，并如实标注来源。
+func TestTimedSegmentsForLines_RealMismatchFallsBack(t *testing.T) {
+	u := Utterance{
+		StartTime: 0,
+		EndTime:   4000,
+		Text:      "明天更好",
+		Words: []Word{
+			{Text: "今", StartTime: 0, EndTime: 500},
+			{Text: "天", StartTime: 500, EndTime: 1000},
+			{Text: "很", StartTime: 1000, EndTime: 1500},
+			{Text: "好", StartTime: 1500, EndTime: 4000},
+		},
+	}
+	segs, source := TimedSegmentsForLinesWithSource(u, []string{"明天", "更好"})
+	if source != CaptionTimingProportional {
+		t.Fatalf("source = %q, want proportional", source)
+	}
+	if len(segs) != 2 || segs[0].StartTime != 0 || segs[0].EndTime != 2000 || segs[1].EndTime != 4000 {
+		t.Fatalf("segs = %#v", segs)
+	}
+	for _, seg := range segs {
+		if seg.TimingSource != CaptionTimingProportional {
+			t.Errorf("seg %q TimingSource = %q", seg.Text, seg.TimingSource)
+		}
+	}
+}
+
+// 规则折行入口同样带上时间来源标注。
+func TestSplitUtteranceForCaptions_ReportsTimingSource(t *testing.T) {
+	u := Utterance{
+		StartTime: 0,
+		EndTime:   6000,
+		Text:      "好我们聊 K 型时代",
+		Words: []Word{
+			{Text: "好", StartTime: 0, EndTime: 300},
+			{Text: "我", StartTime: 300, EndTime: 600},
+			{Text: "们", StartTime: 600, EndTime: 900},
+			{Text: "聊", StartTime: 900, EndTime: 1200},
+			{Text: " ", StartTime: -1, EndTime: -1},
+			{Text: "K", StartTime: 3000, EndTime: 3600},
+			{Text: " ", StartTime: -1, EndTime: -1},
+			{Text: "型", StartTime: 3600, EndTime: 3900},
+			{Text: "时", StartTime: 3900, EndTime: 4200},
+			{Text: "代", StartTime: 4200, EndTime: 6000},
+		},
+	}
+	got := SplitUtteranceForCaptions(u)
+	if len(got) == 0 {
+		t.Fatal("expected segments")
+	}
+	for _, seg := range got {
+		if seg.TimingSource != CaptionTimingWords {
+			t.Errorf("seg %q TimingSource = %q, want words", seg.Text, seg.TimingSource)
+		}
+	}
+}
+
 func TestCaptionLexiconSize(t *testing.T) {
 	n := CaptionLexiconSize()
 	if n < 300 {
