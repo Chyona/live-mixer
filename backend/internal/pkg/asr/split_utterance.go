@@ -22,7 +22,7 @@ type captionAtom struct {
 	runes      int
 }
 
-// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文/数字/中文词典词不拆），并切分时间。
+// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则按最少行数折行（英文/数字/中文词典词不拆），并切分时间。
 // 成片每行会剥离首尾断句标点，保证行首行尾均非标点。
 func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 	lines := splitLinesForText(strings.TrimSpace(u.Text), buildExtraCJKWords(u.Words), MaxCaptionRunes)
@@ -32,7 +32,7 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 	return TimedSegmentsForLines(u, lines)
 }
 
-// SplitLinesByRule 按产品折行规则把文本切成字幕行：标点断句 → 剥离首尾标点 → 超长按最少行数均分，
+// SplitLinesByRule 按产品折行规则把文本切成字幕行：标点断句 → 剥离首尾标点 → 超长按最少行数折行，
 // 静态词表里的中文词、西文词与数字词整段不拆。
 // 供外部断句（如 LLM 折行）的兜底与超长行修正复用，不涉及时间。
 func SplitLinesByRule(text string) []string {
@@ -259,77 +259,110 @@ func isLatinLetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
-// splitBalancedPreferIntact 超长时按最少行数均分；英文/数字/中文词典词整段不拆。
-// 切点只能落在原子边界；keepIntact 原子不会被按 rune 切开。
+// splitBalancedPreferIntact 超长时按最少行数折行：行边界只能落在原子边界上
+// （英文词/数字词/词典中文词整段不可切），每行切点取离均分目标最近的那个。
+//
+// 与「累加到超过均分目标就封口」的旧写法相比有两处差异：
+//  1. 切点从「位置驱动」改成「在目标位附近搜合法边界」。旧写法在原子偏大时会提前很远封口，
+//     留下 1~2 个字的孤行（实测占超长小句的近四分之一）。
+//  2. 行数由「剩余文本最少还要几行」的可行解推出，而不是硬取 ceil(n/max)。后者在标点/词原子
+//     挡住目标位时无解，只能挤出一个超宽行。
 func splitBalancedPreferIntact(text string, max int, extra map[string]struct{}) []string {
 	if text == "" {
 		return nil
 	}
-	n := utf8.RuneCountInString(text)
+	runes := []rune(text)
+	n := len(runes)
 	if n <= max {
 		return []string{text}
 	}
 
+	// cuts 为升序合法切点（含 0 与 n）；行边界只能落在原子边界上。
 	atoms := tokenizeCaptionAtoms(text, extra)
-	parts := (n + max - 1) / max
-	base, rem := n/parts, n%parts
-	targets := make([]int, parts)
-	for i := 0; i < parts; i++ {
-		targets[i] = base
-		if i < rem {
-			targets[i]++
-		}
-	}
-
-	targetOf := func(idx int) int {
-		if idx < len(targets) {
-			return targets[idx]
-		}
-		return max
-	}
-
-	var lines []string
-	var cur strings.Builder
-	curLen := 0
-	targetIdx := 0
-
-	flush := func() {
-		if curLen == 0 {
-			return
-		}
-		lines = append(lines, cur.String())
-		cur.Reset()
-		curLen = 0
-		targetIdx++
-	}
-
+	cuts := make([]int, 1, len(atoms)+1)
+	off := 0
 	for _, atom := range atoms {
-		if curLen == 0 {
-			cur.WriteString(atom.text)
-			curLen = atom.runes
-			continue
-		}
-		next := curLen + atom.runes
-		tgt := targetOf(targetIdx)
-		if next <= tgt {
-			cur.WriteString(atom.text)
-			curLen = next
-			continue
-		}
-		// 超过当前行目标：优先在原子边界换行，不切开 keepIntact。
-		if next <= max {
-			flush()
-			cur.WriteString(atom.text)
-			curLen = atom.runes
-			continue
-		}
-		// 超过上限：封口，整原子起新行（超长 keepIntact 允许该行 > max）。
-		flush()
-		cur.WriteString(atom.text)
-		curLen = atom.runes
+		off += atom.runes
+		cuts = append(cuts, off)
 	}
-	flush()
+
+	// minLines[i]：从 cuts[i] 起到文本末尾，每行不超过 max 折行所需的最少行数；-1 表示放不下。
+	minLines := make([]int, len(cuts))
+	for i := len(cuts) - 1; i >= 0; i-- {
+		if cuts[i] == n {
+			minLines[i] = 0
+			continue
+		}
+		minLines[i] = -1
+		for j := i + 1; j < len(cuts); j++ {
+			if cuts[j]-cuts[i] > max {
+				// 超宽只允许发生在「一个原子比 max 还长」时：让它独占一行。
+				if j == i+1 && minLines[j] >= 0 {
+					minLines[i] = minLines[j] + 1
+				}
+				break
+			}
+			if minLines[j] < 0 {
+				continue
+			}
+			if minLines[i] < 0 || minLines[j]+1 < minLines[i] {
+				minLines[i] = minLines[j] + 1
+			}
+		}
+	}
+
+	parts := minLines[0]
+	if parts <= 0 {
+		return []string{text}
+	}
+
+	lines := make([]string, 0, parts)
+	at := 0
+	for k := 0; k < parts-1; k++ {
+		rest := parts - 1 - k // 本行之后还剩几行
+		ideal := balancedCut(n, parts, k+1)
+		best, bestDist := -1, 0
+		for j := at + 1; j < len(cuts); j++ {
+			if cuts[j]-cuts[at] > max {
+				// 只能吃掉一个超长原子（与 minLines 的判定保持一致）。
+				if j == at+1 && minLines[j] == rest {
+					best = j
+				}
+				break
+			}
+			if minLines[j] != rest {
+				continue
+			}
+			dist := cuts[j] - ideal
+			if dist < 0 {
+				dist = -dist
+			}
+			// 距离相同取靠前的切点：原子边界本身可能是分词误合并（如 上市|公司 之于「上市公司」），
+			// 往前切能把它整体留给下一行，不会拦腰截断。
+			if best < 0 || dist < bestDist {
+				best, bestDist = j, dist
+			}
+		}
+		if best < 0 {
+			break
+		}
+		lines = append(lines, string(runes[cuts[at]:cuts[best]]))
+		at = best
+	}
+	if at < len(cuts)-1 {
+		lines = append(lines, string(runes[cuts[at]:]))
+	}
 	return lines
+}
+
+// balancedCut 返回把 n 个字均分到 parts 行时，第 idx 行末尾的名义切点（idx 从 1 起）：
+// 前 n%parts 行各多一个字。
+func balancedCut(n, parts, idx int) int {
+	base, rem := n/parts, n%parts
+	if idx < rem {
+		return base*idx + idx
+	}
+	return base*idx + rem
 }
 
 // splitBalancedPreferLatin 保留旧名，供既有测试与调用兼容。

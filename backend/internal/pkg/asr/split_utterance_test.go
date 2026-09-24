@@ -134,6 +134,104 @@ func TestSplitBalancedPreferIntact_LongNumber(t *testing.T) {
 	}
 }
 
+// TestSplitBalancedPreferIntact_CutsNearTarget 覆盖切点选择：切点应落在离均分目标最近的
+// 原子边界上，而不是「累加到超过目标就封口」。后者的封口位置由原子大小决定，
+// 会在离目标很远的地方断行（下面两个用例在改动前分别产出 4 行/3 行且带 1~2 字的孤行）。
+func TestSplitBalancedPreferIntact_CutsNearTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+		// token 非空时额外断言该词没被行边界切开。
+		token string
+	}{
+		{
+			// 「人工智能」= 人工 + 智能 两个词表词，切在两者之间会把它拦腰截断
+			name:  "词表词交界不被当作理想切点",
+			text:  "但是因为你不在 AI 不在人工智能的那个聚光灯下面",
+			want:  []string{"但是因为你不在", "AI 不在人工智能", "的那个聚光灯下面"},
+			token: "人工智能",
+		},
+		{
+			name: "凑不到目标位时不留下孤行",
+			text: "这就是一个正在发生的一个房地产市场的 K 化",
+			want: []string{"这就是一个正在发生的", "一个房地产市场的 K 化"},
+		},
+		{
+			// 理想切点(8)落在「上市公司」内部，取靠前的 7：该词整体留给下一行
+			name: "理想切点落在词内时往前让位",
+			text: "这些行业所有的上市公司跌了20%",
+			want: []string{"这些行业所有的", "上市公司跌了20%"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SplitLinesByRule(tt.text)
+			// 行边界落在词间空格上时该空格会被 trimCaptionEdgePunct 剥掉（既有产品规则），
+			// 因此比的是剥标点/空白后的内容：内容字符一律不许增删改。
+			if joined := stripBreakPunct(strings.Join(got, "")); joined != stripBreakPunct(tt.text) {
+				t.Fatalf("joined %q != original %q（剥标点后 %q vs %q）",
+					strings.Join(got, ""), tt.text, joined, stripBreakPunct(tt.text))
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+			for i, line := range got {
+				if line != tt.want[i] {
+					t.Errorf("line[%d] = %q, want %q (all: %q)", i, line, tt.want[i], got)
+				}
+			}
+			if tt.token != "" {
+				assertTokenIntactAcrossLines(t, got, tt.token)
+			}
+		})
+	}
+}
+
+// TestSplitBalancedPreferIntact_NoOverWideLine 覆盖行数：词/数字原子挡住目标位时应多切一行，
+// 而不是把该行挤到 max 以上（超宽行在成片里会溢出安全区）。
+func TestSplitBalancedPreferIntact_NoOverWideLine(t *testing.T) {
+	// 24 字：硬按 ceil(24/12)=2 行时，理想切点 12 落在「中国」内部，第 2 行会变成 13 字
+	text := "我描写了1978年以后中国经济发展的企业变革历史"
+	got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
+	if strings.Join(got, "") != text {
+		t.Fatalf("joined %q != original", strings.Join(got, ""))
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %q, want 3 lines", got)
+	}
+	for i, line := range got {
+		if n := utf8.RuneCountInString(line); n > MaxCaptionRunes {
+			t.Errorf("line[%d] = %q 超宽 %d 字", i, line, n)
+		}
+		if n := utf8.RuneCountInString(line); n < 3 {
+			t.Errorf("line[%d] = %q 孤行 %d 字", i, line, n)
+		}
+	}
+}
+
+// TestSplitBalancedPreferIntact_OrphanFree 覆盖孤行：目标位附近有可选边界时，
+// 不应产出少于 3 个字的行——改动前「报告」这类尾行孤行占超长小句的近四分之一。
+func TestSplitBalancedPreferIntact_OrphanFree(t *testing.T) {
+	texts := []string{
+		"我觉得我们直播间的同学可以把重新学习打在直播间里",
+		"甚至我们的资产在全球化的过程中还会受到蒙代尔不可能三角的挑战",
+		"这件事情是一个实实在在的在我们投资过程中给大家造成最大损失的一个主要原因",
+		"那么我们就来送出这个价值2999块的 AI 悟空机器人",
+	}
+	for _, text := range texts {
+		got := splitBalancedPreferIntact(text, MaxCaptionRunes, nil)
+		if strings.Join(got, "") != text {
+			t.Fatalf("joined %q != original %q", strings.Join(got, ""), text)
+		}
+		for i, line := range got {
+			if n := utf8.RuneCountInString(line); n < 3 {
+				t.Errorf("%q: line[%d] = %q 只有 %d 字（孤行）", text, i, line, n)
+			}
+		}
+	}
+}
+
 func TestSplitByPunctuation_KeepsDecimalIntact(t *testing.T) {
 	got := splitByPunctuation("价格是3.14元。真的")
 	joined := strings.Join(got, "")
