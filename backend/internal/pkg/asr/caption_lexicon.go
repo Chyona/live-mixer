@@ -9,8 +9,11 @@ import (
 // captionLexiconMaxRune 正向最大匹配最长词长：仅收录 2～3 字词。
 const captionLexiconMaxRune = 3
 
-// captionLexiconWords 成片字幕折行用词表（仅完整 2 字、3 字词）。
-// 手工维护：金融行业词，以及口语/书面常用高频词。命中词作为 keepIntact 原子，避免被拦腰切开。
+// captionLexiconWords 人工维护的小词表（仅完整 2 字、3 字词）：金融行业词，以及口语/书面常用高频词。
+// 两处用它：
+//   - 折行路径：并入 caption_dict.txt 的词表一起做最大概率分词（caption_dict.go），
+//     补上通用词表没收录的领域词（如「科创板」）；
+//   - 校验路径（ValidateCaptionLines）：作为 keepIntact 原子的判据，保持既有宽严度。
 var captionLexiconWords = []string{
 	// —— 宏观 / 政策 / 货币 ——
 	"金融", "银行", "市场", "经济", "投资", "风险", "货币", "财政", "税收", "税务", "补贴", "关税", "贸易", "出口",

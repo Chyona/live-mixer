@@ -60,8 +60,8 @@ func TimedSegmentsForLines(u Utterance, lines []string) []TimedSegment {
 	return assignTimesProportional(u, lines)
 }
 
-// splitLinesForText 折行管线：标点断句 → 边缘清理 → 超长均分 → 再清理。
-// extra 为当次动态补充的中文词（来自 ASR Words），nil 表示只用静态词表。
+// splitLinesForText 折行管线：标点断句 → 边缘清理 → 超长按最少行数折行 → 再清理。
+// extra 为当次动态补充的中文词（来自 ASR Words），nil 表示只用词表。
 func splitLinesForText(text string, extra map[string]struct{}, max int) []string {
 	if text == "" {
 		return nil
@@ -165,8 +165,35 @@ func isBreakPunctRune(r rune) bool {
 	}
 }
 
+// captionWordMatcher 从 i 起匹配中文词，返回词的后一个位置；i 处不是多字词时返回 i。
+type captionWordMatcher func(i int) int
+
+// tokenizeCaptionAtoms 校验路径（ValidateCaptionLines）的原子划分：
+// 中文按静态小词表正向最大匹配，只保护 2–3 字的常用词。
+//
+// 校验刻意保持这个宽严度：切点只要不落在西文词/数字词/小词表词内部就算通过，
+// 否则 LLM 给出的整条断句会被判死、退化成规则折行。要收紧校验得先用「吸附」把
+// 非法切点挪到最近合法边界（见 captionWordEnds 的词表），而不是直接拒绝。
 func tokenizeCaptionAtoms(text string, extra map[string]struct{}) []captionAtom {
 	runes := []rune(text)
+	return tokenizeAtoms(runes, func(i int) int { return matchCJKWord(runes, i, extra) })
+}
+
+// tokenizeCaptionAtomsForSplit 折行路径的原子划分：中文按频率词表做最大概率分词
+// （见 captionWordEnds），词边界比校验路径密且准——「上市公司」「中产阶级」这类词
+// 不会被拆开；西文词与数字词仍是硬原子。
+func tokenizeCaptionAtomsForSplit(text string, extra map[string]struct{}) []captionAtom {
+	runes := []rune(text)
+	ends := captionWordEnds(runes, extra)
+	return tokenizeAtoms(runes, func(i int) int {
+		if end := ends[i]; end > i+1 {
+			return end
+		}
+		return i
+	})
+}
+
+func tokenizeAtoms(runes []rune, cjkWord captionWordMatcher) []captionAtom {
 	if len(runes) == 0 {
 		return nil
 	}
@@ -188,7 +215,7 @@ func tokenizeCaptionAtoms(text string, extra map[string]struct{}) []captionAtom 
 			i = j
 			continue
 		}
-		if end := matchCJKWord(runes, i, extra); end > i {
+		if end := cjkWord(i); end > i {
 			s := string(runes[i:end])
 			out = append(out, captionAtom{text: s, keepIntact: true, runes: end - i})
 			i = end
@@ -278,7 +305,7 @@ func splitBalancedPreferIntact(text string, max int, extra map[string]struct{}) 
 	}
 
 	// cuts 为升序合法切点（含 0 与 n）；行边界只能落在原子边界上。
-	atoms := tokenizeCaptionAtoms(text, extra)
+	atoms := tokenizeCaptionAtomsForSplit(text, extra)
 	cuts := make([]int, 1, len(atoms)+1)
 	off := 0
 	for _, atom := range atoms {

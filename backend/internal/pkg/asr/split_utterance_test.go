@@ -6,6 +6,9 @@ import (
 	"unicode/utf8"
 )
 
+// TestSplitBalancedPreferLatin_Table 只断言与词表无关的性质：行数、不超宽、不丢字、无孤行。
+// 精确到每行长度的断言留给 balancedCut 的单测——本用例的语料是十连汉字循环，
+// 里面会撞上真实词（如「万丈」「三一」），切点被词边界挡住后长度分布会平移，不是缺陷。
 func TestSplitBalancedPreferLatin_Table(t *testing.T) {
 	mk := func(n int) string {
 		b := make([]rune, n)
@@ -15,28 +18,52 @@ func TestSplitBalancedPreferLatin_Table(t *testing.T) {
 		return string(b)
 	}
 	tests := []struct {
-		n    int
-		want []int
+		n     int
+		parts int
 	}{
-		{12, []int{12}},
-		{13, []int{7, 6}},
-		{24, []int{12, 12}},
-		{25, []int{9, 8, 8}},
-		{31, []int{11, 10, 10}},
+		{12, 1},
+		{13, 2},
+		{24, 2},
+		{25, 3},
+		{31, 3},
 	}
 	for _, tt := range tests {
-		got := splitBalancedPreferLatin(mk(tt.n), MaxCaptionRunes)
-		if len(got) != len(tt.want) {
-			t.Fatalf("n=%d len=%d want %d lines: %v", tt.n, len(got), len(tt.want), got)
+		text := mk(tt.n)
+		got := splitBalancedPreferLatin(text, MaxCaptionRunes)
+		if len(got) != tt.parts {
+			t.Fatalf("n=%d lines=%d want %d: %v", tt.n, len(got), tt.parts, got)
+		}
+		if joined := strings.Join(got, ""); joined != text {
+			t.Fatalf("n=%d joined %q != original", tt.n, joined)
 		}
 		for i, line := range got {
 			n := utf8.RuneCountInString(line)
-			if n != tt.want[i] {
-				t.Errorf("n=%d line[%d] len=%d want %d (%q)", tt.n, i, n, tt.want[i], line)
-			}
 			if n > MaxCaptionRunes {
-				t.Errorf("n=%d line[%d] exceeds max: %d", tt.n, i, n)
+				t.Errorf("n=%d line[%d] len=%d exceeds max", tt.n, i, n)
 			}
+			if n < 3 {
+				t.Errorf("n=%d line[%d] is an orphan: %q", tt.n, i, line)
+			}
+		}
+	}
+}
+
+func TestBalancedCut_Ideals(t *testing.T) {
+	tests := []struct {
+		n, parts, idx, want int
+	}{
+		{12, 1, 1, 12},
+		{13, 2, 1, 7},
+		{13, 2, 2, 13},
+		{25, 3, 1, 9},
+		{25, 3, 2, 17},
+		{31, 3, 1, 11},
+		{31, 3, 2, 21},
+		{31, 3, 3, 31},
+	}
+	for _, tt := range tests {
+		if got := balancedCut(tt.n, tt.parts, tt.idx); got != tt.want {
+			t.Errorf("balancedCut(%d,%d,%d)=%d want %d", tt.n, tt.parts, tt.idx, got, tt.want)
 		}
 	}
 }
@@ -497,5 +524,103 @@ func TestMatchCJKWord_ForwardMax(t *testing.T) {
 	end = matchCJKWord(runes, 2, nil)
 	if end != 4 || string(runes[2:end]) != "市场" {
 		t.Fatalf("got end=%d word=%q, want 市场", end, string(runes[2:end]))
+	}
+}
+
+// —— L1：频率词表 + 最大概率分词 ——
+
+func TestCaptionWordEnds_MaxProbability(t *testing.T) {
+	tests := []struct {
+		text string
+		want string // 分词结果，用 / 连接
+	}{
+		// 4 字词：静态小词表只收 2–3 字词，给不出这个边界
+		{"中产阶级崛起", "中产阶级/崛起"},
+		// 最大概率分词优于正向最大匹配：研究生/命/起源 的总概率低于 研究/生命/起源
+		{"研究生命起源", "研究/生命/起源"},
+		{"消费者信心指数回升", "消费者/信心/指数/回升"},
+		{"通货膨胀预期管理", "通货膨胀/预期/管理"},
+		// 4 字机构名与后缀：市场/监督/管理局（不是 市场监督/管理局）
+		{"市场监督管理局", "市场/监督/管理局"},
+	}
+	for _, tt := range tests {
+		runes := []rune(tt.text)
+		ends := captionWordEnds(runes, nil)
+		var words []string
+		for i := 0; i < len(runes); {
+			j := ends[i]
+			if j <= i || j > len(runes) {
+				t.Fatalf("%s: 非法词结束位置 ends[%d]=%d", tt.text, i, j)
+			}
+			words = append(words, string(runes[i:j]))
+			i = j
+		}
+		if got := strings.Join(words, "/"); got != tt.want {
+			t.Errorf("%s: 分词 %s，期望 %s", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestCaptionWordEnds_ExtraWordsWin(t *testing.T) {
+	// extra 是调用方强制的词，即使与词表更短的词冲突也整段成词。
+	text := "蓝莓果酱真的好吃"
+	runes := []rune(text)
+	ends := captionWordEnds(runes, map[string]struct{}{"蓝莓果酱": {}})
+	if got := string(runes[0:ends[0]]); got != "蓝莓果酱" {
+		t.Fatalf("ends[0]=%d 得 %q，期望整段「蓝莓果酱」", ends[0], got)
+	}
+}
+
+func TestTokenizeCaptionAtomsForSplit_CutsAtWordBoundaries(t *testing.T) {
+	atoms := tokenizeCaptionAtomsForSplit("中产阶级崛起AI时代", nil)
+	var texts []string
+	for _, a := range atoms {
+		texts = append(texts, a.text)
+		if !a.keepIntact {
+			t.Errorf("原子 %q 应为不可拆（keepIntact）", a.text)
+		}
+	}
+	if got := strings.Join(texts, "|"); got != "中产阶级|崛起|AI|时代" {
+		t.Fatalf("原子划分 = %s，期望 中产阶级|崛起|AI|时代", got)
+	}
+}
+
+func TestSplitLinesByRule_KeepsLongWordsIntact(t *testing.T) {
+	// 这些 4 字词在 L2（只有 2–3 字小词表）时代会被从中间切开：
+	// 中产|阶级、消费观|念、信|心指数。词表换成频率词表后整词保留。
+	tests := []struct {
+		text string
+		word string
+	}{
+		{"我们今天来聊一聊中产阶级的消费降级现象", "中产阶级"},
+		{"中产阶级的消费观念正在发生改变", "消费观念"},
+		{"我们看到消费者的信心指数在持续回升", "信心指数"},
+	}
+	for _, tt := range tests {
+		lines := SplitLinesByRule(tt.text)
+		if joined := strings.Join(lines, ""); joined != tt.text {
+			t.Fatalf("%s: 折行 %q 丢了字", tt.text, joined)
+		}
+		assertTokenIntactAcrossLines(t, lines, tt.word)
+		for _, line := range lines {
+			if n := utf8.RuneCountInString(line); n > MaxCaptionRunes {
+				t.Errorf("%s: 行 %q 超宽 %d", tt.text, line, n)
+			}
+		}
+	}
+}
+
+// TestValidateCaptionLines_SmallLexiconStillLenient 钉住校验路径的现状：它只认 2–3 字小词表，
+// 4 字词内部的切点会被放行。这是刻意的——校验一旦按大词表判「切在词内部」就整条拒绝，
+// LLM 断句会大面积回退规则折行。要收紧得先把非法切点吸附到最近合法边界（captionWordEnds）。
+func TestValidateCaptionLines_SmallLexiconStillLenient(t *testing.T) {
+	text := "中产阶级的消费观念正在发生改变"
+	lines := []string{"中产阶", "级的消费观念正在发生改变"} // 切在「中产阶级」内部
+	valid, err := ValidateCaptionLines(text, lines, MaxCaptionRunes)
+	if err != nil {
+		t.Fatalf("校验不该拒绝：%v", err)
+	}
+	if joined := strings.Join(valid, ""); joined != text {
+		t.Fatalf("校验后 %q != 原文", joined)
 	}
 }
