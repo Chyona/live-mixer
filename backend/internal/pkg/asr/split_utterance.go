@@ -183,7 +183,11 @@ func tokenizeCaptionAtoms(text string, extra map[string]struct{}) []captionAtom 
 // （见 captionWordEnds），词边界比校验路径密且准——「上市公司」「中产阶级」这类词
 // 不会被拆开；西文词与数字词仍是硬原子。
 func tokenizeCaptionAtomsForSplit(text string, extra map[string]struct{}) []captionAtom {
-	runes := []rune(text)
+	return tokenizeCaptionAtomsForSplitRunes([]rune(text), extra)
+}
+
+// tokenizeCaptionAtomsForSplitRunes 同上，直接吃 runes：调用方已持有 runes 时省掉一次往返转换。
+func tokenizeCaptionAtomsForSplitRunes(runes []rune, extra map[string]struct{}) []captionAtom {
 	ends := captionWordEnds(runes, extra)
 	return tokenizeAtoms(runes, func(i int) int {
 		if end := ends[i]; end > i+1 {
@@ -191,6 +195,21 @@ func tokenizeCaptionAtomsForSplit(text string, extra map[string]struct{}) []capt
 		}
 		return i
 	})
+}
+
+// captionAtomCuts 返回 runes 的合法切点（升序，含 0 与 len(runes)）：
+// 折行（splitBalancedPreferIntact）与吸附（SnapCaptionLines）共用的切点集合，
+// 只落在「西文词 / 数字词 / 频率词表中文词」的接缝上。
+// extra 的含义同 splitBalancedPreferIntact。
+func captionAtomCuts(runes []rune, extra map[string]struct{}) []int {
+	atoms := tokenizeCaptionAtomsForSplitRunes(runes, extra)
+	cuts := make([]int, 1, len(atoms)+1)
+	off := 0
+	for _, atom := range atoms {
+		off += atom.runes
+		cuts = append(cuts, off)
+	}
+	return cuts
 }
 
 func tokenizeAtoms(runes []rune, cjkWord captionWordMatcher) []captionAtom {
@@ -305,13 +324,7 @@ func splitBalancedPreferIntact(text string, max int, extra map[string]struct{}) 
 	}
 
 	// cuts 为升序合法切点（含 0 与 n）；行边界只能落在原子边界上。
-	atoms := tokenizeCaptionAtomsForSplit(text, extra)
-	cuts := make([]int, 1, len(atoms)+1)
-	off := 0
-	for _, atom := range atoms {
-		off += atom.runes
-		cuts = append(cuts, off)
-	}
+	cuts := captionAtomCuts(runes, extra)
 
 	// minLines[i]：从 cuts[i] 起到文本末尾，每行不超过 max 折行所需的最少行数；-1 表示放不下。
 	minLines := make([]int, len(cuts))

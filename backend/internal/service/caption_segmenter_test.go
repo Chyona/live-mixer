@@ -224,7 +224,6 @@ func TestCaptionSegmenter_FallsBackOnInvalidOutput(t *testing.T) {
 	}{
 		{name: "改写原文", content: `{"lines": ["我们聊 ChatGPT", "很好用"]}`},
 		{name: "漏字", content: `{"lines": ["我们聊", "可以吗"]}`},
-		{name: "切开英文词", content: `{"lines": ["我们聊 ChatGP", "T 可以吗"]}`},
 		{name: "空行+改写", content: `{"lines": ["我们聊 ChatGPT", "", "很好用"]}`},
 		{name: "非 JSON", content: "第一行\n第二行"},
 	}
@@ -241,6 +240,38 @@ func TestCaptionSegmenter_FallsBackOnInvalidOutput(t *testing.T) {
 				t.Fatalf("校验不通过应回退规则折行（nil），实际 %q", got[0])
 			}
 		})
+	}
+}
+
+func TestCaptionSegmenter_SnapsCutOutOfToken(t *testing.T) {
+	// 模型把英文词从中间切开：不再整条判死回退规则折行，而是把切点吸附到词边界（内容一字不动，
+	// 模型给的行数保留）。
+	text := "我们聊 ChatGPT 可以吗"
+	mock := &captionMockLLM{replies: []captionMockReply{
+		{content: `{"lines": ["我们聊 ChatGP", "T 可以吗"]}`},
+	}}
+	seg := &CaptionSegmenter{Client: mock}
+
+	got := seg.SegmentTexts(context.Background(), []string{text})
+	if len(got) != 1 || len(got[0]) != 2 {
+		t.Fatalf("应吸附成两行，实际 %q", got)
+	}
+	if got[0][0] != "我们聊 ChatGPT" || got[0][1] != "可以吗" {
+		t.Fatalf("got = %q, want [我们聊 ChatGPT 可以吗]", got[0])
+	}
+}
+
+func TestCaptionSegmenter_FallsBackWhenUnsnappable(t *testing.T) {
+	// 模型给的行数在合法词边界上排不出来（三个 12 字英文原子共 38 字，3 行装不下）→ 回退规则折行。
+	text := "AAAAAAAAAAAA BBBBBBBBBBBB CCCCCCCCCCCC"
+	mock := &captionMockLLM{replies: []captionMockReply{
+		{content: `{"lines": ["AAAAAAAAAAAA", " BBBBBBBBBBBB", " CCCCCCCCCCCC"]}`},
+	}}
+	seg := &CaptionSegmenter{Client: mock}
+
+	got := seg.SegmentTexts(context.Background(), []string{text})
+	if len(got) != 1 || got[0] != nil {
+		t.Fatalf("吸附不出应回退规则折行（nil），实际 %q", got)
 	}
 }
 

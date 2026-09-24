@@ -358,10 +358,12 @@ func TestBuildCaptionsForPlacements_UsesProvidedLines(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2: %#v", len(got), got)
 	}
-	// 行时间仍取词级时间戳：源 11000/12200/13000 → 草稿 400000/1600000/2400000
-	wantTexts := []string{"注意到这个", "细节"}
-	wantStarts := []int64{400_000, 1_600_000}
-	wantEnds := []int64{1_600_000, 2_400_000}
+	// 建议的「细节」只有 2 字，是提示词明令避免的孤行：吸附时把切点前移到「注意到|这个细节」，
+	// 两行 3+4 字（切点位移 2 字换掉一个孤行，见 asr.snapCuts 的孤行惩罚）。
+	// 行时间仍取词级时间戳：源 11000/11700/13000 → 草稿 400000/1100000/2400000
+	wantTexts := []string{"注意到", "这个细节"}
+	wantStarts := []int64{400_000, 1_100_000}
+	wantEnds := []int64{1_100_000, 2_400_000}
 	for i := range wantTexts {
 		if got[i].Text != wantTexts[i] || got[i].Start != wantStarts[i] || got[i].End != wantEnds[i] {
 			t.Errorf("caption[%d] = %#v, want %q [%d,%d]",
@@ -399,6 +401,26 @@ func TestBuildCaptionsForPlacements_RejectsLinesThatRewriteText(t *testing.T) {
 	}
 	if captionsContain(got, "真好") {
 		t.Errorf("改写的文字进入了字幕：%#v", got)
+	}
+}
+
+// 断行建议切在词内部时，成片链路同样吸附到最近的合法词边界，而不是整条回退规则折行
+// （断句器已吸附过一次，这里是边界防线；内容一致性仍由 SnapCaptionLines 硬性保证）。
+func TestBuildCaptionsForPlacements_SnapsCutInsideToken(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 2000, DraftStartUS: 0, DraftEndUS: 2_000_000},
+	}
+	clipTexts := []model.ClipWithText{{Text: "中产阶级的消费观念正在发生改变", StartTime: 0, EndTime: 2000}}
+
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"中产阶", "级的消费观念正在发生改变"}})
+	wantTexts := []string{"中产阶级", "的消费观念正在发生改变"}
+	if len(got) != len(wantTexts) {
+		t.Fatalf("len = %d, want %d: %#v", len(got), len(wantTexts), got)
+	}
+	for i := range wantTexts {
+		if got[i].Text != wantTexts[i] {
+			t.Errorf("caption[%d].Text = %q, want %q", i, got[i].Text, wantTexts[i])
+		}
 	}
 }
 

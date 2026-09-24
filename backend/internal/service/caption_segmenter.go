@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -59,8 +60,9 @@ func CaptionSegmentPrompt(maxRunes int) string {
 	return fmt.Sprintf(captionSegmentSystemPromptTemplate, maxRunes)
 }
 
-// CaptionSegmenter 用 LLM 对切片文案做语义断行，输出仍受 asr 的硬约束与内容一致性校验约束；
-// 任一条失败（超时/解析失败/校验不过）只影响该条，调用方按 nil 回退 asr.SplitLinesByRule。
+// CaptionSegmenter 用 LLM 对切片文案做语义断行：输出经 asr.SnapCaptionLines 校验内容一致性、
+// 并把落在词内部的切点吸附到最近的合法词边界（行数与语义分段仍听模型的）；
+// 任一条失败（超时/解析失败/内容不一致/吸附不出）只影响该条，调用方按 nil 回退 asr.SplitLinesByRule。
 type CaptionSegmenter struct {
 	// Client LLM 出口；nil 表示不启用（全部回退规则折行）。
 	Client LLMChatClient
@@ -91,6 +93,13 @@ func (s *CaptionSegmenter) SegmentTexts(ctx context.Context, texts []string) [][
 	})
 
 	out := make([][]string, len(texts))
+	// 吸附统计：本次断句里有多少切点被挪到词边界上。缓存命中不计数（缓存里存的已是吸附后的行）。
+	var snap struct {
+		clips     atomic.Int64
+		cuts      atomic.Int64
+		moved     atomic.Int64
+		displaced atomic.Int64
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(s.concurrency())
 	for i, text := range texts {
@@ -105,20 +114,32 @@ func (s *CaptionSegmenter) SegmentTexts(ctx context.Context, texts []string) [][
 			continue
 		}
 		g.Go(func() error {
-			if lines, ok := s.segmentOne(gctx, trimmed); ok {
+			if lines, stats, ok := s.segmentOne(gctx, trimmed); ok {
 				out[i] = lines
 				s.cache.put(s.cacheKey(trimmed), lines)
+				snap.clips.Add(1)
+				snap.cuts.Add(int64(stats.CutCount))
+				snap.moved.Add(int64(stats.MovedCuts))
+				snap.displaced.Add(int64(stats.Displaced))
 			}
 			return nil
 		})
 	}
 	// 所有 goroutine 都返回 nil，g.Wait 只用于等待与并发上限控制。
 	_ = g.Wait()
+	if n := snap.clips.Load(); n > 0 {
+		s.logger().Info("LLM 断句吸附统计",
+			zap.Int64("clips", n),
+			zap.Int64("cut_count", snap.cuts.Load()),
+			zap.Int64("moved_cuts", snap.moved.Load()),
+			zap.Int64("displaced_runes", snap.displaced.Load()),
+		)
+	}
 	return out
 }
 
-// segmentOne 断一条文案：调用 LLM → 解析 → 内容一致校验与硬约束修正。任一步失败返回 ok=false。
-func (s *CaptionSegmenter) segmentOne(ctx context.Context, text string) ([]string, bool) {
+// segmentOne 断一条文案：调用 LLM → 解析 → 内容一致校验 + 切点吸附到词边界。任一步失败返回 ok=false。
+func (s *CaptionSegmenter) segmentOne(ctx context.Context, text string) ([]string, asr.CaptionSnapStats, bool) {
 	cctx, cancel := context.WithTimeout(ctx, s.timeout())
 	defer cancel()
 
@@ -149,23 +170,23 @@ func (s *CaptionSegmenter) segmentOne(ctx context.Context, text string) ([]strin
 			lastErr = err
 			break
 		}
-		valid, err := asr.ValidateCaptionLines(text, lines, asr.MaxCaptionRunes)
+		valid, stats, err := asr.SnapCaptionLines(text, lines, asr.MaxCaptionRunes)
 		if err != nil {
 			logger.Warn("LLM 断句未通过校验，回退规则折行",
 				zap.Error(err),
 				zap.Int("line_count", len(lines)),
 				zap.Int("text_runes", utf8.RuneCountInString(text)),
 			)
-			return nil, false
+			return nil, asr.CaptionSnapStats{}, false
 		}
-		return valid, true
+		return valid, stats, true
 	}
 
 	logger.Warn("LLM 断句失败，回退规则折行",
 		zap.Error(lastErr),
 		zap.Int("text_runes", utf8.RuneCountInString(text)),
 	)
-	return nil, false
+	return nil, asr.CaptionSnapStats{}, false
 }
 
 // isRetryableSegmentErr 只把超时与网络类错误视为可重试；

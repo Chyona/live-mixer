@@ -51,35 +51,73 @@ func (e *CaptionLinesError) Unwrap() error { return ErrCaptionLines }
 // 校验通过后施加两条产品规则（与规则折行一致）：超长行按 SplitLinesByRuleMax 就地再切、
 // 剥离行首尾断句标点——行长上限与「行首行尾非标点」由代码保证，不依赖模型听话。
 // 失败返回 *CaptionLinesError（errors.Is(err, ErrCaptionLines) 为真），调用方应回退 SplitLinesByRule。
+//
+// 成片链路不用本函数，而用 SnapCaptionLines：切点落在词内部时「挪到最近合法边界」比「整条判死」
+// 划算得多（见 SnapCaptionLines 的说明）。本函数保留「拒绝」这一严格语义，作为对照与诊断口径。
 func ValidateCaptionLines(text string, lines []string, max int) ([]string, error) {
-	if max <= 0 {
-		max = MaxCaptionRunes
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil, &CaptionLinesError{Reason: CaptionLinesReasonEmpty, Detail: "原文为空"}
-	}
-	if len(lines) == 0 {
-		return nil, &CaptionLinesError{Reason: CaptionLinesReasonEmpty, Detail: "无断句行"}
-	}
-	insideToken, boundaries := captionTokenLayout(text)
-	spans, err := locateCaptionLines(text, lines, insideToken)
+	text, max, err := normalizeCaptionInput(text, lines, max)
 	if err != nil {
 		return nil, err
 	}
-	if limit := (utf8.RuneCountInString(text)+max-1)/max + 1; len(lines) > limit {
-		return nil, &CaptionLinesError{
-			Reason: CaptionLinesReasonTooFine,
-			Detail: fmt.Sprintf("行数 %d 超过上限 %d", len(lines), limit),
-		}
+	check, err := checkCaptionContent(text, lines, max)
+	if err != nil {
+		return nil, err
 	}
-	if off, ok := firstCutInsideToken(spans, boundaries); !ok {
+	if off, ok := firstCutInsideToken(check.spans, check.boundaries); !ok {
 		return nil, &CaptionLinesError{
 			Reason: CaptionLinesReasonTokenCut,
 			Detail: fmt.Sprintf("第 %d 个字后的切点落在词/数字/英文内部", off),
 		}
 	}
 	return normalizeCaptionLines(lines, max), nil
+}
+
+// captionContentCheck 内容侧校验的结果（校验与吸附共用）。
+type captionContentCheck struct {
+	// runes 原文（已去首尾空白）的 rune 序列。
+	runes []rune
+	// spans 每行内容在原文中的位置（rune 下标，左闭右开）。
+	spans []captionLineSpan
+	// insideToken 落在不可拆原子内部的字符位置：行边界不允许把这类字符当标点丢掉。
+	insideToken []bool
+	// boundaries 校验路径下的合法切点（原子边界，按 2–3 字小词表判定）。
+	boundaries map[int]struct{}
+}
+
+// normalizeCaptionInput 归一化入参并校验非空：行宽回落默认值、原文去首尾空白。
+// 返回归一化后的原文、行宽与错误（nil 表示可用）。
+func normalizeCaptionInput(text string, lines []string, max int) (string, int, error) {
+	if max <= 0 {
+		max = MaxCaptionRunes
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text, max, &CaptionLinesError{Reason: CaptionLinesReasonEmpty, Detail: "原文为空"}
+	}
+	if len(lines) == 0 {
+		return text, max, &CaptionLinesError{Reason: CaptionLinesReasonEmpty, Detail: "无断句行"}
+	}
+	return text, max, nil
+}
+
+// checkCaptionContent 校验内容侧硬约束：每行都能按序在原文中定位（允许行边界丢标点，
+// 见 locateCaptionLines）、行数不超过 ceil(字数/max)+1。与切点无关，因此两条路径共用。
+func checkCaptionContent(text string, lines []string, max int) (captionContentCheck, error) {
+	var check captionContentCheck
+	check.runes = []rune(text)
+	check.insideToken, check.boundaries = captionTokenLayout(text)
+	spans, err := locateCaptionLines(text, lines, check.insideToken)
+	if err != nil {
+		return captionContentCheck{}, err
+	}
+	if limit := (len(check.runes)+max-1)/max + 1; len(lines) > limit {
+		return captionContentCheck{}, &CaptionLinesError{
+			Reason: CaptionLinesReasonTooFine,
+			Detail: fmt.Sprintf("行数 %d 超过上限 %d", len(lines), limit),
+		}
+	}
+	check.spans = spans
+	return check, nil
 }
 
 // captionLineSpan 单行内容在原文中的位置（rune 下标，左闭右开）。
