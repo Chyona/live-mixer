@@ -87,11 +87,7 @@ func splitLinesForText(text string, extra map[string]struct{}, max int) []string
 		return nil
 	}
 	var lines []string
-	for _, clause := range splitByPunctuation(text) {
-		clause = trimCaptionEdgePunct(clause)
-		if clause == "" {
-			continue
-		}
+	for _, clause := range splitClauses(text) {
 		for _, line := range splitBalancedPreferIntact(clause, max, extra) {
 			line = trimCaptionEdgePunct(line)
 			if line == "" {
@@ -101,6 +97,19 @@ func splitLinesForText(text string, extra map[string]struct{}, max int) []string
 		}
 	}
 	return lines
+}
+
+// splitClauses 标点断句 + 剥掉每段首尾标点与空白，空段丢弃。
+// 与 SplitCaptionClauses 同源：折行路径（本函数）与「超长小句交给 LLM 补切点」的路径
+// 必须切出完全相同的子句，否则两条路径的行边界会不一致。
+func splitClauses(text string) []string {
+	var out []string
+	for _, clause := range splitByPunctuation(text) {
+		if trimmed := trimCaptionEdgePunct(clause); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // trimCaptionEdgePunct 去掉首尾空白与断句标点（含 … / ...），使成片行首行尾非标点。

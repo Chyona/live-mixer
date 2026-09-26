@@ -20,6 +20,9 @@ const (
 	CaptionLinesReasonTooFine = "too_fine"
 	// CaptionLinesReasonTokenCut 切点落在西文词/数字词/词表中文词内部。
 	CaptionLinesReasonTokenCut = "token_cut"
+	// CaptionLinesReasonCutOutOfRange 切点位置越界（不在 0..字数-2）：只会来自外部的「位置」输出，
+	// 见 SplitLinesByCuts 的切点语义。
+	CaptionLinesReasonCutOutOfRange = "cut_out_of_range"
 )
 
 // ErrCaptionLines 断句结果不可用的哨兵错误；调用方用 errors.Is 判定后回退 SplitLinesByRule。

@@ -27,7 +27,7 @@ type captionMockReply struct {
 type captionMockLLM struct {
 	mu      sync.Mutex
 	replies []captionMockReply
-	// echo 为真时忽略 replies：把用户消息里的原文原样包成单行 JSON 返回，
+	// echo 为真时忽略 replies：从用户消息取出原文，按中点报一个切点位置，
 	// 使应答与调用顺序无关（并发用例需要）。
 	echo     bool
 	calls    int
@@ -92,7 +92,8 @@ func (m *captionMockLLM) reply(ctx context.Context, messages []llm.ChatMessage) 
 	return reply.content, reply.err
 }
 
-// echoReply 从用户消息取出原文并原样包成单行 JSON，供与调用顺序无关的用例使用。
+// echoReply 从用户消息取出原文，按中点报一个切点位置，供与调用顺序无关的用例使用。
+// 位置口径同 asr.SplitLinesByCuts：前半段最后一个字的 0 基下标。
 func echoReply(messages []llm.ChatMessage) string {
 	text := ""
 	for _, msg := range messages {
@@ -100,8 +101,22 @@ func echoReply(messages []llm.ChatMessage) string {
 			text = strings.TrimPrefix(msg.Content, "文本：")
 		}
 	}
-	payload, _ := json.Marshal(map[string][]string{"lines": {text}})
+	runes := []rune(text)
+	cuts := []int{}
+	if len(runes) >= 2 {
+		cuts = append(cuts, len(runes)/2-1)
+	}
+	payload, _ := json.Marshal(map[string][]int{"cuts": cuts})
 	return string(payload)
+}
+
+// cutsReply 构造「按中点切一刀」的应答：每个输入必然切出两行，能通过位置校验。
+func cutsReply(texts ...string) []captionMockReply {
+	out := make([]captionMockReply, 0, len(texts))
+	for _, text := range texts {
+		out = append(out, captionMockReply{content: echoReply([]llm.ChatMessage{{Role: "user", Content: "文本：" + text}})})
+	}
+	return out
 }
 
 func (m *captionMockLLM) callCount() int {
@@ -116,16 +131,6 @@ func (m *captionMockLLM) peakConcurrency() int {
 	return m.peak
 }
 
-// textsReply 构造「原样返回整段」的应答：单行输入必然通过无损校验，再被硬约束切成合规行。
-func textsReply(texts ...string) []captionMockReply {
-	out := make([]captionMockReply, 0, len(texts))
-	for _, text := range texts {
-		payload, _ := json.Marshal(map[string][]string{"lines": {text}})
-		out = append(out, captionMockReply{content: string(payload)})
-	}
-	return out
-}
-
 func TestCaptionSegmentPrompt_RendersMaxRunesAndEscapedPercent(t *testing.T) {
 	prompt := CaptionSegmentPrompt(12)
 	if !strings.Contains(prompt, "12 个字") {
@@ -137,33 +142,40 @@ func TestCaptionSegmentPrompt_RendersMaxRunesAndEscapedPercent(t *testing.T) {
 	if !strings.Contains(prompt, "3.14%") {
 		t.Errorf("提示词缺少数字与百分号示例: %q", prompt)
 	}
+	if !strings.Contains(prompt, `{"cuts"`) {
+		t.Errorf("提示词未要求只输出切点位置: %q", prompt)
+	}
+	if !strings.Contains(prompt, "0 开始计") {
+		t.Errorf("提示词未说明位置口径（0 基）: %q", prompt)
+	}
 }
 
 func TestCaptionSegmenter_NilClientReturnsNil(t *testing.T) {
 	var nilSeg *CaptionSegmenter
-	if got := nilSeg.SegmentTexts(context.Background(), []string{"今天我们来聊一聊人工智能在医疗领域的应用"}); got != nil {
+	if got := nilSeg.SegmentTexts(context.Background(), []string{"最直接的解决方法是升级到修复该问题的版本"}); got != nil {
 		t.Errorf("nil 接收者应返回 nil，实际 %q", got)
 	}
 
 	seg := &CaptionSegmenter{}
-	if got := seg.SegmentTexts(context.Background(), []string{"今天我们来聊一聊人工智能在医疗领域的应用"}); got != nil {
+	if got := seg.SegmentTexts(context.Background(), []string{"最直接的解决方法是升级到修复该问题的版本"}); got != nil {
 		t.Errorf("未配置 Client 应返回 nil，实际 %q", got)
 	}
 }
 
-func TestCaptionSegmenter_SkipsTextsWithinMaxRunes(t *testing.T) {
+func TestCaptionSegmenter_SkipsClausesWithinMaxRunes(t *testing.T) {
 	mock := &captionMockLLM{echo: true}
 	seg := &CaptionSegmenter{Client: mock}
 
 	short := "今天天气不错我们聊聊天吧"
-	long := "今天我们来聊一聊人工智能在医疗领域的应用"
 	if n := utf8.RuneCountInString(short); n != asr.MaxCaptionRunes {
 		t.Fatalf("用例前提不成立：短文本 %d 字，期望 %d 字", n, asr.MaxCaptionRunes)
 	}
+	// 带标点的整段：标点断句后每句都在行宽内，同样不该调用模型。
+	punctuated := "好的，就这样吧，明天见。"
 
-	got := seg.SegmentTexts(context.Background(), []string{short, "", "  "})
-	if len(got) != 3 {
-		t.Fatalf("结果长度 = %d, want 3", len(got))
+	got := seg.SegmentTexts(context.Background(), []string{short, punctuated, "", "  "})
+	if len(got) != 4 {
+		t.Fatalf("结果长度 = %d, want 4", len(got))
 	}
 	for i, item := range got {
 		if item != nil {
@@ -173,152 +185,75 @@ func TestCaptionSegmenter_SkipsTextsWithinMaxRunes(t *testing.T) {
 	if mock.callCount() != 0 {
 		t.Errorf("调用次数 = %d, want 0（未超宽不应调用模型）", mock.callCount())
 	}
-
-	// 超宽才调用，且结果与输入等长对齐。
-	got = seg.SegmentTexts(context.Background(), []string{short, long, ""})
-	if mock.callCount() != 1 {
-		t.Errorf("调用次数 = %d, want 1", mock.callCount())
-	}
-	if got[0] != nil || got[2] != nil {
-		t.Errorf("未超宽/空文本应为 nil: %q", got)
-	}
-	if len(got[1]) == 0 {
-		t.Fatalf("超宽文本应得到断行结果: %q", got[1])
-	}
-	for i, line := range got[1] {
-		if n := utf8.RuneCountInString(line); n > asr.MaxCaptionRunes {
-			t.Errorf("lines[%d] = %q 长度 %d > %d", i, line, n, asr.MaxCaptionRunes)
-		}
-	}
 }
 
-func TestCaptionSegmenter_UsesLLMLinesWhenValid(t *testing.T) {
-	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["今天我们来聊一聊", "人工智能在医疗领域的应用"]}`},
-	}}
+func TestCaptionSegmenter_UsesLLMPositionsWhenValid(t *testing.T) {
+	text := "最直接的解决方法是升级到修复该问题的版本"
+	mock := &captionMockLLM{replies: []captionMockReply{{content: `{"cuts": [8]}`}}}
 	seg := &CaptionSegmenter{Client: mock, Model: "test-model"}
 
-	got := seg.SegmentTexts(context.Background(), []string{"今天我们来聊一聊人工智能在医疗领域的应用"})
-	want := []string{"今天我们来聊一聊", "人工智能在医疗领域的应用"}
+	got := seg.SegmentTexts(context.Background(), []string{text})
+	want := []string{"最直接的解决方法是", "升级到修复该问题的版本"}
 	if len(got) != 1 || strings.Join(got[0], "|") != strings.Join(want, "|") {
 		t.Fatalf("got = %q, want %q", got, want)
 	}
 
-	// 系统提示词应为断句提示词，用户消息带上待断句原文（并带行宽上限）。
+	// 系统提示词应为断句提示词，用户消息带上待断句原文（位置由提示词定口径）。
 	if len(mock.lastMsgs) != 2 {
 		t.Fatalf("messages 数 = %d, want 2", len(mock.lastMsgs))
 	}
 	if mock.lastMsgs[0].Role != "system" || !strings.Contains(mock.lastMsgs[0].Content, "断句") {
 		t.Errorf("system 消息不是断句提示词: %+v", mock.lastMsgs[0])
 	}
-	if !strings.HasSuffix(mock.lastMsgs[1].Content, "今天我们来聊一聊人工智能在医疗领域的应用") {
+	if !strings.HasSuffix(mock.lastMsgs[1].Content, text) {
 		t.Errorf("user 消息未带上原文: %q", mock.lastMsgs[1].Content)
 	}
 }
 
-func TestCaptionSegmenter_FallsBackOnInvalidOutput(t *testing.T) {
-	text := "我们聊 ChatGPT 可以吗"
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{name: "改写原文", content: `{"lines": ["我们聊 ChatGPT", "很好用"]}`},
-		{name: "漏字", content: `{"lines": ["我们聊", "可以吗"]}`},
-		{name: "空行+改写", content: `{"lines": ["我们聊 ChatGPT", "", "很好用"]}`},
-		{name: "非 JSON", content: "第一行\n第二行"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &captionMockLLM{replies: []captionMockReply{{content: tt.content}}}
-			seg := &CaptionSegmenter{Client: mock}
-
-			got := seg.SegmentTexts(context.Background(), []string{text})
-			if len(got) != 1 {
-				t.Fatalf("结果长度 = %d, want 1", len(got))
-			}
-			if got[0] != nil {
-				t.Fatalf("校验不通过应回退规则折行（nil），实际 %q", got[0])
-			}
-		})
-	}
-}
-
-func TestCaptionSegmenter_SnapsCutOutOfToken(t *testing.T) {
-	// 模型把英文词从中间切开：不再整条判死回退规则折行，而是把切点吸附到词边界（内容一字不动，
-	// 模型给的行数保留）。
-	text := "我们聊 ChatGPT 可以吗"
-	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["我们聊 ChatGP", "T 可以吗"]}`},
-	}}
+func TestCaptionSegmenter_PunctuationFirstOnlyAsksForLongClauses(t *testing.T) {
+	// 标点优先：已按标点切好的短子句直接用，只有超长子句才问模型——问的也只是那个子句。
+	clause := "今天我们来聊一聊人工智能在医疗领域的应用"
+	text := "好的，" + clause + "。"
+	mock := &captionMockLLM{echo: true}
 	seg := &CaptionSegmenter{Client: mock}
 
 	got := seg.SegmentTexts(context.Background(), []string{text})
-	if len(got) != 1 || len(got[0]) != 2 {
-		t.Fatalf("应吸附成两行，实际 %q", got)
+	if mock.callCount() != 1 {
+		t.Fatalf("调用次数 = %d, want 1（只有超长子句需要模型）", mock.callCount())
 	}
-	if got[0][0] != "我们聊 ChatGPT" || got[0][1] != "可以吗" {
-		t.Fatalf("got = %q, want [我们聊 ChatGPT 可以吗]", got[0])
+	if len(got) != 1 || len(got[0]) < 2 || got[0][0] != "好的" {
+		t.Fatalf("got = %q, want 以「好的」开头且不止一行", got)
 	}
-}
-
-func TestCaptionSegmenter_FallsBackWhenUnsnappable(t *testing.T) {
-	// 模型给的行数在合法词边界上排不出来（三个 12 字英文原子共 38 字，3 行装不下）→ 回退规则折行。
-	text := "AAAAAAAAAAAA BBBBBBBBBBBB CCCCCCCCCCCC"
-	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["AAAAAAAAAAAA", " BBBBBBBBBBBB", " CCCCCCCCCCCC"]}`},
-	}}
-	seg := &CaptionSegmenter{Client: mock}
-
-	got := seg.SegmentTexts(context.Background(), []string{text})
-	if len(got) != 1 || got[0] != nil {
-		t.Fatalf("吸附不出应回退规则折行（nil），实际 %q", got)
+	if !strings.HasSuffix(mock.lastMsgs[1].Content, clause) {
+		t.Errorf("user 消息应只带超长子句（不含标点）: %q", mock.lastMsgs[1].Content)
+	}
+	if strings.Join(got[0][1:], "") != clause {
+		t.Errorf("子句内容被改动: %q != %q", strings.Join(got[0][1:], ""), clause)
 	}
 }
 
-func TestCaptionSegmenter_AcceptsDroppedBoundaryPunctuation(t *testing.T) {
-	// 实测模型行为：行边界的标点/空白会被直接丢掉，内容一字不少即可采纳（产品规则本就要剥行首尾标点）。
-	text := "这款产品原价是￥199，现在直播间下单只要98折，相当于省了小两百块钱。"
+func TestCaptionSegmenter_FallsBackPerClause(t *testing.T) {
+	// 两个超长子句：第一个给了位置、第二个没给 → 只回退第二句，第一句仍用模型结果。
+	first := "最直接的解决方法是升级到修复该问题的版本"
+	second := "这个颜色特别好看而且它的面料非常柔软穿起来很舒服"
 	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["这款产品原价是￥199", "现在直播间下单只要98折", "相当于省了小两百块钱"]}`},
+		{content: `{"cuts": [8]}`},
+		{content: `{"cuts": []}`},
 	}}
-	seg := &CaptionSegmenter{Client: mock}
+	seg := &CaptionSegmenter{Client: mock, Concurrency: 1}
 
-	got := seg.SegmentTexts(context.Background(), []string{text})
-	want := []string{"这款产品原价是￥199", "现在直播间下单只要98折", "相当于省了小两百块钱"}
-	if len(got) != 1 || len(got[0]) != len(want) {
-		t.Fatalf("got = %q, want %q", got, want)
+	got := seg.SegmentTexts(context.Background(), []string{first + "，" + second})
+	if mock.callCount() != 2 {
+		t.Fatalf("调用次数 = %d, want 2（每个超长子句一次）", mock.callCount())
 	}
-	for i := range want {
-		if got[0][i] != want[i] {
-			t.Errorf("lines[%d] = %q, want %q", i, got[0][i], want[i])
-		}
+	if len(got) != 1 || len(got[0]) < 3 {
+		t.Fatalf("got = %q, want 至少三行", got)
 	}
-}
-
-func TestCaptionSegmenter_IgnoresEmptyLineNoise(t *testing.T) {
-	// 模型偶尔多给一个空行：ParseCaptionLines 丢掉空行，其余行内容合法时照常采纳。
-	text := "我们聊 ChatGPT 可以吗"
-	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["我们聊 ChatGPT", "", "可以吗"]}`},
-	}}
-	seg := &CaptionSegmenter{Client: mock}
-
-	got := seg.SegmentTexts(context.Background(), []string{text})
-	if len(got) != 1 || len(got[0]) != 2 || got[0][0] != "我们聊 ChatGPT" || got[0][1] != "可以吗" {
-		t.Fatalf("got = %q, want [我们聊 ChatGPT 可以吗]", got)
+	if got[0][0] != "最直接的解决方法是" || got[0][1] != "升级到修复该问题的版本" {
+		t.Errorf("第一句应使用模型位置: %q", got[0][:2])
 	}
-}
-
-func TestCaptionSegmenter_ResplitsOverlongLine(t *testing.T) {
-	text := "今天我们来聊一聊人工智能在医疗领域的应用"
-	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: fmt.Sprintf(`{"lines": [%q]}`, text)},
-	}}
-	seg := &CaptionSegmenter{Client: mock}
-
-	got := seg.SegmentTexts(context.Background(), []string{text})
-	if len(got) != 1 || len(got[0]) < 2 {
-		t.Fatalf("超长行应被再切分，实际 %q", got)
+	if rest := strings.Join(got[0][2:], ""); rest != second {
+		t.Errorf("第二句回退规则折行后内容被改动: %q != %q", rest, second)
 	}
 	for i, line := range got[0] {
 		if n := utf8.RuneCountInString(line); n > asr.MaxCaptionRunes {
@@ -327,12 +262,72 @@ func TestCaptionSegmenter_ResplitsOverlongLine(t *testing.T) {
 	}
 }
 
+func TestCaptionSegmenter_ReturnsNilWhenNoClauseYieldedPositions(t *testing.T) {
+	// 模型没给出任何位置（或位置不可用）时，该条为 nil：调用方按规则折行，与未启用本层一致。
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "位置数组为空", content: `{"cuts": []}`},
+		{name: "位置越界", content: `{"cuts": [999]}`},
+		{name: "非 JSON", content: "我建议切在这里"},
+		{name: "空内容", content: "   "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &captionMockLLM{replies: []captionMockReply{{content: tt.content}}}
+			seg := &CaptionSegmenter{Client: mock}
+
+			got := seg.SegmentTexts(context.Background(), []string{"最直接的解决方法是升级到修复该问题的版本"})
+			if len(got) != 1 {
+				t.Fatalf("结果长度 = %d, want 1", len(got))
+			}
+			if got[0] != nil {
+				t.Fatalf("应回退规则折行（nil），实际 %q", got[0])
+			}
+		})
+	}
+}
+
+func TestCaptionSegmenter_SnapsCutInsideToken(t *testing.T) {
+	// 位置落在英文词中间：不判死回退，而是吸附到最近的合法词边界（正文一字不动）。
+	text := "我们聊 ChatGPT 可以吗"
+	mock := &captionMockLLM{replies: []captionMockReply{{content: `{"cuts": [6]}`}}}
+	seg := &CaptionSegmenter{Client: mock}
+
+	got := seg.SegmentTexts(context.Background(), []string{text})
+	if len(got) != 1 || len(got[0]) != 2 {
+		t.Fatalf("应吸附成两行，实际 %q", got)
+	}
+	if got[0][0] != "我们聊" || got[0][1] != "ChatGPT 可以吗" {
+		t.Fatalf("got = %q, want [我们聊 ChatGPT 可以吗]", got[0])
+	}
+}
+
+func TestCaptionSegmenter_DedupesIdenticalClauses(t *testing.T) {
+	// 同一小句在两个切片里重复出现：只调一次模型，两条结果一致。
+	clause := "这个颜色特别好看而且它的面料非常柔软穿起来很舒服"
+	mock := &captionMockLLM{echo: true}
+	seg := &CaptionSegmenter{Client: mock}
+
+	got := seg.SegmentTexts(context.Background(), []string{clause, clause})
+	if mock.callCount() != 1 {
+		t.Errorf("调用次数 = %d, want 1（小句去重）", mock.callCount())
+	}
+	if len(got) != 2 || len(got[0]) == 0 || len(got[1]) == 0 {
+		t.Fatalf("got = %q, 期望两条都有行", got)
+	}
+	if strings.Join(got[0], "|") != strings.Join(got[1], "|") {
+		t.Errorf("同一小句的两条结果不一致: %q vs %q", got[0], got[1])
+	}
+}
+
 func TestCaptionSegmenter_TimeoutDoesNotRetry(t *testing.T) {
-	mock := &captionMockLLM{replies: textsReply("今天我们来聊一聊人工智能在医疗领域的应用"), hold: 2 * time.Second}
+	mock := &captionMockLLM{replies: cutsReply("最直接的解决方法是升级到修复该问题的版本"), hold: 2 * time.Second}
 	seg := &CaptionSegmenter{Client: mock, Timeout: 20 * time.Millisecond}
 
 	start := time.Now()
-	got := seg.SegmentTexts(context.Background(), []string{"今天我们来聊一聊人工智能在医疗领域的应用"})
+	got := seg.SegmentTexts(context.Background(), []string{"最直接的解决方法是升级到修复该问题的版本"})
 	elapsed := time.Since(start)
 
 	if len(got) != 1 || got[0] != nil {
@@ -347,10 +342,10 @@ func TestCaptionSegmenter_TimeoutDoesNotRetry(t *testing.T) {
 }
 
 func TestCaptionSegmenter_RetriesTransientErrorThenSucceeds(t *testing.T) {
-	text := "今天我们来聊一聊人工智能在医疗领域的应用"
+	text := "最直接的解决方法是升级到修复该问题的版本"
 	replies := append([]captionMockReply{
 		{err: &net.DNSError{Err: "temporary failure", IsTemporary: true}},
-	}, textsReply(text)...)
+	}, cutsReply(text)...)
 	mock := &captionMockLLM{replies: replies}
 	seg := &CaptionSegmenter{Client: mock, Timeout: 5 * time.Second}
 
@@ -367,7 +362,7 @@ func TestCaptionSegmenter_DoesNotRetryApplicationError(t *testing.T) {
 	mock := &captionMockLLM{replies: []captionMockReply{{err: errors.New("请求被拒绝")}}}
 	seg := &CaptionSegmenter{Client: mock, Timeout: 5 * time.Second}
 
-	got := seg.SegmentTexts(context.Background(), []string{"今天我们来聊一聊人工智能在医疗领域的应用"})
+	got := seg.SegmentTexts(context.Background(), []string{"最直接的解决方法是升级到修复该问题的版本"})
 	if len(got) != 1 || got[0] != nil {
 		t.Fatalf("失败应回退规则折行（nil），实际 %q", got)
 	}
@@ -377,10 +372,8 @@ func TestCaptionSegmenter_DoesNotRetryApplicationError(t *testing.T) {
 }
 
 func TestCaptionSegmenter_CacheReusesResult(t *testing.T) {
-	text := "今天我们来聊一聊人工智能在医疗领域的应用"
-	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["今天我们来聊一聊", "人工智能在医疗领域的应用"]}`},
-	}}
+	text := "最直接的解决方法是升级到修复该问题的版本"
+	mock := &captionMockLLM{replies: []captionMockReply{{content: `{"cuts": [8]}`}}}
 	seg := &CaptionSegmenter{Client: mock}
 
 	first := seg.SegmentTexts(context.Background(), []string{text})
@@ -396,7 +389,7 @@ func TestCaptionSegmenter_CacheReusesResult(t *testing.T) {
 
 func TestCaptionSegmenter_CacheKeyIncludesRunesAndModel(t *testing.T) {
 	// 行宽与模型都是缓存 key 的成员：模型换代或行宽常量变化时旧缓存必须失效。
-	text := "今天我们来聊一聊人工智能在医疗领域的应用"
+	text := "最直接的解决方法是升级到修复该问题的版本"
 	a := &CaptionSegmenter{Model: "model-a"}
 	b := &CaptionSegmenter{Model: "model-b"}
 	if a.cacheKey(text) == b.cacheKey(text) {
@@ -431,11 +424,11 @@ func TestCaptionSegmenter_RespectsConcurrencyLimit(t *testing.T) {
 }
 
 func TestCaptionSegmenter_AlignsPartialFailuresByIndex(t *testing.T) {
-	okText := "今天我们来聊一聊人工智能在医疗领域的应用"
-	badText := "这款产品原价是199元现在下单更便宜"
+	okText := "最直接的解决方法是升级到修复该问题的版本"
+	badText := "这款产品原价是一九九元现在直播间下单只要九八折相当于省了小两百块钱"
 	mock := &captionMockLLM{replies: []captionMockReply{
-		{content: `{"lines": ["今天我们来聊一聊", "人工智能在医疗领域的应用"]}`},
-		{content: `{"lines": ["完全被改写的另一段内容"]}`},
+		{content: `{"cuts": [8]}`},
+		{content: `{"cuts": [999]}`},
 	}}
 	seg := &CaptionSegmenter{Client: mock, Concurrency: 1}
 
@@ -443,11 +436,55 @@ func TestCaptionSegmenter_AlignsPartialFailuresByIndex(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("结果长度 = %d, want 2", len(got))
 	}
-	if strings.Join(got[0], "") != okText {
+	if len(got[0]) == 0 || strings.Join(got[0], "") != okText {
 		t.Errorf("got[0] = %q, 期望无损切分自 %q", got[0], okText)
 	}
 	if got[1] != nil {
 		t.Errorf("got[1] = %q, 期望 nil（失败条目按位回退）", got[1])
+	}
+}
+
+// charWords 把文本按逐字词造出词级时间戳（每字 perChar 毫秒）：豆包 ASR 的实际形态。
+func charWords(text string, perChar int64) []asr.Word {
+	words := make([]asr.Word, 0, len([]rune(text)))
+	at := int64(0)
+	for _, r := range []rune(text) {
+		words = append(words, asr.Word{Text: string(r), StartTime: at, EndTime: at + perChar})
+		at += perChar
+	}
+	return words
+}
+
+func TestCaptionSegmenter_OutputSurvivesConsumerValidation(t *testing.T) {
+	// 断句结果要能原样通过消费侧（draft/steps）的边界防线，并让行时间走词级对齐。
+	// 行与原文不一致、或切点吸附不出来，消费侧就会退回规则折行；词级对齐一旦失败，
+	// 整条切片的时间会降级为按字数均分——那正是「字幕对不齐」的来源，所以这条链路钉住。
+	text := "好的，最直接的解决方法是升级到修复该问题的版本。"
+	mock := &captionMockLLM{replies: []captionMockReply{{content: `{"cuts": [8]}`}}}
+	seg := &CaptionSegmenter{Client: mock}
+
+	got := seg.SegmentTexts(context.Background(), []string{text})
+	want := []string{"好的", "最直接的解决方法是", "升级到修复该问题的版本"}
+	if len(got) != 1 || strings.Join(got[0], "|") != strings.Join(want, "|") {
+		t.Fatalf("got = %q, want %q", got, want)
+	}
+
+	valid, _, err := asr.SnapCaptionLines(text, got[0], asr.MaxCaptionRunes)
+	if err != nil {
+		t.Fatalf("消费侧再校验不应失败: %v（%q）", err, got[0])
+	}
+
+	u := asr.Utterance{Text: text, StartTime: 0, EndTime: 2400, Words: charWords(text, 100)}
+	segs, source := asr.TimedSegmentsForLinesWithSource(u, valid)
+	if source != asr.CaptionTimingWords {
+		t.Fatalf("时间来源 = %s, want %s（降级为均分即音字对不齐）", source, asr.CaptionTimingWords)
+	}
+	if len(segs) != len(want) {
+		t.Fatalf("字幕条数 = %d, want %d（%q）", len(segs), len(want), segs)
+	}
+	// 词级时间按「行的第一个字」逐行取（100ms/字）：好的=0、最=300、升=1200。
+	if segs[0].StartTime != 0 || segs[1].StartTime != 300 || segs[2].StartTime != 1200 {
+		t.Errorf("行起始时间 = %d/%d/%d, want 0/300/1200", segs[0].StartTime, segs[1].StartTime, segs[2].StartTime)
 	}
 }
 

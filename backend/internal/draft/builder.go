@@ -159,8 +159,8 @@ func resolveAlignedClipTexts(req Request, clips []model.ClipRange, logger *zap.L
 	return merged
 }
 
-// segmentCaptionLines 用 LLM 为切片文案生成断行建议。
-// 未配置断句器、项目未开字幕、无文案或全部失败时返回 nil，字幕步骤据此走规则折行；
+// segmentCaptionLines 用 LLM 为切片文案的超长小句补切点位置，拼出字幕行（标点优先断句在前）。
+// 未配置断句器、项目未开字幕、无文案或一条文案都没用上模型结果时返回 nil，字幕步骤据此走规则折行；
 // 部分失败时保留 nil 元素，字幕步骤只对该条回退规则。
 func (b *Builder) segmentCaptionLines(ctx context.Context, jobID string, clipTexts []model.ClipWithText, project *model.VideoProject) [][]string {
 	if b.Segmenter == nil || len(clipTexts) == 0 {

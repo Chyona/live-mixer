@@ -250,10 +250,11 @@ func splitUtterancesForPlacement(utterances []asr.Utterance, p session.ClipPlace
 	return out
 }
 
-// splitClipTextForCaptions 将切片文案拆成字幕行：lines 非空且通过校验时用外部断行建议（LLM 断句），
-// 否则按规则折行（标点 + 12 字）。
-// lines 在此重新走一遍 asr.SnapCaptionLines：断句器已校验并吸附过一次，这里再走是边界防线——
-// 无论上游怎么改，进入字幕的文本都不能改动切片文案的内容，绝不把改写过的文本写进成片。
+// splitClipTextForCaptions 将切片文案拆成字幕行：lines 非空且通过校验时用断句器给的行
+// （标点优先断句 + 超长小句按 LLM 报的位置切行），否则按规则折行（标点 + 12 字）。
+// lines 在此重新走一遍 asr.SnapCaptionLines，作为进入字幕前的边界防线——无论上游怎么改，
+// 进入字幕的文本都不能改动切片文案的内容，绝不把改写过的文本写进成片。
+// （LLM 已经只报位置、不产文本，这道防线是给「上游将来又换了断句来源」留的。）
 // （内容侧校验与吸附都是幂等的：已经合法的切点位移为 0，重跑结果与首次一致。）
 // 两条路径共用同一时间分配：行时间优先取 clips1 词级时间戳；词级时间缺失或与文案不一致时在切片区间内按比例分配。
 func splitClipTextForCaptions(c model.ClipWithText, lines []string) []asr.TimedSegment {
