@@ -97,7 +97,14 @@ func runClaimedWork(
 	}
 	// 任务级超时/取消时，无论错误是否用 %w 包装了 context，都要落库失败状态。
 	if taskCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		markFailed(writeCtx, fmt.Errorf("任务执行超时: %w", err))
+		// 只有任务级硬超时（taskCtx 到期）才叫「任务执行超时」。子调用自带的超时同样会 unwrap 到
+		// context.DeadlineExceeded（大模型 HTTP 客户端超时就是如此），沿用旧文案会把
+		// 「客户端 30 分钟预算用尽」误报成「任务超时」，运维排查方向直接跑偏。
+		prefix := "任务执行失败"
+		if taskCtx.Err() != nil {
+			prefix = "任务执行超时"
+		}
+		markFailed(writeCtx, fmt.Errorf("%s: %w", prefix, err))
 	}
 }
 

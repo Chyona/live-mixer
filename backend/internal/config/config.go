@@ -183,6 +183,11 @@ type LLMConfig struct {
 	BaseURL    string `mapstructure:"base_url"`
 	Model      string `mapstructure:"model"`
 	FlashModel string `mapstructure:"flash_model"`
+	// TimeoutSec 单次 Chat Completions 的客户端超时（秒）；<=0 时回落 llm.DefaultTimeout（30 分钟）。
+	// 只约束单次 HTTP 请求，不改变任务级硬超时（processHardTimeout，至少 6 小时）。
+	// 非流式请求要等模型生成完才回响应头，所以这个值必须大于最慢一次生成的耗时：
+	// AI 切片（思考模式 + 全量 ASR）线上实测 6.5~8.8 分钟。
+	TimeoutSec int `mapstructure:"timeout_sec"`
 }
 
 // CaptionSegmentConfig 成片字幕断句配置：用 LLM 做语义断行，替代纯规则折行。
@@ -666,6 +671,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val, ok := os.LookupEnv("APP_LLM_FLASH_MODEL"); ok {
 		cfg.LLM.FlashModel = val
+	}
+	if val, ok := os.LookupEnv("APP_LLM_TIMEOUT_SEC"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.LLM.TimeoutSec = n
+		}
 	}
 
 	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_CONCURRENCY"); ok {

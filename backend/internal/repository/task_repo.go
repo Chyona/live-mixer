@@ -41,6 +41,10 @@ type TaskRepository interface {
 	ClaimPendingByType(ctx context.Context, taskType string) (*model.Task, error)
 	// UpdateProgress 更新任务进度（0-100），仅 processing 状态时生效。
 	UpdateProgress(ctx context.Context, id string, progress int16) error
+	// HeartbeatProgress 带版本校验地刷新进度与 updated_at，用于长耗时调用（大模型生成）期间的心跳。
+	// 仅当任务仍为 processing 且 version 未被 RequeueStaleProcessingByType 递增时生效；
+	// 返回 false 表示租约已失效（任务已被回收重排或已结束），调用方应停止后续写入。
+	HeartbeatProgress(ctx context.Context, id string, version int64, progress int16) (bool, error)
 	// MarkCompleted 标记任务成功完成，并写入最终进度与扩展字段。
 	MarkCompleted(ctx context.Context, id string, progress int16, ext string) error
 	// MarkFailed 标记任务失败，写入错误信息与当前进度。
@@ -210,6 +214,29 @@ func (r *taskRepository) UpdateProgress(ctx context.Context, id string, progress
 			"progress":   progress,
 			"updated_at": time.Now(),
 		}).Error
+}
+
+// HeartbeatProgress 带版本校验地刷新进度与 updated_at，兼作长耗时调用的心跳。
+// 版本不匹配（任务已被 RequeueStaleProcessingByType 重排给别的 Worker）时不做任何写入，
+// 避免旧执行的僵尸 goroutine 一边刷新 updated_at 一边把新一轮的进度写回去。
+func (r *taskRepository) HeartbeatProgress(ctx context.Context, id string, version int64, progress int16) (bool, error) {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	result := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ? AND status = ? AND version = ?", id, model.TaskStatusProcessing, version).
+		Updates(map[string]interface{}{
+			"progress":   progress,
+			"updated_at": time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func (r *taskRepository) MarkCompleted(ctx context.Context, id string, progress int16, ext string) error {

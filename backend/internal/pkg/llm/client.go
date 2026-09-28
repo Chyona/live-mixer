@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -16,8 +18,12 @@ const (
 	DefaultBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	// DefaultModel AI 切片默认模型。
 	DefaultModel = "qwen3.7-plus"
-	// DefaultTimeout 单次 Chat Completions 超时。
-	DefaultTimeout = 600 * time.Second
+	// DefaultTimeout 单次 Chat Completions 的超时。
+	// 注意这是「整次生成」的预算：请求非流式，响应头要等模型生成完才返回，所以耗时长等于生成耗时。
+	// AI 切片是思考模式 + clips0 全量 ASR（440~570 句段），线上实测单次 391~526 秒（6.5~8.8 分钟），
+	// 旧的 600 秒会随机踩线（2026-09-28 一键成片 3/10 被自己掐死，报 "awaiting headers"）。
+	// 默认给到 30 分钟；可用 llm.timeout_sec / APP_LLM_TIMEOUT_SEC 调整。
+	DefaultTimeout = 30 * time.Minute
 )
 
 // Config OpenAI 兼容协议 LLM 客户端配置。
@@ -31,8 +37,9 @@ type Config struct {
 
 // Client 兼容 OpenAI Chat Completions 协议的 HTTP 客户端。
 type Client struct {
-	cfg  Config
-	http *http.Client
+	cfg     Config
+	http    *http.Client
+	timeout time.Duration
 }
 
 // NewClient 创建 LLM 客户端；未设置的字段使用默认值。
@@ -51,8 +58,17 @@ func NewClient(cfg Config) *Client {
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: timeout}
+	} else if httpClient.Timeout > 0 {
+		// 自带 HTTPClient 时以它自己的超时为准，错误信息里照实写，避免报出未生效的预算。
+		timeout = httpClient.Timeout
 	}
-	return &Client{cfg: cfg, http: httpClient}
+	cfg.Timeout = timeout
+	return &Client{cfg: cfg, http: httpClient, timeout: timeout}
+}
+
+// Timeout 返回当前客户端生效的单次请求超时。
+func (c *Client) Timeout() time.Duration {
+	return c.timeout
 }
 
 // ChatMessage OpenAI 风格的对话消息。
@@ -136,9 +152,16 @@ func (c *Client) chatCompletions(ctx context.Context, messages []ChatMessage, op
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
+	started := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求 LLM 失败: %w", err)
+		// 把「谁超的时 / 跑了多久 / 预算是多少」写进错误：只写 "Post ...: context deadline exceeded" 时，
+		// 运维分不清是 LLM 客户端预算用尽（本项目默认 30 分钟，可配 llm.timeout_sec），
+		// 还是任务级硬超时（processHardTimeout，至少 6 小时）。
+		// 预算照原样打印（不四舍五入），便于与 llm.timeout_sec 直接对照。
+		return nil, fmt.Errorf("请求 LLM 失败(%s, 耗时 %s, 客户端超时上限 %s): %w",
+			timeoutReason(ctx, err), time.Since(started).Round(time.Second),
+			c.timeout, err)
 	}
 	defer resp.Body.Close()
 
@@ -161,6 +184,18 @@ func (c *Client) chatCompletions(ctx context.Context, messages []ChatMessage, op
 		return nil, fmt.Errorf("LLM 响应无 choices")
 	}
 	return json.RawMessage(raw), nil
+}
+
+// timeoutReason 判定请求失败的性质：调用方 context 到期 / 本客户端超时 / 其它传输失败。
+func timeoutReason(ctx context.Context, err error) string {
+	if ctx.Err() != nil {
+		return "调用方 context 已取消或超时"
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return "LLM 客户端超时"
+	}
+	return "传输失败"
 }
 
 // Chat 调用 /chat/completions，返回助手文本内容。

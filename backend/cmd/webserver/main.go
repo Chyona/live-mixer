@@ -90,6 +90,14 @@ func main() {
 	asrLLM := llm.NewClient(asrLLMConfig)
 	sliceLLM := llm.NewClient(cfg.LLM.LLMClientConfig())
 	chatLLM := llm.NewClient(cfg.LLM.LLMClientConfig())
+	// 单次大模型调用的预算必须大于最慢一次真实生成（AI 切片实测 6.5~8.8 分钟），
+	// 否则请求会被客户端超时掐死（报 "awaiting headers"）。启动即打印，便于线上核对。
+	logger.Info("LLM 客户端已初始化",
+		zap.String("model", cfg.LLM.Model),
+		zap.String("flash_model", cfg.LLM.FlashModelOrDefault()),
+		zap.String("base_url", cfg.LLM.BaseURL),
+		zap.Duration("timeout", cfg.LLM.Timeout()),
+	)
 
 	audioPreparer := service.NewLiveMaterialASRAudioPreparer(
 		downloader,

@@ -625,3 +625,92 @@ func TestTaskRepository_UpdateClipsTarURL(t *testing.T) {
 		t.Errorf("ClipsTarURL = %q, want %q", got.ClipsTarURL, want)
 	}
 }
+
+// TestTaskRepository_HeartbeatProgress 验证带版本校验的心跳：版本匹配才写、租约失效即停。
+func TestTaskRepository_HeartbeatProgress(t *testing.T) {
+	db := setupTaskTestDB(t)
+	repo := NewTaskRepository(db)
+	ctx := context.Background()
+
+	task := &model.Task{
+		Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing,
+		Progress: 40, CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, task); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// 模拟「调大模型期间长时间没有写库」：把 updated_at 回拨 10 分钟。
+	staleAt := time.Now().Add(-10 * time.Minute)
+	if err := db.Model(&model.Task{}).Where("id = ?", task.ID).
+		Update("updated_at", staleAt).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	// 版本匹配：写入成功，updated_at 被刷新且进度保持调用方给的值。
+	ok, err := repo.HeartbeatProgress(ctx, task.ID, task.Version, 40)
+	if err != nil {
+		t.Fatalf("HeartbeatProgress() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("HeartbeatProgress() = false, want true")
+	}
+	got, _ := repo.GetByID(ctx, task.ID)
+	if !got.UpdatedAt.After(staleAt) {
+		t.Errorf("UpdatedAt = %v, 未刷新（回拨值 %v）", got.UpdatedAt, staleAt)
+	}
+	if got.Progress != 40 {
+		t.Errorf("Progress = %d, want 40", got.Progress)
+	}
+	if got.Status != model.TaskStatusProcessing {
+		t.Errorf("Status = %q, want processing", got.Status)
+	}
+
+	// 版本不匹配（例如已被回收重排给别的 Worker）：不写、返回 false。
+	ok, err = repo.HeartbeatProgress(ctx, task.ID, task.Version+1, 90)
+	if err != nil {
+		t.Fatalf("HeartbeatProgress(stale version) error = %v", err)
+	}
+	if ok {
+		t.Error("HeartbeatProgress() with stale version = true, want false")
+	}
+	got, _ = repo.GetByID(ctx, task.ID)
+	if got.Progress != 40 {
+		t.Errorf("Progress = %d, want 40（旧租约不得写回）", got.Progress)
+	}
+
+	// 任务被 RequeueStale 回收重排后（version 递增），旧租约心跳必须彻底失效。
+	if err := db.Model(&model.Task{}).Where("id = ?", task.ID).
+		Update("updated_at", staleAt).Error; err != nil {
+		t.Fatalf("backdate again: %v", err)
+	}
+	if _, err := repo.RequeueStaleProcessingByType(ctx, model.TaskTypeAISlice, time.Minute); err != nil {
+		t.Fatalf("RequeueStaleProcessingByType() error = %v", err)
+	}
+	requeued, _ := repo.GetByID(ctx, task.ID)
+	if requeued.Version == task.Version {
+		t.Fatalf("Version = %d, 回收后应递增", requeued.Version)
+	}
+	ok, err = repo.HeartbeatProgress(ctx, task.ID, task.Version, 40)
+	if err != nil {
+		t.Fatalf("HeartbeatProgress(after requeue) error = %v", err)
+	}
+	if ok {
+		t.Error("回收重排后旧租约心跳仍生效，会把新执行的进度写回去")
+	}
+
+	// 已结束（非 processing）的任务不再接受心跳。
+	running := &model.Task{Type: model.TaskTypeAISlice, Status: model.TaskStatusProcessing, CreatedBy: 1}
+	if err := repo.Create(ctx, running); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := repo.MarkCompleted(ctx, running.ID, 100, "{}"); err != nil {
+		t.Fatalf("MarkCompleted() error = %v", err)
+	}
+	ok, err = repo.HeartbeatProgress(ctx, running.ID, running.Version, 40)
+	if err != nil {
+		t.Fatalf("HeartbeatProgress(completed) error = %v", err)
+	}
+	if ok {
+		t.Error("已完成任务不应接受心跳")
+	}
+}

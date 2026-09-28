@@ -63,6 +63,10 @@ llm:
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   model: "qwen3.7-max"
   flash_model: "qwen3.7-flash"
+  # 单次 Chat Completions 的客户端超时（秒）；环境变量：APP_LLM_TIMEOUT_SEC
+  # 非流式请求，响应头要等模型生成完才返回，所以这必须是「整次生成」的预算：
+  # AI 切片（思考模式 + 全量 ASR）实测单次 6.5~8.8 分钟，给小了会被客户端超时掐死。
+  timeout_sec: 1800
 
 # 成片字幕断句：用 LLM（flash_model）做语义断行，解决"词表枚举不全导致切词"的问题。
 # 默认开启（本节整个不写也是开启）；置 enabled: false 关闭，关闭时字幕行完全由规则折行决定。
