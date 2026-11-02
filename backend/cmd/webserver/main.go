@@ -103,7 +103,7 @@ func main() {
 		downloader,
 		media.NewFFmpegConverter(""),
 		storageClient,
-		"temp",
+		service.ASRTempDirName,
 		logger,
 		media.NewFFprobeProber(""),
 	)
@@ -267,6 +267,27 @@ func main() {
 			}
 			if removed > 0 {
 				logger.Info("已清理过期直播源缓存", zap.Int("removed", removed))
+			}
+		},
+	})
+	sched.Register(scheduler.Job{
+		Name:     "cleanup-asr-temp",
+		Interval: cfg.Web.StagingCleanupInterval(),
+		Run: func(context.Context) {
+			removed, cleanErr := service.CleanupASRTempFiles(service.ASRTempDirName, service.ASRTempCleanupMaxAge)
+			if cleanErr != nil {
+				logger.Warn("清理 ASR 临时文件失败",
+					zap.String("dir", service.ASRTempDirName),
+					zap.Error(cleanErr),
+					zap.Int("removed", removed),
+				)
+				return
+			}
+			if removed > 0 {
+				logger.Info("已清理过期 ASR 临时文件",
+					zap.String("dir", service.ASRTempDirName),
+					zap.Int("removed", removed),
+				)
 			}
 		},
 	})

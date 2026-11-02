@@ -15,6 +15,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./html:/app/html
+      - ./temp:/app/temp
     env_file:
       - .env
     environment:

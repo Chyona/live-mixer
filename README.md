@@ -123,7 +123,7 @@ curl http://localhost:81/openapi/live-mixer/v1/auth/login
 | `capcut-mate` | 剪映草稿服务 | `31001` |
 | `nginx` | 静态资源与反向代理 | `81` |
 
-日志目录：`docker/logs/` · 暂存目录：`docker/html/`
+日志目录：`docker/logs/` · 暂存目录：`docker/html/` · ASR 临时目录：`docker/temp/`（超过 24 小时自动清理）
 
 > 部署到新环境时，请按实际网关与域名调整 `docker-compose.yaml` 中的 `PROXY_*` / `DRAFT_URL`，否则草稿下载或代理可能失败。
 

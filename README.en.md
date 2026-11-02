@@ -123,7 +123,7 @@ curl http://localhost:81/openapi/live-mixer/v1/auth/login
 | `capcut-mate` | CapCut draft service | `31001` |
 | `nginx` | Static assets + reverse proxy | `81` |
 
-Logs: `docker/logs/` · Staging: `docker/html/`
+Logs: `docker/logs/` · Staging: `docker/html/` · ASR temp: `docker/temp/` (auto-cleaned after 24h)
 
 > When deploying to a new network, update `PROXY_*` / `DRAFT_URL` in `docker-compose.yaml` to match your gateway and domain.
 
