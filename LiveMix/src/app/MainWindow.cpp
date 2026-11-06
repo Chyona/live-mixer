@@ -640,6 +640,16 @@ MainWindow::MainWindow(QWidget *parent)
     // 走统一导航入口，初始化标题栏的文档名并同步侧栏选中状态。
     navigateTo(QStringLiteral("dash"));
 
+    // 点击 macOS Dock 图标（或 Windows 托盘图标）时系统只会激活应用；
+    // 若窗口已被隐藏到后台，Qt 不会自动显示它，这里统一恢复。
+    connect(qApp, &QGuiApplication::applicationStateChanged, this,
+            [this](Qt::ApplicationState state) {
+                if (state == Qt::ApplicationActive
+                    && (isMinimized() || !isVisible())) {
+                    showFromTray();
+                }
+            });
+
     auto *newShortcut = new QShortcut(QKeySequence::New, this);
     connect(newShortcut, &QShortcut::activated, this, [this] {
         if ((m_modalOverlay && m_modalOverlay->isOpen())
@@ -812,6 +822,14 @@ void MainWindow::ensureTray()
 
 void MainWindow::showFromTray()
 {
+    if (m_forceQuit) {
+        return;
+    }
+    // show() 只负责让隐藏的窗口重新可见，不会清除最小化状态；
+    // 必须显式去掉 Qt::WindowMinimized，否则从托盘/Dock 恢复时窗口仍留在任务栏。
+    if (isMinimized()) {
+        setWindowState(windowState() & ~Qt::WindowMinimized);
+    }
     show();
     raise();
     activateWindow();
