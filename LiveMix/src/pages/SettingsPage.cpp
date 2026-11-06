@@ -441,9 +441,9 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     aiLayout->addWidget(promptField, 0, Qt::AlignLeft);
     aiLayout->addSpacing(16);
 
-    // 选片时长由提示词控制（内置默认提示词要求成片 3–8 分钟），不再单独设置区间。
+    // 选片时长由提示词控制，不再单独设置区间。
     auto *durationNote = Ui::label(
-        QStringLiteral("成片时长由所选提示词控制；内置默认提示词要求成片 3–8 分钟。"),
+        QStringLiteral("成片时长由所选提示词控制，不同提示词对成片时长的要求不同。"),
         11, 400, Theme::Text3, aiPane);
     durationNote->setWordWrap(true);
     auto *durationField = makeField(QStringLiteral("成片时长"), durationNote, QString(),

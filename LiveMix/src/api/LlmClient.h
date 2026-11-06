@@ -18,7 +18,7 @@ struct LlmSelectionRequest
 {
     QString baseUrl;       // 例如 https://api.jcaigc.cn/v1
     QString apiKey;
-    QString systemPrompt;  // 选片提示词（默认提示词由后端导入）
+    QString systemPrompt;  // 选片提示词（内置提示词由后端导入）
     QVector<AsrUtterance> segments; // 本段待分析 ASR 句段，索引从 0 开始
     bool strictJson = false; // 解析失败重试时使用更严格的指令
 };

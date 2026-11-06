@@ -1,8 +1,8 @@
 #pragma once
 
-// 文件作用：内置默认提示词。
+// 文件作用：内置财经类直播提示词。
 // 内容从 live-mixer 后端 internal/seeder/llm_system_prompt_seeder.go 原样导入，
-// 名称「默认提示词」、备注「适用于金融行业」，作为 LLM 选片的系统提示词。
+// 名称「财经类直播」、备注「适用于金融行业」，作为 LLM 选片的系统提示词。
 
 #include <QString>
 

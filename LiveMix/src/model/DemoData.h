@@ -25,8 +25,9 @@ struct PromptEntry {
 
 inline QVector<PromptEntry> prompts()
 {
-    // 默认提示词从 live-mixer 后端原样导入，作为 LLM 选片的系统提示词。
-    // 服装切片场景额外内置 clipflow-ai 的 3 个代表性历史版本，均为只读内置项。
+    // 财经类直播提示词从 live-mixer 后端原样导入，作为 LLM 选片的系统提示词。
+    // 服装切片场景额外内置 clipflow-ai 的 3 个代表性历史版本（其中「默认提示词」
+    // 为结构化合规模板），均为只读内置项。
     const QString defaultContent = DefaultPrompts::content();
     const QString demoContent = QStringLiteral(
         "你是一名直播切片专家。请从直播转写稿中筛选高价值片段，输出每条的起止时间与一句话摘要。\n"
@@ -45,7 +46,7 @@ inline QVector<PromptEntry> prompts()
 
     QVector<PromptEntry> entries;
     entries.reserve(garment.size() + 3);
-    entries.append({QStringLiteral("默认提示词"), QStringLiteral("适用于金融行业"),
+    entries.append({QStringLiteral("财经类直播"), QStringLiteral("适用于金融行业"),
                     QStringLiteral("金融/财经直播选片系统提示词，内置且不可编辑……"),
                     QStringLiteral("2026-08-26 14:44:41"), 0, true, defaultContent});
     for (const DefaultPrompts::GarmentPromptVersion &version : garment) {

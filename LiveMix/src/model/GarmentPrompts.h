@@ -171,7 +171,7 @@ inline QVector<GarmentPromptVersion> garmentVersions()
 - STEP 1 违禁句段)GARMENT")},
 
         // 来源：clipflow-ai@0ecf7d45（2026-05-05）
-        {QStringLiteral("服装切片 · 结构化合规"),
+        {QStringLiteral("默认提示词"),
          QStringLiteral("服装切片历史版本 · 2026-05-05"),
          QStringLiteral("结构化模板、合规违禁词预筛与 14 种爆款开头。"),
          QStringLiteral("2026-05-05 22:45:02"),

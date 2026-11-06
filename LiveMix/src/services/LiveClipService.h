@@ -22,7 +22,7 @@ struct LiveClipRequest
     QString databasePath;
     QString apiKey;
     QString gatewayBaseUrl; // OpenAI 兼容网关，同时用于 ASR 与 LLM
-    QString promptText;     // 选片系统提示词（默认提示词由后端导入）
+    QString promptText;     // 选片系统提示词（内置提示词由后端导入）
     QString promptLabel;    // 过程页展示的提示词名称
     QString cacheDir;
 };
