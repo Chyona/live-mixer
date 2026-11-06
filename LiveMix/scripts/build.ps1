@@ -19,7 +19,7 @@
     并行编译线程数，默认交给 CMake 决定。
 
 .PARAMETER QtPath
-    Qt 6 安装目录，例如 C:\Qt\6.8.0\msvc2022_64。省略时会尝试自动查找。
+    Qt 6 安装目录，例如 C:\Qt\6.12.0\msvc2022_64。省略时会尝试自动查找。
 
 .PARAMETER FFmpegDir
     ffmpeg/ffprobe 所在目录。指定后会把两个可执行文件复制到应用输出目录。
@@ -37,7 +37,7 @@
     .\scripts\build.ps1 -Configuration Release -Run
 
 .EXAMPLE
-    .\scripts\build.ps1 -Configuration Release -Clean -QtPath C:\Qt\6.8.0\msvc2022_64
+    .\scripts\build.ps1 -Configuration Release -Clean -QtPath C:\Qt\6.12.0\msvc2022_64
 #>
 [CmdletBinding()]
 param(
@@ -216,7 +216,7 @@ try {
 
     & $cmake @configureArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "CMake 配置失败。请确认 Qt 6.5+ 已安装，必要时使用 -QtPath 指定 Qt 目录。"
+        throw "CMake 配置失败。请确认 Qt 6.12.0 已安装，必要时使用 -QtPath 指定 Qt 目录。"
     }
 
     Write-Step "编译 LiveMix Studio ($Configuration)"

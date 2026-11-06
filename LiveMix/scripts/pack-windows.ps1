@@ -40,7 +40,7 @@
     .\scripts\pack-windows.ps1
 
 .EXAMPLE
-    .\scripts\pack-windows.ps1 -Clean -QtPath C:\Qt\6.8.3\msvc2022_64
+    .\scripts\pack-windows.ps1 -Clean -QtPath C:\Qt\6.12.0\msvc2022_64
 #>
 [CmdletBinding()]
 param(

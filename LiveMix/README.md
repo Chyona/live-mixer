@@ -28,7 +28,7 @@ LiveMix Studio 是直播切片桌面客户端。当前版本以 Qt 6 + C++ Widge
 
 ## 技术栈
 
-- Qt 6.5+ / C++17
+- Qt 6.12.0 / C++17（本地开发与 CI 打包统一使用该版本；macOS 目标系统下限为 14.4）
 - Qt Core、Gui、Widgets、Svg、Sql、Network、Multimedia / MultimediaWidgets
 - SQLite（Qt SQLite 驱动）
 - ffmpeg / ffprobe（命令行子进程）
@@ -250,7 +250,7 @@ scripts\build.bat -Configuration Release -Run
 `C:\Qt\<version>\msvc*_64`、`QT_ROOT`、`QTDIR` 查找 Qt，也可以显式指定：
 
 ```bat
-scripts\build.bat -QtPath C:\Qt\6.8.0\msvc2022_64
+scripts\build.bat -QtPath C:\Qt\6.12.0\msvc2022_64
 ```
 
 ### 打包 macOS DMG
@@ -312,7 +312,7 @@ DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmp
 
 默认产物为 `dist\LiveMixStudio-<version>-win64-setup.exe`，同时生成 `.sha256` 校验文件。
 安装包内包含 `LiveMixStudio.exe`、Qt 运行库以及 `ffmpeg.exe` / `ffprobe.exe`。
-需要 Qt 6.5+ 的 MSVC 套件与 NSIS 3（CI 会按需安装）。
+需要 Qt 6.12.0 的 MSVC 套件与 NSIS 3（CI 会按需安装）。
 
 ### 持续集成
 
@@ -344,11 +344,11 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
 
 **Windows**
 
-以 Qt 6.5+ 的 MSVC 套件为例：
+以 Qt 6.12.0 的 MSVC 套件为例：
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\msvc2022_64
+  -DCMAKE_PREFIX_PATH=C:\Qt\6.12.0\msvc2022_64
 cmake --build build --config Release
 .\build\Release\LiveMixStudio.exe
 ```

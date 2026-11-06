@@ -249,7 +249,7 @@ if [ "${#EXTRA_CMAKE_ARGS[@]}" -gt 0 ]; then
 fi
 
 if ! cmake "${configure_args[@]}"; then
-    printf '\n配置失败。请确认已安装 Qt 6.5+；Homebrew 用户可尝试 --qt "$(brew --prefix qt 2>/dev/null || printf /opt/homebrew/opt/qt)"。\n' >&2
+    printf '\n配置失败。请确认已安装 Qt 6.12.0；Homebrew 用户可尝试 --qt "$(brew --prefix qt 2>/dev/null || printf /opt/homebrew/opt/qt)"。\n' >&2
     exit 1
 fi
 

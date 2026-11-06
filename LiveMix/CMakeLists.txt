@@ -72,7 +72,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Svg Sql Network
+# 本地开发与 CI 打包统一使用 Qt 6.12.0，避免构建产物行为不一致。
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Svg Sql Network
                                         Multimedia MultimediaWidgets)
 
 qt_standard_project_setup()
