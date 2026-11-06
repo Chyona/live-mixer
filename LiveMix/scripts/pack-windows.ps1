@@ -70,6 +70,47 @@ function Resolve-RepoPath {
     return [System.IO.Path]::GetFullPath((Join-Path $repoRoot $Path))
 }
 
+# 用 Process 直接运行并读取退出码，不要写成
+#   & $exe -version | Select-Object -First 1
+# 后者会让 Select-Object 提前终止管道并杀掉 native 进程，$LASTEXITCODE 可能变成
+# -1 或 $null（在 CI 上尤其明显），把正常的二进制误判为“无法运行”。
+function Get-ToolVersion {
+    param([string]$Exe, [string]$Label)
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Exe
+    $startInfo.Arguments = '-version'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+        $exitCode = $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
+
+    if ($exitCode -ne 0) {
+        $detail = (@($stdout, $stderr) -join "`n").Trim()
+        $hint = ''
+        if ($exitCode -eq -1073741515) {
+            $hint = '（0xC0000135：缺少运行库 DLL，二进制可能不是完全静态链接）'
+        } elseif ($exitCode -eq -1073741790) {
+            $hint = '（0xC0000022：拒绝访问，可能被杀毒软件拦截）'
+        }
+        throw "无法运行 $Label（退出码 $exitCode）$hint`n$detail"
+    }
+
+    return ($stdout -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+}
+
 # --- resolve ffmpeg ---------------------------------------------------------
 
 if ([string]::IsNullOrWhiteSpace($FFmpegDir) -and
@@ -218,10 +259,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $stageDir 'vcruntime140.dll'))) {
     Write-Warning '未复制 vcruntime140.dll，目标机器可能需要安装 VC++ 运行库。'
 }
 
-$ffmpegVersion = & (Join-Path $stageDir 'ffmpeg.exe') -version 2>$null | Select-Object -First 1
-if ($LASTEXITCODE -ne 0) {
-    throw '安装包中的 ffmpeg.exe 无法运行。'
-}
+$ffmpegVersion = Get-ToolVersion -Exe (Join-Path $stageDir 'ffmpeg.exe') -Label '安装包中的 ffmpeg.exe'
 
 # --- build NSIS installer ---------------------------------------------------
 

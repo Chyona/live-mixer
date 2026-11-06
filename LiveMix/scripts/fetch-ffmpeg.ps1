@@ -105,6 +105,47 @@ function Assert-Checksum {
     }
 }
 
+# 用 Process 直接运行并读取退出码，不要写成
+#   & $exe -version | Select-Object -First 1
+# 后者会让 Select-Object 提前终止管道并杀掉 native 进程，$LASTEXITCODE 可能变成
+# -1 或 $null（在 CI 上尤其明显），把正常的二进制误判为“无法运行”。
+function Get-ToolVersion {
+    param([string]$Exe, [string]$Label)
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Exe
+    $startInfo.Arguments = '-version'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+        $exitCode = $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
+
+    if ($exitCode -ne 0) {
+        $detail = (@($stdout, $stderr) -join "`n").Trim()
+        $hint = ''
+        if ($exitCode -eq -1073741515) {
+            $hint = '（0xC0000135：缺少运行库 DLL，二进制可能不是完全静态链接）'
+        } elseif ($exitCode -eq -1073741790) {
+            $hint = '（0xC0000022：拒绝访问，可能被杀毒软件拦截）'
+        }
+        throw "无法运行 $Label（退出码 $exitCode）$hint`n$detail"
+    }
+
+    return ($stdout -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+}
+
 $missing = @($assets | Where-Object {
     -not (Test-Path -LiteralPath (Join-Path $binDir $_.Output))
 })
@@ -163,10 +204,8 @@ subprocesses and are not linked into LiveMix Studio.
 "@
     Set-Content -LiteralPath (Join-Path $binDir 'ffmpeg-SOURCE.txt') -Value $sourceNote -Encoding UTF8
 
-    $ffmpegVersion = & (Join-Path $binDir 'ffmpeg.exe') -version 2>$null | Select-Object -First 1
-    if ($LASTEXITCODE -ne 0) {
-        throw '无法运行 ffmpeg.exe。'
-    }
+    $ffmpegVersion = Get-ToolVersion -Exe (Join-Path $binDir 'ffmpeg.exe') -Label 'ffmpeg.exe'
+    [void](Get-ToolVersion -Exe (Join-Path $binDir 'ffprobe.exe') -Label 'ffprobe.exe')
 
     Write-Step 'FFmpeg 准备完成'
     Write-Host "  输出目录: $binDir"
