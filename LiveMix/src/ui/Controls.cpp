@@ -1458,11 +1458,27 @@ FormField::FormField(const QString &labelText, QWidget *content, const QString &
     }
 
     if (!hint.isEmpty()) {
-        auto *hintLabel = Ui::label(hint, 11, 400, Theme::Text3, this);
-        hintLabel->setWordWrap(true);
-        hintLabel->setContentsMargins(0, 7, 0, 0);
-        root->addWidget(hintLabel);
+        m_hint = Ui::label(hint, 11, 400, Theme::Text3, this);
+        m_hint->setWordWrap(true);
+        m_hint->setContentsMargins(0, 7, 0, 0);
+        root->addWidget(m_hint);
     }
+}
+
+void FormField::setHintRichText(bool enabled)
+{
+    if (!m_hint) {
+        return;
+    }
+    // Ui::label 默认让标签对鼠标透明，富文本链接需要重新接收鼠标事件。
+    m_hint->setAttribute(Qt::WA_TransparentForMouseEvents, !enabled);
+    m_hint->setTextFormat(enabled ? Qt::RichText : Qt::PlainText);
+    m_hint->setTextInteractionFlags(enabled ? Qt::TextBrowserInteraction
+                                            : Qt::NoTextInteraction);
+    m_hint->setOpenExternalLinks(enabled);
+    // 富文本换行后高度会变化，需要让父级布局重新计算尺寸。
+    m_hint->updateGeometry();
+    updateGeometry();
 }
 
 // -----------------------------------------------------------------------------

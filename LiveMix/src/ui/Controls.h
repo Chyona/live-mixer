@@ -387,9 +387,12 @@ public:
               bool required = false, QWidget *parent = nullptr);
 
     QWidget *contentWidget() const { return m_content; }
+    // 提示语按富文本渲染，链接可通过系统默认浏览器打开。
+    void setHintRichText(bool enabled);
 
 private:
     QWidget *m_content = nullptr;
+    QLabel *m_hint = nullptr;
 };
 
 class SelectBox : public QComboBox

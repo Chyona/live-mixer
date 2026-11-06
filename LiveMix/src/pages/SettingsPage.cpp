@@ -302,10 +302,16 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     keyInput->setText(config.service.apiKey);
     auto *keyField = makeField(
         QStringLiteral("API 密钥"), keyInput,
-        QStringLiteral("密钥仅保存在本机，用于 LLM 网关、豆包 ASR 与剪映小助手上传；"
-                       "未配置前一键成片不可用。"),
+        QStringLiteral("密钥仅存本机，用于 LLM 网关、豆包 ASR 及剪映小助手；"
+                       "未配置则「一键成片」不可用，<br>"
+                       "前往：<a href=\"https://jcaigc.cn\" "
+                       "style=\"color:%1;text-decoration:none;\">"
+                       "https://jcaigc.cn</a> 获取 API Key")
+            .arg(Theme::Primary.name()),
         true, servicePane);
-    serviceLayout->addWidget(keyField, 0, Qt::AlignLeft);
+    keyField->setHintRichText(true);
+    // 不使用 AlignLeft：否则布局按单行 sizeHint 分配高度，换行后的提示会被裁掉。
+    serviceLayout->addWidget(keyField, 0);
     serviceLayout->addSpacing(16);
 
     auto *testButton = new Button(QStringLiteral("测试连接并保存"), Button::Primary,
