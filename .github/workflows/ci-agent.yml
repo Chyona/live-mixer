@@ -1,6 +1,7 @@
 name: Build Desktop Installers
 
 # 仅在推送 v* tag 时触发；并且只有 LiveMix/ 目录相对上一个 v* tag 有变更时才打包。
+# 打包成功后会把 DMG / 安装包发布到该 tag 对应的 GitHub Release，供直接下载。
 on:
   push:
     tags:
@@ -162,3 +163,44 @@ jobs:
             LiveMix/dist/*-setup.exe
             LiveMix/dist/*.sha256
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [changes, macos, windows]
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载安装包
+        uses: actions/download-artifact@v4
+        with:
+          pattern: LiveMixStudio-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: 发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          shopt -s nullglob
+          assets=(*.dmg *.dmg.sha256 *-setup.exe *-setup.exe.sha256)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "错误: 未找到可发布的安装包" >&2
+            ls -la
+            exit 1
+          fi
+
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag 已存在，覆盖上传安装包"
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "LiveMix Studio $tag" \
+              --generate-notes
+          fi
+          echo "已发布 ${#assets[@]} 个文件到 Release $tag"
