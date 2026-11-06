@@ -130,6 +130,12 @@ jobs:
           arch: win64_msvc2022_64
           modules: qtmultimedia
           cache: true
+          # aqtinstall 3.3.0 不认识 Qt 6.11+ 在 Windows 上改用的仓库结构：
+          # 现在的目录是 qt6_6120/qt6_6120_msvc2022_64/，它会去请求
+          # qt6_6120/qt6_6120/Updates.xml，直接报
+          # "Failed to locate XML data for Qt version '6.12.0'"。
+          # 固定到包含修复（miurahr/aqtinstall#1000）的 master 提交。
+          aqtsource: 'https://github.com/miurahr/aqtinstall/archive/5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7.tar.gz'
 
       - name: 缓存 FFmpeg
         uses: actions/cache@v4
