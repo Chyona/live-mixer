@@ -934,7 +934,6 @@ Sidebar::Sidebar(QWidget *parent)
 
     const NavSpec secondarySpecs[] = {
         {"settings", Icons::Glyph::Settings, "设置", ""},
-        {"spec", Icons::Glyph::Spec, "设计说明", ""},
     };
     for (const auto &spec : secondarySpecs) {
         auto *item = new NavItem(spec.glyph, QString::fromUtf8(spec.text),
