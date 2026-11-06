@@ -1,0 +1,58 @@
+# Prerequisites
+*.d
+
+# Build output
+build/
+build-*/
+cmake-build-*/
+dist/
+
+# Runtime logs (fallback location next to the executable)
+logs/
+
+# Build-time third-party binaries (fetched by scripts/fetch-ffmpeg.*)
+third_party/ffmpeg/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.xcodeproj/
+*.xcworkspace/
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
