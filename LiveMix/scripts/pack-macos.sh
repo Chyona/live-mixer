@@ -276,8 +276,15 @@ ditto "$APP_PATH" "$STAGED_APP"
 
 info "部署 Qt 运行库和插件"
 DEPLOY_LOG="$LOG_DIR/macdeployqt.log"
-if ! macdeployqt "$STAGED_APP" -always-overwrite -no-codesign -verbose=1 \
-        >"$DEPLOY_LOG" 2>&1; then
+# Qt 6.11 起 macdeployqt 默认对应用做 ad-hoc 签名，并提供 -no-codesign；
+# 更早的版本（如 CI 使用的 6.8）本身不签名，且会把该参数当作未知参数直接报错。
+# 最终签名统一由下面的 codesign 步骤完成，因此仅当工具支持时才传入该参数。
+MACDEPLOYQT_USAGE="$(macdeployqt 2>&1 || true)"
+deploy_args=("$STAGED_APP" -always-overwrite -verbose=1)
+case "$MACDEPLOYQT_USAGE" in
+    *-no-codesign*) deploy_args+=(-no-codesign) ;;
+esac
+if ! macdeployqt "${deploy_args[@]}" >"$DEPLOY_LOG" 2>&1; then
     cat "$DEPLOY_LOG" >&2
     fail "macdeployqt 部署失败。"
 fi
