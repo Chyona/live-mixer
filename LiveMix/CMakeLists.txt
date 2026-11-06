@@ -1,10 +1,71 @@
 cmake_minimum_required(VERSION 3.21)
 
+# 版本号来源（优先级从高到低）:
+#   1. -DLIVEMIX_APP_VERSION=x.y.z —— CI 从推送的 tag 提取后传入（如 v1.1.0 -> 1.1.0）
+#   2. HEAD 上恰好存在的版本 tag（本地在 tag 上直接构建时）
+#   3. 1.0.0
+# 安装包名、Info.plist、Windows 安装器元数据和应用内显示都由此统一派生。
+set(LIVEMIX_APP_VERSION "" CACHE STRING
+    "应用版本号覆盖值，格式如 1.2.3（默认取 HEAD 上的版本 tag，否则 1.0.0）")
+
+# 去掉可选的 v 前缀，校验为 1~4 段数字；无效时返回空字符串。
+function(_livemix_normalize_version INPUT OUTPUT)
+    string(REGEX REPLACE "^[vV]" "" _version "${INPUT}")
+    if(NOT _version MATCHES "^[0-9]+(\\.[0-9]+)*$")
+        set(${OUTPUT} "" PARENT_SCOPE)
+        return()
+    endif()
+    string(REPLACE "." ";" _parts "${_version}")
+    list(LENGTH _parts _count)
+    if(_count GREATER 4)
+        set(${OUTPUT} "" PARENT_SCOPE)
+        return()
+    endif()
+    set(${OUTPUT} "${_version}" PARENT_SCOPE)
+endfunction()
+
+set(_livemix_version "")
+set(_livemix_git_result 1)
+set(_livemix_git_tag "")
+if(LIVEMIX_APP_VERSION)
+    _livemix_normalize_version("${LIVEMIX_APP_VERSION}" _livemix_version)
+    if(NOT _livemix_version)
+        message(FATAL_ERROR
+            "LIVEMIX_APP_VERSION='${LIVEMIX_APP_VERSION}' 不是有效的数字版本号。"
+            "请使用 1.2.3 或 1.2.3.4 这样的格式（tag 的 v 前缀可以省略）。")
+    endif()
+    message(STATUS "使用传入的版本号: ${_livemix_version}")
+else()
+    find_program(LIVEMIX_GIT_EXECUTABLE git)
+    if(LIVEMIX_GIT_EXECUTABLE)
+        execute_process(
+            COMMAND "${LIVEMIX_GIT_EXECUTABLE}" describe --tags --exact-match
+                    --match "v[0-9]*" --match "[0-9]*"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            OUTPUT_VARIABLE _livemix_git_tag
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _livemix_git_result
+            ERROR_QUIET)
+    endif()
+    if(_livemix_git_result EQUAL 0)
+        _livemix_normalize_version("${_livemix_git_tag}" _livemix_version)
+    endif()
+    if(_livemix_version)
+        message(STATUS "使用 git tag 版本号: ${_livemix_version}")
+    else()
+        set(_livemix_version "1.0.0")
+        message(STATUS "未找到可用的版本 tag，回退到版本号: ${_livemix_version}")
+    endif()
+endif()
+
 project(LiveMixStudio
-    VERSION 1.0.0
+    VERSION ${_livemix_version}
     DESCRIPTION "LiveMix Studio desktop client"
     LANGUAGES CXX
 )
+
+# 供打包脚本读取最终解析出的版本号（Windows 安装器用它命名和填写元数据）。
+file(WRITE "${CMAKE_BINARY_DIR}/livemix-version.txt" "${PROJECT_VERSION}\n")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

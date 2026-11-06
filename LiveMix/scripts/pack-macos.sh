@@ -26,6 +26,7 @@ FFMPEG_DIR="${LIVEMIX_FFMPEG_DIR:-}"
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 EXTRA_BUILD_ARGS=()
 VOLUME_NAME="LiveMix Studio"
+APP_VERSION_OVERRIDE=""
 
 usage() {
     cat <<'EOF'
@@ -46,6 +47,7 @@ LiveMix Studio DMG 打包脚本（macOS）
   --qt PATH              指定 Qt 6 安装前缀
   --ffmpeg-dir DIR       ffmpeg/ffprobe 所在目录
                          （默认: third_party/ffmpeg/macos-<arch>/bin 或 LIVEMIX_FFMPEG_DIR）
+  --version X.Y.Z        覆盖应用版本号（默认取构建时的版本 tag，否则 1.0.0）
   --build-dir DIR        构建目录（默认: build-dmg）
   --output DIR           DMG 输出目录（默认: dist）
   --sign IDENTITY        codesign 签名身份；默认使用 ad-hoc 临时签名
@@ -102,6 +104,14 @@ while [ "$#" -gt 0 ]; do
         --ffmpeg-dir=*)
             FFMPEG_DIR="${arg#*=}"
             ;;
+        --version)
+            [ "$#" -ge 2 ] || fail "--version 需要一个版本号"
+            APP_VERSION_OVERRIDE="$2"
+            shift
+            ;;
+        --version=*)
+            APP_VERSION_OVERRIDE="${arg#*=}"
+            ;;
         --build-dir)
             [ "$#" -ge 2 ] || fail "--build-dir 需要一个路径"
             BUILD_DIR="$2"
@@ -155,6 +165,13 @@ if [ -n "$JOBS" ]; then
         ''|*[!0-9]*) fail "--jobs 必须是正整数" ;;
     esac
     [ "$JOBS" -gt 0 ] || fail "--jobs 必须是正整数"
+fi
+
+if [ -n "$APP_VERSION_OVERRIDE" ]; then
+    APP_VERSION_OVERRIDE="${APP_VERSION_OVERRIDE#v}"
+    [[ "$APP_VERSION_OVERRIDE" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]] \
+        || fail "--version 必须是数字版本号，如 1.2.3（当前: ${APP_VERSION_OVERRIDE}）"
+    EXTRA_BUILD_ARGS+=("-DLIVEMIX_APP_VERSION=$APP_VERSION_OVERRIDE")
 fi
 
 [ "$(uname -s)" = "Darwin" ] || fail "DMG 打包仅支持 macOS。"
@@ -241,6 +258,15 @@ if [ -f "$INFO_PLIST" ]; then
     APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST" 2>/dev/null || true)"
 fi
 [ -n "$APP_VERSION" ] || APP_VERSION="1.0.0"
+
+if [ -n "$APP_VERSION_OVERRIDE" ] && [ "$APP_VERSION" != "$APP_VERSION_OVERRIDE" ]; then
+    if [ "$SKIP_BUILD" -eq 1 ]; then
+        printf '警告: --skip-build 无法更改已编译应用的版本，继续使用 %s（忽略 --version %s）。\n' \
+            "$APP_VERSION" "$APP_VERSION_OVERRIDE" >&2
+    else
+        fail "构建产物版本为 ${APP_VERSION}，与 --version ${APP_VERSION_OVERRIDE} 不一致。"
+    fi
+fi
 
 ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/LiveMixStudio" 2>/dev/null || true)"
 if [ -z "$ARCHS" ]; then

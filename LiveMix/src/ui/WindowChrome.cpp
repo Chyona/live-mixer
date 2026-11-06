@@ -965,7 +965,7 @@ Sidebar::Sidebar(QWidget *parent)
     connectedLayout->addWidget(m_databaseDot);
     connectedLayout->addWidget(m_databaseLabel);
     connectedLayout->addStretch(1);
-    auto *version = Ui::label(QStringLiteral("v1.0.0"), 11, 400, Theme::Text3, foot);
+    auto *version = Ui::label(QStringLiteral("v" LIVEMIX_VERSION), 11, 400, Theme::Text3, foot);
     version->setContentsMargins(2, 3, 2, 3);
     footLayout->addWidget(connected);
     footLayout->addWidget(version);

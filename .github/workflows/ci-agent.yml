@@ -91,6 +91,7 @@ jobs:
       - name: 编译并生成 DMG
         run: |
           ./scripts/pack-macos.sh --clean \
+            --version "${GITHUB_REF_NAME#v}" \
             --qt "$QT_ROOT_DIR" \
             --ffmpeg-dir "third_party/ffmpeg/macos-${{ matrix.arch }}/bin"
 
@@ -148,7 +149,10 @@ jobs:
 
       - name: 编译并生成安装包
         shell: pwsh
-        run: ./scripts/pack-windows.ps1 -Configuration Release -BuildDir build -QtPath "$env:QT_ROOT_DIR" -Clean
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^[vV]', ''
+          ./scripts/pack-windows.ps1 -Configuration Release -BuildDir build `
+            -QtPath "$env:QT_ROOT_DIR" -Version $version -Clean
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4

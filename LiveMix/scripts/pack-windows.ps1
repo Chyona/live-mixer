@@ -23,6 +23,10 @@
 .PARAMETER OutputDir
     安装包输出目录，默认 dist。
 
+.PARAMETER Version
+    覆盖应用版本号（如 1.2.3），会写入安装包文件名和安装器元数据。
+    省略时使用构建目录中 CMake 解析出的版本（生产 tag 或 1.0.0）。
+
 .PARAMETER Clean
     编译前清理构建目录。
 
@@ -47,6 +51,7 @@ param(
     [string]$QtPath = '',
     [string]$FFmpegDir = '',
     [string]$OutputDir = 'dist',
+    [string]$Version = '',
     [switch]$Clean,
     [switch]$SkipBuild,
     [int]$Jobs = 0
@@ -55,6 +60,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+$Version = $Version.Trim()
+if ($Version) {
+    $Version = $Version -replace '^[vV]', ''
+    if ($Version -notmatch '^[0-9]+(\.[0-9]+){0,3}$') {
+        throw "无效的版本号：${Version}（应形如 1.2.3）。"
+    }
+}
 
 function Write-Step {
     param([string]$Message)
@@ -147,6 +160,9 @@ if (-not $SkipBuild) {
     }
     if ($Jobs -gt 0) {
         $buildArgs.Jobs = $Jobs
+    }
+    if ($Version) {
+        $buildArgs.ExtraCMakeArgs = @("-DLIVEMIX_APP_VERSION=$Version")
     }
 
     & (Join-Path $PSScriptRoot 'build.ps1') @buildArgs
@@ -287,10 +303,22 @@ if (-not $makensis) {
     throw '未找到 makensis.exe。请先安装 NSIS（choco install nsis）。'
 }
 
-$cmakeText = Get-Content -LiteralPath (Join-Path $repoRoot 'CMakeLists.txt') -Raw
-$version = '1.0.0'
-if ($cmakeText -match 'project\s*\(\s*LiveMixStudio\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)') {
-    $version = $Matches[1]
+$versionFile = Join-Path $buildPath 'livemix-version.txt'
+$builtVersion = ''
+if (Test-Path -LiteralPath $versionFile) {
+    $builtVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+}
+
+if ($Version) {
+    if ($builtVersion -and $builtVersion -ne $Version) {
+        throw "构建产物版本为 ${builtVersion}，与 -Version ${Version} 不一致。"
+    }
+    $version = $Version
+} elseif ($builtVersion) {
+    $version = $builtVersion
+} else {
+    Write-Warning "未找到构建版本信息（${versionFile}），回退到 1.0.0；建议重新编译。"
+    $version = '1.0.0'
 }
 $versionParts = @($version.Split('.'))
 while ($versionParts.Count -lt 4) {
