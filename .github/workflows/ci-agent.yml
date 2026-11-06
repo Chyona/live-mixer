@@ -1,0 +1,160 @@
+name: Build Desktop Installers
+
+# 仅在推送 v* tag 时触发；并且只有 LiveMix/ 目录相对上一个 v* tag 有变更时才打包。
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: live-mix-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: '6.8.3'
+  PROJECT_DIR: LiveMix
+
+jobs:
+  changes:
+    name: Detect LiveMix Changes
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - name: 准备代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检测 LiveMix 是否有变更
+        id: filter
+        run: |
+          CURRENT="${GITHUB_REF_NAME}"
+          PREV="$(git tag -l 'v*' --sort=-v:refname | awk -v cur="$CURRENT" '$0 != cur { print; exit }')"
+
+          if [ -z "$PREV" ]; then
+            echo "无上一版本 tag，将打包 ${PROJECT_DIR}"
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "对比范围: $PREV -> $CURRENT (${PROJECT_DIR}/)"
+          if git diff --quiet "$PREV" "$CURRENT" -- "$PROJECT_DIR"; then
+            echo "${PROJECT_DIR}/ 无变更，跳过打包"
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "${PROJECT_DIR}/ 有变更，需要打包"
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  macos:
+    name: macOS ${{ matrix.arch }} DMG
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+    defaults:
+      run:
+        working-directory: LiveMix
+    steps:
+      - name: 准备代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: clang_64
+          modules: qtmultimedia
+          cache: true
+
+      - name: 缓存 FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: LiveMix/third_party/ffmpeg
+          key: ffmpeg-static-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('LiveMix/scripts/fetch-ffmpeg.sh') }}
+
+      - name: 下载 FFmpeg
+        run: ./scripts/fetch-ffmpeg.sh --output "third_party/ffmpeg/macos-${{ matrix.arch }}"
+
+      - name: 编译并生成 DMG
+        run: |
+          ./scripts/pack-macos.sh --clean \
+            --qt "$QT_ROOT_DIR" \
+            --ffmpeg-dir "third_party/ffmpeg/macos-${{ matrix.arch }}/bin"
+
+      - name: 上传 DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveMixStudio-macos-${{ matrix.arch }}
+          path: |
+            LiveMix/dist/*.dmg
+            LiveMix/dist/*.dmg.sha256
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 Installer
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: LiveMix
+    steps:
+      - name: 准备代码
+        uses: actions/checkout@v4
+
+      - name: 配置 MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: 安装 Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: qtmultimedia
+          cache: true
+
+      - name: 缓存 FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: LiveMix/third_party/ffmpeg
+          key: ffmpeg-static-${{ runner.os }}-x64-${{ hashFiles('LiveMix/scripts/fetch-ffmpeg.ps1') }}
+
+      - name: 下载 FFmpeg
+        shell: pwsh
+        run: ./scripts/fetch-ffmpeg.ps1
+
+      - name: 安装 NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
+            choco install nsis --no-progress -y
+          }
+
+      - name: 编译并生成安装包
+        shell: pwsh
+        run: ./scripts/pack-windows.ps1 -Configuration Release -BuildDir build -QtPath "$env:QT_ROOT_DIR" -Clean
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveMixStudio-windows-x64
+          path: |
+            LiveMix/dist/*-setup.exe
+            LiveMix/dist/*.sha256
+          if-no-files-found: error
