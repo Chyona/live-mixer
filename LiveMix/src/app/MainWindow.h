@@ -82,6 +82,7 @@ private:
     void retryTask(qint64 taskId);
     void deleteSource(qint64 sourceId);
     void applySettings();
+    void enforceCacheLimit();
     void ensureTray();
     void showFromTray();
     void quitFromTray();

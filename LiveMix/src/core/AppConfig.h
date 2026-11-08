@@ -15,7 +15,7 @@ struct StorageConfig
     QString exportDir;
     QString draftDir;
     QString cacheDir;
-    int cacheLimitGb = 10;
+    int cacheLimitGb = 100;
     bool autoCleanCache = true;
 };
 

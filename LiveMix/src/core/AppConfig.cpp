@@ -11,7 +11,10 @@
 
 namespace {
 
-constexpr int kConfigVersion = 1;
+constexpr int kConfigVersion = 2;
+
+// 旧版本的默认缓存上限；升级到 v2 时把仍为该值的配置迁移到新的 100GB 默认。
+constexpr int kLegacyCacheLimitGb = 10;
 
 QString moviesDirectory()
 {
@@ -229,6 +232,8 @@ bool ConfigStore::load(QString *error)
     }
 
     const QJsonObject root = document.object();
+    // 缺失 version 的旧配置按 v1 处理。
+    const int fileVersion = root.value(QStringLiteral("version")).toInt(1);
     const QJsonObject service = root.value(QStringLiteral("service")).toObject();
     const QJsonObject storage = root.value(QStringLiteral("storage")).toObject();
     const QJsonObject recording = root.value(QStringLiteral("recording")).toObject();
@@ -246,6 +251,11 @@ bool ConfigStore::load(QString *error)
         pathValue(storage, QStringLiteral("cacheDir"), loaded.storage.cacheDir);
     loaded.storage.cacheLimitGb =
         intValue(storage, QStringLiteral("cacheLimitGb"), loaded.storage.cacheLimitGb);
+    // v2 起默认缓存上限提高到 100GB。只迁移仍保留旧默认值的配置，
+    // 用户手动改过的数值保持不变。
+    if (fileVersion < 2 && loaded.storage.cacheLimitGb == kLegacyCacheLimitGb) {
+        loaded.storage.cacheLimitGb = AppConfig{}.storage.cacheLimitGb;
+    }
     loaded.storage.autoCleanCache =
         boolValue(storage, QStringLiteral("autoCleanCache"), loaded.storage.autoCleanCache);
 
