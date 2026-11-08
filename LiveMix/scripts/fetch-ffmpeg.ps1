@@ -6,6 +6,9 @@
     二进制不会提交到仓库。CI 与本地打包在编译前运行本脚本，把 ffmpeg/ffprobe
     放到 third_party\ffmpeg\windows-x64\bin，随后由 CMake 复制到应用输出目录。
 
+    默认从项目 COS 镜像下载；可通过环境变量 LIVEMIX_FFMPEG_MIRROR 指定其它
+    镜像前缀（需包含 b6.1.1\<platform>\ 目录）。
+
 .PARAMETER OutputDir
     输出平台目录，默认 third_party\ffmpeg\windows-x64。
 
@@ -29,6 +32,18 @@ $ErrorActionPreference = 'Stop'
 # Pinned ffmpeg-static release (currently FFmpeg 6.1.1). Keep the tag and the
 # SHA-256 values below in sync; never silently follow a moving "latest" URL.
 $release = 'b6.1.1'
+$platform = 'win32-x64'
+
+# 默认从项目 COS 镜像下载；镜像前缀下必须包含 <release>\<platform>\ 目录：
+#   .../ffmpeg/b6.1.1/win32-x64/ffmpeg-win32-x64.gz
+# 可用 LIVEMIX_FFMPEG_MIRROR 覆盖为其它同结构镜像。
+if ([string]::IsNullOrWhiteSpace($env:LIVEMIX_FFMPEG_MIRROR)) {
+    $mirror = 'https://ffmpeg-1426793176.cos.ap-guangzhou.myqcloud.com/ffmpeg'
+} else {
+    $mirror = $env:LIVEMIX_FFMPEG_MIRROR.TrimEnd('/')
+}
+$releaseBaseUrl = "$mirror/$release/$platform"
+
 $assets = @(
     @{ Name = 'ffmpeg-win32-x64.gz';  Output = 'ffmpeg.exe';  Sha256 = '8883a3dffbd0a16cf4ef95206ea05283f78908dbfb118f73c83f4951dcc06d77' },
     @{ Name = 'ffprobe-win32-x64.gz'; Output = 'ffprobe.exe'; Sha256 = 'f309e6223ad89d2fe54bccd420a7709b66fd27540674e92309578ed491a43c8d' }
@@ -167,7 +182,7 @@ try {
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
     foreach ($asset in $assets) {
-        $url = "https://github.com/eugeneware/ffmpeg-static/releases/download/$release/$($asset.Name)"
+        $url = "$releaseBaseUrl/$($asset.Name)"
         $archive = Join-Path $tempDir $asset.Name
         Write-Step "下载 $($asset.Name)"
         Invoke-Download -Uri $url -OutFile $archive
@@ -178,14 +193,14 @@ try {
         Write-Host "  已安装 $destination"
     }
 
-    $licenseUrl = "https://github.com/eugeneware/ffmpeg-static/releases/download/$release/$($license.Name)"
+    $licenseUrl = "$releaseBaseUrl/$($license.Name)"
     $licenseArchive = Join-Path $tempDir $license.Name
     Write-Step "下载 $($license.Name)"
     Invoke-Download -Uri $licenseUrl -OutFile $licenseArchive
     Assert-Checksum -Path $licenseArchive -Expected $license.Sha256 -Label $license.Name
     Copy-Item -LiteralPath $licenseArchive -Destination $licensePath -Force
 
-    $readmeUrl = "https://github.com/eugeneware/ffmpeg-static/releases/download/$release/$($buildReadme.Name)"
+    $readmeUrl = "$releaseBaseUrl/$($buildReadme.Name)"
     $readmeArchive = Join-Path $tempDir $buildReadme.Name
     Write-Step "下载 $($buildReadme.Name)"
     Invoke-Download -Uri $readmeUrl -OutFile $readmeArchive

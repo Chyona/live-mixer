@@ -13,6 +13,9 @@ logs/
 # Build-time third-party binaries (fetched by scripts/fetch-ffmpeg.*)
 third_party/ffmpeg/
 
+# 本地 FFmpeg 打包镜像（已上传到 COS，不入库）
+/ffmpeg/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/

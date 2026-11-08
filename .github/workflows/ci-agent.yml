@@ -18,6 +18,9 @@ permissions:
 env:
   QT_VERSION: '6.12.0'
   PROJECT_DIR: LiveMix
+  # FFmpeg 打包资产镜像前缀（其下需有 b6.1.1/<platform>/）。
+  # 默认使用项目 COS；需要切换时在仓库 Variables 中设置 LIVEMIX_FFMPEG_MIRROR。
+  LIVEMIX_FFMPEG_MIRROR: "${{ vars.LIVEMIX_FFMPEG_MIRROR || 'https://ffmpeg-1426793176.cos.ap-guangzhou.myqcloud.com/ffmpeg' }}"
 
 jobs:
   changes:
