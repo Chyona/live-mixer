@@ -17,6 +17,27 @@ Stack: Go 1.25+ · PostgreSQL 14+ · Docker Compose · see LICENSE in this repo
 
 ---
 
+## Desktop client LiveMix Studio
+
+A companion desktop client, **LiveMix Studio** (source in [LiveMix/](LiveMix/)), is built with **Qt 6 / C++17** and works with the backend in this repo. It brings the whole “capture → ASR → AI selection → CapCut draft” pipeline to the desktop, for teams that record locally and ship clips in batches.
+
+| Feature | Description |
+|---------|-------------|
+| Source capture | Record live streams (`http/https/rtmp/rtsp`), download direct mp4 links, and import local videos (drag & drop); auto-detects duration and resolution |
+| Video preview | Auto thumbnails on cards; built-in player with play/pause and seek; HLS recordings start playing while remuxing continues |
+| One-click export | Full-length ASR → LLM selects clips by prompt → precise ffmpeg cuts → CapCut draft, with live stage and progress on the pipeline page |
+| On-demand draft download | Drafts are recorded locally first; draft files and media download only when you click “Open draft folder”, saving disk space |
+| Task center | Jobs persisted in local SQLite with live progress, retry on failure, and result access when done |
+| Local-first | Config and business data stay on your machine (JSON + SQLite); packaged for macOS and Windows |
+
+**Demo**
+
+![LiveMix Studio desktop client demo](LiveMix/help.gif)
+
+> See [LiveMix/README.md](LiveMix/README.md) for build, packaging (macOS DMG / Windows installer), and implementation details.
+
+---
+
 ## Why Live Clip Workbench?
 
 An end-to-end pipeline for **live replay / recorded streams**: ingest media, run ASR, let AI pick highlight segments, then generate CapCut drafts and optional final videos. Use fully automatic **one-click export**, or **AI draft + human refine** when quality matters most.
@@ -216,6 +237,7 @@ Pushing a tag like `v1.0.0` triggers GitHub Actions to build and push the Docker
 |----------|-------------|
 | [README.md](README.md) | Chinese docs (default) |
 | [README.en.md](README.en.md) | English documentation |
+| [LiveMix/README.md](LiveMix/README.md) | Desktop client build, packaging, and implementation notes |
 | [LICENSE](LICENSE) | License |
 
 Keywords: live stream clipping, AI clipping, live remix, speech recognition ASR, CapCut draft, one-click export, Live Clip Workbench, live-mixer

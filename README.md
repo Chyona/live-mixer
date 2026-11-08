@@ -17,6 +17,27 @@
 
 ---
 
+## 桌面客户端 LiveMix Studio
+
+配套桌面客户端 **LiveMix Studio**（源码见 [LiveMix/](LiveMix/)）基于 **Qt 6 / C++17** 构建，与本仓库的后端服务配合使用。它把「素材采集 → ASR 转写 → AI 选片 → 剪映草稿」整条流水线搬进桌面端，适合需要本地录制与批量出片的剪辑团队。
+
+| 能力 | 说明 |
+|------|------|
+| 源视频采集 | 直播流录制（`http/https/rtmp/rtsp`）、mp4 直链下载、本地视频导入（支持拖拽），自动识别时长与分辨率 |
+| 视频预览 | 卡片封面自动截帧，应用内播放器支持播放/暂停与进度拖动；HLS 录像边转封装边播放 |
+| 一键成片 | ASR 整片转写 → LLM 按提示词选片 → ffmpeg 精确裁剪 → 生成剪映草稿，过程页实时展示阶段与进度 |
+| 草稿按需下载 | 草稿生成后先落库，点击「打开草稿文件夹」时才下载草稿与素材，节省本地空间 |
+| 任务中心 | 任务持久化到本地 SQLite，运行中实时进度、失败重试、完成后查看成片 |
+| 本地优先 | 配置与业务数据保存在本机（JSON + SQLite），支持 macOS 与 Windows 打包 |
+
+**界面演示**
+
+![LiveMix Studio 客户端使用演示](LiveMix/help.gif)
+
+> 构建、打包（macOS DMG / Windows 安装包）与实现细节详见 [LiveMix/README.md](LiveMix/README.md)。
+
+---
+
 ## 为什么选择直播切片工作台？
 
 面向 **直播回放 / 录像** 的端到端切片流水线：从素材入库、ASR 转写、AI 智能选段，到剪映草稿与成片导出，一条链路打通。支持「全自动一键成片」，也支持「AI 粗选 + 人工精修」协同模式，把重复劳动交给模型，把成片质量留在人手里。
@@ -216,6 +237,7 @@ $env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 |------|------|
 | [README.md](README.md) | 中文说明（默认） |
 | [README.en.md](README.en.md) | English documentation |
+| [LiveMix/README.md](LiveMix/README.md) | 桌面客户端构建、打包与实现说明 |
 | [LICENSE](LICENSE) | 开源许可 |
 
 关键词：直播切片、AI 切片、直播混剪、语音识别 ASR、剪映草稿、一键成片、直播切片工作台、live-mixer
