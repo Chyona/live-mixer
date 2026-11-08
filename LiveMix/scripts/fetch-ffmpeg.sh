@@ -9,6 +9,10 @@
 #   ./scripts/fetch-ffmpeg.sh
 #   ./scripts/fetch-ffmpeg.sh --output third_party/ffmpeg/macos-arm64
 #   ./scripts/fetch-ffmpeg.sh --force
+#   LIVEMIX_FFMPEG_MIRROR=https://cdn.example.com/livemix/ffmpeg ./scripts/fetch-ffmpeg.sh
+#
+# By default the binaries are downloaded from the project's COS mirror; set
+# LIVEMIX_FFMPEG_MIRROR to use a different mirror with the same layout.
 #
 set -euo pipefail
 
@@ -18,6 +22,12 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Pinned ffmpeg-static release (currently FFmpeg 6.1.1). Keep the tag and the
 # SHA-256 values below in sync; never silently follow a moving "latest" URL.
 FFMPEG_RELEASE="b6.1.1"
+
+# 默认从项目 COS 镜像下载；镜像前缀下必须包含 <release>/<platform>/ 目录：
+#   .../ffmpeg/b6.1.1/darwin-arm64/ffmpeg-darwin-arm64.gz
+# 可用 LIVEMIX_FFMPEG_MIRROR 覆盖为其它同结构镜像。
+FFMPEG_MIRROR="${LIVEMIX_FFMPEG_MIRROR:-https://ffmpeg-1426793176.cos.ap-guangzhou.myqcloud.com/ffmpeg}"
+FFMPEG_MIRROR="${FFMPEG_MIRROR%/}"
 
 OUTPUT_DIR=""
 FORCE=0
@@ -33,6 +43,10 @@ usage() {
   --output DIR   输出平台目录（默认: third_party/ffmpeg/macos-<arch>）
   --force        重新下载并覆盖已有文件
   -h, --help     显示帮助
+
+环境变量:
+  LIVEMIX_FFMPEG_MIRROR  可选镜像前缀，需包含 b6.1.1/<platform>/ 目录
+                          默认: https://ffmpeg-1426793176.cos.ap-guangzhou.myqcloud.com/ffmpeg
 
 产物:
   <output>/bin/ffmpeg
@@ -105,6 +119,8 @@ case "$(uname -m)" in
         ;;
 esac
 
+FFMPEG_URL_PREFIX="${FFMPEG_MIRROR}/${FFMPEG_RELEASE}/${FFMPEG_ASSET}"
+
 if [ -z "$OUTPUT_DIR" ]; then
     OUTPUT_DIR="$ROOT_DIR/third_party/ffmpeg/$OUTPUT_ARCH"
 fi
@@ -140,7 +156,7 @@ mkdir -p "$BIN_DIR"
 fetch_asset() {
     asset="$1"
     expected_sha="$2"
-    url="https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_RELEASE}/${asset}"
+    url="${FFMPEG_URL_PREFIX}/${asset}"
     file="$TMP_DIR/$asset"
 
     info "下载 $asset"

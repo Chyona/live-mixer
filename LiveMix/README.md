@@ -261,6 +261,10 @@ scripts\build.bat -QtPath C:\Qt\6.12.0\msvc2022_64
 ./scripts/fetch-ffmpeg.sh
 ```
 
+FFmpeg 默认从项目 COS 镜像
+`https://ffmpeg-1426793176.cos.ap-guangzhou.myqcloud.com/ffmpeg` 下载；
+如需切换镜像，设置 `LIVEMIX_FFMPEG_MIRROR`（详见 `ffmpeg/README.md`）。
+
 DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmpeg` / `ffprobe`
 放入应用包、补充 ad-hoc 签名，并生成带 Applications 快捷方式的拖拽安装包：
 
@@ -303,7 +307,8 @@ DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmp
 ### 打包 Windows 安装包
 
 ```powershell
-# 1. 下载固定版本的静态 FFmpeg
+# 1. 下载固定版本的静态 FFmpeg（默认从项目 COS 镜像下载）
+#    可设置 $env:LIVEMIX_FFMPEG_MIRROR 覆盖镜像地址（见 ffmpeg/README.md）
 .\scripts\fetch-ffmpeg.ps1
 
 # 2. 编译、windeployqt 部署 Qt、生成 NSIS 安装包
@@ -321,9 +326,9 @@ DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmp
 - macOS x64 / arm64 DMG（`macos-15-intel`、`macos-15`）
 - Windows x64 NSIS 安装包（`windows-latest`）
 
-工作流在打包前通过 `scripts/fetch-ffmpeg.*` 下载固定版本（当前 FFmpeg 6.1.1）的静态二进制，
-校验 SHA-256 后交给 CMake 复制进应用包。`third_party/ffmpeg/` 已加入 `.gitignore`，
-二进制不会入库；同一次构建的产物可通过 Actions 的 Artifacts 下载。
+工作流在打包前通过 `scripts/fetch-ffmpeg.*` 从项目 COS 镜像下载固定版本（当前 FFmpeg 6.1.1）
+的静态二进制，校验 SHA-256 后交给 CMake 复制进应用包。`third_party/ffmpeg/` 已加入
+`.gitignore`，二进制不会入库；同一次构建的产物可通过 Actions 的 Artifacts 下载。
 
 ### 手动构建
 
