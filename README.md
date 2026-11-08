@@ -1,25 +1,36 @@
-# 直播切片工作台
+<p align="center">
+  <a href="https://gogoshine.com"><img src="LiveMix/resources/brand/logo.png" width="96" alt="LiveMix Studio"></a>
+</p>
 
-[中文](README.md) · [English](README.en.md)
+<h1 align="center">直播切片工作台</h1>
 
-> **AI 辅助直播切片工具** · 语音识别 · 智能选段 · 剪映草稿 · 一键成片  
-> 仓库技术名：`live-mixer` · 帮助直播运营与剪辑团队大幅提升切片效率
+<p align="center">
+  <strong>AI 辅助直播切片</strong> · 语音识别 · 智能选段 · 剪映草稿 · 一键成片
+</p>
 
-技术栈：Go 1.25+ · PostgreSQL 14+ · Docker Compose · 详见仓库 LICENSE
+<p align="center">
+  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+</p>
+
+> 仓库技术名：`live-mixer`。产品由两部分组成：**LiveMix Studio 桌面客户端**负责素材采集与本地创作，**live-mixer 服务端**负责 ASR、AI 选片、剪映草稿与成片任务。
 
 ---
 
-## 在线体验环境
+## 下载客户端
 
-> **体验地址：[https://gogoshine.com](https://gogoshine.com)**
+> **下载地址：[https://gogoshine.com](https://gogoshine.com)**
 >
-> 无需本地部署，打开浏览器即可体验完整的直播切片工作台：素材录入、ASR 转写、AI 切片、剪映草稿与一键成片。
+> 支持 **macOS / Windows**；无需安装，也可直接在浏览器中[在线体验](https://gogoshine.com)完整工作台。
 
 ---
 
 ## 桌面客户端 LiveMix Studio
 
-配套桌面客户端 **LiveMix Studio**（源码见 [LiveMix/](LiveMix/)）基于 **Qt 6 / C++17** 构建，与本仓库的后端服务配合使用。它把「素材采集 → ASR 转写 → AI 选片 → 剪映草稿」整条流水线搬进桌面端，适合需要本地录制与批量出片的剪辑团队。
+LiveMix Studio 基于 **Qt 6 / C++17** 构建，与 live-mixer 服务端配合使用。它把「素材采集 → ASR 转写 → AI 选片 → 剪映草稿」整条流水线搬到桌面端，适合需要本地录制与批量出片的剪辑团队。
+
+![LiveMix Studio 客户端使用演示](LiveMix/help.gif)
+
+### 核心功能
 
 | 能力 | 说明 |
 |------|------|
@@ -30,17 +41,13 @@
 | 任务中心 | 任务持久化到本地 SQLite，运行中实时进度、失败重试、完成后查看成片 |
 | 本地优先 | 配置与业务数据保存在本机（JSON + SQLite），支持 macOS 与 Windows 打包 |
 
-**界面演示**
-
-![LiveMix Studio 客户端使用演示](LiveMix/help.gif)
-
 > 构建、打包（macOS DMG / Windows 安装包）与实现细节详见 [LiveMix/README.md](LiveMix/README.md)。
 
 ---
 
-## 为什么选择直播切片工作台？
+## 服务端部署与使用（live-mixer）
 
-面向 **直播回放 / 录像** 的端到端切片流水线：从素材入库、ASR 转写、AI 智能选段，到剪映草稿与成片导出，一条链路打通。支持「全自动一键成片」，也支持「AI 粗选 + 人工精修」协同模式，把重复劳动交给模型，把成片质量留在人手里。
+`live-mixer` 是面向 **直播回放 / 录像** 的自建后端：素材入库、ASR 转写、AI 智能选段、剪映草稿与成片导出一条链路打通。桌面客户端与网页端共用同一套 API，既支持「全自动一键成片」，也支持「AI 粗选 + 人工精修」——把重复劳动交给模型，把成片质量留在人手里。
 
 **适合谁用**
 
@@ -48,9 +55,7 @@
 - 希望用大模型加速「听稿选段」，再用剪映完成后期包装的创作者与剪辑师
 - 需要可自建、可私有化部署的直播切片 / 混剪后端服务的研发团队
 
----
-
-## 核心能力
+### 核心能力
 
 | 能力 | 说明 |
 |------|------|
@@ -73,9 +78,7 @@
   → 下载剪映草稿继续后期
 ```
 
----
-
-## 技术栈一览
+### 技术栈
 
 | 层级 | 技术 |
 |------|------|
@@ -87,17 +90,15 @@
 | 对象存储 | 腾讯云 COS / 阿里云 OSS / 火山引擎 TOS（任选其一） |
 | 部署 | Docker Compose（API + capcut-mate + nginx） |
 
----
+### 快速开始（Docker）
 
-## 快速开始（Docker）
-
-### 前置条件
+#### 前置条件
 
 - Docker / Docker Compose
 - 可访问的 **PostgreSQL 14+**（需提前建库，服务不内置数据库）
 - 已配置的对象存储、ASR Key、大模型 Key
 
-### 1. 准备环境变量
+#### 1. 准备环境变量
 
 ```bash
 cd docker
@@ -113,7 +114,7 @@ Compose 内剪映地址一般填 `http://nginx`。可选：
 
 配置优先级：**环境变量 `APP_*` > 外部 yaml > 内嵌默认配置**。
 
-### 2. 初始化数据库
+#### 2. 初始化数据库
 
 ```bash
 go run ./cmd/envinit init
@@ -127,7 +128,7 @@ docker exec -it live-mixer /app/envinit init
 go run ./cmd/envinit reset-password -p 'YourStrongPassword'
 ```
 
-### 3. 启动与验证
+#### 3. 启动与验证
 
 ```bash
 cd docker
@@ -148,9 +149,7 @@ curl http://localhost:81/openapi/live-mixer/v1/auth/login
 
 > 部署到新环境时，请按实际网关与域名调整 `docker-compose.yaml` 中的 `PROXY_*` / `DRAFT_URL`，否则草稿下载或代理可能失败。
 
----
-
-## 主要 API
+### 主要 API
 
 除登录外均需 JWT。完整文档见 Swagger：`http://localhost:30000/swagger/index.html`。
 
@@ -166,17 +165,15 @@ curl http://localhost:81/openapi/live-mixer/v1/auth/login
 | POST | `/openapi/live-mixer/v1/tasks/ai-slice-draft` | 一键成片任务 |
 | GET | `/openapi/live-mixer/v1/tasks/:id` | 轮询任务进度 / 草稿与成片地址 |
 
----
+### 本地开发
 
-## 本地开发
-
-### 环境要求
+#### 环境要求
 
 - Go **1.25+**
 - PostgreSQL **14+**
 - ffmpeg（ASR 抽音频与切片裁剪；Docker 镜像已内置）
 
-### 项目结构
+#### 项目结构
 
 ```text
 live-mixer/
@@ -190,7 +187,7 @@ live-mixer/
 └── migrations/        # SQL 参考脚本
 ```
 
-### 常用命令
+#### 常用命令
 
 ```bash
 go mod download
@@ -218,14 +215,14 @@ $env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 
 本地无 capcut-mate 时，可只启动 `docker compose up -d capcut-mate nginx`，并将 `capcut_mate.base_url` 指向 `http://localhost:81`。
 
-### 二次开发建议
+#### 二次开发建议
 
 - 分层：`handler` → `service` → `repository` → `model`；异步任务在 `scheduler`，剪映流水线在 `draft`
 - 新增 API：补 Swagger 注释，在 `internal/routes/v1` 注册；需鉴权的放入 `JWTAuth` 分组
 - 新配置项同步更新 `config.yaml.example`、结构体与 `docker/.env.example`
 - AI 切片 / 草稿 / 一键成片均为异步任务，客户端轮询 `GET /tasks/:id`
 
-### 发布镜像
+#### 发布镜像
 
 推送形如 `v1.0.0` 的 tag 后，GitHub Actions 会构建并推送 Docker Hub 镜像。
 
