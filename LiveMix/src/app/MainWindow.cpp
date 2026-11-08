@@ -4,6 +4,7 @@
 #include "ApplicationStyle.h"
 #include "../core/AppConfig.h"
 #include "../core/AutoStart.h"
+#include "../core/CacheCleaner.h"
 #include "../core/FileManager.h"
 #include "../core/MediaUtils.h"
 #include "../data/MediaRepository.h"
@@ -640,6 +641,13 @@ MainWindow::MainWindow(QWidget *parent)
     // 走统一导航入口，初始化标题栏的文档名并同步侧栏选中状态。
     navigateTo(QStringLiteral("dash"));
 
+    // 缓存超过上限时自动清理最旧的文件：启动后执行一次，之后每 10 分钟检查。
+    auto *cacheTimer = new QTimer(this);
+    cacheTimer->setInterval(10 * 60 * 1000);
+    connect(cacheTimer, &QTimer::timeout, this, &MainWindow::enforceCacheLimit);
+    cacheTimer->start();
+    QTimer::singleShot(0, this, &MainWindow::enforceCacheLimit);
+
     // 点击 macOS Dock 图标（或 Windows 托盘图标）时系统只会激活应用；
     // 若窗口已被隐藏到后台，Qt 不会自动显示它，这里统一恢复。
     connect(qApp, &QGuiApplication::applicationStateChanged, this,
@@ -773,6 +781,22 @@ void MainWindow::applySettings()
         m_tray->hide();
     }
     updateServiceStatus();
+    // 保存设置后立即按新的上限与开关检查一次。
+    enforceCacheLimit();
+}
+
+void MainWindow::enforceCacheLimit()
+{
+    if (!m_configStore) {
+        return;
+    }
+    const AppConfig config = m_configStore->config();
+    if (!config.storage.autoCleanCache) {
+        return;
+    }
+    constexpr qint64 kBytesPerGb = 1024LL * 1024LL * 1024LL;
+    CacheCleaner::enforceLimit(config.storage.cacheDir,
+                               qint64(config.storage.cacheLimitGb) * kBytesPerGb);
 }
 
 void MainWindow::updateServiceStatus()

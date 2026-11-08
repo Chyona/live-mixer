@@ -407,8 +407,11 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     limitLayout->addWidget(limitInput, 0, Qt::AlignVCenter);
     limitLayout->addWidget(autoClean, 0, Qt::AlignVCenter);
     limitLayout->addStretch(1);
-    auto *limitField = makeField(QStringLiteral("缓存上限"), limitRow, QString(), false,
-                                 storagePane);
+    auto *limitField = makeField(
+        QStringLiteral("缓存上限"), limitRow,
+        QStringLiteral("超过上限后按最后修改时间从旧到新删除预览缓存与任务临时文件，"
+                       "正在使用的文件不会被清理。"),
+        false, storagePane);
     storageLayout->addWidget(limitField, 0, Qt::AlignLeft);
     storageLayout->addSpacing(18);
 
