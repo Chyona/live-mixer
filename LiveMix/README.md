@@ -272,7 +272,7 @@ DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmp
 ./scripts/pack-macos.sh
 ```
 
-默认产物为 `dist/LiveMixStudio-<version>-<arch>.dmg`，同时生成对应的 `.sha256` 校验文件。
+默认产物为 `dist/LiveMixStudio-<version>-<arch>-setup.dmg`，同时生成对应的 `.sha256` 校验文件。
 可用参数：
 
 | 参数 | 说明 |

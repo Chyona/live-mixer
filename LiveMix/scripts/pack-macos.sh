@@ -279,7 +279,7 @@ else
 fi
 
 mkdir -p "$OUTPUT_DIR"
-DMG_PATH="$OUTPUT_DIR/LiveMixStudio-${APP_VERSION}-${ARCH_LABEL}.dmg"
+DMG_PATH="$OUTPUT_DIR/LiveMixStudio-${APP_VERSION}-${ARCH_LABEL}-setup.dmg"
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/livemix-dmg.XXXXXX")"
 STAGING_DIR="$WORK_DIR/dmg-root"

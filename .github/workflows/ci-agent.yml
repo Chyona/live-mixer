@@ -176,7 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          dmg_files=(dist/LiveMixStudio-*.dmg)
+          dmg_files=(dist/LiveMixStudio-*-setup.dmg)
           DMG_PATH="${dmg_files[0]:-}"
           if [ -z "$DMG_PATH" ]; then
             echo "未找到待公证的 DMG" >&2
@@ -216,10 +216,10 @@ jobs:
       - name: 上传 DMG
         uses: actions/upload-artifact@v4
         with:
-          name: LiveMixStudio-macos-${{ matrix.arch }}
+          name: LiveMixStudio-macos-${{ matrix.arch }}-setup
           path: |
-            LiveMix/dist/*.dmg
-            LiveMix/dist/*.dmg.sha256
+            LiveMix/dist/*-setup.dmg
+            LiveMix/dist/*-setup.dmg.sha256
           if-no-files-found: error
 
   windows:
@@ -281,10 +281,10 @@ jobs:
       - name: 上传安装包
         uses: actions/upload-artifact@v4
         with:
-          name: LiveMixStudio-windows-x64
+          name: LiveMixStudio-windows-x64-setup
           path: |
             LiveMix/dist/*-setup.exe
-            LiveMix/dist/*.sha256
+            LiveMix/dist/*-setup.exe.sha256
           if-no-files-found: error
 
   release:
@@ -310,7 +310,7 @@ jobs:
           set -euo pipefail
           cd release-assets
           shopt -s nullglob
-          assets=(*.dmg *.dmg.sha256 *-setup.exe *-setup.exe.sha256)
+          assets=(*-setup.dmg *-setup.dmg.sha256 *-setup.exe *-setup.exe.sha256)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "错误: 未找到可发布的安装包" >&2
             ls -la
