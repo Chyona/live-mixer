@@ -12,7 +12,7 @@
 #include "../media/FfmpegUtils.h"
 #include "../media/MediaProbe.h"
 #include "../media/RecordingService.h"
-#include "../model/DemoData.h"
+#include "../model/PromptCatalog.h"
 #include "../services/DraftDownloadManager.h"
 #include "../services/LiveClipService.h"
 #include "../pages/DashboardPage.h"
@@ -601,6 +601,7 @@ MainWindow::MainWindow(QWidget *parent)
     wireSignals();
     buildOverlays();
     createResizeHandles();
+    refreshPrompts();
 
     // 侧栏与底栏只展示真实状态：数据库是否打开、API 密钥是否配置、ffmpeg 是否可用。
     m_sideBar->setDatabaseReady(databaseOpened, databaseError);
@@ -1118,10 +1119,24 @@ void MainWindow::wireSignals()
     connect(m_prompt, &PromptPage::editPromptRequested, this, &MainWindow::openPromptEditor);
     connect(m_prompt, &PromptPage::viewPromptRequested, this, &MainWindow::openPromptViewer);
     connect(m_prompt, &PromptPage::deletePromptRequested, this, [this](int index) {
-        const QVector<Demo::PromptEntry> prompts = Demo::prompts();
-        if (index >= 0 && index < prompts.size()) {
-            showToast(QStringLiteral("已删除提示词 %1").arg(prompts[index].name));
+        if (index < 0 || index >= m_prompts.size()) {
+            return;
         }
+        const PromptEntry entry = m_prompts[index];
+        if (entry.builtIn || entry.id < 0) {
+            return;
+        }
+        if (!m_repository || !m_repository->isOpen()) {
+            showToast(QStringLiteral("本地数据库不可用，无法删除提示词"));
+            return;
+        }
+        QString error;
+        if (!m_repository->removePrompt(entry.id, &error)) {
+            showToast(QStringLiteral("删除提示词失败：%1").arg(error));
+            return;
+        }
+        refreshPrompts();
+        showToast(QStringLiteral("已删除提示词 %1").arg(entry.name));
     });
 
     connect(m_tasks, &TasksPage::viewTaskRequested, this, &MainWindow::openTask);
@@ -1144,7 +1159,36 @@ void MainWindow::buildOverlays()
         m_downloadDialogDraftId = -1;
     });
     connect(m_fullEditor, &FullscreenEditor::saveRequested, this, [this] {
-        showToast(QStringLiteral("提示词已保存"));
+        const QString name = m_fullEditor->promptName().trimmed();
+        const QString content = m_fullEditor->promptContent();
+        if (name.isEmpty()) {
+            showToast(QStringLiteral("请填写提示词名称"));
+            return;
+        }
+        if (content.trimmed().isEmpty()) {
+            showToast(QStringLiteral("请填写提示词正文"));
+            return;
+        }
+        if (!m_repository || !m_repository->isOpen()) {
+            showToast(QStringLiteral("本地数据库不可用，无法保存提示词"));
+            return;
+        }
+
+        QString error;
+        const bool editing = m_editingPromptId >= 0;
+        const bool saved = editing
+            ? m_repository->updatePrompt(m_editingPromptId, name,
+                                         m_fullEditor->promptNote(), content, &error)
+            : m_repository->addPrompt(name, m_fullEditor->promptNote(), content,
+                                      &error)
+                >= 0;
+        if (!saved) {
+            showToast(QStringLiteral("保存提示词失败：%1").arg(error));
+            return;
+        }
+        refreshPrompts();
+        showToast(editing ? QStringLiteral("提示词已更新")
+                          : QStringLiteral("提示词已保存"));
         m_fullEditor->closeEditor();
     });
 }
@@ -1248,9 +1292,11 @@ void MainWindow::showModalForPreview(const QString &modalId)
 
 void MainWindow::showFullscreenForPreview(bool readOnly)
 {
-    QVector<Demo::PromptEntry> prompts = Demo::prompts();
+    const QVector<PromptEntry> prompts =
+        m_prompts.isEmpty() ? PromptCatalog::builtIns() : m_prompts;
     if (!prompts.isEmpty()) {
-        openFullscreenPrompt(prompts[1].name, prompts[1].note, prompts[1].content, readOnly);
+        const PromptEntry &entry = prompts.at(prompts.size() > 1 ? 1 : 0);
+        openFullscreenPrompt(entry.name, entry.note, entry.content, readOnly);
     }
 }
 
@@ -2086,8 +2132,7 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     promptLayout->addWidget(
         Ui::label(QStringLiteral("使用提示词"), 12, 400, Theme::Text2, promptGroup));
     auto *select = new SelectBox(promptGroup);
-    const QVector<Demo::PromptEntry> prompts = Demo::prompts();
-    for (const Demo::PromptEntry &prompt : prompts) {
+    for (const PromptEntry &prompt : m_prompts) {
         select->addItem(prompt.name);
     }
     const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
@@ -2126,11 +2171,10 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     auto *start = new Button(QStringLiteral("开始"), Button::Primary, card);
     connect(cancel, &QAbstractButton::clicked, this, [this] { m_modalOverlay->closeModal(); });
     connect(start, &QAbstractButton::clicked, this, [this, source, select] {
-        const QVector<Demo::PromptEntry> entries = Demo::prompts();
         QString promptText;
         const int index = select->currentIndex();
-        if (index >= 0 && index < entries.size()) {
-            promptText = entries.at(index).content;
+        if (index >= 0 && index < m_prompts.size()) {
+            promptText = m_prompts.at(index).content;
         }
         const QString promptLabel = select->currentText();
         m_modalOverlay->closeModal();
@@ -2142,12 +2186,30 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     m_modalOverlay->showModal(card);
 }
 
+void MainWindow::refreshPrompts()
+{
+    QString error;
+    m_prompts = PromptCatalog::all(m_repository.get(), &error);
+    if (!error.isEmpty()) {
+        qWarning() << "Failed to load prompts:" << error;
+    }
+    if (m_prompt) {
+        m_prompt->setPrompts(m_prompts);
+    }
+    if (m_settings) {
+        m_settings->setPrompts(m_prompts);
+    }
+}
+
 void MainWindow::openPromptEditor(int index)
 {
-    const QVector<Demo::PromptEntry> prompts = Demo::prompts();
-    if (index >= 0 && index < prompts.size()) {
-        const Demo::PromptEntry &entry = prompts[index];
+    m_editingPromptId = -1;
+    if (index >= 0 && index < m_prompts.size()) {
+        const PromptEntry &entry = m_prompts[index];
         // 内置提示词不可编辑，即使从编辑入口进入也保持只读。
+        if (!entry.builtIn) {
+            m_editingPromptId = entry.id;
+        }
         openFullscreenPrompt(entry.name, entry.note, entry.content, entry.builtIn);
         return;
     }
@@ -2156,11 +2218,11 @@ void MainWindow::openPromptEditor(int index)
 
 void MainWindow::openPromptViewer(int index)
 {
-    const QVector<Demo::PromptEntry> prompts = Demo::prompts();
-    if (index < 0 || index >= prompts.size()) {
+    if (index < 0 || index >= m_prompts.size()) {
         return;
     }
-    const Demo::PromptEntry &entry = prompts[index];
+    const PromptEntry &entry = m_prompts[index];
+    m_editingPromptId = entry.builtIn ? -1 : entry.id;
     // 支持编辑的提示词直接进入可编辑页面，内置提示词保持只读。
     openFullscreenPrompt(entry.name, entry.note, entry.content, entry.builtIn);
 }

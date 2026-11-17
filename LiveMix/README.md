@@ -4,9 +4,9 @@ LiveMix Studio 是直播切片桌面客户端。当前版本以 Qt 6 + C++ Widge
 并已接入真实的视频录制、mp4 直链下载、本地视频导入、一键成片（ASR 转写、LLM 选片、ffmpeg 裁剪、
 剪映草稿生成与按需下载）、JSON 配置与 SQLite 业务数据持久化。
 
-> 工作台、一键成片主链路、任务中心、源视频库与设置页已接入真实数据与外部服务，
-> 统计与动态均来自本地 SQLite；提示词管理仍为界面演示，演示内容集中在
-> `src/model/DemoData.h`。
+> 工作台、一键成片主链路、任务中心、源视频库、提示词管理与设置页已接入真实数据与外部服务，
+> 统计与动态均来自本地 SQLite；用户提示词保存到 SQLite，内置提示词由
+> `src/model/PromptCatalog.h` 提供且保持只读。
 
 ## 已实现界面
 
@@ -19,7 +19,8 @@ LiveMix Studio 是直播切片桌面客户端。当前版本以 Qt 6 + C++ Widge
 - 成片流水线：ASR 整片识别的等待过程（波形、任务动态、估算进度与轮询心跳）、
   完成后的整稿转写、AI 选片过程与候选切片、草稿逐步生成、可点击阶段切换；
   总进度、用时、预计剩余与失败状态均来自真实过程事件
-- 提示词管理：列表、只读查看、新建/编辑弹窗、全屏编辑器
+- 提示词管理：列表、只读查看、新建/编辑弹窗、全屏编辑器；用户提示词保存到 SQLite，
+  保存后立即刷新列表与默认提示词下拉框
 - 任务中心：一键成片任务持久化，运行中实时进度、失败重试、完成后查看成片
 - 设置：服务连接、存储与输出、AI 与 ASR、快捷键、通用（本地 JSON 持久化与系统集成）
 - 设计说明：完整设计系统、配色、字体、快捷键说明
@@ -394,8 +395,9 @@ cmake --build build --config Release
 │   │   └── ServiceEndpoints.*       # 内置服务地址（剪映小助手，不可配置）
 │   ├── data/
 │   │   ├── ClipTypes.*              # ASR / 切片 / 草稿领域模型与 JSON 编解码
-│   │   ├── MediaRepository.*        # SQLite 业务数据访问（源视频 / ASR 缓存 / 草稿）
-│   │   └── MediaTypes.h             # 源视频 / 录制会话模型
+│   │   ├── MediaRepository.*        # SQLite 业务数据（源视频 / ASR 缓存 / 草稿 / 提示词）
+│   │   ├── MediaTypes.h             # 源视频 / 录制会话模型
+│   │   └── PromptTypes.h            # 提示词记录模型
 │   ├── media/
 │   │   ├── FfmpegLocator.*          # 定位内置 ffmpeg / ffprobe
 │   │   ├── FfmpegUtils.*            # 合成完整 MP4、提取 MP3、按时间裁剪视频
@@ -415,7 +417,7 @@ cmake --build build --config Release
 │   └── model/
 │       ├── DefaultPrompts.h         # 从 live-mixer 后端导入的默认选片提示词
 │       ├── GarmentPrompts.h         # 服装切片场景的 3 个代表性历史版本提示词
-│       └── DemoData.h               # 提示词页面的演示数据
+│       └── PromptCatalog.*          # 内置提示词 + SQLite 用户提示词目录
 └── third_party/ffmpeg/              # 构建时下载的静态二进制（gitignore）
 ```
 
@@ -428,9 +430,8 @@ cmake --build build --config Release
   `MediaRepository`（SQLite 业务数据）
 - **一键成片**：`LiveClipService` 负责流水线编排，`CapCutMateClient` / `AsrClient` /
   `LlmClient` 负责外部接口；页面只通过信号接收进度与结果
-- **其余真实数据**：源视频库、任务中心、成片结果与工作台已接入 `MediaRepository`；
-  提示词管理仍使用 `DemoData.h`（财经类直播提示词已从后端导入），
-  可继续用业务服务替换静态组装逻辑
+- **其余真实数据**：源视频库、任务中心、成片结果、工作台与用户提示词均已接入
+  `MediaRepository`；提示词列表由 `PromptCatalog` 合并内置模板与数据库记录
 - **统一视觉**：修改 `Theme` 中的设计 Token，避免页面内散落颜色值
 
 ## 开发预览参数

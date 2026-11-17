@@ -1,12 +1,12 @@
 #include "PromptPage.h"
 
-#include "../model/DemoData.h"
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
 
 #include <QEnterEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayoutItem>
 #include <QPainter>
 #include <QVBoxLayout>
 
@@ -60,6 +60,16 @@ QLabel *dotLabel(QWidget *parent)
     return Ui::label(QStringLiteral("·"), 12, 400, Theme::Text3, parent);
 }
 
+void clearLayout(QLayout *layout)
+{
+    while (QLayoutItem *item = layout->takeAt(0)) {
+        if (QWidget *widget = item->widget()) {
+            delete widget;
+        }
+        delete item;
+    }
+}
+
 } // namespace
 
 PromptPage::PromptPage(QWidget *parent)
@@ -75,9 +85,28 @@ PromptPage::PromptPage(QWidget *parent)
     bodyLayout()->addWidget(header);
 
     auto *table = new QWidget(this);
-    auto *tableLayout = new QVBoxLayout(table);
-    tableLayout->setContentsMargins(0, 0, 0, 0);
-    tableLayout->setSpacing(0);
+    m_tableLayout = new QVBoxLayout(table);
+    m_tableLayout->setContentsMargins(0, 0, 0, 0);
+    m_tableLayout->setSpacing(0);
+    bodyLayout()->addWidget(table);
+    bodyLayout()->addStretch(1);
+
+    rebuildTable();
+}
+
+void PromptPage::setPrompts(const QVector<PromptEntry> &prompts)
+{
+    m_prompts = prompts;
+    rebuildTable();
+}
+
+void PromptPage::rebuildTable()
+{
+    if (!m_tableLayout) {
+        return;
+    }
+    QWidget *table = m_tableLayout->parentWidget();
+    clearLayout(m_tableLayout);
 
     auto *headerRow = new QWidget(table);
     headerRow->setFixedHeight(34);
@@ -100,12 +129,11 @@ PromptPage::PromptPage(QWidget *parent)
     auto *operations = Ui::label(QStringLiteral("操作"), 11, 400, Theme::Text3, headerRow);
     operations->setFixedWidth(kActionsWidth);
     headerLayout->addWidget(operations);
-    tableLayout->addWidget(headerRow);
-    tableLayout->addWidget(Ui::separator(false, table));
+    m_tableLayout->addWidget(headerRow);
+    m_tableLayout->addWidget(Ui::separator(false, table));
 
-    const QVector<Demo::PromptEntry> prompts = Demo::prompts();
-    for (int i = 0; i < prompts.size(); ++i) {
-        const Demo::PromptEntry &prompt = prompts[i];
+    for (int i = 0; i < m_prompts.size(); ++i) {
+        const PromptEntry &prompt = m_prompts[i];
         auto *row = new TableRow(table);
         row->setMinimumHeight(42);
         auto *rowLayout = new QHBoxLayout(row);
@@ -184,9 +212,6 @@ PromptPage::PromptPage(QWidget *parent)
         actionsLayout->addStretch(1);
         rowLayout->addWidget(actions);
 
-        tableLayout->addWidget(row);
+        m_tableLayout->addWidget(row);
     }
-
-    bodyLayout()->addWidget(table);
-    bodyLayout()->addStretch(1);
 }
