@@ -118,6 +118,7 @@ qt_add_executable(LiveMixStudio
     src/data/MediaRepository.cpp
     src/data/MediaTypes.h
     src/data/PipelineTypes.h
+    src/data/PromptTypes.h
 
     src/media/FfmpegLocator.h
     src/media/FfmpegLocator.cpp
@@ -140,7 +141,8 @@ qt_add_executable(LiveMixStudio
 
     src/model/DefaultPrompts.h
     src/model/GarmentPrompts.h
-    src/model/DemoData.h
+    src/model/PromptCatalog.h
+    src/model/PromptCatalog.cpp
 
     src/ui/Icons.h
     src/ui/Icons.cpp

@@ -561,6 +561,21 @@ void FullscreenEditor::openPrompt(const QString &name, const QString &note,
     }
 }
 
+QString FullscreenEditor::promptName() const
+{
+    return m_nameEdit ? m_nameEdit->text() : QString();
+}
+
+QString FullscreenEditor::promptNote() const
+{
+    return m_noteEdit ? m_noteEdit->text() : QString();
+}
+
+QString FullscreenEditor::promptContent() const
+{
+    return m_editor ? m_editor->toPlainText() : QString();
+}
+
 void FullscreenEditor::closeEditor()
 {
     if (!isVisible()) {

@@ -16,7 +16,7 @@
 
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 
 // SQLite NOT NULL TEXT columns reject a null QString, but Qt's default
 // constructed QString is null. Normalize empty user-facing text to "".
@@ -160,6 +160,21 @@ ClipTask taskFromQuery(const QSqlQuery &query)
     task.updatedAtMs = query.value(9).toLongLong();
     task.finishedAtMs = query.value(10).toLongLong();
     return task;
+}
+
+PromptEntry promptFromQuery(const QSqlQuery &query)
+{
+    PromptEntry prompt;
+    prompt.id = query.value(0).toLongLong();
+    prompt.name = query.value(1).toString();
+    prompt.note = query.value(2).toString();
+    prompt.content = query.value(3).toString();
+    prompt.uses = query.value(4).toInt();
+    prompt.editedAt =
+        QDateTime::fromMSecsSinceEpoch(query.value(5).toLongLong())
+            .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    prompt.builtIn = false;
+    return prompt;
 }
 
 bool execSchema(QSqlDatabase &db, const QString &sql, QString *error)
@@ -381,6 +396,20 @@ bool MediaRepository::ensureSchema(QString *error)
         QStringLiteral(
             "CREATE INDEX IF NOT EXISTS idx_clip_tasks_created "
             "ON clip_tasks(created_at_ms DESC)"),
+        // 用户提示词；内置提示词仍由 PromptCatalog 提供，不写入数据库。
+        QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS prompts ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "name TEXT NOT NULL,"
+            "note TEXT NOT NULL DEFAULT '',"
+            "content TEXT NOT NULL,"
+            "uses INTEGER NOT NULL DEFAULT 0,"
+            "created_at_ms INTEGER NOT NULL,"
+            "updated_at_ms INTEGER NOT NULL"
+            ")"),
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_prompts_updated "
+            "ON prompts(updated_at_ms DESC)"),
     };
 
     for (const QString &statement : statements) {
@@ -425,7 +454,7 @@ bool MediaRepository::ensureSchema(QString *error)
     }
 
     QString versionError;
-    if (!execSchema(m_db, QStringLiteral("PRAGMA user_version = 4"), &versionError)) {
+    if (!execSchema(m_db, QStringLiteral("PRAGMA user_version = 5"), &versionError)) {
         m_db.rollback();
         if (error) {
             *error = QStringLiteral("写入数据库版本失败：%1").arg(versionError);
@@ -748,6 +777,140 @@ MediaSource MediaRepository::source(qint64 sourceId, QString *error) const
         return MediaSource();
     }
     return sourceFromQuery(query);
+}
+
+QVector<PromptEntry> MediaRepository::userPrompts(QString *error) const
+{
+    QVector<PromptEntry> result;
+    if (!m_db.isOpen()) {
+        if (error) {
+            *error = QStringLiteral("数据库尚未打开。");
+        }
+        return result;
+    }
+
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    if (!query.exec(QStringLiteral(
+            "SELECT id, name, note, content, uses, updated_at_ms"
+            " FROM prompts ORDER BY updated_at_ms DESC, id DESC"))) {
+        if (error) {
+            *error = QStringLiteral("读取提示词失败：%1").arg(query.lastError().text());
+        }
+        return result;
+    }
+    while (query.next()) {
+        result.append(promptFromQuery(query));
+    }
+    return result;
+}
+
+qint64 MediaRepository::addPrompt(const QString &name, const QString &note,
+                                  const QString &content, QString *error)
+{
+    if (!m_db.isOpen()) {
+        if (error) {
+            *error = QStringLiteral("数据库尚未打开。");
+        }
+        return -1;
+    }
+    if (name.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("提示词名称不能为空。");
+        }
+        return -1;
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral(
+        "INSERT INTO prompts (name, note, content, uses, created_at_ms, updated_at_ms)"
+        " VALUES (?, ?, ?, 0, ?, ?)"));
+    query.addBindValue(name.trimmed());
+    query.addBindValue(textOrEmpty(note.trimmed()));
+    query.addBindValue(textOrEmpty(content));
+    query.addBindValue(now);
+    query.addBindValue(now);
+    if (!query.exec()) {
+        if (error) {
+            *error = QStringLiteral("保存提示词失败：%1").arg(query.lastError().text());
+        }
+        return -1;
+    }
+    return query.lastInsertId().toLongLong();
+}
+
+bool MediaRepository::updatePrompt(qint64 promptId, const QString &name, const QString &note,
+                                   const QString &content, QString *error)
+{
+    if (!m_db.isOpen()) {
+        if (error) {
+            *error = QStringLiteral("数据库尚未打开。");
+        }
+        return false;
+    }
+    if (promptId < 0) {
+        if (error) {
+            *error = QStringLiteral("提示词记录无效。");
+        }
+        return false;
+    }
+    if (name.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("提示词名称不能为空。");
+        }
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral(
+        "UPDATE prompts SET name = ?, note = ?, content = ?, updated_at_ms = ?"
+        " WHERE id = ?"));
+    query.addBindValue(name.trimmed());
+    query.addBindValue(textOrEmpty(note.trimmed()));
+    query.addBindValue(textOrEmpty(content));
+    query.addBindValue(QDateTime::currentMSecsSinceEpoch());
+    query.addBindValue(promptId);
+    if (!query.exec()) {
+        if (error) {
+            *error = QStringLiteral("更新提示词失败：%1").arg(query.lastError().text());
+        }
+        return false;
+    }
+    if (query.numRowsAffected() <= 0) {
+        if (error) {
+            *error = QStringLiteral("提示词不存在，可能已被删除。");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool MediaRepository::removePrompt(qint64 promptId, QString *error)
+{
+    if (!m_db.isOpen()) {
+        if (error) {
+            *error = QStringLiteral("数据库尚未打开。");
+        }
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("DELETE FROM prompts WHERE id = ?"));
+    query.addBindValue(promptId);
+    if (!query.exec()) {
+        if (error) {
+            *error = QStringLiteral("删除提示词失败：%1").arg(query.lastError().text());
+        }
+        return false;
+    }
+    if (query.numRowsAffected() <= 0) {
+        if (error) {
+            *error = QStringLiteral("提示词不存在，可能已被删除。");
+        }
+        return false;
+    }
+    return true;
 }
 
 bool MediaRepository::loadCachedAsr(qint64 sourceId, const QString &fingerprint,

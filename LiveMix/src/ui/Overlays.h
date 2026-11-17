@@ -81,6 +81,10 @@ public:
                     bool readOnly, bool creating = false);
     void closeEditor();
 
+    QString promptName() const;
+    QString promptNote() const;
+    QString promptContent() const;
+
 signals:
     void closeRequested();
     void saveRequested();

@@ -1,7 +1,6 @@
 #include "SettingsPage.h"
 
 #include "../core/AppConfig.h"
-#include "../model/DemoData.h"
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
 
@@ -430,17 +429,9 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     // ---- AI & ASR -----------------------------------------------------------
     auto *aiPane = makePane(stack);
     auto *aiLayout = qobject_cast<QVBoxLayout *>(aiPane->layout());
-    auto *promptSelect = new SelectBox(aiPane);
-    const QVector<Demo::PromptEntry> prompts = Demo::prompts();
-    for (const Demo::PromptEntry &prompt : prompts) {
-        promptSelect->addItem(prompt.name);
-    }
-    const int defaultPromptIndex = promptSelect->findText(config.ai.defaultPrompt);
-    if (defaultPromptIndex >= 0) {
-        promptSelect->setCurrentIndex(defaultPromptIndex);
-    }
-    auto *promptField = makeField(QStringLiteral("新建项目时默认提示词"), promptSelect, QString(),
-                                  false, aiPane);
+    m_promptSelect = new SelectBox(aiPane);
+    auto *promptField = makeField(QStringLiteral("新建项目时默认提示词"), m_promptSelect,
+                                  QString(), false, aiPane);
     aiLayout->addWidget(promptField, 0, Qt::AlignLeft);
     aiLayout->addSpacing(16);
 
@@ -536,7 +527,7 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     stack->addWidget(generalPane);
 
     auto persist = [this, apiInput, keyInput, draftInput, exportInput, cacheInput,
-                    recordingInput, segmentInput, limitInput, autoClean, promptSelect,
+                    recordingInput, segmentInput, limitInput, autoClean,
                     subtitleCheck, themeTabs, generalChecks,
                     cleanedPath, firstInteger](QString *error) -> bool {
         if (!m_config) {
@@ -571,7 +562,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         updated.recording.segmentSeconds =
             segmentOk ? qBound(1, seconds, 30) : updated.recording.segmentSeconds;
 
-        updated.ai.defaultPrompt = promptSelect->currentText();
+        updated.ai.defaultPrompt = m_promptSelect ? m_promptSelect->currentText()
+                                                  : updated.ai.defaultPrompt;
         updated.ai.exportSrt = subtitleCheck->isChecked();
 
         updated.general.theme = themeTabs->currentIndex() == 1
@@ -681,4 +673,31 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     bodyLayout()->addWidget(outer);
     bodyLayout()->addStretch(1);
     fitStack();
+}
+
+void SettingsPage::setPrompts(const QVector<PromptEntry> &prompts)
+{
+    if (!m_promptSelect) {
+        return;
+    }
+
+    const QString current = m_promptSelect->currentText();
+    m_promptSelect->blockSignals(true);
+    m_promptSelect->clear();
+    for (const PromptEntry &prompt : prompts) {
+        m_promptSelect->addItem(prompt.name);
+    }
+
+    QString desired = current;
+    if (desired.isEmpty() && m_config) {
+        desired = m_config->config().ai.defaultPrompt;
+    }
+    int index = m_promptSelect->findText(desired);
+    if (index < 0 && m_config) {
+        index = m_promptSelect->findText(m_config->config().ai.defaultPrompt);
+    }
+    if (index >= 0) {
+        m_promptSelect->setCurrentIndex(index);
+    }
+    m_promptSelect->blockSignals(false);
 }

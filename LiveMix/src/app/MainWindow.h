@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../data/PromptTypes.h"
+
 #include <QHash>
 #include <QPointer>
 #include <QVector>
@@ -96,6 +98,7 @@ private:
     void updateDraftStatusBar();
     // 开发预览：用示例数据展示下载弹窗的各状态。
     void showDraftDownloadPreview(const QString &state);
+    void refreshPrompts();
     void openPromptEditor(int index);
     void openPromptViewer(int index);
     void openFullscreenPrompt(const QString &name, const QString &note, const QString &content,
@@ -140,6 +143,9 @@ private:
     // 最近一次一键成片的源视频与提示词，用于过程页的「再跑一次」。
     QString m_lastPromptText;
     QString m_lastPromptLabel;
+    // 当前提示词列表（内置 + 用户），以及全屏编辑器正在编辑的数据库记录。
+    QVector<PromptEntry> m_prompts;
+    qint64 m_editingPromptId = -1;
     bool m_dashboardRefreshPending = false;
     QString m_databaseError;
     QString m_previewLocalFile;

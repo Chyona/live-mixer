@@ -2,6 +2,7 @@
 
 #include "ClipTypes.h"
 #include "MediaTypes.h"
+#include "PromptTypes.h"
 
 #include <QSqlDatabase>
 #include <QString>
@@ -60,6 +61,14 @@ public:
     ClipTask clipTask(qint64 id, QString *error = nullptr) const;
     // 应用退出后遗留的 running 任务标记为失败，避免任务中心永远显示运行中。
     bool recoverInterruptedClipTasks(QString *error = nullptr);
+
+    // 用户创建的提示词；内置提示词不在数据库中，见 PromptCatalog。
+    QVector<PromptEntry> userPrompts(QString *error = nullptr) const;
+    qint64 addPrompt(const QString &name, const QString &note, const QString &content,
+                     QString *error = nullptr);
+    bool updatePrompt(qint64 promptId, const QString &name, const QString &note,
+                      const QString &content, QString *error = nullptr);
+    bool removePrompt(qint64 promptId, QString *error = nullptr);
 
     // container 为 "hls"（直播录制）或 "mp4"（mp4 直链下载）。
     RecordingHandle createRecordingSource(const QString &title, const QString &sourceUri,
