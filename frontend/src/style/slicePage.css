@@ -397,6 +397,23 @@
   width: 100%;
 }
 
+/* 左侧文案加入右侧的插入方式切换 */
+.slice-editor-transcript-insert-mode {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.slice-editor-transcript-insert-mode .ant-segmented {
+  font-size: 12px;
+}
+
+.slice-editor-transcript-insert-mode .ant-segmented-item-label {
+  min-height: 22px;
+  line-height: 22px;
+  padding: 0 10px;
+}
+
 .slice-editor-transcript-follow {
   display: inline-flex;
   align-items: center;
@@ -1073,6 +1090,25 @@
 .slice-editor-copy-item.is-multi-selected {
   border-color: var(--primary-color);
   background: var(--color-primary-bg-subtle);
+}
+
+/* 「跟随选中」模式下的插入锚点 */
+.slice-editor-copy-item.is-insert-anchor {
+  border-bottom: 1px dashed rgba(var(--primary-color-rgb), 0.55);
+}
+
+.slice-editor-copy-insert-anchor-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  border: 1px dashed rgba(var(--primary-color-rgb), 0.55);
+  border-radius: 999px;
+  color: var(--primary-color);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .slice-editor-copy-item_dragging {

@@ -2337,6 +2337,24 @@ export function insertSegmentsByTimelineProximity(
 }
 
 /**
+ * 将 incoming 插入到 anchorId 对应片段之后（保持 incoming 顺序）。
+ * 锚点不存在时返回 null，调用方据此回退到按时间插入。
+ */
+export function insertSegmentsAfterId(
+  segments: SelectedCopySegment[],
+  incoming: SelectedCopySegment[],
+  anchorId: string
+): SelectedCopySegment[] | null {
+  if (incoming.length === 0) return segments;
+  const anchorIndex = segments.findIndex((segment) => segment.id === anchorId);
+  if (anchorIndex < 0) return null;
+
+  const next = [...segments];
+  next.splice(anchorIndex + 1, 0, ...incoming);
+  return next;
+}
+
+/**
  * 将指定 id 的片段整体移动到 toIndex（原数组中的插入位置，0..length），
  * 选中片段保持原有相对顺序，用于多选拖动排序。
  * 顺序未变化时返回原数组引用，便于调用方判断是否需要更新。

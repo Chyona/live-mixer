@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render } from '@testing-library/react';
-import type { SelectedCopySegment } from '../types';
+import { cleanup, fireEvent, render, within } from '@testing-library/react';
+import type { CopyInsertMode, SelectedCopySegment } from '../types';
 import SelectedCopyPanel from './SelectedCopyPanel';
 
 // jsdom 未实现 PointerEvent：用 MouseEvent 承载 pointer* 事件，才能传递 clientX/clientY。
@@ -22,13 +22,20 @@ function makeSegment(id: string, index: number): SelectedCopySegment {
 
 const segments = ['a', 'b', 'c', 'd'].map((id, index) => makeSegment(id, index));
 
-function renderPanel(overrides: { activeSegmentId?: string | null; onReorder?: (s: SelectedCopySegment[]) => void } = {}) {
+function renderPanel(
+  overrides: {
+    activeSegmentId?: string | null;
+    insertMode?: CopyInsertMode;
+    onReorder?: (s: SelectedCopySegment[]) => void;
+  } = {}
+) {
   const props = {
     segments,
     paragraphs: [],
     aiSegments: [],
     currentTime: 0,
     activeSegmentId: overrides.activeSegmentId ?? null,
+    insertMode: overrides.insertMode ?? ('timeline' as const),
     speakers: ['说话人1'],
     maxTotalDuration: 7200,
     videoDuration: 100,
@@ -105,6 +112,31 @@ describe('SelectedCopyPanel 多选', () => {
     expect(isMultiSelected(container, 'c')).toBe(false);
     // 单选不展示多选高亮，保持原来的 active 样式
     expect(isMultiSelected(container, 'd')).toBe(false);
+  });
+});
+
+describe('SelectedCopyPanel 插入锚点', () => {
+  it('跟随选中模式下，锚点显示在当前选中片段上；多选时取最后一段', () => {
+    const { container } = renderPanel({ insertMode: 'after-selected' });
+
+    fireEvent.click(copyItem(container, 'b'));
+    expect(copyItem(container, 'b').classList.contains('is-insert-anchor')).toBe(true);
+    expect(copyItem(container, 'a').classList.contains('is-insert-anchor')).toBe(false);
+
+    fireEvent.click(copyItem(container, 'c'), { shiftKey: true });
+    expect(copyItem(container, 'b').classList.contains('is-insert-anchor')).toBe(false);
+    expect(copyItem(container, 'c').classList.contains('is-insert-anchor')).toBe(true);
+    expect(
+      within(copyItem(container, 'c')).getByText('新内容插入到此之后')
+    ).toBeInTheDocument();
+  });
+
+  it('按时间模式下不显示插入锚点', () => {
+    const { container } = renderPanel({ insertMode: 'timeline' });
+
+    fireEvent.click(copyItem(container, 'b'));
+    expect(copyItem(container, 'b').classList.contains('is-insert-anchor')).toBe(false);
+    expect(container.textContent).not.toContain('新内容插入到此之后');
   });
 });
 

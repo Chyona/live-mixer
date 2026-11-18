@@ -53,10 +53,16 @@ import VideoTranscriptResizeHandle from './components/VideoTranscriptResizeHandl
 import SelectedCopyPanel, { type SelectedCopyPanelHandle } from './components/SelectedCopyPanel';
 import SegmentPreviewModal from './components/SegmentPreviewModal';
 import SaveDraftModal from './components/SaveDraftModal';
-import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from './types';
+import type {
+  AiSegment,
+  CopyInsertMode,
+  SelectedCopySegment,
+  TranscriptParagraph,
+} from './types';
 import {
   buildClips1Payload,
   deleteSelectedRangeFromSegment,
+  insertSegmentsAfterId,
   resolveCopySegmentWords,
   adjustSegmentEdge,
   findActiveSegment,
@@ -89,6 +95,18 @@ function buildManualProjectAutoName() {
 
 const MANUAL_SLICE_SAVE_NOTIFY_DESC =
   '您可以继续调整内容，或直接提交成片。提交后将创建任务并跳转至任务列表。';
+
+const INSERT_MODE_STORAGE_KEY = 'manual-slice-insert-mode';
+
+function readInsertMode(): CopyInsertMode {
+  try {
+    return localStorage.getItem(INSERT_MODE_STORAGE_KEY) === 'after-selected'
+      ? 'after-selected'
+      : 'timeline';
+  } catch {
+    return 'timeline';
+  }
+}
 
 /** 加入文案预览时用于提示的短摘要 */
 function buildCopySegmentExcerpt(text: string, maxLength = 18) {
@@ -139,6 +157,8 @@ const ManualVideoSlicePage = () => {
   const [savingProject, setSavingProject] = useState(false);
   const [downloadingSubtitle, setDownloadingSubtitle] = useState(false);
   const [enableCaptions, setEnableCaptions] = useState(false);
+  /** 左侧文案加入右侧的插入方式：默认按时间，可选择跟随右侧选中片段 */
+  const [insertMode, setInsertMode] = useState<CopyInsertMode>(readInsertMode);
   const [draftName, setDraftName] = useState(() => localStorage.getItem(DRAFT_STORAGE_KEY) ?? '');
   const [projectRemark, setProjectRemark] = useState('');
   const [projectTitle, setProjectTitle] = useState('');
@@ -150,6 +170,14 @@ const ManualVideoSlicePage = () => {
   useEffect(() => {
     setProjectId(projectIdFromQuery);
   }, [projectIdFromQuery]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(INSERT_MODE_STORAGE_KEY, insertMode);
+    } catch {
+      // 忽略隐私模式/配额异常
+    }
+  }, [insertMode]);
 
   useAppSEO({
     title: resolveSlicePageTitle({
@@ -550,23 +578,54 @@ const ManualVideoSlicePage = () => {
     [selectedSegments]
   );
 
+  /** 按当前插入模式把文案加入右侧：跟随选中时插到锚点后，否则按时间排序 */
+  const insertIncomingSegments = useCallback(
+    (incoming: SelectedCopySegment[]) => {
+      const anchorId =
+        insertMode === 'after-selected'
+          ? copyPanelRef.current?.getInsertAnchorId() ?? null
+          : null;
+      const anchored = anchorId
+        ? insertSegmentsAfterId(selectedSegments, incoming, anchorId)
+        : null;
+      const nextSegments =
+        anchored ?? insertSegmentsByTimelineProximity(selectedSegments, incoming);
+      // 选了「跟随选中」但右侧没有选中片段时，回退按时间插入并提示。
+      const fellBack = insertMode === 'after-selected' && anchored === null;
+
+      setSelectedSegments(nextSegments);
+      const lastSegment = incoming[incoming.length - 1] ?? null;
+      setActiveSegmentId(lastSegment?.id ?? null);
+      if (lastSegment) {
+        // 右侧滚动到新片段并短暂高亮，明确「加的是哪条、位置在哪」
+        copyPanelRef.current?.scrollToSegment(lastSegment.id, { flash: true });
+      }
+      return { nextSegments, fellBack };
+    },
+    [insertMode, selectedSegments]
+  );
+
+  const insertModeLabel = useCallback(
+    (fellBack: boolean) => {
+      if (fellBack) return '右侧未选中片段，已按时间插入';
+      return insertMode === 'after-selected' ? '选中片段之后' : '按时间排序';
+    },
+    [insertMode]
+  );
+
   const handleSelectSegment = useCallback((segment: SelectedCopySegment | null) => {
     if (!segment) return;
 
     const sanitized = clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration);
-    const nextSegments = insertSegmentsByTimelineProximity(selectedSegments, sanitized);
-    setSelectedSegments(nextSegments);
-    setActiveSegmentId(sanitized.id);
-    // 右侧滚动到新片段并短暂高亮，明确「加的是哪条、位置在哪」
-    copyPanelRef.current?.scrollToSegment(sanitized.id, { flash: true });
+    const { nextSegments, fellBack } = insertIncomingSegments([sanitized]);
 
     const position = nextSegments.findIndex((item) => item.id === sanitized.id) + 1;
     const excerpt = buildCopySegmentExcerpt(sanitized.text);
     toast.notify.success(
       `已加入第 ${position} 段`,
-      excerpt ? `共 ${nextSegments.length} 段 · 「${excerpt}」` : `共 ${nextSegments.length} 段`
+      `共 ${nextSegments.length} 段 · ${insertModeLabel(fellBack)}${excerpt ? ` · 「${excerpt}」` : ''}`
     );
-  }, [paragraphs, selectedSegments, videoDuration]);
+  }, [insertIncomingSegments, insertModeLabel, paragraphs, videoDuration]);
 
   const aiSegments = useMemo(
     () => asrSummariesToAiSegments(video?.asr_summaries),
@@ -584,13 +643,7 @@ const ManualVideoSlicePage = () => {
       const sanitized = segments.map((segment) =>
         clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration)
       );
-      const nextSegments = insertSegmentsByTimelineProximity(selectedSegments, sanitized);
-      setSelectedSegments(nextSegments);
-      const lastSegment = sanitized[sanitized.length - 1];
-      setActiveSegmentId(lastSegment?.id ?? null);
-      if (lastSegment) {
-        copyPanelRef.current?.scrollToSegment(lastSegment.id, { flash: true });
-      }
+      const { nextSegments, fellBack } = insertIncomingSegments(sanitized);
 
       const positions = sanitized
         .map((item) => nextSegments.findIndex((segmentItem) => segmentItem.id === item.id) + 1)
@@ -604,9 +657,12 @@ const ManualVideoSlicePage = () => {
           : contiguous
             ? `已加入第 ${firstPosition}-${lastPosition} 段`
             : `已加入 ${sanitized.length} 个片段`;
-      toast.notify.success(title, `共 ${nextSegments.length} 段`);
+      toast.notify.success(
+        title,
+        `共 ${nextSegments.length} 段 · ${insertModeLabel(fellBack)}`
+      );
     },
-    [paragraphs, selectedSegments, videoDuration]
+    [insertIncomingSegments, insertModeLabel, paragraphs, videoDuration]
   );
 
   const handleDeleteSegment = useCallback((segmentId: string) => {
@@ -1203,6 +1259,8 @@ const ManualVideoSlicePage = () => {
                 onSeek={handleSeek}
                 onSelectSegment={handleSelectSegment}
                 onLocateParagraph={handleLocateParagraph}
+                insertMode={insertMode}
+                onInsertModeChange={setInsertMode}
                 readOnly={projectTaskReadOnly}
                 asrPending={asrPending}
               />
@@ -1216,6 +1274,7 @@ const ManualVideoSlicePage = () => {
             aiSegments={aiSegments}
             currentTime={currentTime}
             activeSegmentId={activeSegmentId}
+            insertMode={insertMode}
             speakers={speakers}
             maxTotalDuration={MAX_TOTAL_DURATION}
             videoDuration={videoDuration}

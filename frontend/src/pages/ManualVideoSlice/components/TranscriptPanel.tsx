@@ -1,9 +1,9 @@
-import { Switch, Tooltip } from 'antd';
+import { Segmented, Switch, Tooltip } from 'antd';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LuCheck, LuPlus } from 'react-icons/lu';
 import { highlightPlainKeyword } from '~/utils/listKeywords';
-import type { TranscriptParagraph } from '../types';
+import type { CopyInsertMode, TranscriptParagraph } from '../types';
 import KeywordSearchBar from './KeywordSearchBar';
 import {
   formatSliceTime,
@@ -36,6 +36,9 @@ interface TranscriptPanelProps {
   onSelectSegment: (segment: ReturnType<typeof paragraphToCopySegment>) => void;
   /** 定位跟随开启时，单击文案通知页面滚动右侧预览 */
   onLocateParagraph?: (paragraph: TranscriptParagraph, timeSec: number) => void;
+  /** 加入右侧时的插入方式 */
+  insertMode: CopyInsertMode;
+  onInsertModeChange: (mode: CopyInsertMode) => void;
   /** 只读：可定位播放，不可点选/拖选文案 */
   readOnly?: boolean;
   /** 录像时长超过 ASR 覆盖时，在文案列表末尾提示字幕仍在生成 */
@@ -272,6 +275,8 @@ const TranscriptPanel = ({
   onSeek,
   onSelectSegment,
   onLocateParagraph,
+  insertMode,
+  onInsertModeChange,
   readOnly = false,
   asrPending = false,
 }: TranscriptPanelProps) => {
@@ -669,6 +674,21 @@ const TranscriptPanel = ({
         <div className="slice-editor-transcript-head">
           <div className="slice-editor-transcript-head-main">
             <div className="slice-editor-panel-title">文案分段</div>
+            {!readOnly ? (
+              <Tooltip title="新文案加入右侧的位置：按时间排序，或插入到右侧当前选中片段之后">
+                <span className="slice-editor-transcript-insert-mode">
+                  <Segmented
+                    size="small"
+                    value={insertMode}
+                    onChange={(value) => onInsertModeChange(value as CopyInsertMode)}
+                    options={[
+                      { label: '按时间', value: 'timeline' },
+                      { label: '跟随选中', value: 'after-selected' },
+                    ]}
+                  />
+                </span>
+              </Tooltip>
+            ) : null}
             <Tooltip title="开启后，播放视频时文案列表会自动滚动，将当前朗读段落居中显示；单击文案时，右侧预览会滚到对应片段">
               <label className="slice-editor-transcript-follow">
                 <Switch

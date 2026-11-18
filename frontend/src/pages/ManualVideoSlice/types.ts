@@ -1,3 +1,6 @@
+/** 左侧文案加入右侧预览时的插入方式 */
+export type CopyInsertMode = 'timeline' | 'after-selected';
+
 export interface TranscriptWord {
   /** 秒 */
   start: number;

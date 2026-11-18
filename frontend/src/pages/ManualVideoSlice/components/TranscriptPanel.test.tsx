@@ -73,6 +73,8 @@ function renderPanel(selectedCopyHighlights: SelectedCopyHighlightRange[] = []) 
     onSeek: vi.fn(),
     onSelectSegment: vi.fn(),
     onLocateParagraph: vi.fn(),
+    insertMode: 'timeline' as const,
+    onInsertModeChange: vi.fn(),
   };
   return { ...render(<TranscriptPanel {...props} />), props };
 }
@@ -120,6 +122,17 @@ describe('TranscriptPanel 选中与加入预览', () => {
     expect(props.onSelectSegment).toHaveBeenCalledTimes(1);
     expect(props.onSeek).not.toHaveBeenCalled();
     expect(paragraphElement(container, 'p1').classList.contains('selected')).toBe(true);
+  });
+
+  it('可切换插入方式，默认按时间', () => {
+    const { container, props } = renderPanel();
+    const modeScope = within(
+      container.querySelector<HTMLElement>('.slice-editor-transcript-insert-mode')!
+    );
+
+    expect(modeScope.getByText('按时间')).toBeInTheDocument();
+    fireEvent.click(modeScope.getByText('跟随选中'));
+    expect(props.onInsertModeChange).toHaveBeenCalledWith('after-selected');
   });
 
   it('已加入右侧预览的段落显示「已添加」标记', () => {

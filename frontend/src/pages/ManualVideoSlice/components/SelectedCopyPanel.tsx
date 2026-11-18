@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Checkbox } from 'antd';
 import {
   LuArrowLeft,
+  LuCornerDownRight,
   LuGripVertical,
   LuMinus,
   LuPlay,
@@ -12,7 +13,12 @@ import {
   LuTrash2,
 } from 'react-icons/lu';
 import { CopyIcon } from '~/components/CopyIcon';
-import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from '../types';
+import type {
+  AiSegment,
+  CopyInsertMode,
+  SelectedCopySegment,
+  TranscriptParagraph,
+} from '../types';
 import {
   formatPadSeconds,
   formatSliceTime,
@@ -85,6 +91,8 @@ function wouldReorderSelection(
 export type SelectedCopyPanelHandle = {
   /** 滚动到指定片段；flash 为 true 时短暂高亮，用于提示新加入位置 */
   scrollToSegment: (id: string, options?: { flash?: boolean }) => void;
+  /** 「跟随选中」模式下新增文案的插入锚点（选中块最后一段）；无选中时返回 null */
+  getInsertAnchorId: () => string | null;
 };
 
 interface SelectedCopyPanelProps {
@@ -95,6 +103,8 @@ interface SelectedCopyPanelProps {
   aiSegments?: AiSegment[];
   currentTime?: number;
   activeSegmentId: string | null;
+  /** 左侧加入文案时的插入方式；after-selected 时在锚点片段上展示提示 */
+  insertMode?: CopyInsertMode;
   speakers: string[];
   maxTotalDuration: number;
   videoDuration: number;
@@ -130,6 +140,7 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
   aiSegments = [],
   currentTime = 0,
   activeSegmentId,
+  insertMode = 'timeline',
   speakers,
   maxTotalDuration,
   videoDuration,
@@ -171,6 +182,18 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
   const listRef = useRef<HTMLDivElement>(null);
   const flashTimerRef = useRef(0);
 
+  /** 「跟随选中」的插入锚点：多选时取列表中最后一段，未多选时取 active 片段。 */
+  const insertAnchorId = useMemo(() => {
+    if (insertMode !== 'after-selected') return null;
+    const selectedInOrder = segments.filter((segment) => selectedIds.includes(segment.id));
+    const lastSelected = selectedInOrder[selectedInOrder.length - 1];
+    if (lastSelected) return lastSelected.id;
+    if (activeSegmentId && segments.some((segment) => segment.id === activeSegmentId)) {
+      return activeSegmentId;
+    }
+    return null;
+  }, [activeSegmentId, insertMode, segments, selectedIds]);
+
   const revealSegment = (id: string, attempt = 0) => {
     const container = listRef.current;
     if (!container) return;
@@ -199,6 +222,9 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
       const node = container.querySelector<HTMLElement>(`[data-copy-id="${CSS.escape(id)}"]`);
       if (!node) return;
       scrollElementIntoViewPreferUpper(container, node);
+    },
+    getInsertAnchorId() {
+      return insertAnchorId;
     },
   }));
   const pointerDraggingRef = useRef(false);
@@ -705,6 +731,7 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
                   'slice-editor-copy-item',
                   isActive ? 'active' : '',
                   isMultiSelected ? 'is-multi-selected' : '',
+                  insertAnchorId === segment.id ? 'is-insert-anchor' : '',
                   flashSegmentId === segment.id ? 'slice-editor-copy-item_just-added' : '',
                   dragIdSet.has(segment.id) ? 'slice-editor-copy-item_dragging' : '',
                   showInsertBefore ? 'slice-editor-copy-item_insert-before' : '',
@@ -739,6 +766,15 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
                   </span>
                   {flashSegmentId === segment.id ? (
                     <span className="slice-editor-copy-just-added-tag">刚刚加入</span>
+                  ) : null}
+                  {insertAnchorId === segment.id ? (
+                    <span
+                      className="slice-editor-copy-insert-anchor-tag"
+                      title="左侧新加入的文案会插入到该片段之后"
+                    >
+                      <LuCornerDownRight size={12} />
+                      新内容插入到此之后
+                    </span>
                   ) : null}
                 </div>
 

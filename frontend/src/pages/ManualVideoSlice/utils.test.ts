@@ -29,6 +29,7 @@ import {
   insertSegmentsByTimelineProximity,
   buildClips1Payload,
   resolveSegmentClipWords,
+  insertSegmentsAfterId,
   moveSegmentsByIds,
   sanitizeSelectedCopySegments,
   splitCaptionClauses,
@@ -86,6 +87,31 @@ describe('insertSegmentsByTimelineProximity', () => {
     const incoming = [makeCopySegment('a', 10, 20), makeCopySegment('b', 150, 180)];
     const next = insertSegmentsByTimelineProximity(existing, incoming);
     expect(next.map((item) => item.id)).toEqual(['a', 'b', 'x1']);
+  });
+});
+
+describe('insertSegmentsAfterId', () => {
+  const makeSegments = (ids: string[]) => ids.map((id) => makeCopySegment(id));
+
+  it('inserts one segment right after the anchor', () => {
+    const segments = makeSegments(['a', 'b', 'c']);
+    const next = insertSegmentsAfterId(segments, [makeCopySegment('x')], 'b');
+    expect(next?.map((item) => item.id)).toEqual(['a', 'b', 'x', 'c']);
+  });
+
+  it('inserts multiple segments after the anchor in order', () => {
+    const segments = makeSegments(['a', 'b']);
+    const next = insertSegmentsAfterId(
+      segments,
+      [makeCopySegment('x'), makeCopySegment('y')],
+      'b'
+    );
+    expect(next?.map((item) => item.id)).toEqual(['a', 'b', 'x', 'y']);
+  });
+
+  it('returns null when the anchor is missing so callers can fall back', () => {
+    const segments = makeSegments(['a', 'b']);
+    expect(insertSegmentsAfterId(segments, [makeCopySegment('x')], 'missing')).toBeNull();
   });
 });
 
