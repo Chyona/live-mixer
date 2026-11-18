@@ -1,6 +1,7 @@
 import { Switch, Tooltip } from 'antd';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { LuCheck, LuPlus } from 'react-icons/lu';
 import { highlightPlainKeyword } from '~/utils/listKeywords';
 import type { TranscriptParagraph } from '../types';
 import KeywordSearchBar from './KeywordSearchBar';
@@ -84,7 +85,12 @@ type TranscriptParagraphItemProps = {
   keyword: string;
   isKeywordMatch: boolean;
   isCurrentKeywordMatch: boolean;
+  /** 当前选中的段落（明显的选中态） */
+  isSelected: boolean;
+  /** 该段已加入右侧预览的片段数 */
+  addedCount: number;
   readOnly: boolean;
+  onAddParagraph: (paragraph: TranscriptParagraph) => void;
   onParagraphClick: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
   onParagraphDoubleClick: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
   onTextSelection: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
@@ -103,7 +109,10 @@ const TranscriptParagraphItem = ({
   keyword,
   isKeywordMatch,
   isCurrentKeywordMatch,
+  isSelected,
+  addedCount,
   readOnly,
+  onAddParagraph,
   onParagraphClick,
   onParagraphDoubleClick,
   onTextSelection,
@@ -189,6 +198,7 @@ const TranscriptParagraphItem = ({
         isPlaybackParagraph ? 'active' : '',
         isKeywordMatch ? 'matched' : '',
         isCurrentKeywordMatch ? 'matched-current' : '',
+        isSelected ? 'selected' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -203,6 +213,34 @@ const TranscriptParagraphItem = ({
           <span className="slice-editor-paragraph-time">
             {formatSliceTime(paragraphRange.start)} - {formatSliceTime(paragraphRange.end)}
           </span>
+        </div>
+        <div className="slice-editor-paragraph-head-side">
+          {addedCount > 0 ? (
+            <span
+              className="slice-editor-paragraph-added"
+              title={`该段已有 ${addedCount} 条文案加入右侧预览`}
+            >
+              <LuCheck size={12} />
+              {addedCount > 1 ? `已添加 ${addedCount}` : '已添加'}
+            </span>
+          ) : null}
+          {!readOnly ? (
+            <button
+              type="button"
+              className="slice-editor-paragraph-add"
+              title="加入右侧文案预览（也可双击整段）"
+              onClick={(event) => {
+                event.stopPropagation();
+                // 双击按钮只算一次加入
+                if (event.detail > 1) return;
+                onAddParagraph(paragraph);
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+            >
+              <LuPlus size={12} />
+              加入预览
+            </button>
+          ) : null}
         </div>
       </div>
       <div
@@ -245,6 +283,8 @@ const TranscriptPanel = ({
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(() => {
     return localStorage.getItem(TRANSCRIPT_AUTO_SCROLL_KEY) !== 'false';
   });
+  /** 最近点选的段落：用于明显选中态，帮助用户确认操作对象 */
+  const [selectedParagraphId, setSelectedParagraphId] = useState<string | null>(null);
 
   const speakers = useMemo(
     () => [...new Set(paragraphs.map((item) => item.speaker))],
@@ -517,10 +557,25 @@ const TranscriptPanel = ({
 
     const range = getParagraphRange(paragraph);
     onSeek(range.start);
+    if (!readOnly) {
+      setSelectedParagraphId(paragraph.id);
+    }
     if (autoScrollEnabled) {
       onLocateParagraph?.(paragraph, range.start);
     }
   };
+
+  const handleAddParagraph = useCallback(
+    (paragraph: TranscriptParagraph) => {
+      if (readOnly) return;
+      setSelectedParagraphId(paragraph.id);
+      const copySegment = paragraphToCopySegment(paragraph);
+      if (copySegment) {
+        onSelectSegment(copySegment);
+      }
+    },
+    [onSelectSegment, readOnly]
+  );
 
   const handleParagraphDoubleClick = (
     event: React.MouseEvent<HTMLDivElement>,
@@ -532,10 +587,7 @@ const TranscriptPanel = ({
     suppressNextClickSeekRef.current = false;
     window.getSelection()?.removeAllRanges();
 
-    const copySegment = paragraphToCopySegment(paragraph);
-    if (copySegment) {
-      onSelectSegment(copySegment);
-    }
+    handleAddParagraph(paragraph);
   };
 
   const handleTextSelection = (
@@ -551,6 +603,7 @@ const TranscriptPanel = ({
     const copySegment = paragraphSelectionToCopySegment(event.currentTarget, paragraph);
     if (copySegment) {
       suppressNextClickSeekRef.current = true;
+      setSelectedParagraphId(paragraph.id);
       onSelectSegment(copySegment);
       selection.removeAllRanges();
     }
@@ -566,6 +619,9 @@ const TranscriptPanel = ({
     if (suppressNextClickSeekRef.current) {
       suppressNextClickSeekRef.current = false;
       return;
+    }
+    if (!readOnly) {
+      setSelectedParagraphId(paragraph.id);
     }
     onSeek(start);
     if (autoScrollEnabled) {
@@ -588,7 +644,10 @@ const TranscriptPanel = ({
       keyword={keyword}
       isKeywordMatch={options.isKeywordMatch}
       isCurrentKeywordMatch={options.isCurrentKeywordMatch}
+      isSelected={selectedParagraphId === paragraph.id}
+      addedCount={highlightCountByParagraphId.get(paragraph.id) ?? 0}
       readOnly={readOnly}
+      onAddParagraph={handleAddParagraph}
       onParagraphClick={handleParagraphClick}
       onParagraphDoubleClick={handleParagraphDoubleClick}
       onTextSelection={handleTextSelection}
@@ -690,7 +749,7 @@ const TranscriptPanel = ({
       <p className="slice-editor-transcript-tip">
         {readOnly
           ? '当前为只读模式，单击可定位视频，暂不可选择文案。'
-          : '单击定位视频，双击选中整段；拖拽选中部分文字可提取对应片段。'}
+          : '单击定位并选中段落；双击或点「加入预览」加入整段，拖拽选中部分文字可提取片段。'}
       </p>
     </div>
   );

@@ -90,6 +90,15 @@ function buildManualProjectAutoName() {
 const MANUAL_SLICE_SAVE_NOTIFY_DESC =
   '您可以继续调整内容，或直接提交成片。提交后将创建任务并跳转至任务列表。';
 
+/** 加入文案预览时用于提示的短摘要 */
+function buildCopySegmentExcerpt(text: string, maxLength = 18) {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}…`
+    : normalized;
+}
+
 const ManualVideoSlicePage = () => {
   const { id: sourceVideoId = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -545,11 +554,19 @@ const ManualVideoSlicePage = () => {
     if (!segment) return;
 
     const sanitized = clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration);
-    setSelectedSegments((prev) => insertSegmentsByTimelineProximity(prev, sanitized));
+    const nextSegments = insertSegmentsByTimelineProximity(selectedSegments, sanitized);
+    setSelectedSegments(nextSegments);
     setActiveSegmentId(sanitized.id);
-    // 选片只加入预览，不打断当前播放进度
-    toast.notify.success('已添加到文案预览');
-  }, [paragraphs, videoDuration]);
+    // 右侧滚动到新片段并短暂高亮，明确「加的是哪条、位置在哪」
+    copyPanelRef.current?.scrollToSegment(sanitized.id, { flash: true });
+
+    const position = nextSegments.findIndex((item) => item.id === sanitized.id) + 1;
+    const excerpt = buildCopySegmentExcerpt(sanitized.text);
+    toast.notify.success(
+      `已加入第 ${position} 段`,
+      excerpt ? `共 ${nextSegments.length} 段 · 「${excerpt}」` : `共 ${nextSegments.length} 段`
+    );
+  }, [paragraphs, selectedSegments, videoDuration]);
 
   const aiSegments = useMemo(
     () => asrSummariesToAiSegments(video?.asr_summaries),
@@ -567,15 +584,29 @@ const ManualVideoSlicePage = () => {
       const sanitized = segments.map((segment) =>
         clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration)
       );
-      setSelectedSegments((prev) => insertSegmentsByTimelineProximity(prev, sanitized));
-      setActiveSegmentId(sanitized[sanitized.length - 1]?.id ?? null);
-      toast.notify.success(
-        sanitized.length > 1
-          ? `已添加 ${sanitized.length} 个片段到文案预览`
-          : '已添加到文案预览'
-      );
+      const nextSegments = insertSegmentsByTimelineProximity(selectedSegments, sanitized);
+      setSelectedSegments(nextSegments);
+      const lastSegment = sanitized[sanitized.length - 1];
+      setActiveSegmentId(lastSegment?.id ?? null);
+      if (lastSegment) {
+        copyPanelRef.current?.scrollToSegment(lastSegment.id, { flash: true });
+      }
+
+      const positions = sanitized
+        .map((item) => nextSegments.findIndex((segmentItem) => segmentItem.id === item.id) + 1)
+        .filter((position) => position > 0);
+      const firstPosition = positions[0] ?? 0;
+      const lastPosition = positions[positions.length - 1] ?? firstPosition;
+      const contiguous = positions.length > 1 && lastPosition - firstPosition + 1 === positions.length;
+      const title =
+        sanitized.length === 1
+          ? `已加入第 ${firstPosition} 段`
+          : contiguous
+            ? `已加入第 ${firstPosition}-${lastPosition} 段`
+            : `已加入 ${sanitized.length} 个片段`;
+      toast.notify.success(title, `共 ${nextSegments.length} 段`);
     },
-    [paragraphs, videoDuration]
+    [paragraphs, selectedSegments, videoDuration]
   );
 
   const handleDeleteSegment = useCallback((segmentId: string) => {

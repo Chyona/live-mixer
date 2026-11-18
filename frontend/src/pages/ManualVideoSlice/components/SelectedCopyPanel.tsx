@@ -83,7 +83,8 @@ function wouldReorderSelection(
 }
 
 export type SelectedCopyPanelHandle = {
-  scrollToSegment: (id: string) => void;
+  /** 滚动到指定片段；flash 为 true 时短暂高亮，用于提示新加入位置 */
+  scrollToSegment: (id: string, options?: { flash?: boolean }) => void;
 };
 
 interface SelectedCopyPanelProps {
@@ -155,6 +156,8 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
   const [dragIds, setDragIds] = useState<string[]>([]);
   const [dropMarker, setDropMarker] = useState<DropMarker | null>(null);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
+  /** 刚从左侧加入的片段：短暂高亮，帮助用户定位 */
+  const [flashSegmentId, setFlashSegmentId] = useState<string | null>(null);
   /** 多选：与系统文件管理器一致，Ctrl/Cmd 点选切换、Shift 点选连续范围 */
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [aiPanelHeight, setAiPanelHeight] = useState<number | null>(null);
@@ -166,9 +169,31 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
   const panelRef = useRef<HTMLDivElement>(null);
   const aiBlockRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const flashTimerRef = useRef(0);
+
+  const revealSegment = (id: string, attempt = 0) => {
+    const container = listRef.current;
+    if (!container) return;
+    const node = container.querySelector<HTMLElement>(`[data-copy-id="${CSS.escape(id)}"]`);
+    // 刚 setState 后节点可能尚未挂载：重试几帧再滚动。
+    if (!node) {
+      if (attempt < 6) {
+        requestAnimationFrame(() => revealSegment(id, attempt + 1));
+      }
+      return;
+    }
+    scrollElementIntoViewPreferUpper(container, node);
+    setFlashSegmentId(id);
+    window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => setFlashSegmentId(null), 1800);
+  };
 
   useImperativeHandle(ref, () => ({
-    scrollToSegment(id: string) {
+    scrollToSegment(id: string, options?: { flash?: boolean }) {
+      if (options?.flash) {
+        revealSegment(id);
+        return;
+      }
       const container = listRef.current;
       if (!container) return;
       const node = container.querySelector<HTMLElement>(`[data-copy-id="${CSS.escape(id)}"]`);
@@ -245,6 +270,7 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
       if (dragAutoScrollRafRef.current) {
         cancelAnimationFrame(dragAutoScrollRafRef.current);
       }
+      window.clearTimeout(flashTimerRef.current);
     };
   }, []);
 
@@ -679,6 +705,7 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
                   'slice-editor-copy-item',
                   isActive ? 'active' : '',
                   isMultiSelected ? 'is-multi-selected' : '',
+                  flashSegmentId === segment.id ? 'slice-editor-copy-item_just-added' : '',
                   dragIdSet.has(segment.id) ? 'slice-editor-copy-item_dragging' : '',
                   showInsertBefore ? 'slice-editor-copy-item_insert-before' : '',
                   showInsertAfter ? 'slice-editor-copy-item_insert-after' : '',
@@ -710,6 +737,9 @@ const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelP
                   <span className="slice-editor-copy-time">
                     {formatSliceTime(segment.start)} - {formatSliceTime(segment.end)}
                   </span>
+                  {flashSegmentId === segment.id ? (
+                    <span className="slice-editor-copy-just-added-tag">刚刚加入</span>
+                  ) : null}
                 </div>
 
                 <p

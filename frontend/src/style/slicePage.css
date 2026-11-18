@@ -595,6 +595,17 @@
   background: var(--surface-item-active-bg);
 }
 
+/* 点选中的段落：左侧主色标线 + 浅主色底，明确当前操作对象 */
+.slice-editor-paragraph.selected {
+  border-color: var(--primary-color);
+  background: var(--color-primary-bg-subtle);
+  box-shadow: inset 3px 0 0 var(--primary-color);
+}
+
+.slice-editor-paragraph.selected .slice-editor-speaker {
+  color: var(--primary-color) !important;
+}
+
 .slice-editor-paragraph-head {
   display: flex;
   align-items: center;
@@ -608,6 +619,60 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.slice-editor-paragraph-head-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 已加入右侧预览的标记 */
+.slice-editor-paragraph-added {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(82, 196, 26, 0.14);
+  color: #389e0d;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 段落头部「加入预览」快捷按钮：常驻但低调，悬停/选中时强调 */
+.slice-editor-paragraph-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border: 1px solid var(--surface-item-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-gray);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.slice-editor-paragraph-add:hover {
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+  background: var(--color-primary-bg-subtle);
+}
+
+.slice-editor-paragraph.selected .slice-editor-paragraph-add,
+.slice-editor-paragraph:hover .slice-editor-paragraph-add {
+  color: var(--primary-color);
+  border-color: rgba(var(--primary-color-rgb), 0.45);
 }
 
 .slice-editor-speaker {
@@ -1012,6 +1077,37 @@
 
 .slice-editor-copy-item_dragging {
   opacity: 0.32;
+}
+
+/* 新加入片段：短暂描边脉冲 + 「刚刚加入」标签，帮助用户定位 */
+.slice-editor-copy-item_just-added {
+  animation: slice-copy-just-added 1.8s ease-out;
+}
+
+.slice-editor-copy-just-added-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--primary-color);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@keyframes slice-copy-just-added {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--primary-color-rgb), 0.4);
+    background: var(--color-primary-bg-subtle);
+  }
+  35% {
+    box-shadow: 0 0 0 4px rgba(var(--primary-color-rgb), 0.2);
+  }
+  100% {
+    box-shadow: 0 0 0 4px rgba(var(--primary-color-rgb), 0);
+  }
 }
 
 .slice-editor-copy-item_insert-before::before,
