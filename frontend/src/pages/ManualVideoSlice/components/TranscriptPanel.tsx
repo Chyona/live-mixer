@@ -1,6 +1,6 @@
 import { Switch, Tooltip } from 'antd';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { highlightPlainKeyword } from '~/utils/listKeywords';
 import type { TranscriptParagraph } from '../types';
 import KeywordSearchBar from './KeywordSearchBar';
@@ -313,6 +313,21 @@ const TranscriptPanel = ({
     [highlightLayoutKey, trimmedKeyword]
   );
 
+  /**
+   * 虚拟列表项 key 必须只跟段落本身绑定：
+   * 若把搜索词/高亮布局拼进 key，选中文案时所有行都会被当成新行重建，
+   * 已测高度失效并被重新估算，虚拟列表会为“首次测量”的行补偿滚动，
+   * 表现为滚动条异常跳动。
+   */
+  const getVirtualItemKey = useCallback(
+    (index: number) => {
+      const paragraph = paragraphs[index];
+      if (!paragraph) return `index-${index}`;
+      return paragraph.id;
+    },
+    [paragraphs]
+  );
+
   const virtualizer = useVirtualizer({
     count: paragraphs.length,
     getScrollElement: () => transcriptBodyRef.current,
@@ -344,23 +359,8 @@ const TranscriptPanel = ({
       return height;
     },
     overscan: 6,
-    getItemKey: (index) => {
-      const paragraph = paragraphs[index];
-      if (!paragraph) return String(index);
-      return getParagraphSizeCacheKey(paragraph.id);
-    },
+    getItemKey: getVirtualItemKey,
   });
-
-  useLayoutEffect(() => {
-    if (!shouldVirtualize) return;
-    virtualizer.measure();
-  }, [
-    shouldVirtualize,
-    highlightLayoutKey,
-    trimmedKeyword,
-    paragraphSyncKey,
-    virtualizer,
-  ]);
 
   const scrollToParagraphIndex = useCallback(
     (index: number, behavior: ScrollBehavior = 'smooth') => {
