@@ -18,6 +18,7 @@ import { useAppSEO } from '~/hooks/useAppSEO';
 import { useListFilters } from '~/hooks/useListFilters';
 import { useTableColumnVisibility } from '~/hooks/useTableColumnVisibility';
 import { buildManualVideoSliceLink, buildSlicesListLink, buildSourceVideoSliceLink } from '~/routes/links';
+import { sanitizeDownloadFilename } from '~/services/blobDownload';
 import { AppError } from '~/services/http';
 import {
   deleteSourceVideo,
@@ -111,10 +112,6 @@ function renderSliceAction(options: {
 function getSourceVideoProjectCount(record: Pick<SourceVideo, 'project_count'>): number {
   const count = Number(record.project_count);
   return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
-}
-
-function sanitizeDownloadFilename(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'subtitle';
 }
 
 function SourceVideoDeleteButton({

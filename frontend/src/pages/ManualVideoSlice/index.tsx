@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Button } from 'antd';
+import { Button, Space } from 'antd';
+import { LuDownload } from 'react-icons/lu';
 import SliceVideoPlayer from '~/components/SliceVideoPlayer';
 import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
 import SlicePageHeader, { SliceProjectMetaBar } from '~/components/SlicePageHeader';
@@ -20,7 +21,9 @@ import {
   type SourceVideo,
 } from '~/services/sourceVideo';
 import { getAsrSelectableEndSec, shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
+import { sanitizeDownloadFilename } from '~/services/blobDownload';
 import {
+  downloadSliceProjectSubtitle,
   fetchSliceProjectDetail,
   saveSliceProject,
   toSliceProjectClips,
@@ -125,6 +128,7 @@ const ManualVideoSlicePage = () => {
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saveModalMode, setSaveModalMode] = useState<'create' | 'saveAs' | 'export'>('saveAs');
   const [savingProject, setSavingProject] = useState(false);
+  const [downloadingSubtitle, setDownloadingSubtitle] = useState(false);
   const [enableCaptions, setEnableCaptions] = useState(false);
   const [draftName, setDraftName] = useState(() => localStorage.getItem(DRAFT_STORAGE_KEY) ?? '');
   const [projectRemark, setProjectRemark] = useState('');
@@ -947,6 +951,41 @@ const ManualVideoSlicePage = () => {
     void handleSaveProject();
   };
 
+  /** 下载与提交成片/剪映草稿完全一致的字幕（由后端复用草稿断行规则生成） */
+  const handleDownloadSubtitle = useCallback(async () => {
+    if (!video) return;
+    if (selectedSegments.length === 0) {
+      toast.notify.warning('请先选择至少一个片段');
+      return;
+    }
+    if (!enableCaptions) {
+      toast.notify.warning('请先勾选「生成字幕」再下载');
+      return;
+    }
+
+    setDownloadingSubtitle(true);
+    try {
+      const filename = `${sanitizeDownloadFilename(video.name || 'subtitle')}-字幕.txt`;
+      await downloadSliceProjectSubtitle(
+        {
+          live_id: video.id,
+          clips1: buildClips1Payload(selectedSegments, paragraphs),
+          enable_captions: enableCaptions,
+        },
+        filename
+      );
+      toast.notify.success('字幕文件已开始下载');
+    } catch (error) {
+      if (error instanceof AppError) {
+        showAppError(error);
+      } else {
+        toast.notify.error(error instanceof Error ? error.message : '字幕下载失败');
+      }
+    } finally {
+      setDownloadingSubtitle(false);
+    }
+  }, [enableCaptions, paragraphs, selectedSegments, video]);
+
   const handleSwitchToTimeline = useCallback(() => {
     confirmLeave(() => {
       if (projectId) {
@@ -1019,9 +1058,18 @@ const ManualVideoSlicePage = () => {
           ) : undefined
         }
         actions={
-          <Button className="slice-mode-switch-btn" onClick={handleSwitchToTimeline}>
-            切换到时间轴切片
-          </Button>
+          <Space size={12} align="center">
+            <Button
+              icon={<LuDownload size={16} />}
+              loading={downloadingSubtitle}
+              onClick={() => void handleDownloadSubtitle()}
+            >
+              字幕下载
+            </Button>
+            <Button className="slice-mode-switch-btn" onClick={handleSwitchToTimeline}>
+              切换到时间轴切片
+            </Button>
+          </Space>
         }
       />
       <SliceProjectTaskReadOnlyAlert

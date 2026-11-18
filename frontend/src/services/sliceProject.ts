@@ -1,5 +1,6 @@
 import type { SelectedCopySegment, TranscriptWord } from '~/pages/ManualVideoSlice/types';
 import type { BaseResponse } from './types';
+import { downloadBlob } from './blobDownload';
 import { request } from './http';
 
 export type SliceProjectSource = 'timeline' | 'manual';
@@ -380,6 +381,32 @@ export async function deleteSliceProject(
 ): Promise<BaseResponse<null>> {
   return await request(`/v1/video-projects/${projectId}`, {
     method: 'delete',
+  });
+}
+
+/** 字幕下载入参：按当前编辑中的 clips1 计算，不落库 */
+export interface SliceProjectSubtitleParams {
+  live_id: number;
+  clips1: SliceProjectClip[];
+  /** 未开启时后端返回「项目未开启字幕」 */
+  enable_captions?: boolean;
+}
+
+/**
+ * 下载与提交成片/剪映草稿完全一致的字幕（TXT，每行一条字幕）。
+ * 后端复用草稿的字幕断行规则与 LLM 断句缓存，因此内容与成片字幕一致。
+ */
+export async function downloadSliceProjectSubtitle(
+  params: SliceProjectSubtitleParams,
+  fallbackFilename: string
+): Promise<void> {
+  await downloadBlob({
+    url: '/v1/video-projects/subtitle',
+    method: 'post',
+    data: params,
+    fallbackFilename,
+    fallbackError: '字幕下载失败',
+    emptyMessage: '暂无字幕内容',
   });
 }
 

@@ -469,3 +469,62 @@ func captionsContain(items []capcutmate.CaptionItem, sub string) bool {
 	}
 	return false
 }
+
+// BuildCaptionTexts 必须与草稿字幕逐条一致（文本与顺序），只是去掉时间轴。
+func TestBuildCaptionTexts_MatchesDraftCaptions(t *testing.T) {
+	clips := []model.ClipRange{{StartTime: 0, EndTime: 1000}, {StartTime: 2000, EndTime: 3500}}
+	clipTexts := []model.ClipWithText{
+		{Text: "第一段话", StartTime: 0, EndTime: 1000},
+		{Text: "第二段话", StartTime: 2000, EndTime: 3500},
+	}
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+		{SourceStartMS: 2000, SourceEndMS: 3500, DraftStartUS: 1_000_000, DraftEndUS: 2_500_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":100,"end_time":800,"text":"ASR不应回灌","words":[]}
+	]}}`
+
+	items := BuildCaptionsForPlacementsWithLines(liveASR, placements, clipTexts, nil)
+	want := make([]string, 0, len(items))
+	for _, item := range items {
+		want = append(want, item.Text)
+	}
+
+	got := BuildCaptionTexts(liveASR, clips, clipTexts, nil)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("texts = %#v, want %#v", got, want)
+	}
+}
+
+// 无 clipTexts 时与草稿一致地回退 ASR 分句。
+func TestBuildCaptionTexts_FallsBackToASR(t *testing.T) {
+	clips := []model.ClipRange{{StartTime: 1000, EndTime: 2000}}
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 1000, SourceEndMS: 2000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":500,"end_time":1500,"text":"跨边界","words":[]}
+	]}}`
+
+	items := BuildCaptionsForPlacementsWithLines(liveASR, placements, nil, nil)
+	want := make([]string, 0, len(items))
+	for _, item := range items {
+		want = append(want, item.Text)
+	}
+
+	got := BuildCaptionTexts(liveASR, clips, nil, nil)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("texts = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildCaptionTexts_Empty(t *testing.T) {
+	if got := BuildCaptionTexts("", nil, nil, nil); got != nil {
+		t.Errorf("no clips = %#v, want nil", got)
+	}
+	clips := []model.ClipRange{{StartTime: 0, EndTime: 1000}}
+	if got := BuildCaptionTexts("", clips, nil, nil); got != nil {
+		t.Errorf("no asr/texts = %#v, want nil", got)
+	}
+}

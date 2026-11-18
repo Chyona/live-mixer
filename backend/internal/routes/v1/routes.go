@@ -66,6 +66,8 @@ func RegisterRoutes(
 	{
 		videoProjects.GET("", videoProjectHandler.ListVideoProjects)
 		videoProjects.POST("", videoProjectHandler.CreateVideoProject)
+		// 静态路径须注册在 /:id 之前，避免被当成 id。
+		videoProjects.POST("/subtitle", videoProjectHandler.DownloadVideoProjectSubtitle)
 		videoProjects.GET("/:id", videoProjectHandler.GetVideoProject)
 		videoProjects.GET("/:id/running-tasks", taskHandler.ListRunningTasksByProject)
 		videoProjects.PUT("/:id", videoProjectHandler.UpdateVideoProject)

@@ -3,6 +3,9 @@ package v1
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"live-mixer/internal/middleware"
@@ -37,6 +40,13 @@ func NewVideoProjectHandler(videoProjectService service.VideoProjectService, acc
 		videoProjectService: videoProjectService,
 		createdBy:           newCreatedByResolver(accountRepo),
 	}
+}
+
+// PreviewVideoProjectSubtitleRequest 字幕预览/下载请求体：按当前编辑中的 clips1 计算，不落库。
+type PreviewVideoProjectSubtitleRequest struct {
+	LiveID         uint                 `json:"live_id" binding:"required"`
+	Clips1         []model.ClipWithText `json:"clips1"`
+	EnableCaptions *bool                `json:"enable_captions"` // 未传默认 true
 }
 
 // CreateVideoProjectRequest 创建剪辑项目请求体。
@@ -384,6 +394,48 @@ func (h *VideoProjectHandler) GetVideoProject(c *gin.Context) {
 		return
 	}
 	response.Success(c, h.toVideoProjectResponse(c.Request.Context(), project))
+}
+
+// DownloadVideoProjectSubtitle 下载与剪映草稿一致的字幕（TXT）
+// @Summary      下载与剪映草稿一致的字幕
+// @Description  按人工切片当前 clips1（含词级时间）执行与提交成片/剪映草稿相同的字幕断行规则，返回 TXT（每行一条字幕）；未开启字幕或没有可用文案时返回 400
+// @Tags         剪辑项目
+// @Accept       json
+// @Produce      text/plain
+// @Param        body  body      PreviewVideoProjectSubtitleRequest  true  "字幕参数"
+// @Success      200   {file}    file  "字幕 TXT 文件"
+// @Failure      400   {object}  response.Body
+// @Failure      404   {object}  response.Body
+// @Security     BearerAuth
+// @Router       /v1/video-projects/subtitle [post]
+func (h *VideoProjectHandler) DownloadVideoProjectSubtitle(c *gin.Context) {
+	var req PreviewVideoProjectSubtitleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	lines, err := h.videoProjectService.SubtitleTexts(c.Request.Context(), service.VideoProjectSubtitleInput{
+		LiveID:         req.LiveID,
+		Clips1:         req.Clips1,
+		EnableCaptions: req.EnableCaptions,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrLiveMaterialNotFoundForProject):
+			response.NotFound(c, err.Error())
+		case errors.Is(err, service.ErrProjectCaptionsDisabled),
+			errors.Is(err, service.ErrProjectSubtitleEmpty):
+			response.BadRequest(c, err.Error())
+		default:
+			response.InternalError(c, err.Error())
+		}
+		return
+	}
+
+	filename := fmt.Sprintf("project_subtitle_%d.txt", req.LiveID)
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(strings.Join(lines, "\n")+"\n"))
 }
 
 // UpdateVideoProject 更新剪辑项目

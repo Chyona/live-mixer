@@ -206,7 +206,13 @@ func main() {
 		cfg.Ingest.MediaWindowDuration(),
 	)
 	llmPromptService := service.NewLLMSystemPromptService(llmPromptRepo)
-	videoProjectService := service.NewVideoProjectServiceWithLogger(videoProjectRepo, liveMaterialRepo, logger)
+	// 字幕预览下载复用草稿组装器：断行规则/LLM 断句缓存与提交成片完全一致。
+	videoProjectService := service.NewVideoProjectServiceWithSubtitleBuilder(
+		videoProjectRepo,
+		liveMaterialRepo,
+		logger,
+		generator,
+	)
 	taskService := service.NewTaskService(
 		taskRepo,
 		liveMaterialRepo,

@@ -25,6 +25,12 @@ var ErrVideoProjectNameExists = errors.New("项目名称已存在")
 // ErrLiveMaterialNotFoundForProject 创建剪辑项目时关联的直播素材不存在。
 var ErrLiveMaterialNotFoundForProject = errors.New("关联的直播素材不存在")
 
+// ErrProjectCaptionsDisabled 项目未开启字幕，成片草稿中不会有字幕。
+var ErrProjectCaptionsDisabled = errors.New("项目未开启字幕")
+
+// ErrProjectSubtitleEmpty 当前切片没有可用字幕内容。
+var ErrProjectSubtitleEmpty = errors.New("暂无字幕内容")
+
 // 剪辑项目画布仅支持两档分辨率。
 const (
 	projectCanvasLandscapeW = 1920
@@ -79,6 +85,18 @@ type VideoProjectUpdateInput struct {
 	Topics         *[]string
 }
 
+// SubtitleTextsBuilder 按剪映草稿规则计算字幕文本行（*draft.Builder 实现）。
+type SubtitleTextsBuilder interface {
+	SubtitleTexts(ctx context.Context, jobID string, material *model.LiveMaterial, project *model.VideoProject) ([]string, error)
+}
+
+// VideoProjectSubtitleInput 字幕预览入参：按当前编辑中的 clips1 计算，不落库。
+type VideoProjectSubtitleInput struct {
+	LiveID         uint
+	Clips1         []model.ClipWithText
+	EnableCaptions *bool
+}
+
 // VideoProjectService 剪辑项目业务接口。
 type VideoProjectService interface {
 	// Create 创建剪辑项目，createdBy 来自 JWT 当前用户；promptID 为 0 时使用默认值 1。
@@ -93,11 +111,14 @@ type VideoProjectService interface {
 	ListByLiveMaterial(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error)
 	// Get 根据 ID 获取剪辑项目详情。
 	Get(ctx context.Context, id uint) (*model.VideoProject, error)
+	// SubtitleTexts 按提交成片/剪映草稿的字幕规则，计算当前 clips1 的字幕文本行。
+	SubtitleTexts(ctx context.Context, input VideoProjectSubtitleInput) ([]string, error)
 }
 
 type videoProjectService struct {
 	videoProjectRepo repository.VideoProjectRepository
 	liveMaterialRepo repository.LiveMaterialRepository
+	subtitleBuilder  SubtitleTextsBuilder
 	logger           *zap.Logger
 }
 
@@ -112,12 +133,24 @@ func NewVideoProjectServiceWithLogger(
 	liveMaterialRepo repository.LiveMaterialRepository,
 	logger *zap.Logger,
 ) VideoProjectService {
+	return NewVideoProjectServiceWithSubtitleBuilder(videoProjectRepo, liveMaterialRepo, logger, nil)
+}
+
+// NewVideoProjectServiceWithSubtitleBuilder 创建带草稿字幕文本能力的剪辑项目服务。
+// subtitleBuilder 为 nil 时 SubtitleTexts 返回未配置错误（不影响其他项目接口）。
+func NewVideoProjectServiceWithSubtitleBuilder(
+	videoProjectRepo repository.VideoProjectRepository,
+	liveMaterialRepo repository.LiveMaterialRepository,
+	logger *zap.Logger,
+	subtitleBuilder SubtitleTextsBuilder,
+) VideoProjectService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &videoProjectService{
 		videoProjectRepo: videoProjectRepo,
 		liveMaterialRepo: liveMaterialRepo,
+		subtitleBuilder:  subtitleBuilder,
 		logger:           logger,
 	}
 }
@@ -363,6 +396,55 @@ func (s *videoProjectService) Get(ctx context.Context, id uint) (*model.VideoPro
 		return nil, err
 	}
 	return project, nil
+}
+
+// SubtitleTexts 按提交成片/剪映草稿的同一套规则计算字幕文本行：
+// 合并相邻片段 → 对齐 clips1 → LLM/规则断行，与草稿 add_captions 的内容一致。
+func (s *videoProjectService) SubtitleTexts(ctx context.Context, input VideoProjectSubtitleInput) ([]string, error) {
+	if s.subtitleBuilder == nil {
+		return nil, errors.New("字幕服务未配置")
+	}
+	if input.LiveID == 0 {
+		return nil, errors.New("直播素材 ID 不能为空")
+	}
+	if len(input.Clips1) == 0 {
+		return nil, ErrProjectSubtitleEmpty
+	}
+
+	material, err := s.liveMaterialRepo.GetByID(ctx, input.LiveID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLiveMaterialNotFoundForProject
+		}
+		return nil, err
+	}
+
+	enableCaptions := true
+	if input.EnableCaptions != nil {
+		enableCaptions = *input.EnableCaptions
+	}
+	if !enableCaptions {
+		return nil, ErrProjectCaptionsDisabled
+	}
+
+	project := &model.VideoProject{
+		LiveID:         input.LiveID,
+		Clips1:         input.Clips1,
+		EnableCaptions: model.EnableCaptionsOn,
+	}
+	lines, err := s.subtitleBuilder.SubtitleTexts(
+		ctx,
+		fmt.Sprintf("subtitle-preview-%d", input.LiveID),
+		material,
+		project,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(lines) == 0 {
+		return nil, ErrProjectSubtitleEmpty
+	}
+	return lines, nil
 }
 
 // resolveProjectCanvasSize 解析创建项目时的画布尺寸：

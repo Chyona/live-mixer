@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -586,5 +587,116 @@ func TestVideoProjectService_Delete_NotFound(t *testing.T) {
 	svc := NewVideoProjectService(projectRepo, &mockLiveMaterialRepoForProject{})
 	if err := svc.Delete(context.Background(), 99); err != ErrVideoProjectNotFound {
 		t.Errorf("Delete() error = %v, want %v", err, ErrVideoProjectNotFound)
+	}
+}
+
+// stubSubtitleTextsBuilder 记录入参并返回预设字幕行。
+type stubSubtitleTextsBuilder struct {
+	called      int
+	gotMaterial *model.LiveMaterial
+	gotProject  *model.VideoProject
+	lines       []string
+	err         error
+}
+
+func (s *stubSubtitleTextsBuilder) SubtitleTexts(_ context.Context, _ string, material *model.LiveMaterial, project *model.VideoProject) ([]string, error) {
+	s.called++
+	s.gotMaterial = material
+	s.gotProject = project
+	return s.lines, s.err
+}
+
+func TestVideoProjectService_SubtitleTexts_Success(t *testing.T) {
+	material := &model.LiveMaterial{ID: 7, LiveASR: `{"result":{"utterances":[]}}`}
+	liveRepo := &mockLiveMaterialRepoForProject{materials: map[uint]*model.LiveMaterial{7: material}}
+	builder := &stubSubtitleTextsBuilder{lines: []string{"第一行字幕", "第二行字幕"}}
+	svc := NewVideoProjectServiceWithSubtitleBuilder(&mockVideoProjectRepo{}, liveRepo, nil, builder)
+
+	lines, err := svc.SubtitleTexts(context.Background(), VideoProjectSubtitleInput{
+		LiveID: 7,
+		Clips1: []model.ClipWithText{{Text: "第一行字幕第二行字幕", StartTime: 0, EndTime: 2000}},
+	})
+	if err != nil {
+		t.Fatalf("SubtitleTexts() error = %v", err)
+	}
+	if len(lines) != 2 || lines[0] != "第一行字幕" || lines[1] != "第二行字幕" {
+		t.Fatalf("lines = %#v", lines)
+	}
+	if builder.called != 1 {
+		t.Fatalf("builder called = %d, want 1", builder.called)
+	}
+	if builder.gotMaterial == nil || builder.gotMaterial.ID != material.ID ||
+		builder.gotMaterial.LiveASR != material.LiveASR {
+		t.Errorf("material = %#v", builder.gotMaterial)
+	}
+	if builder.gotProject == nil || builder.gotProject.LiveID != 7 ||
+		builder.gotProject.EnableCaptions != model.EnableCaptionsOn ||
+		len(builder.gotProject.Clips1) != 1 {
+		t.Errorf("project = %#v", builder.gotProject)
+	}
+}
+
+func TestVideoProjectService_SubtitleTexts_CaptionsDisabled(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{materials: map[uint]*model.LiveMaterial{7: {ID: 7}}}
+	builder := &stubSubtitleTextsBuilder{lines: []string{"不应调用"}}
+	svc := NewVideoProjectServiceWithSubtitleBuilder(&mockVideoProjectRepo{}, liveRepo, nil, builder)
+	disabled := false
+
+	_, err := svc.SubtitleTexts(context.Background(), VideoProjectSubtitleInput{
+		LiveID:         7,
+		Clips1:         []model.ClipWithText{{Text: "文案", StartTime: 0, EndTime: 1000}},
+		EnableCaptions: &disabled,
+	})
+	if !errors.Is(err, ErrProjectCaptionsDisabled) {
+		t.Fatalf("error = %v, want ErrProjectCaptionsDisabled", err)
+	}
+	if builder.called != 0 {
+		t.Errorf("builder called = %d, want 0", builder.called)
+	}
+}
+
+func TestVideoProjectService_SubtitleTexts_EmptyClips(t *testing.T) {
+	svc := NewVideoProjectServiceWithSubtitleBuilder(
+		&mockVideoProjectRepo{},
+		&mockLiveMaterialRepoForProject{},
+		nil,
+		&stubSubtitleTextsBuilder{},
+	)
+	_, err := svc.SubtitleTexts(context.Background(), VideoProjectSubtitleInput{LiveID: 7})
+	if !errors.Is(err, ErrProjectSubtitleEmpty) {
+		t.Fatalf("error = %v, want ErrProjectSubtitleEmpty", err)
+	}
+}
+
+func TestVideoProjectService_SubtitleTexts_MaterialNotFound(t *testing.T) {
+	svc := NewVideoProjectServiceWithSubtitleBuilder(
+		&mockVideoProjectRepo{},
+		&mockLiveMaterialRepoForProject{materials: map[uint]*model.LiveMaterial{}},
+		nil,
+		&stubSubtitleTextsBuilder{lines: []string{"x"}},
+	)
+	_, err := svc.SubtitleTexts(context.Background(), VideoProjectSubtitleInput{
+		LiveID: 9,
+		Clips1: []model.ClipWithText{{Text: "文案", StartTime: 0, EndTime: 1000}},
+	})
+	if !errors.Is(err, ErrLiveMaterialNotFoundForProject) {
+		t.Fatalf("error = %v, want ErrLiveMaterialNotFoundForProject", err)
+	}
+}
+
+func TestVideoProjectService_SubtitleTexts_BuilderEmptyResult(t *testing.T) {
+	liveRepo := &mockLiveMaterialRepoForProject{materials: map[uint]*model.LiveMaterial{7: {ID: 7}}}
+	svc := NewVideoProjectServiceWithSubtitleBuilder(
+		&mockVideoProjectRepo{},
+		liveRepo,
+		nil,
+		&stubSubtitleTextsBuilder{lines: nil},
+	)
+	_, err := svc.SubtitleTexts(context.Background(), VideoProjectSubtitleInput{
+		LiveID: 7,
+		Clips1: []model.ClipWithText{{Text: "文案", StartTime: 0, EndTime: 1000}},
+	})
+	if !errors.Is(err, ErrProjectSubtitleEmpty) {
+		t.Fatalf("error = %v, want ErrProjectSubtitleEmpty", err)
 	}
 }

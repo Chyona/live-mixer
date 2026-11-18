@@ -145,6 +145,60 @@ func BuildCaptionsForPlacementsWithLines(liveASRJSON string, placements []sessio
 	return items
 }
 
+// BuildCaptionTexts 返回与草稿 add_captions 完全一致的字幕行文本（顺序、断行、空白过滤相同），
+// 仅去掉时间轴信息，供人工切片页下载字幕预览使用。
+// clips 须与草稿 Build 中的切片一一对应（已按同一规则合并相邻片段）。
+func BuildCaptionTexts(liveASRJSON string, clips []model.ClipRange, clipTexts []model.ClipWithText, clipLines [][]string) []string {
+	if len(clips) == 0 {
+		return nil
+	}
+	if len(clipTexts) != len(clips) {
+		clipTexts = nil
+	}
+	if len(clipLines) != len(clipTexts) {
+		clipLines = nil
+	}
+	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
+	if len(utterances) == 0 && clipTexts == nil {
+		return nil
+	}
+
+	out := make([]string, 0)
+	for i, c := range clips {
+		sourceDurMS := c.EndTime - c.StartTime
+		if sourceDurMS <= 0 {
+			continue
+		}
+		// 草稿时间轴仅用于映射时间，文本内容与它无关；这里用等价的正比例放置。
+		p := session.ClipPlacement{
+			SourceStartMS: c.StartTime,
+			SourceEndMS:   c.EndTime,
+			DraftStartUS:  0,
+			DraftEndUS:    sourceDurMS * 1000,
+		}
+		for _, seg := range placementCaptionSegments(utterances, clipTexts, clipLines, i, p) {
+			text := strings.TrimSpace(seg.Text)
+			if text == "" {
+				continue
+			}
+			// 与 mapCaptionsForPlacements 的重叠裁剪保持一致：零长度交叉同样跳过。
+			overlapStart := seg.StartTime
+			if overlapStart < c.StartTime {
+				overlapStart = c.StartTime
+			}
+			overlapEnd := seg.EndTime
+			if overlapEnd > c.EndTime {
+				overlapEnd = c.EndTime
+			}
+			if overlapEnd <= overlapStart {
+				continue
+			}
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
 func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText, clipLines [][]string) ([]capcutmate.CaptionItem, []mappedCaption) {
 	if len(placements) == 0 {
 		return nil, nil

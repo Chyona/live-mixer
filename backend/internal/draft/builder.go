@@ -140,6 +140,35 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	return result, nil
 }
 
+// SubtitleTexts 返回与提交成片/剪映草稿 add_captions 完全一致的字幕文本行（不含时间轴）。
+// 只做文本计算，不下载/裁剪视频；供人工切片页「字幕下载」预览使用。
+func (b *Builder) SubtitleTexts(ctx context.Context, jobID string, material *model.LiveMaterial, project *model.VideoProject) ([]string, error) {
+	if b == nil {
+		return nil, fmt.Errorf("builder 未配置")
+	}
+	if project == nil {
+		return nil, fmt.Errorf("project 不能为空")
+	}
+	if project.EnableCaptions == model.EnableCaptionsOff {
+		return nil, nil
+	}
+	clips, err := prepare.ResolveClipRanges(project)
+	if err != nil {
+		return nil, err
+	}
+	clips = prepare.MergeAdjacentClipRanges(clips, prepare.ClipMergeGapMS)
+	if err := prepare.ValidateClipRanges(clips); err != nil {
+		return nil, err
+	}
+	clipTexts := resolveAlignedClipTexts(Request{Project: project}, clips, b.Logger)
+	lines := b.segmentCaptionLines(ctx, jobID, clipTexts, project)
+	liveASR := ""
+	if material != nil {
+		liveASR = material.LiveASR
+	}
+	return steps.BuildCaptionTexts(liveASR, clips, clipTexts, lines), nil
+}
+
 // resolveAlignedClipTexts 取 video_project.clips1，按同一合并规则与切片区间对齐。
 // 对齐成功返回带 text/words 的切片（字幕据此生成，人工删除的文字不会再回到字幕）；
 // 未对齐（如显式传入 clips、clips1 与区间不一致）返回 nil，字幕回退 live_asr 映射。

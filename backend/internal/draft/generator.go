@@ -23,7 +23,8 @@ type GeneratorDeps struct {
 }
 
 // NewGenerator 创建纯草稿组装器（无任务调度）。
-func NewGenerator(deps GeneratorDeps) Generator {
+// 返回具体 Builder，便于调用只依赖草稿规则的 SubtitleTexts（字幕预览/下载）。
+func NewGenerator(deps GeneratorDeps) *Builder {
 	logger := deps.Logger
 	if logger == nil {
 		logger = zap.NewNop()
