@@ -103,6 +103,11 @@
   white-space: nowrap;
 }
 
+/* 日期时间不换行：数字宽度不一致时避免同一列部分行折行 */
+.source-videos-datetime {
+  white-space: nowrap;
+}
+
 .source-videos-form-date {
   width: 100%;
 }

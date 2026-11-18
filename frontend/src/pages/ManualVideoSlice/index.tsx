@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Button, Space, Tooltip } from 'antd';
-import { LuDownload } from 'react-icons/lu';
+import { Button } from 'antd';
 import SliceVideoPlayer from '~/components/SliceVideoPlayer';
 import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
 import SlicePageHeader, { SliceProjectMetaBar } from '~/components/SlicePageHeader';
@@ -14,7 +13,6 @@ import {
 } from '~/components/SliceProjectTaskStatus';
 import { AppError } from '~/services/http';
 import {
-  downloadSourceVideoAsrSubtitle,
   fetchSourceVideoDetail,
   hlsStartPositionForSourceVideo,
   isLiveIngesting,
@@ -68,7 +66,6 @@ import {
   asrSummariesToAiSegments,
   buildCopySegmentsFromAiSegment,
   normalizeTranscriptParagraphs,
-  sanitizeDownloadFilename,
   sanitizeSelectedCopySegments,
   clampCopySegmentPlaybackBounds,
   insertSegmentsByTimelineProximity,
@@ -128,7 +125,6 @@ const ManualVideoSlicePage = () => {
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saveModalMode, setSaveModalMode] = useState<'create' | 'saveAs' | 'export'>('saveAs');
   const [savingProject, setSavingProject] = useState(false);
-  const [downloadingSubtitle, setDownloadingSubtitle] = useState(false);
   const [enableCaptions, setEnableCaptions] = useState(false);
   const [draftName, setDraftName] = useState(() => localStorage.getItem(DRAFT_STORAGE_KEY) ?? '');
   const [projectRemark, setProjectRemark] = useState('');
@@ -951,36 +947,6 @@ const ManualVideoSlicePage = () => {
     void handleSaveProject();
   };
 
-  const handleDownloadSubtitle = useCallback(async () => {
-    if (!sourceVideoId) {
-      toast.notify.warning('暂无字幕文案');
-      return;
-    }
-    if (paragraphs.length === 0) {
-      toast.notify.warning('暂无已识别字幕，无法导出');
-      return;
-    }
-
-    setDownloadingSubtitle(true);
-    try {
-      const filename = `${sanitizeDownloadFilename(video?.name ?? 'subtitle')}-字幕.json`;
-      await downloadSourceVideoAsrSubtitle(sourceVideoId, filename);
-      if (video?.asr_status !== 'completed') {
-        toast.notify.info('已下载当前已识别字幕');
-      } else {
-        toast.notify.success('字幕文件已开始下载');
-      }
-    } catch (error) {
-      if (error instanceof AppError) {
-        showAppError(error);
-      } else {
-        toast.notify.error(error instanceof Error ? error.message : '字幕下载失败');
-      }
-    } finally {
-      setDownloadingSubtitle(false);
-    }
-  }, [paragraphs.length, sourceVideoId, video?.asr_status, video?.name]);
-
   const handleSwitchToTimeline = useCallback(() => {
     confirmLeave(() => {
       if (projectId) {
@@ -1053,18 +1019,9 @@ const ManualVideoSlicePage = () => {
           ) : undefined
         }
         actions={
-          <Space size={12} align="center">
-            <Button
-              icon={<LuDownload size={16} />}
-              loading={downloadingSubtitle}
-              onClick={() => void handleDownloadSubtitle()}
-            >
-              字幕下载
-            </Button>
-            <Button className="slice-mode-switch-btn" onClick={handleSwitchToTimeline}>
-              切换到时间轴切片
-            </Button>
-          </Space>
+          <Button className="slice-mode-switch-btn" onClick={handleSwitchToTimeline}>
+            切换到时间轴切片
+          </Button>
         }
       />
       <SliceProjectTaskReadOnlyAlert

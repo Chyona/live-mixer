@@ -2417,10 +2417,6 @@ export function downloadTextFile(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function sanitizeDownloadFilename(name: string) {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'subtitle';
-}
-
 /** 文案列表滚动时，将目标元素置于视口偏上位置（默认约 36%，居中为 50%） */
 export function scrollElementIntoViewPreferUpper(
   container: HTMLElement,
