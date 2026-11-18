@@ -1004,6 +1004,12 @@
   background: var(--surface-item-active-bg);
 }
 
+/* 多选高亮：与系统文件管理器的多选态一致（Ctrl/Cmd、Shift 点选） */
+.slice-editor-copy-item.is-multi-selected {
+  border-color: var(--primary-color);
+  background: var(--color-primary-bg-subtle);
+}
+
 .slice-editor-copy-item_dragging {
   opacity: 0.32;
 }

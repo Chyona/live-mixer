@@ -29,7 +29,7 @@ import {
   insertSegmentsByTimelineProximity,
   buildClips1Payload,
   resolveSegmentClipWords,
-  reorderSegments,
+  moveSegmentsByIds,
   sanitizeSelectedCopySegments,
   splitCaptionClauses,
   splitTextByHighlightRanges,
@@ -89,17 +89,39 @@ describe('insertSegmentsByTimelineProximity', () => {
   });
 });
 
-describe('reorderSegments', () => {
-  it('moves an earlier segment to the last position', () => {
-    const segments = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => makeCopySegment(id));
-    const next = reorderSegments(segments, 3, segments.length);
-    expect(next.map((item) => item.id)).toEqual(['a', 'b', 'c', 'e', 'f', 'g', 'd']);
+describe('moveSegmentsByIds', () => {
+  const makeSegments = (ids: string[]) => ids.map((id) => makeCopySegment(id));
+
+  it('moves a contiguous selection down, keeping relative order', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['b', 'c'], 5);
+    expect(next.map((item) => item.id)).toEqual(['a', 'd', 'e', 'b', 'c']);
   });
 
-  it('keeps order when dropping after the last item at the last index', () => {
-    const segments = ['a', 'b', 'c'].map((id) => makeCopySegment(id));
-    const next = reorderSegments(segments, 2, segments.length);
-    expect(next.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+  it('moves a contiguous selection up', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['c', 'd'], 1);
+    expect(next.map((item) => item.id)).toEqual(['a', 'c', 'd', 'b', 'e']);
+  });
+
+  it('moves a non-contiguous selection and keeps relative order', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['a', 'd'], 4);
+    expect(next.map((item) => item.id)).toEqual(['b', 'c', 'a', 'd', 'e']);
+  });
+
+  it('accounts for selected items removed before the drop index', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['b', 'c'], 4);
+    expect(next.map((item) => item.id)).toEqual(['a', 'd', 'b', 'c', 'e']);
+  });
+
+  it('returns the same reference when order is unchanged', () => {
+    const segments = makeSegments(['a', 'b', 'c']);
+    expect(moveSegmentsByIds(segments, ['b'], 1)).toBe(segments);
+    expect(moveSegmentsByIds(segments, ['a', 'b', 'c'], 0)).toBe(segments);
+    expect(moveSegmentsByIds(segments, [], 2)).toBe(segments);
+    expect(moveSegmentsByIds(segments, ['missing'], 0)).toBe(segments);
   });
 });
 

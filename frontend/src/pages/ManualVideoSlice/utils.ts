@@ -2336,30 +2336,36 @@ export function insertSegmentsByTimelineProximity(
   }, segments);
 }
 
-export function reorderSegments(
+/**
+ * 将指定 id 的片段整体移动到 toIndex（原数组中的插入位置，0..length），
+ * 选中片段保持原有相对顺序，用于多选拖动排序。
+ * 顺序未变化时返回原数组引用，便于调用方判断是否需要更新。
+ */
+export function moveSegmentsByIds(
   segments: SelectedCopySegment[],
-  fromIndex: number,
+  ids: string[],
   toIndex: number
-) {
-  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return segments;
-  if (fromIndex >= segments.length || toIndex > segments.length) return segments;
+): SelectedCopySegment[] {
+  if (segments.length === 0 || ids.length === 0) return segments;
 
-  const next = [...segments];
-  const [moved] = next.splice(fromIndex, 1);
-  if (!moved) return segments;
+  const idSet = new Set(ids);
+  const moving = segments.filter((segment) => idSet.has(segment.id));
+  if (moving.length === 0) return segments;
 
-  if (toIndex >= next.length) {
-    next.push(moved);
-    return next;
-  }
+  const remaining = segments.filter((segment) => !idSet.has(segment.id));
+  const clamped = Math.max(0, Math.min(toIndex, segments.length));
+  const removedBefore = segments
+    .slice(0, clamped)
+    .filter((segment) => idSet.has(segment.id)).length;
+  const insertAt = Math.max(0, Math.min(clamped - removedBefore, remaining.length));
 
-  let targetIndex = toIndex;
-  if (fromIndex < toIndex) {
-    targetIndex -= 1;
-  }
-
-  next.splice(targetIndex, 0, moved);
-  return next;
+  const next = [
+    ...remaining.slice(0, insertAt),
+    ...moving,
+    ...remaining.slice(insertAt),
+  ];
+  const unchanged = next.every((segment, index) => segment.id === segments[index]?.id);
+  return unchanged ? segments : next;
 }
 
 function escapeHtml(text: string) {
