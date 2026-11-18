@@ -123,9 +123,31 @@ QString videoFileFilter()
         "*.mpg *.mpeg *.wmv *.3gp *.m3u8)");
 }
 
+bool isDouyinRoomNumber(const QString &text)
+{
+    if (text.size() < 4 || text.size() > 20) {
+        return false;
+    }
+    for (const QChar ch : text) {
+        if (ch < QLatin1Char('0') || ch > QLatin1Char('9')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool normalizeStreamUrl(const QString &text, QString *normalized)
 {
-    const QUrl url = QUrl::fromUserInput(text);
+    const QString trimmed = text.trimmed();
+    // 抖音直播间号（如 382915305384）直接按官网房间地址处理。
+    if (isDouyinRoomNumber(trimmed)) {
+        if (normalized) {
+            *normalized = QStringLiteral("https://live.douyin.com/%1").arg(trimmed);
+        }
+        return true;
+    }
+
+    const QUrl url = QUrl::fromUserInput(trimmed);
     const QString scheme = url.scheme().toLower();
     static const QSet<QString> schemes = {
         QStringLiteral("http"), QStringLiteral("https"), QStringLiteral("rtmp"),
@@ -1321,10 +1343,11 @@ void MainWindow::openAddSource(const QString &initialTab, const QString &localFi
     linkLayout->setSpacing(16);
     auto *urlInput = new InputField(linkPane);
     urlInput->setPlaceholder(
-        QStringLiteral("粘贴 m3u8 / mp4 链接，如 https://.../live.m3u8"));
+        QStringLiteral("粘贴 m3u8 / mp4 链接，或抖音直播间链接 / 房间号"));
     auto *urlField = new FormField(
         QStringLiteral("视频地址"), urlInput,
-        QStringLiteral("mp4 直链直接下载原文件；m3u8 / 直播流会录制为本地 HLS。"),
+        QStringLiteral("mp4 直链直接下载原文件；m3u8 / 直播流会录制为本地 HLS；"
+                       "抖音直播间支持 https://live.douyin.com/<房间号> 或直接输入房间号。"),
         true, linkPane);
     linkLayout->addWidget(urlField);
     auto *nameInput = new InputField(linkPane);
@@ -1386,7 +1409,8 @@ void MainWindow::openAddSource(const QString &initialTab, const QString &localFi
                     QString url;
                     if (!normalizeStreamUrl(input, &url)) {
                         showToast(QStringLiteral(
-                            "仅支持 http / https / rtmp / rtsp 视频地址"));
+                            "仅支持 http / https / rtmp / rtsp 视频地址，"
+                            "或抖音直播间链接 / 房间号"));
                         return;
                     }
                     if (startOnlineRecording(url, nameInput->text().trimmed())) {

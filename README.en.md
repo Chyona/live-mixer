@@ -34,7 +34,7 @@ LiveMix Studio is built with **Qt 6 / C++17** and works with the live-mixer serv
 
 | Feature | Description |
 |---------|-------------|
-| Source capture | Record live streams (`http/https/rtmp/rtsp`), download direct mp4 links, and import local videos (drag & drop); auto-detects duration and resolution |
+| Source capture | Record live streams (`http/https/rtmp/rtsp`) and Douyin live rooms (URL or room ID), download direct mp4 links, and import local videos (drag & drop); auto-detects duration and resolution |
 | Video preview | Auto thumbnails on cards; built-in player with play/pause and seek; HLS recordings start playing while remuxing continues |
 | One-click export | Full-length ASR → LLM selects clips by prompt → precise ffmpeg cuts → CapCut draft, with live stage and progress on the pipeline page |
 | On-demand draft download | Drafts are recorded locally first; draft files and media download only when you click “Open draft folder”, saving disk space |

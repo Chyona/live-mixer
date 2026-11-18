@@ -13,6 +13,7 @@ class QNetworkReply;
 
 // Owns online sources: progressive mp4 links are downloaded over HTTP as the
 // original file, while live/HLS/unknown links are recorded with ffmpeg.
+// Douyin live room pages are resolved to their signed stream URL first.
 // Configuration is read from ConfigStore at job start.
 class RecordingService : public QObject
 {
@@ -49,6 +50,7 @@ signals:
 private:
     struct Job;
     struct Probe;
+    struct DouyinResolve;
 
     Job *findJob(qint64 sourceId) const;
 
@@ -57,10 +59,21 @@ private:
     void finishLinkProbe(Probe *probe, bool timedOut);
     void abortPendingProbes();
 
+    // 抖音直播间：页面里的流地址带签名且会变化，因此每次录制都重新
+    // 拉取页面解析 FLV / HLS 地址，并先确认流可播放再开始录制。
+    void beginDouyinResolve(const QString &pageUri, const QString &title);
+    void finishDouyinPage(DouyinResolve *resolve, bool timedOut);
+    void beginDouyinStreamProbe(DouyinResolve *resolve);
+    void finishDouyinStreamProbe(DouyinResolve *resolve, bool timedOut);
+    void failDouyinResolve(DouyinResolve *resolve, const QString &message);
+    void abortPendingDouyinResolves();
+
     // forceHls：探测已确认内容是 HLS 播放列表时显式指定 demuxer，
     // 避免无扩展名 / 非标准 MIME 的链接被 ffmpeg 拒绝。
+    // inputUri：实际交给 ffmpeg 的流地址（抖音解析结果）；为空时使用 sourceUri。
     StartResult startStreamRecording(const QString &sourceUri, const QString &title,
-                                     bool forceHls = false);
+                                     bool forceHls = false,
+                                     const QString &inputUri = QString());
     void startDownloadJob(const QString &sourceUri, const QString &title);
     void handleDownloadReadyRead(Job *job);
     void handleDownloadFinished(Job *job);
@@ -82,4 +95,5 @@ private:
     QNetworkAccessManager *m_network = nullptr;
     QHash<qint64, Job *> m_jobs;
     QSet<Probe *> m_probes;
+    QSet<DouyinResolve *> m_douyinResolves;
 };

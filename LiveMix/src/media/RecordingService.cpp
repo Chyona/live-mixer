@@ -19,6 +19,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUrl>
 
@@ -39,6 +40,10 @@ constexpr int kProbeTimeoutMs = 8000;
 constexpr int kDownloadIdleTimeoutMs = 60000;
 constexpr int kProbeSniffBytes = 8192;
 constexpr int kProgressIntervalMs = 100;
+// 抖音直播间页面约 1.3 MB，留足余量；解析超时略大于页面拉取时间。
+constexpr int kDouyinPageTimeoutMs = 25000;
+constexpr int kDouyinProbeTimeoutMs = 8000;
+constexpr int kDouyinPageLimitBytes = 16 * 1024 * 1024;
 
 enum class OnlineLinkKind {
     DirectFile, // 渐进式 mp4/mov，直接下载原文件
@@ -98,6 +103,179 @@ OnlineLinkKind classifyOnlineLink(const QByteArray &head, const QString &content
         return OnlineLinkKind::DirectFile;
     }
     return OnlineLinkKind::Stream;
+}
+
+QString douyinUserAgent()
+{
+    return QStringLiteral(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36");
+}
+
+bool isDouyinLiveRoomUrl(const QUrl &url)
+{
+    return url.host().compare(QLatin1String("live.douyin.com"), Qt::CaseInsensitive) == 0;
+}
+
+// 直播间短链（v.douyin.com）会跳转到 live.douyin.com 房间页，一并支持。
+bool isDouyinShareUrl(const QUrl &url)
+{
+    if (isDouyinLiveRoomUrl(url)) {
+        return true;
+    }
+    return url.host().compare(QLatin1String("v.douyin.com"), Qt::CaseInsensitive) == 0;
+}
+
+QString douyinRoomIdFromUrl(const QUrl &url)
+{
+    static const QRegularExpression pattern(QStringLiteral("^/(\\d+)"));
+    const QRegularExpressionMatch match = pattern.match(url.path());
+    return match.hasMatch() ? match.captured(1) : QString();
+}
+
+QString douyinDecodeUrl(QString url)
+{
+    url.replace(QStringLiteral("\\u0026"), QStringLiteral("&"));
+    url.replace(QStringLiteral("\\u002F"), QStringLiteral("/"));
+    url.replace(QStringLiteral("\\u003D"), QStringLiteral("="));
+    url.replace(QStringLiteral("\\/"), QStringLiteral("/"));
+    return url;
+}
+
+// 页面把内嵌 JSON 的引号转义成 \"，先还原才能按字段解析。
+QString douyinNormalizedHtml(const QByteArray &body)
+{
+    QString html = QString::fromUtf8(body);
+    html.replace(QStringLiteral("\\\""), QStringLiteral("\""));
+    return html;
+}
+
+// start 指向 '{'，返回配对 '}' 为止的完整对象文本。
+QString douyinJsonObjectAt(const QString &text, int start)
+{
+    int depth = 0;
+    bool inString = false;
+    for (int i = start; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (inString) {
+            if (ch == QLatin1Char('\\')) {
+                ++i;
+            } else if (ch == QLatin1Char('"')) {
+                inString = false;
+            }
+            continue;
+        }
+        if (ch == QLatin1Char('"')) {
+            inString = true;
+        } else if (ch == QLatin1Char('{')) {
+            ++depth;
+        } else if (ch == QLatin1Char('}') && --depth == 0) {
+            return text.mid(start, i - start + 1);
+        }
+    }
+    return QString();
+}
+
+QString douyinQualityUrl(const QJsonObject &urls)
+{
+    // 与录制脚本保持一致的优先级：高清优先，其次最高清 / 标清。
+    static const QStringList preferred = {
+        QStringLiteral("HD1"), QStringLiteral("FULL_HD1"),
+        QStringLiteral("SD1"), QStringLiteral("SD2"),
+    };
+    for (const QString &quality : preferred) {
+        const QString url = urls.value(quality).toString();
+        if (url.startsWith(QLatin1String("http"), Qt::CaseInsensitive)) {
+            return url;
+        }
+    }
+    // 清晰度键可能随页面版本变化，兜底取第一个可用地址。
+    for (auto it = urls.constBegin(); it != urls.constEnd(); ++it) {
+        const QString url = it.value().toString();
+        if (url.startsWith(QLatin1String("http"), Qt::CaseInsensitive)) {
+            return url;
+        }
+    }
+    return QString();
+}
+
+QString douyinPullUrlMap(const QString &html, const QString &key)
+{
+    const QString needle = QLatin1Char('"') + key + QLatin1String("\":");
+    int from = 0;
+    while (true) {
+        const int keyPos = html.indexOf(needle, from);
+        if (keyPos < 0) {
+            return QString();
+        }
+        from = keyPos + needle.size();
+
+        int bracePos = from;
+        while (bracePos < html.size() && html.at(bracePos).isSpace()) {
+            ++bracePos;
+        }
+        if (bracePos >= html.size() || html.at(bracePos) != QLatin1Char('{')) {
+            continue;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(
+            douyinJsonObjectAt(html, bracePos).toUtf8(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            continue;
+        }
+        const QString url = douyinQualityUrl(document.object());
+        if (!url.isEmpty()) {
+            return url;
+        }
+    }
+}
+
+struct DouyinStream
+{
+    QString uri;
+    QString kind; // flv / hls
+};
+
+DouyinStream douyinStreamFromHtml(const QByteArray &body)
+{
+    DouyinStream stream;
+    const QString html = douyinNormalizedHtml(body);
+    if (html.isEmpty()) {
+        return stream;
+    }
+
+    // 优先 FLV：长连接更适合长时间录制。
+    stream.uri = douyinPullUrlMap(html, QStringLiteral("flv_pull_url"));
+    if (!stream.uri.isEmpty()) {
+        stream.kind = QStringLiteral("flv");
+        return stream;
+    }
+
+    stream.uri = douyinPullUrlMap(html, QStringLiteral("hls_pull_url_map"));
+    if (!stream.uri.isEmpty()) {
+        stream.kind = QStringLiteral("hls");
+        return stream;
+    }
+
+    static const QRegularExpression hlsStringPattern(
+        QStringLiteral("\"hls_pull_url\"\\s*:\\s*\"([^\"]+)\""));
+    const QRegularExpressionMatch hlsStringMatch = hlsStringPattern.match(html);
+    if (hlsStringMatch.hasMatch()) {
+        stream.uri = douyinDecodeUrl(hlsStringMatch.captured(1));
+        stream.kind = QStringLiteral("hls");
+        return stream;
+    }
+
+    // 最后兜底：页面任意位置的 m3u8 地址。
+    static const QRegularExpression m3u8Pattern(
+        QStringLiteral("https?://[^\"]*\\.m3u8[^\"]*"));
+    const QRegularExpressionMatch m3u8Match = m3u8Pattern.match(html);
+    if (m3u8Match.hasMatch()) {
+        stream.uri = douyinDecodeUrl(m3u8Match.captured(0));
+        stream.kind = QStringLiteral("hls");
+    }
+    return stream;
 }
 
 QString downloadFileName(const QString &uri)
@@ -211,6 +389,26 @@ struct RecordingService::Probe
     bool decided = false;
 };
 
+struct RecordingService::DouyinResolve
+{
+    enum class Phase {
+        Page,  // 拉取直播间页面并解析流地址
+        Probe, // 确认解析出的流地址可播放
+    };
+
+    Phase phase = Phase::Page;
+    QString pageUri;
+    QString title;
+    QString roomUri;
+    QString roomId;
+    QString streamUri;
+    QString streamKind; // flv / hls
+    QNetworkReply *reply = nullptr;
+    QTimer *timer = nullptr;
+    QByteArray body;
+    bool decided = false;
+};
+
 struct RecordingService::Job
 {
     enum class Mode {
@@ -308,8 +506,20 @@ RecordingService::StartResult RecordingService::startOnlineRecording(
         return result;
     }
 
-    const QString scheme = QUrl(sourceUri).scheme().toLower();
-    if (scheme == QLatin1String("http") || scheme == QLatin1String("https")) {
+    const QUrl parsedUri(sourceUri);
+    const QString scheme = parsedUri.scheme().toLower();
+    const bool httpScheme =
+        scheme == QLatin1String("http") || scheme == QLatin1String("https");
+    if (httpScheme && isDouyinShareUrl(parsedUri)) {
+        if (isDouyinLiveRoomUrl(parsedUri) && douyinRoomIdFromUrl(parsedUri).isEmpty()) {
+            result.error = QStringLiteral("无法识别抖音直播间号，请检查链接。");
+            return result;
+        }
+        beginDouyinResolve(sourceUri, title.trimmed());
+        result.ok = true;
+        return result;
+    }
+    if (httpScheme) {
         // 先嗅探响应，再决定是直链下载还是 ffmpeg 录制。
         beginLinkProbe(sourceUri, title.trimmed());
         result.ok = true;
@@ -452,8 +662,317 @@ void RecordingService::abortPendingProbes()
     }
 }
 
+void RecordingService::beginDouyinResolve(const QString &pageUri, const QString &title)
+{
+    auto *resolve = new DouyinResolve;
+    resolve->pageUri = pageUri;
+    resolve->title = title;
+    resolve->roomId = douyinRoomIdFromUrl(QUrl(pageUri));
+
+    QNetworkRequest request{QUrl(pageUri)};
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setHeader(QNetworkRequest::UserAgentHeader, douyinUserAgent());
+    request.setRawHeader(
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    request.setRawHeader("Accept-Language", "zh-CN,zh;q=0.9");
+    request.setRawHeader("Referer", "https://live.douyin.com/");
+    resolve->reply = m_network->get(request);
+    m_douyinResolves.insert(resolve);
+
+    resolve->timer = new QTimer(resolve->reply);
+    resolve->timer->setSingleShot(true);
+    connect(resolve->timer, &QTimer::timeout, this, [this, resolve] {
+        finishDouyinPage(resolve, true);
+    });
+    resolve->timer->start(kDouyinPageTimeoutMs);
+
+    connect(resolve->reply, &QNetworkReply::readyRead, this, [resolve] {
+        if (!resolve->reply || resolve->decided) {
+            return;
+        }
+        resolve->body.append(resolve->reply->readAll());
+        if (resolve->body.size() >= kDouyinPageLimitBytes) {
+            resolve->body.truncate(kDouyinPageLimitBytes);
+            // 流地址通常出现在页面靠前位置，超出上限时直接按已收到的内容解析。
+            resolve->reply->abort();
+        }
+    });
+    connect(resolve->reply, &QNetworkReply::finished, this, [this, resolve] {
+        finishDouyinPage(resolve, false);
+    });
+}
+
+void RecordingService::finishDouyinPage(DouyinResolve *resolve, bool timedOut)
+{
+    if (!resolve || resolve->decided || resolve->phase != DouyinResolve::Phase::Page) {
+        return;
+    }
+    resolve->decided = true;
+
+    QNetworkReply *reply = resolve->reply;
+    resolve->reply = nullptr;
+    QByteArray body = resolve->body;
+    resolve->body.clear();
+
+    QString finalUri = resolve->pageUri;
+    int status = 0;
+    bool networkError = false;
+    QString networkErrorText;
+    if (reply) {
+        body.append(reply->readAll());
+        if (body.size() > kDouyinPageLimitBytes) {
+            body.truncate(kDouyinPageLimitBytes);
+        }
+        status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (reply->url().isValid()) {
+            finalUri = reply->url().toString();
+        }
+        networkError = reply->error() != QNetworkReply::NoError
+            && reply->error() != QNetworkReply::OperationCanceledError;
+        networkErrorText = reply->errorString();
+        reply->disconnect(this);
+        reply->abort();
+        reply->deleteLater();
+    }
+    if (resolve->timer) {
+        resolve->timer->stop();
+        resolve->timer->disconnect(this);
+        resolve->timer->deleteLater();
+        resolve->timer = nullptr;
+    }
+
+    if (timedOut) {
+        failDouyinResolve(resolve,
+                          QStringLiteral("抖音直播间解析失败：打开直播间页面超时。"));
+        return;
+    }
+    if (status >= 400) {
+        failDouyinResolve(
+            resolve,
+            QStringLiteral("抖音直播间解析失败：页面返回 HTTP %1（房间不存在或链接已失效）。")
+                .arg(status));
+        return;
+    }
+    if (networkError && body.isEmpty()) {
+        QString reason = networkErrorText;
+        // errorString 形如 "Error transferring <url> - <reason>"，去掉 URL。
+        const int dash = reason.lastIndexOf(QStringLiteral(" - "));
+        if (dash >= 0) {
+            reason = reason.mid(dash + 3);
+        }
+        failDouyinResolve(resolve,
+                          QStringLiteral("抖音直播间解析失败：%1")
+                              .arg(reason.isEmpty() ? QStringLiteral("网络错误") : reason));
+        return;
+    }
+
+    const QUrl finalUrl(finalUri);
+    if (!isDouyinLiveRoomUrl(finalUrl)) {
+        failDouyinResolve(
+            resolve,
+            QStringLiteral("抖音直播间解析失败：该链接不是有效的抖音直播间地址。"));
+        return;
+    }
+    if (resolve->roomId.isEmpty()) {
+        resolve->roomId = douyinRoomIdFromUrl(finalUrl);
+    }
+    if (resolve->roomId.isEmpty()) {
+        failDouyinResolve(
+            resolve,
+            QStringLiteral("抖音直播间解析失败：无法从链接中识别直播间号。"));
+        return;
+    }
+
+    const DouyinStream stream = douyinStreamFromHtml(body);
+    if (stream.uri.isEmpty()) {
+        failDouyinResolve(
+            resolve,
+            QStringLiteral("抖音直播间解析失败：未找到直播流，可能未开播、已下播，"
+                           "或该直播需要登录才能观看。"));
+        return;
+    }
+
+    resolve->roomUri = finalUri;
+    resolve->streamUri = stream.uri;
+    resolve->streamKind = stream.kind;
+    beginDouyinStreamProbe(resolve);
+}
+
+void RecordingService::beginDouyinStreamProbe(DouyinResolve *resolve)
+{
+    if (!resolve) {
+        return;
+    }
+    resolve->phase = DouyinResolve::Phase::Probe;
+    resolve->decided = false;
+    resolve->body.clear();
+
+    QNetworkRequest request{QUrl(resolve->streamUri)};
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setHeader(QNetworkRequest::UserAgentHeader, douyinUserAgent());
+    request.setRawHeader("Accept", "*/*");
+    request.setRawHeader("Range", "bytes=0-4095");
+    request.setRawHeader("Referer", "https://live.douyin.com/");
+    resolve->reply = m_network->get(request);
+
+    resolve->timer = new QTimer(resolve->reply);
+    resolve->timer->setSingleShot(true);
+    connect(resolve->timer, &QTimer::timeout, this, [this, resolve] {
+        finishDouyinStreamProbe(resolve, true);
+    });
+    resolve->timer->start(kDouyinProbeTimeoutMs);
+
+    // 直播流不会自行结束，拿到响应头即可判断流是否可播放。
+    connect(resolve->reply, &QNetworkReply::metaDataChanged, this, [this, resolve] {
+        if (resolve->decided || !resolve->reply) {
+            return;
+        }
+        const int status =
+            resolve->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if ((status >= 200 && status < 300) || status >= 400) {
+            finishDouyinStreamProbe(resolve, false);
+        }
+    });
+    connect(resolve->reply, &QNetworkReply::finished, this, [this, resolve] {
+        finishDouyinStreamProbe(resolve, false);
+    });
+}
+
+void RecordingService::finishDouyinStreamProbe(DouyinResolve *resolve, bool timedOut)
+{
+    if (!resolve || resolve->decided || resolve->phase != DouyinResolve::Phase::Probe) {
+        return;
+    }
+    resolve->decided = true;
+
+    QNetworkReply *reply = resolve->reply;
+    resolve->reply = nullptr;
+    int status = 0;
+    bool networkError = false;
+    QString networkErrorText;
+    if (reply) {
+        status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        networkError = reply->error() != QNetworkReply::NoError
+            && reply->error() != QNetworkReply::OperationCanceledError;
+        networkErrorText = reply->errorString();
+        reply->disconnect(this);
+        reply->abort();
+        reply->deleteLater();
+    }
+    if (resolve->timer) {
+        resolve->timer->stop();
+        resolve->timer->disconnect(this);
+        resolve->timer->deleteLater();
+        resolve->timer = nullptr;
+    }
+
+    if (timedOut) {
+        failDouyinResolve(resolve,
+                          QStringLiteral("抖音直播录制失败：连接直播间流超时。"));
+        return;
+    }
+    if (status == 403) {
+        failDouyinResolve(
+            resolve,
+            QStringLiteral("抖音直播录制失败：直播间流拒绝访问（HTTP 403，"
+                           "可能已下播或链接已失效）。"));
+        return;
+    }
+    if (status >= 400) {
+        failDouyinResolve(
+            resolve,
+            QStringLiteral("抖音直播录制失败：直播间流不可用（HTTP %1，可能已下播）。")
+                .arg(status));
+        return;
+    }
+    if (status < 200 || status >= 300) {
+        QString reason = networkErrorText;
+        const int dash = reason.lastIndexOf(QStringLiteral(" - "));
+        if (dash >= 0) {
+            reason = reason.mid(dash + 3);
+        }
+        if (!networkError || reason.isEmpty()) {
+            reason = QStringLiteral("无法连接直播间流。");
+        }
+        failDouyinResolve(resolve, QStringLiteral("抖音直播录制失败：%1").arg(reason));
+        return;
+    }
+
+    const QString roomUri = resolve->roomUri;
+    const QString roomId = resolve->roomId;
+    const QString title = resolve->title;
+    const QString streamUri = resolve->streamUri;
+    const QString streamKind = resolve->streamKind;
+    m_douyinResolves.remove(resolve);
+    delete resolve;
+
+    qInfo().noquote() << QStringLiteral("抖音直播间 %1：已解析 %2 流，开始录制")
+                             .arg(roomId, streamKind);
+    const QString resolvedTitle =
+        title.isEmpty() ? QStringLiteral("抖音直播 %1").arg(roomId) : title;
+    const StartResult result =
+        startStreamRecording(roomUri, resolvedTitle, false, streamUri);
+    if (!result.ok) {
+        emit recordingFinished(-1, false, result.error);
+    }
+}
+
+void RecordingService::failDouyinResolve(DouyinResolve *resolve, const QString &message)
+{
+    if (!resolve) {
+        return;
+    }
+    resolve->decided = true;
+    m_douyinResolves.remove(resolve);
+
+    if (resolve->timer) {
+        resolve->timer->stop();
+        resolve->timer->disconnect(this);
+        resolve->timer->deleteLater();
+        resolve->timer = nullptr;
+    }
+    if (resolve->reply) {
+        resolve->reply->disconnect(this);
+        resolve->reply->abort();
+        resolve->reply->deleteLater();
+        resolve->reply = nullptr;
+    }
+    delete resolve;
+
+    emit recordingFinished(-1, false, message);
+}
+
+void RecordingService::abortPendingDouyinResolves()
+{
+    const QList<DouyinResolve *> resolves = m_douyinResolves.values();
+    for (DouyinResolve *resolve : resolves) {
+        if (!resolve) {
+            continue;
+        }
+        resolve->decided = true;
+        m_douyinResolves.remove(resolve);
+        if (resolve->timer) {
+            resolve->timer->stop();
+            resolve->timer->disconnect(this);
+            resolve->timer->deleteLater();
+            resolve->timer = nullptr;
+        }
+        if (resolve->reply) {
+            resolve->reply->disconnect(this);
+            resolve->reply->abort();
+            resolve->reply->deleteLater();
+            resolve->reply = nullptr;
+        }
+        delete resolve;
+    }
+}
+
 RecordingService::StartResult RecordingService::startStreamRecording(
-    const QString &sourceUri, const QString &title, bool forceHls)
+    const QString &sourceUri, const QString &title, bool forceHls,
+    const QString &inputUri)
 {
     StartResult result;
     if (!m_repository || !m_repository->isOpen()) {
@@ -524,6 +1043,11 @@ RecordingService::StartResult RecordingService::startStreamRecording(
         job->logFile = nullptr;
     }
 
+    // sourceUri 是写入视频库的原始页面地址；抖音等平台的真实流地址带签名，
+    // 只用于 ffmpeg 输入，避免把会过期的地址暴露给用户。
+    const QString effectiveInput =
+        inputUri.trimmed().isEmpty() ? sourceUri : inputUri.trimmed();
+
     QStringList args;
     args << QStringLiteral("-hide_banner")
          << QStringLiteral("-y")
@@ -531,7 +1055,7 @@ RecordingService::StartResult RecordingService::startStreamRecording(
          << QStringLiteral("-progress") << QStringLiteral("pipe:1")
          << QStringLiteral("-nostats");
 
-    if (config.recording.reconnect && isHttpUrl(sourceUri)) {
+    if (config.recording.reconnect && isHttpUrl(effectiveInput)) {
         args << QStringLiteral("-reconnect") << QStringLiteral("1")
              << QStringLiteral("-reconnect_streamed") << QStringLiteral("1")
              << QStringLiteral("-reconnect_delay_max")
@@ -541,7 +1065,7 @@ RecordingService::StartResult RecordingService::startStreamRecording(
     if (forceHls) {
         args << QStringLiteral("-f") << QStringLiteral("hls");
     }
-    args << QStringLiteral("-i") << sourceUri
+    args << QStringLiteral("-i") << effectiveInput
          << QStringLiteral("-c") << QStringLiteral("copy")
          << QStringLiteral("-f") << QStringLiteral("hls")
          << QStringLiteral("-hls_time") << QString::number(config.recording.segmentSeconds)
@@ -1001,6 +1525,7 @@ bool RecordingService::isRecording(qint64 sourceId) const
 void RecordingService::stopAllAndWait(int timeoutMs)
 {
     abortPendingProbes();
+    abortPendingDouyinResolves();
 
     const QList<qint64> ids = m_jobs.keys();
     for (qint64 id : ids) {
