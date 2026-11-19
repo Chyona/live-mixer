@@ -1,5 +1,5 @@
 import type { AsrParagraphs, AsrSummary, LiveAsrSegment } from '~/services/sourceVideo.model';
-import { toSliceProjectClips, type SliceProjectClip } from '~/services/sliceProject';
+import { toSliceProjectClips, type SliceProjectClip } from '~/services/sliceProjectClips';
 import type {
   AiSegment,
   SelectedCopySegment,
