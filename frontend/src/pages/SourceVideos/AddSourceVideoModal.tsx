@@ -1,4 +1,5 @@
 import { Button, DatePicker, Form, Input, Modal, Radio } from 'antd';
+import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useEffect, useState } from 'react';
 
@@ -44,6 +45,8 @@ function isM3u8Url(value: string): boolean {
 }
 
 const DEFAULT_SOURCE_MODE: SourceMode = 'replay';
+/** 与后端 LiveEarlyProbe 一致：开播前最多提前探测。 */
+const LIVE_EARLY_PROBE_MINUTES = 15;
 
 const AddSourceVideoModal = ({
   open,
@@ -59,6 +62,12 @@ const AddSourceVideoModal = ({
     if (!open) return;
     form.setFieldsValue({ sourceMode: DEFAULT_SOURCE_MODE });
   }, [open, form]);
+
+  useEffect(() => {
+    if (!open || sourceMode !== 'live') return;
+    if (form.getFieldValue('scheduledAt')) return;
+    form.setFieldsValue({ scheduledAt: dayjs() });
+  }, [open, sourceMode, form]);
 
   const handleClose = () => {
     form.resetFields();
@@ -97,9 +106,7 @@ const AddSourceVideoModal = ({
         source_mode: mode,
         remark: values.remark?.trim(),
         scheduled_at:
-          mode === 'upcoming' && values.scheduledAt
-            ? values.scheduledAt.toISOString()
-            : undefined,
+          mode === 'live' && values.scheduledAt ? values.scheduledAt.toISOString() : undefined,
         ...(isM3u8Url(url) ? { m3u8_url: url } : { live_url: url }),
       });
 
@@ -112,10 +119,16 @@ const AddSourceVideoModal = ({
         return;
       }
 
-      if (mode === 'upcoming') {
-        toast.notify.success('源视频已添加，将按计划探测开播');
-      } else if (mode === 'live') {
-        toast.notify.success('源视频已添加，正在连接直播');
+      if (mode === 'live') {
+        const probeStart = (values.scheduledAt ?? dayjs()).subtract(
+          LIVE_EARLY_PROBE_MINUTES,
+          'minute'
+        );
+        toast.notify.success(
+          dayjs().isBefore(probeStart)
+            ? '源视频已添加，将按计划探测开播'
+            : '源视频已添加，正在连接直播'
+        );
       } else {
         toast.notify.success('源视频已添加，正在进行 ASR 转写');
       }
@@ -172,20 +185,19 @@ const AddSourceVideoModal = ({
             buttonStyle="solid"
             options={[
               { label: '回放', value: 'replay' },
-              { label: '正在直播', value: 'live' },
-              { label: '将要直播', value: 'upcoming' },
+              { label: '直播', value: 'live' },
             ]}
           />
         </Form.Item>
 
-        {sourceMode === 'upcoming' ? (
+        {sourceMode === 'live' ? (
           <Form.Item
             name="scheduledAt"
-            label="计划开播时间"
+            label="开播时间"
             extra="开播后 2 小时内未出流将标记失败；可提前最多 15 分钟开始探测"
-            rules={[{ required: true, message: '请选择计划开播时间' }]}
+            rules={[{ required: true, message: '请选择开播时间' }]}
           >
-            <DatePicker showTime style={{ width: '100%' }} placeholder="选择计划开播时间" />
+            <DatePicker showTime style={{ width: '100%' }} placeholder="选择开播时间" />
           </Form.Item>
         ) : null}
 
@@ -194,7 +206,7 @@ const AddSourceVideoModal = ({
           label={urlLabel}
           extra={
             sourceMode === 'live'
-              ? '添加后立即连接；2 小时内未出流将标记失败'
+              ? '默认开播时间为当前时间，将立即连接；未来开播则按计划探测'
               : sourceMode === 'replay'
                 ? '回放 m3u8 不会整段转封装上传，ASR 与裁剪直接读取播放列表'
                 : undefined
@@ -209,7 +221,7 @@ const AddSourceVideoModal = ({
                   return Promise.reject(new Error('请输入有效的 http/https 地址'));
                 }
                 if (sourceMode !== 'replay' && !isM3u8Url(trimmed)) {
-                  return Promise.reject(new Error('将要直播 / 正在直播必须填写 m3u8 地址'));
+                  return Promise.reject(new Error('直播必须填写 m3u8 地址'));
                 }
                 return Promise.resolve();
               },

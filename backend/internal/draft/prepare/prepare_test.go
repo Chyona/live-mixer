@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"live-mixer/internal/draft/session"
@@ -101,13 +102,52 @@ func (m *mockCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputP
 	return os.WriteFile(outputPath, []byte("fast"), 0o644)
 }
 
+func (m *mockCutter) ConcatMediaFiles(ctx context.Context, files []string, outputPath string) error {
+	return os.WriteFile(outputPath, []byte("concat"), 0o644)
+}
+
 type mockDownloader struct{}
 
 func (mockDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	return dest, os.WriteFile(dest, []byte("source"), 0o644)
+	body := []byte("source")
+	if strings.Contains(strings.ToLower(url), ".m3u8") {
+		body = []byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6.000,\nhttps://cdn.example/seg_00000.ts\n")
+	}
+	return dest, os.WriteFile(dest, body, 0o644)
+}
+
+type recordingDownloader struct {
+	urls []string
+}
+
+func (d *recordingDownloader) Download(ctx context.Context, url, dest string) (string, error) {
+	d.urls = append(d.urls, url)
+	return mockDownloader{}.Download(ctx, url, dest)
+}
+
+type recordingCutter struct {
+	mockCutter
+	inputs   []string
+	playlists []string
+}
+
+func (m *recordingCutter) CutVideoSegment(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	m.inputs = append(m.inputs, inputPath)
+	if b, err := os.ReadFile(inputPath); err == nil {
+		m.playlists = append(m.playlists, string(b))
+	}
+	return m.mockCutter.CutVideoSegment(ctx, inputPath, outputPath, startSec, endSec)
+}
+
+func (m *recordingCutter) CutVideoSegmentFast(ctx context.Context, inputPath, outputPath string, startSec, endSec float64) error {
+	m.inputs = append(m.inputs, inputPath)
+	if b, err := os.ReadFile(inputPath); err == nil {
+		m.playlists = append(m.playlists, string(b))
+	}
+	return m.mockCutter.CutVideoSegmentFast(ctx, inputPath, outputPath, startSec, endSec)
 }
 
 func runCutPipeline(t *testing.T, clips []model.ClipRange, cutter *mockCutter) {
@@ -119,6 +159,8 @@ func runCutPipeline(t *testing.T, clips []model.ClipRange, cutter *mockCutter) {
 		StagingDir: filepath.Join(root, "staging"),
 		RecordDir:  filepath.Join(root, "record"),
 		Clips:      clips,
+		// 默认关字幕，保留「超 10 分钟走关键帧快切」的既有行为断言。
+		Project: &model.VideoProject{EnableCaptions: model.EnableCaptionsOff},
 	}
 	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
 	if err := p.Run(context.Background(), s); err != nil {
@@ -178,5 +220,236 @@ func TestPipeline_CutClips_FastWhenOver10Min(t *testing.T) {
 	}
 	if len(cutter.precise) != 0 {
 		t.Fatalf("precise calls = %d, want 0", len(cutter.precise))
+	}
+}
+
+func TestPipeline_CutClips_CaptionsAllowFastOver10Min(t *testing.T) {
+	cutter := &mockCutter{}
+	root := t.TempDir()
+	s := &session.Session{
+		JobID:      "job-cap",
+		Material:   &model.LiveMaterial{LiveURL: "https://example.com/live.mp4"},
+		StagingDir: filepath.Join(root, "staging"),
+		RecordDir:  filepath.Join(root, "record"),
+		Project:    &model.VideoProject{EnableCaptions: model.EnableCaptionsOn},
+		Clips: []model.ClipRange{
+			{StartTime: 0, EndTime: FastKeyframeCutMinDurationMS + 1},
+		},
+	}
+	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(cutter.fast) != 1 {
+		t.Fatalf("fast calls = %d, want 1 over 10min even with captions", len(cutter.fast))
+	}
+	if len(cutter.precise) != 0 {
+		t.Fatalf("precise calls = %d, want 0 over 10min", len(cutter.precise))
+	}
+}
+
+func TestProjectWantsCaptions(t *testing.T) {
+	if !projectWantsCaptions(nil) {
+		t.Fatal("nil project should default to captions on")
+	}
+	if projectWantsCaptions(&model.VideoProject{EnableCaptions: model.EnableCaptionsOff}) {
+		t.Fatal("off")
+	}
+	if !projectWantsCaptions(&model.VideoProject{EnableCaptions: model.EnableCaptionsOn}) {
+		t.Fatal("on")
+	}
+}
+
+func TestPipeline_Run_LiveUsesMediaWindows(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	ingest := filepath.Join(root, "ingest")
+	if err := os.MkdirAll(ingest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	masterPath := filepath.Join(ingest, "master.mp4")
+	if err := os.WriteFile(masterPath, []byte("mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cutter := &recordingCutter{}
+	windows := model.MediaWindowList{{
+		Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
+		URL: "https://cdn.example/windows/window_00000.mp4",
+	}}
+	s := &session.Session{
+		JobID: "job-master",
+		Material: &model.LiveMaterial{
+			LiveStatus:   model.LiveStatusLive,
+			LiveURL:      "https://cdn.example/master.mp4",
+			Duration:     600000,
+			MediaWindows: windows.Marshal(),
+		},
+		StagingDir:     staging,
+		RecordDir:      filepath.Join(root, "record"),
+		LocalIngestDir: ingest,
+		Clips:          []model.ClipRange{{StartTime: 0, EndTime: 3000}},
+	}
+	p := NewPipeline(nil, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if s.SourceMode != "master_mp4" {
+		t.Fatalf("SourceMode=%q want master_mp4", s.SourceMode)
+	}
+	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "master.mp4") {
+		t.Fatalf("cut inputs = %v, want master.mp4", cutter.inputs)
+	}
+}
+
+func TestPipeline_Run_LiveRejectsWithoutMediaWindows(t *testing.T) {
+	root := t.TempDir()
+	s := &session.Session{
+		JobID: "job-live-no-win",
+		Material: &model.LiveMaterial{
+			LiveStatus:        model.LiveStatusLive,
+			RecordPlaylistURL: "https://cdn.example/live.m3u8",
+		},
+		StagingDir: filepath.Join(root, "staging"),
+		RecordDir:  filepath.Join(root, "record"),
+		Clips:      []model.ClipRange{{StartTime: 0, EndTime: 3000}},
+	}
+	p := NewPipeline(mockDownloader{}, &recordingCutter{}, zap.NewNop())
+	err := p.Run(context.Background(), s)
+	if err == nil || !strings.Contains(err.Error(), "主 MP4 尚未覆盖") {
+		t.Fatalf("err = %v, want master mp4 coverage error", err)
+	}
+}
+
+func TestMaterializeVODPlaylist_AppendsENDLIST(t *testing.T) {
+	root := t.TempDir()
+	s := &session.Session{JobID: "j", StagingDir: root}
+	p := NewPipeline(mockDownloader{}, &mockCutter{}, zap.NewNop())
+	path, err := p.materializeVODPlaylist(context.Background(), s, "https://cdn.example/live.m3u8")
+	if err != nil {
+		t.Fatalf("materializeVODPlaylist: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "#EXT-X-ENDLIST") {
+		t.Fatalf("missing ENDLIST: %s", body)
+	}
+	if !strings.Contains(string(body), "seg_00000.ts") {
+		t.Fatalf("lost segment: %s", body)
+	}
+}
+
+func TestPipeline_Run_PrefersLocalTimelineIndexWhenEndedWithoutFinal(t *testing.T) {
+	root := t.TempDir()
+	ingest := filepath.Join(root, "ingest")
+	if err := os.MkdirAll(ingest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"seg_00000.ts", "seg_00001.ts"} {
+		if err := os.WriteFile(filepath.Join(ingest, name), []byte("ts"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staging := filepath.Join(root, "staging")
+	cutter := &recordingCutter{}
+	s := &session.Session{
+		JobID:          "job-local",
+		Material:       &model.LiveMaterial{LiveStatus: model.LiveStatusEnded, RecordPlaylistURL: "https://cdn.example/live.m3u8"},
+		StagingDir:     staging,
+		RecordDir:      filepath.Join(root, "record"),
+		LocalIngestDir: ingest,
+		Clips:          []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+	}
+	p := NewPipeline(mockDownloader{}, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.SourceMode != "local_timeline_index" {
+		t.Fatalf("SourceMode=%q want local_timeline_index", s.SourceMode)
+	}
+	if len(cutter.inputs) != 1 || !strings.HasSuffix(cutter.inputs[0], "seg_00000.ts") {
+		t.Fatalf("want single-seg cut, got %v", cutter.inputs)
+	}
+}
+
+func TestPipeline_Run_PreferFinalMP4WhenEnded(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	cutter := &recordingCutter{}
+	dl := &recordingDownloader{}
+	s := &session.Session{
+		JobID: "job-ended",
+		Material: &model.LiveMaterial{
+			LiveStatus: model.LiveStatusEnded,
+			URLType:    model.URLTypeFile,
+			LiveURL:    "https://cdn.example/final.mp4",
+		},
+		StagingDir: staging,
+		RecordDir:  filepath.Join(root, "record"),
+		Clips:      []model.ClipRange{{StartTime: 0, EndTime: 1000}},
+	}
+	p := NewPipeline(dl, cutter, zap.NewNop())
+	if err := p.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s.SourceMode != "final_mp4" {
+		t.Fatalf("SourceMode=%q want final_mp4", s.SourceMode)
+	}
+	if len(dl.urls) != 1 || dl.urls[0] != "https://cdn.example/final.mp4" {
+		t.Fatalf("download urls=%v", dl.urls)
+	}
+}
+
+func TestMergeAdjacentClipTexts_KeepsLockstepWithRanges(t *testing.T) {
+	in := []model.ClipWithText{
+		{Text: "前半句", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{{Text: "前半句", StartTime: 100, EndTime: 900}}},
+		// gap = 500 → 与 MergeAdjacentClipRanges 同样合并
+		{Text: "后半句", StartTime: 1500, EndTime: 2000, Words: []model.ClipWord{{Text: "后半句", StartTime: 1500, EndTime: 1900}}},
+		// gap = 501 → 不合并
+		{Text: "另起一段", StartTime: 2501, EndTime: 3000},
+	}
+	got := MergeAdjacentClipTexts(in, ClipMergeGapMS)
+
+	ranges := MergeAdjacentClipRanges(clipsWithTextToRanges(in), ClipMergeGapMS)
+	if !ClipTextsMatchRanges(ranges, got) {
+		t.Fatalf("texts 与 ranges 未对齐: texts=%#v ranges=%#v", got, ranges)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Text != "前半句后半句" || got[0].StartTime != 0 || got[0].EndTime != 2000 {
+		t.Errorf("merged[0] = %#v", got[0])
+	}
+	if len(got[0].Words) != 2 || got[0].Words[1].Text != "后半句" {
+		t.Errorf("merged[0].Words = %#v", got[0].Words)
+	}
+	if got[1].Text != "另起一段" || len(got[1].Words) != 0 {
+		t.Errorf("merged[1] = %#v", got[1])
+	}
+	// 入参不被修改
+	if in[0].Text != "前半句" || in[0].EndTime != 1000 {
+		t.Errorf("input mutated: %#v", in[0])
+	}
+}
+
+func clipsWithTextToRanges(clips []model.ClipWithText) []model.ClipRange {
+	out := make([]model.ClipRange, 0, len(clips))
+	for _, c := range clips {
+		out = append(out, model.ClipRange{StartTime: c.StartTime, EndTime: c.EndTime})
+	}
+	return out
+}
+
+func TestClipTextsMatchRanges(t *testing.T) {
+	ranges := []model.ClipRange{{StartTime: 0, EndTime: 100}}
+	if !ClipTextsMatchRanges(ranges, []model.ClipWithText{{StartTime: 0, EndTime: 100}}) {
+		t.Error("identical should match")
+	}
+	if ClipTextsMatchRanges(ranges, nil) {
+		t.Error("count mismatch should not match")
+	}
+	if ClipTextsMatchRanges(ranges, []model.ClipWithText{{StartTime: 0, EndTime: 101}}) {
+		t.Error("end mismatch should not match")
 	}
 }

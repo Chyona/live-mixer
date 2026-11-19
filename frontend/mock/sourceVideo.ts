@@ -457,14 +457,14 @@ export default [
         name,
         live_url: /\.m3u8(\?|$)/i.test(live_url) ? '' : live_url,
         ...defaultLiveFields(live_url),
-        source_mode: (body.source_mode as SourceVideo['source_mode']) || 'replay',
+        source_mode:
+          body.source_mode === 'upcoming' || body.source_mode === 'live' ? 'live' : 'replay',
         live_status:
-          body.source_mode === 'upcoming'
-            ? 'waiting'
-            : body.source_mode === 'live'
-              ? 'connecting'
-              : 'none',
-        scheduled_at: body.scheduled_at || '',
+          body.source_mode === 'upcoming' || body.source_mode === 'live' ? 'waiting' : 'none',
+        scheduled_at:
+          body.source_mode === 'upcoming' || body.source_mode === 'live'
+            ? body.scheduled_at || now
+            : '',
         remark: body.remark?.trim() || '',
         duration: 0,
         ext: '',
@@ -615,7 +615,7 @@ export default [
         item.m3u8_url = body.m3u8_url.trim();
         item.play_url = item.m3u8_url;
       }
-      item.live_status = item.source_mode === 'upcoming' ? 'waiting' : 'connecting';
+      item.live_status = item.scheduled_at ? 'waiting' : 'connecting';
       item.ingest_error_msg = '';
       Object.assign(item, createInitialAsrState());
       item.updated_at = nowIso();
@@ -639,25 +639,13 @@ export default [
         return;
       }
 
-      if (item.asr_status !== 'completed') {
-        res.statusCode = 400;
-        res.end(
-          JSON.stringify({
-            code: 400,
-            message: 'ASR 未完成，暂不可下载字幕',
-            data: null,
-          })
-        );
-        return;
-      }
-
       const liveAsr = getTranscript(String(item.id));
       if (!liveAsr.length) {
         res.statusCode = 400;
         res.end(
           JSON.stringify({
             code: 400,
-            message: '字幕内容为空，暂不可下载',
+            message: '暂无已识别字幕，无法导出',
             data: null,
           })
         );

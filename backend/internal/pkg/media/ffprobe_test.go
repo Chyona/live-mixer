@@ -180,6 +180,18 @@ func TestParseProbeMediaTimelineJSON(t *testing.T) {
 	}
 }
 
+func TestMediaTimeline_DurationMS(t *testing.T) {
+	if got := (MediaTimeline{FormatDurationSec: 1.5}).DurationMS(); got != 1500 {
+		t.Fatalf("got %d", got)
+	}
+	if got := (MediaTimeline{VideoDurationSec: 2}).DurationMS(); got != 2000 {
+		t.Fatalf("got %d", got)
+	}
+	if got := (MediaTimeline{}).DurationMS(); got != 0 {
+		t.Fatalf("got %d", got)
+	}
+}
+
 func TestMediaTimeline_AlignOptions(t *testing.T) {
 	t.Run("audio late", func(t *testing.T) {
 		opts := MediaTimeline{

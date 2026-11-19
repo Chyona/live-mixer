@@ -27,7 +27,17 @@ type Config struct {
 	CapCutMate CapCutMateConfig `mapstructure:"capcut_mate"`
 	Web        WebConfig        `mapstructure:"web"`
 	Worker     WorkerConfig     `mapstructure:"worker"`
+	Ingest     IngestConfig     `mapstructure:"ingest"`
 	Download   DownloadConfig   `mapstructure:"download"`
+
+	// CaptionSegment 成片字幕断句（LLM 语义断行）全局开关；缺省即开启，显式关闭后字幕行由规则折行决定。
+	CaptionSegment CaptionSegmentConfig `mapstructure:"caption_segment"`
+}
+
+// IngestConfig 跟播录像参数。媒体窗步长在创建素材时写入 media_window_ms，之后按该素材自己的值切窗。
+type IngestConfig struct {
+	// MediaWindowMin 媒体窗步长（分钟）。未配置或 ≤0 时使用 DefaultIngestMediaWindowMin。
+	MediaWindowMin int `mapstructure:"media_window_min"`
 }
 
 // WorkerConfig 后台任务 Worker 并发等调度配置。
@@ -90,6 +100,8 @@ type WebConfig struct {
 	ASRStagingMaxDirs int `mapstructure:"asr_staging_max_dirs"`
 	// SourceCacheMaxDirs staging/source_cache 下最多保留的直播源缓存数（按 mtime 保留最近命中）；默认 3。
 	SourceCacheMaxDirs int `mapstructure:"source_cache_max_dirs"`
+	// LiveIngestMaxDirs staging/live_ingest 下最多保留的素材 ID 目录数（按 mtime 保留最新；进行中永不删）；默认 20。
+	LiveIngestMaxDirs int `mapstructure:"live_ingest_max_dirs"`
 	// StagingCleanupIntervalMin staging 清理任务执行间隔（分钟）；默认 60。
 	StagingCleanupIntervalMin int `mapstructure:"staging_cleanup_interval_min"`
 }
@@ -165,12 +177,32 @@ type ASRConfig struct {
 }
 
 // LLMConfig OpenAI 兼容协议大模型配置。
-// Model 用于 AI 切片等；FlashModel 用于添加视频后的 ASR 后处理（asr_summaries / asr_paragraphs）。
+// Model 用于 AI 切片等；FlashModel 用于添加视频后的 ASR 后处理（仅 asr_summaries；asr_paragraphs 为本地算法）。
 type LLMConfig struct {
 	APIKey     string `mapstructure:"api_key"`
 	BaseURL    string `mapstructure:"base_url"`
 	Model      string `mapstructure:"model"`
 	FlashModel string `mapstructure:"flash_model"`
+	// TimeoutSec 单次 Chat Completions 的客户端超时（秒）；<=0 时回落 llm.DefaultTimeout（30 分钟）。
+	// 只约束单次 HTTP 请求，不改变任务级硬超时（processHardTimeout，至少 6 小时）。
+	// 非流式请求要等模型生成完才回响应头，所以这个值必须大于最慢一次生成的耗时：
+	// AI 切片（思考模式 + 全量 ASR）线上实测 6.5~8.8 分钟。
+	TimeoutSec int `mapstructure:"timeout_sec"`
+}
+
+// CaptionSegmentConfig 成片字幕断句配置：用 LLM 做语义断行，替代纯规则折行。
+// 默认开启；关闭时与历史行为一致（标点断句 + 超长均分 + 词表不切词）。
+type CaptionSegmentConfig struct {
+	// Enabled 是否启用 LLM 断句；nil/未配置时默认开启，显式 false 才关闭。
+	// 可用 APP_CAPTION_SEGMENT_ENABLED 覆盖（true/false、1/0、yes/no、on/off）。
+	// 开启后每条切片文案一次调用，单条失败只回退该条的规则折行，不影响成片。
+	Enabled *bool `mapstructure:"enabled"`
+	// TimeoutMS 单条文案的调用总预算（含重试），单位毫秒；<=0 时回落 15000。
+	TimeoutMS int `mapstructure:"timeout_ms"`
+	// Concurrency 同时打向 LLM 的断句请求上限；<=0 时回落 4。
+	Concurrency int `mapstructure:"concurrency"`
+	// CacheSize 断句结果的进程内缓存条数上限；<=0 时回落 512。
+	CacheSize int `mapstructure:"cache_size"`
 }
 
 // TOSStorageConfig 火山引擎对象存储（TOS）连接配置。
@@ -237,6 +269,7 @@ func Load(configPath string) (*Config, error) {
 	applyEnvOverrides(&cfg)
 	normalizeServerConfig(&cfg.Server)
 	normalizeWorkerConfig(&cfg.Worker)
+	normalizeIngestConfig(&cfg.Ingest)
 	normalizeWebConfig(&cfg.Web)
 	return &cfg, nil
 }
@@ -255,6 +288,9 @@ const DefaultASRConcurrency = 6
 
 // DefaultIngestConcurrency 跟播 Worker 默认并发数。
 const DefaultIngestConcurrency = 6
+
+// DefaultIngestMediaWindowMin 跟播媒体窗默认步长（分钟）。
+const DefaultIngestMediaWindowMin = 10
 
 // DefaultDraftConcurrency 剪映草稿 Worker 默认并发数。
 const DefaultDraftConcurrency = 3
@@ -280,8 +316,52 @@ const DefaultStagingMaxDirs = 80
 // DefaultASRStagingMaxDirs staging/asr 下默认最多保留的 ASR 调试子目录数。
 const DefaultASRStagingMaxDirs = 20
 
+// DefaultCaptionSegmentTimeout 单条文案 LLM 断句的默认调用总预算（含重试）。
+const DefaultCaptionSegmentTimeout = 15 * time.Second
+
+// DefaultCaptionSegmentConcurrency LLM 断句默认并发上限。
+const DefaultCaptionSegmentConcurrency = 4
+
+// DefaultCaptionSegmentCacheSize LLM 断句结果默认缓存条数上限。
+const DefaultCaptionSegmentCacheSize = 512
+
+// EnabledOrDefault 返回是否启用 LLM 断句；未配置时默认启用（出厂即开启，显式 false 才关闭）。
+func (c CaptionSegmentConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// Timeout 返回单条文案的断句调用总预算；<=0 时回落默认 15 秒。
+func (c CaptionSegmentConfig) Timeout() time.Duration {
+	if c.TimeoutMS <= 0 {
+		return DefaultCaptionSegmentTimeout
+	}
+	return time.Duration(c.TimeoutMS) * time.Millisecond
+}
+
+// ConcurrencyOrDefault 返回断句并发上限；<=0 时回落默认 4。
+func (c CaptionSegmentConfig) ConcurrencyOrDefault() int {
+	if c.Concurrency <= 0 {
+		return DefaultCaptionSegmentConcurrency
+	}
+	return c.Concurrency
+}
+
+// CacheSizeOrDefault 返回断句结果缓存条数上限；<=0 时回落默认 512。
+func (c CaptionSegmentConfig) CacheSizeOrDefault() int {
+	if c.CacheSize <= 0 {
+		return DefaultCaptionSegmentCacheSize
+	}
+	return c.CacheSize
+}
+
 // DefaultSourceCacheMaxDirs staging/source_cache 下默认最多保留的直播源缓存数。
 const DefaultSourceCacheMaxDirs = 3
+
+// DefaultLiveIngestMaxDirs staging/live_ingest 下默认最多保留的素材 ID 目录数。
+const DefaultLiveIngestMaxDirs = 20
 
 // DefaultStagingCleanupIntervalMin staging 清理任务默认执行间隔（分钟）。
 const DefaultStagingCleanupIntervalMin = 60
@@ -399,6 +479,22 @@ func (w WorkerConfig) AISliceDraftStaleTimeout() time.Duration {
 	return time.Duration(min) * time.Minute
 }
 
+// normalizeIngestConfig 将未配置或非法的跟播参数回落到内置默认值。
+func normalizeIngestConfig(c *IngestConfig) {
+	if c.MediaWindowMin <= 0 {
+		c.MediaWindowMin = DefaultIngestMediaWindowMin
+	}
+}
+
+// MediaWindowDuration 返回跟播媒体窗步长；≤0 时回落默认 10 分钟。
+func (c IngestConfig) MediaWindowDuration() time.Duration {
+	min := c.MediaWindowMin
+	if min <= 0 {
+		min = DefaultIngestMediaWindowMin
+	}
+	return time.Duration(min) * time.Minute
+}
+
 // normalizeWebConfig 将未配置或非法的 staging 清理参数回落到内置默认值。
 func normalizeWebConfig(w *WebConfig) {
 	if w.StagingMaxDirs <= 0 {
@@ -409,6 +505,9 @@ func normalizeWebConfig(w *WebConfig) {
 	}
 	if w.SourceCacheMaxDirs <= 0 {
 		w.SourceCacheMaxDirs = DefaultSourceCacheMaxDirs
+	}
+	if w.LiveIngestMaxDirs <= 0 {
+		w.LiveIngestMaxDirs = DefaultLiveIngestMaxDirs
 	}
 	if w.StagingCleanupIntervalMin <= 0 {
 		w.StagingCleanupIntervalMin = DefaultStagingCleanupIntervalMin
@@ -573,6 +672,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val, ok := os.LookupEnv("APP_LLM_FLASH_MODEL"); ok {
 		cfg.LLM.FlashModel = val
 	}
+	if val, ok := os.LookupEnv("APP_LLM_TIMEOUT_SEC"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.LLM.TimeoutSec = n
+		}
+	}
 
 	if val, ok := os.LookupEnv("APP_WORKER_AI_SLICE_CONCURRENCY"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
@@ -619,6 +723,11 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Worker.AISliceDraftStaleTimeoutMin = n
 		}
 	}
+	if val, ok := os.LookupEnv("APP_INGEST_MEDIA_WINDOW_MIN"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Ingest.MediaWindowMin = n
+		}
+	}
 
 	// 剪映草稿服务与本地暂存目录（也可兼容无 APP_ 前缀的环境变量名）
 	if val, ok := lookupEnvPrefer("APP_CAPCUT_MATE_BASE_URL", "CAPCUT_MATE_URL"); ok {
@@ -663,6 +772,11 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Web.SourceCacheMaxDirs = n
 		}
 	}
+	if val, ok := os.LookupEnv("APP_WEB_LIVE_INGEST_MAX_DIRS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.Web.LiveIngestMaxDirs = n
+		}
+	}
 	if val, ok := os.LookupEnv("APP_WEB_STAGING_CLEANUP_INTERVAL_MIN"); ok {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.Web.StagingCleanupIntervalMin = n
@@ -671,6 +785,28 @@ func applyEnvOverrides(cfg *Config) {
 
 	if val, ok := os.LookupEnv("APP_DOWNLOAD_HOST_MAPPINGS"); ok {
 		cfg.Download.HostMappings = hostMappingsFromEnv(val)
+	}
+
+	// caption_segment 未写入内嵌 config.yaml 时 viper 无法从环境变量补全，故显式覆盖。
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_ENABLED"); ok {
+		if b, err := parseEnvBool(val); err == nil {
+			cfg.CaptionSegment.Enabled = &b
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_TIMEOUT_MS"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.TimeoutMS = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_CONCURRENCY"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.Concurrency = n
+		}
+	}
+	if val, ok := os.LookupEnv("APP_CAPTION_SEGMENT_CACHE_SIZE"); ok {
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.CaptionSegment.CacheSize = n
+		}
 	}
 }
 

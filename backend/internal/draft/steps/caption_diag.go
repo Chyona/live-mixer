@@ -1,0 +1,916 @@
+package steps
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"live-mixer/internal/draft/session"
+	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/asr"
+	"live-mixer/internal/pkg/capcutmate"
+	"live-mixer/internal/pkg/liveingest"
+	"live-mixer/internal/pkg/media"
+	"live-mixer/internal/pkg/storage"
+
+	"go.uber.org/zap"
+)
+
+const (
+	captionDiagFileName       = "caption_diag.json"
+	captionDiagMapErrSuspect  = 50   // |map_err_ms| 超过则计入映射异常
+	captionDiagDeltaSuspectMS = 300  // |delta_ms| 超过则计入裁切时长嫌疑
+	captionDiagMaxSkewMS      = 2500 // 与 resolveClipDraftDurationMS 一致
+	captionDiagOnsetSuspectMS = 120  // |onset_shift_ms| 超过则 suspect_content
+	captionDiagOnsetWindowMS  = 400  // 片头抽样音频长度
+	// captionDiagProportionalSpanMS 切片时长超过它、且时间来自按字数均分时，算「长条均分」：
+	// 均分的漂移与切片时长成正比，短条看不出来，这里只统计肉眼可感的那些。
+	captionDiagProportionalSpanMS = 6000
+)
+
+// CaptionDiagReport 字幕/音画对齐诊断报告（方案 A）。
+// CaptionSource 标注本次字幕来源：clips1（切片文案）/ asr（兜底）/ mixed（部分切片无文案）。
+type CaptionDiagReport struct {
+	JobID           string             `json:"job_id"`
+	SourceURL       string             `json:"source_url,omitempty"`
+	SourceMode      string             `json:"source_mode,omitempty"`
+	CutMode         string             `json:"cut_mode"`
+	FastKeyframe    bool               `json:"fast_keyframe"`
+	TotalWantMS     int64              `json:"total_want_ms"`
+	CaptionsEnabled bool               `json:"captions_enabled"`
+	CaptionSource   string             `json:"caption_source"`
+	Clips           []CaptionDiagClip  `json:"clips"`
+	Captions        []CaptionDiagItem  `json:"captions"`
+	Summary         CaptionDiagSummary `json:"summary"`
+	Hint            string             `json:"hint"`
+
+	// CaptionLinesSource 标注切片文案的断行来源：llm（LLM 断句）/ rule（规则折行）/ mixed（部分切片用了 LLM）。
+	// 与 CaptionSource 正交：后者说「文本从哪来」，本字段说「怎么断行」。
+	CaptionLinesSource string `json:"caption_lines_source"`
+}
+
+// CaptionDiagClip 单段切片时长对比。
+type CaptionDiagClip struct {
+	Index          int    `json:"index"`
+	Path           string `json:"path,omitempty"`
+	SourceStartMS  int64  `json:"source_start_ms"`
+	SourceEndMS    int64  `json:"source_end_ms"`
+	WantMS         int64  `json:"want_ms"`
+	ActualMS       int64  `json:"actual_ms"`
+	DeltaMS        int64  `json:"delta_ms"`
+	DraftStartUS   int64  `json:"draft_start_us"`
+	DraftEndUS     int64  `json:"draft_end_us"`
+	Scale          float64 `json:"scale"`
+	UsedProbe      bool   `json:"used_probe"`
+	SuspectCut     bool   `json:"suspect_cut"`
+	OnsetShiftMS   *int64 `json:"onset_shift_ms,omitempty"`
+	SuspectContent bool   `json:"suspect_content"`
+}
+
+// CaptionDiagItem 单条字幕映射误差。
+type CaptionDiagItem struct {
+	ClipIndex    int    `json:"clip_index"`
+	Text         string `json:"text"`
+	ASRStartMS   int64  `json:"asr_start_ms"`
+	ASREndMS     int64  `json:"asr_end_ms"`
+	DraftStartUS int64  `json:"draft_start_us"`
+	DraftEndUS   int64  `json:"draft_end_us"`
+	RelASRMS     int64  `json:"rel_asr_ms"`
+	RelDraftMS   int64  `json:"rel_draft_ms"`
+	MapErrMS     int64  `json:"map_err_ms"`
+	SuspectMap   bool   `json:"suspect_map"`
+	// TimingSource 行时间来源：words=ASR 词级时间戳对齐；proportional=整条按字数均分（会随语速漂移）。
+	TimingSource string `json:"timing_source,omitempty"`
+}
+
+// CaptionDiagSummary 汇总统计，便于快速分流 L1/L2/L3/L4。
+type CaptionDiagSummary struct {
+	ClipCount              int     `json:"clip_count"`
+	CaptionCount           int     `json:"caption_count"`
+	SuspectCutClips        int     `json:"suspect_cut_clips"`
+	SuspectContentClips    int     `json:"suspect_content_clips"`
+	SuspectMapCaptions     int     `json:"suspect_map_captions"`
+	SuspectMapRatio        float64 `json:"suspect_map_ratio"`
+	DeltaMSMedian          int64   `json:"delta_ms_median"`
+	DeltaMSP90             int64   `json:"delta_ms_p90"`
+	MapErrMSMedianAbs      int64   `json:"map_err_ms_median_abs"`
+	MapErrMSP90Abs         int64   `json:"map_err_ms_p90_abs"`
+	ASRUtteranceCount      int     `json:"asr_utterance_count"`
+	ASRWindowGapCount      int     `json:"asr_window_gap_count"`
+	ASRMaxWindowGapMS      int64   `json:"asr_max_window_gap_ms"`
+	ASRWindowGapBoundaries []int64 `json:"asr_window_gap_boundaries_ms,omitempty"`
+	// ProportionalCaptions 时间来自「按字数均分」的字幕数（词级时间戳对齐失败）。
+	ProportionalCaptions int `json:"proportional_captions,omitempty"`
+	// ProportionalLongCaptions 其中所属切片时长 ≥ captionDiagProportionalSpanMS 的条数：
+	// 均分的漂移量与切片时长成正比，这类是肉眼能看出音字不同步的部分。
+	ProportionalLongCaptions int    `json:"proportional_long_captions,omitempty"`
+	LikelyLayer              string `json:"likely_layer"`
+	LikelyLayerDescription   string `json:"likely_layer_description"`
+}
+
+// mappedCaption 内部：字幕条目 + 源 ASR 时间，供诊断复用同一映射结果。
+type mappedCaption struct {
+	Item         capcutmate.CaptionItem
+	ClipIndex    int
+	ASRStartMS   int64
+	ASREndMS     int64
+	Scale        float64
+	TimingSource asr.CaptionTimingSource
+}
+
+// BuildCaptionsFromASR 仅按 live_asr 分句映射到草稿字幕时间轴（无切片文案时的兜底，保持旧行为）。
+func BuildCaptionsFromASR(liveASRJSON string, placements []session.ClipPlacement) []capcutmate.CaptionItem {
+	return BuildCaptionsForPlacements(liveASRJSON, placements, nil)
+}
+
+// BuildCaptionsForPlacements 生成字幕条目。
+// 优先使用与切片一一对应的 clipTexts（人工编辑后的文案 + 词级时间）：字幕文本与画面一致，
+// 人工删掉的文字不会回灌，行时间来自词级时间戳而非线性插值；
+// clipTexts 缺失（无 clips1 / 未对齐）时逐段回退 live_asr 按时间重叠映射。
+func BuildCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText) []capcutmate.CaptionItem {
+	return BuildCaptionsForPlacementsWithLines(liveASRJSON, placements, clipTexts, nil)
+}
+
+// BuildCaptionsForPlacementsWithLines 与 BuildCaptionsForPlacements 同逻辑，
+// 额外接受与 clipTexts 一一对应的断行建议 clipLines（来自 LLM）：该条为 nil 时按规则折行。
+func BuildCaptionsForPlacementsWithLines(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText, clipLines [][]string) []capcutmate.CaptionItem {
+	items, _ := mapCaptionsForPlacements(liveASRJSON, placements, clipTexts, clipLines)
+	return items
+}
+
+// BuildCaptionTexts 返回与草稿 add_captions 完全一致的字幕行文本（顺序、断行、空白过滤相同），
+// 仅去掉时间轴信息，供人工切片页下载字幕预览使用。
+// clips 须与草稿 Build 中的切片一一对应（已按同一规则合并相邻片段）。
+func BuildCaptionTexts(liveASRJSON string, clips []model.ClipRange, clipTexts []model.ClipWithText, clipLines [][]string) []string {
+	if len(clips) == 0 {
+		return nil
+	}
+	if len(clipTexts) != len(clips) {
+		clipTexts = nil
+	}
+	if len(clipLines) != len(clipTexts) {
+		clipLines = nil
+	}
+	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
+	if len(utterances) == 0 && clipTexts == nil {
+		return nil
+	}
+
+	out := make([]string, 0)
+	for i, c := range clips {
+		sourceDurMS := c.EndTime - c.StartTime
+		if sourceDurMS <= 0 {
+			continue
+		}
+		// 草稿时间轴仅用于映射时间，文本内容与它无关；这里用等价的正比例放置。
+		p := session.ClipPlacement{
+			SourceStartMS: c.StartTime,
+			SourceEndMS:   c.EndTime,
+			DraftStartUS:  0,
+			DraftEndUS:    sourceDurMS * 1000,
+		}
+		for _, seg := range placementCaptionSegments(utterances, clipTexts, clipLines, i, p) {
+			text := strings.TrimSpace(seg.Text)
+			if text == "" {
+				continue
+			}
+			// 与 mapCaptionsForPlacements 的重叠裁剪保持一致：零长度交叉同样跳过。
+			overlapStart := seg.StartTime
+			if overlapStart < c.StartTime {
+				overlapStart = c.StartTime
+			}
+			overlapEnd := seg.EndTime
+			if overlapEnd > c.EndTime {
+				overlapEnd = c.EndTime
+			}
+			if overlapEnd <= overlapStart {
+				continue
+			}
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func mapCaptionsForPlacements(liveASRJSON string, placements []session.ClipPlacement, clipTexts []model.ClipWithText, clipLines [][]string) ([]capcutmate.CaptionItem, []mappedCaption) {
+	if len(placements) == 0 {
+		return nil, nil
+	}
+	// 只在完全对齐时按文案生成，否则整场回退 ASR，避免错行。
+	if len(clipTexts) != len(placements) {
+		clipTexts = nil
+	}
+	// 断行建议同样要求一一对齐，否则整体忽略。
+	if len(clipLines) != len(clipTexts) {
+		clipLines = nil
+	}
+	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
+	if len(utterances) == 0 && clipTexts == nil {
+		return nil, nil
+	}
+
+	out := make([]capcutmate.CaptionItem, 0)
+	mapped := make([]mappedCaption, 0)
+	for pi, p := range placements {
+		sourceDurMS := p.SourceEndMS - p.SourceStartMS
+		draftDurUS := p.DraftEndUS - p.DraftStartUS
+		if sourceDurMS <= 0 || draftDurUS <= 0 {
+			continue
+		}
+		scale := float64(draftDurUS) / float64(sourceDurMS*1000)
+		for _, seg := range placementCaptionSegments(utterances, clipTexts, clipLines, pi, p) {
+			text := strings.TrimSpace(seg.Text)
+			if text == "" {
+				continue
+			}
+			if seg.EndTime <= p.SourceStartMS || seg.StartTime >= p.SourceEndMS {
+				continue
+			}
+			overlapStartMS := seg.StartTime
+			if overlapStartMS < p.SourceStartMS {
+				overlapStartMS = p.SourceStartMS
+			}
+			overlapEndMS := seg.EndTime
+			if overlapEndMS > p.SourceEndMS {
+				overlapEndMS = p.SourceEndMS
+			}
+			if overlapEndMS <= overlapStartMS {
+				continue
+			}
+			draftStartUS := p.DraftStartUS + int64(float64((overlapStartMS-p.SourceStartMS)*1000)*scale)
+			draftEndUS := p.DraftStartUS + int64(float64((overlapEndMS-p.SourceStartMS)*1000)*scale)
+			if draftEndUS > p.DraftEndUS {
+				draftEndUS = p.DraftEndUS
+			}
+			if draftStartUS < p.DraftStartUS {
+				draftStartUS = p.DraftStartUS
+			}
+			if draftEndUS <= draftStartUS {
+				continue
+			}
+			item := capcutmate.CaptionItem{
+				Start: draftStartUS,
+				End:   draftEndUS,
+				Text:  text,
+			}
+			out = append(out, item)
+			mapped = append(mapped, mappedCaption{
+				Item:         item,
+				ClipIndex:    pi,
+				ASRStartMS:   overlapStartMS,
+				ASREndMS:     overlapEndMS,
+				Scale:        scale,
+				TimingSource: seg.TimingSource,
+			})
+		}
+	}
+	return out, mapped
+}
+
+// placementCaptionSegments 取第 idx 段切片的字幕行：有该段文案时以文案为准（词级时间拆行），
+// 否则回退到与该切片区间有重叠的 ASR 分句。
+func placementCaptionSegments(utterances []asr.Utterance, clipTexts []model.ClipWithText, clipLines [][]string, idx int, p session.ClipPlacement) []asr.TimedSegment {
+	if clipTexts != nil {
+		if c := clipTexts[idx]; strings.TrimSpace(c.Text) != "" {
+			var lines []string
+			if idx < len(clipLines) {
+				lines = clipLines[idx]
+			}
+			return splitClipTextForCaptions(c, lines)
+		}
+	}
+	return splitUtterancesForPlacement(utterances, p)
+}
+
+// splitUtterancesForPlacement 取与切片区间有重叠的 ASR 分句并按标点/长度拆行。
+func splitUtterancesForPlacement(utterances []asr.Utterance, p session.ClipPlacement) []asr.TimedSegment {
+	var out []asr.TimedSegment
+	for _, u := range utterances {
+		if strings.TrimSpace(u.Text) == "" {
+			continue
+		}
+		if u.EndTime <= p.SourceStartMS || u.StartTime >= p.SourceEndMS {
+			continue
+		}
+		out = append(out, asr.SplitUtteranceForCaptions(u)...)
+	}
+	return out
+}
+
+// splitClipTextForCaptions 将切片文案拆成字幕行：lines 非空且通过校验时用断句器给的行
+// （标点优先断句 + 超长小句按 LLM 报的位置切行），否则按规则折行（标点 + 12 字）。
+// lines 在此重新走一遍 asr.SnapCaptionLines，作为进入字幕前的边界防线——无论上游怎么改，
+// 进入字幕的文本都不能改动切片文案的内容，绝不把改写过的文本写进成片。
+// （LLM 已经只报位置、不产文本，这道防线是给「上游将来又换了断句来源」留的。）
+// （内容侧校验与吸附都是幂等的：已经合法的切点位移为 0，重跑结果与首次一致。）
+// 两条路径共用同一时间分配：行时间优先取 clips1 词级时间戳；词级时间缺失或与文案不一致时在切片区间内按比例分配。
+func splitClipTextForCaptions(c model.ClipWithText, lines []string) []asr.TimedSegment {
+	u := asr.Utterance{
+		Text:      c.Text,
+		StartTime: c.StartTime,
+		EndTime:   c.EndTime,
+		Words:     toASRWords(c.Words),
+	}
+	var segs []asr.TimedSegment
+	if len(lines) > 0 {
+		if valid, _, err := asr.SnapCaptionLines(c.Text, lines, asr.MaxCaptionRunes); err == nil {
+			segs = asr.TimedSegmentsForLines(u, valid)
+		} else {
+			segs = asr.SplitUtteranceForCaptions(u)
+		}
+	} else {
+		segs = asr.SplitUtteranceForCaptions(u)
+	}
+	// 夹紧到切片区间：clips1 与合并后区间有出入时不越界。
+	for i := range segs {
+		if segs[i].StartTime < c.StartTime {
+			segs[i].StartTime = c.StartTime
+		}
+		if segs[i].EndTime > c.EndTime {
+			segs[i].EndTime = c.EndTime
+		}
+	}
+	return segs
+}
+
+func toASRWords(words []model.ClipWord) []asr.Word {
+	if len(words) == 0 {
+		return nil
+	}
+	out := make([]asr.Word, len(words))
+	for i, w := range words {
+		out[i] = asr.Word{Text: w.Text, StartTime: w.StartTime, EndTime: w.EndTime}
+	}
+	return out
+}
+
+// BuildCaptionDiagReport 根据 Session 切片与 ASR 映射生成对齐诊断报告。
+func BuildCaptionDiagReport(ctx context.Context, s *session.Session, prober media.MediaTimelineProber) (*CaptionDiagReport, error) {
+	if s == nil {
+		return nil, fmt.Errorf("session 不能为空")
+	}
+	if prober == nil {
+		prober = media.NewFFprobeProber("")
+	}
+	liveASR := ""
+	if s.Material != nil {
+		liveASR = s.Material.LiveASR
+	}
+	_, mapped := mapCaptionsForPlacements(liveASR, s.ClipPlacements, s.ClipTexts, s.CaptionLines)
+
+	report := &CaptionDiagReport{
+		JobID:              s.JobID,
+		CutMode:            s.CutMode,
+		FastKeyframe:       s.FastKeyframe,
+		SourceMode:         s.SourceMode,
+		CaptionsEnabled:    true,
+		Clips:              make([]CaptionDiagClip, 0, len(s.ClipPlacements)),
+		Captions:           make([]CaptionDiagItem, 0, len(mapped)),
+		CaptionLinesSource: captionLinesSourceLabel(s.ClipTexts, s.CaptionLines),
+	}
+	if s.Project != nil {
+		report.CaptionsEnabled = s.Project.EnableCaptions != model.EnableCaptionsOff
+	}
+	report.CaptionSource = captionSourceLabel(s.ClipTexts, s.ClipPlacements)
+	if s.Material != nil {
+		report.SourceURL = s.SourcePath
+		if report.SourceURL == "" {
+			report.SourceURL = s.Material.ProcessMediaURL()
+		}
+	}
+	if report.SourceMode == "" && media.IsM3U8URL(report.SourceURL) {
+		report.SourceMode = "remote_hls"
+	}
+
+	deltas := make([]int64, 0, len(s.ClipPlacements))
+	for i, p := range s.ClipPlacements {
+		wantMS := p.SourceEndMS - p.SourceStartMS
+		path := ""
+		if i < len(s.ClipPaths) {
+			path = s.ClipPaths[i]
+		}
+		actualMS, usedProbe := probeClipActualMS(ctx, prober, path, wantMS)
+		delta := actualMS - wantMS
+		draftDurUS := p.DraftEndUS - p.DraftStartUS
+		scale := 1.0
+		if wantMS > 0 {
+			scale = float64(draftDurUS) / float64(wantMS*1000)
+		}
+		clip := CaptionDiagClip{
+			Index:         i,
+			Path:          filepath.Base(path),
+			SourceStartMS: p.SourceStartMS,
+			SourceEndMS:   p.SourceEndMS,
+			WantMS:        wantMS,
+			ActualMS:      actualMS,
+			DeltaMS:       delta,
+			DraftStartUS:  p.DraftStartUS,
+			DraftEndUS:    p.DraftEndUS,
+			Scale:         scale,
+			UsedProbe:     usedProbe,
+			SuspectCut:    absInt64(delta) >= captionDiagDeltaSuspectMS,
+		}
+		report.Clips = append(report.Clips, clip)
+		report.TotalWantMS += wantMS
+		deltas = append(deltas, delta)
+		if clip.SuspectCut {
+			report.Summary.SuspectCutClips++
+		}
+	}
+
+	fillOnsetContentChecks(ctx, s, report)
+
+	mapErrsAbs := make([]int64, 0, len(mapped))
+	for _, m := range mapped {
+		p := s.ClipPlacements[m.ClipIndex]
+		relASR := m.ASRStartMS - p.SourceStartMS
+		relDraftMS := (m.Item.Start - p.DraftStartUS) / 1000
+		expectedRel := int64(float64(relASR) * m.Scale)
+		mapErr := relDraftMS - expectedRel
+		item := CaptionDiagItem{
+			ClipIndex:    m.ClipIndex,
+			Text:         truncateRunesDiag(m.Item.Text, 40),
+			ASRStartMS:   m.ASRStartMS,
+			ASREndMS:     m.ASREndMS,
+			DraftStartUS: m.Item.Start,
+			DraftEndUS:   m.Item.End,
+			RelASRMS:     relASR,
+			RelDraftMS:   relDraftMS,
+			MapErrMS:     mapErr,
+			SuspectMap:   absInt64(mapErr) >= captionDiagMapErrSuspect,
+			TimingSource: string(m.TimingSource),
+		}
+		report.Captions = append(report.Captions, item)
+		mapErrsAbs = append(mapErrsAbs, absInt64(mapErr))
+		if item.SuspectMap {
+			report.Summary.SuspectMapCaptions++
+		}
+		if m.TimingSource == asr.CaptionTimingProportional {
+			report.Summary.ProportionalCaptions++
+			if p.SourceEndMS-p.SourceStartMS >= captionDiagProportionalSpanMS {
+				report.Summary.ProportionalLongCaptions++
+			}
+		}
+	}
+
+	report.Summary.ClipCount = len(report.Clips)
+	report.Summary.CaptionCount = len(report.Captions)
+	if report.Summary.CaptionCount > 0 {
+		report.Summary.SuspectMapRatio = float64(report.Summary.SuspectMapCaptions) / float64(report.Summary.CaptionCount)
+	}
+	report.Summary.DeltaMSMedian = percentileSortedInt64(sortedCopy(deltas), 50)
+	report.Summary.DeltaMSP90 = percentileSortedInt64(sortedCopyAbs(deltas), 90)
+	report.Summary.MapErrMSMedianAbs = percentileSortedInt64(sortedCopy(mapErrsAbs), 50)
+	report.Summary.MapErrMSP90Abs = percentileSortedInt64(sortedCopy(mapErrsAbs), 90)
+	fillASRWindowGapSummary(liveASR, usedSourceRanges(s.ClipPlacements), &report.Summary)
+	report.Summary.LikelyLayer, report.Summary.LikelyLayerDescription = classifyCaptionDiag(report.Summary)
+	report.Hint = report.Summary.LikelyLayerDescription
+	return report, nil
+}
+
+func probeClipActualMS(ctx context.Context, prober media.MediaTimelineProber, localPath string, wantMS int64) (actualMS int64, usedProbe bool) {
+	if localPath == "" || prober == nil {
+		return wantMS, false
+	}
+	tl, err := prober.ProbeMediaTimeline(ctx, localPath)
+	if err != nil {
+		return wantMS, false
+	}
+	actual := tl.DurationMS()
+	if actual <= 0 {
+		return wantMS, false
+	}
+	if actual > wantMS+captionDiagMaxSkewMS || wantMS > actual+captionDiagMaxSkewMS {
+		return actual, true // still report real actual, but VideosStep would not use it
+	}
+	return actual, true
+}
+
+// fillOnsetContentChecks 抽样校验裁切片头与源 [source_start, +T) 的 onset 偏移。
+func fillOnsetContentChecks(ctx context.Context, s *session.Session, report *CaptionDiagReport) {
+	if s == nil || report == nil || len(report.Clips) == 0 {
+		return
+	}
+	sampleIdx := selectOnsetSampleIndices(report.Clips)
+	if len(sampleIdx) == 0 {
+		return
+	}
+	tmpDir := filepath.Join(s.StagingDir, "onset_diag")
+	_ = os.MkdirAll(tmpDir, 0o755)
+	defer os.RemoveAll(tmpDir)
+
+	durSec := float64(captionDiagOnsetWindowMS) / 1000.0
+	for _, i := range sampleIdx {
+		if i < 0 || i >= len(report.Clips) {
+			continue
+		}
+		clipPath := ""
+		if i < len(s.ClipPaths) {
+			clipPath = s.ClipPaths[i]
+		}
+		if clipPath == "" {
+			continue
+		}
+		refInput, refStartSec, ok := resolveOnsetRefInput(s, report.Clips[i].SourceStartMS)
+		if !ok {
+			continue
+		}
+		refRaw := filepath.Join(tmpDir, fmt.Sprintf("ref_%d.pcm", i))
+		clipRaw := filepath.Join(tmpDir, fmt.Sprintf("clip_%d.pcm", i))
+		octx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		errRef := media.ExtractMonoPCM16Window(octx, "", refInput, refRaw, refStartSec, durSec, media.OnsetSampleRate)
+		errClip := media.ExtractMonoPCM16Window(octx, "", clipPath, clipRaw, 0, durSec, media.OnsetSampleRate)
+		cancel()
+		if errRef != nil || errClip != nil {
+			continue
+		}
+		refPCM, err1 := media.ReadPCM16File(refRaw)
+		clipPCM, err2 := media.ReadPCM16File(clipRaw)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		shift, ok := media.OnsetShiftMS(refPCM, clipPCM, media.OnsetSampleRate, 200)
+		if !ok {
+			continue
+		}
+		v := shift
+		report.Clips[i].OnsetShiftMS = &v
+		if absInt64(shift) > captionDiagOnsetSuspectMS {
+			report.Clips[i].SuspectContent = true
+			report.Summary.SuspectContentClips++
+		}
+	}
+}
+
+// selectOnsetSampleIndices 抽样：首/中/末 + |source_start| 最大的几段。
+func selectOnsetSampleIndices(clips []CaptionDiagClip) []int {
+	n := len(clips)
+	if n == 0 {
+		return nil
+	}
+	set := map[int]struct{}{}
+	add := func(i int) {
+		if i >= 0 && i < n {
+			set[i] = struct{}{}
+		}
+	}
+	add(0)
+	add(n / 2)
+	add(n - 1)
+	type pair struct{ i int; start int64 }
+	arr := make([]pair, n)
+	for i, c := range clips {
+		arr[i] = pair{i: i, start: c.SourceStartMS}
+	}
+	sort.Slice(arr, func(a, b int) bool { return absInt64(arr[a].start) > absInt64(arr[b].start) })
+	for k := 0; k < 3 && k < len(arr); k++ {
+		add(arr[k].i)
+	}
+	out := make([]int, 0, len(set))
+	for i := range set {
+		out = append(out, i)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// resolveOnsetRefInput 解析用于 onset 对照的源媒体与片内起点（秒）。
+func resolveOnsetRefInput(s *session.Session, sourceStartMS int64) (input string, startSec float64, ok bool) {
+	if s == nil {
+		return "", 0, false
+	}
+	// 拼接主 MP4 成片：对照必须用 master.mp4 + 全局 offset（不是单窗内偏移）。
+	if (s.SourceMode == "master_mp4" || s.SourceMode == "media_windows") && s.Material != nil {
+		readyMS := s.Material.MasterReadyMS()
+		if readyMS > 0 && sourceStartMS >= 0 && sourceStartMS < readyMS {
+			for _, dir := range []string{strings.TrimSpace(s.LocalIngestDir), strings.TrimSpace(s.StagingDir)} {
+				if dir == "" {
+					continue
+				}
+				p := filepath.Join(dir, liveingest.MasterMP4FileName())
+				if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+					return p, float64(sourceStartMS) / 1000.0, true
+				}
+			}
+		}
+	}
+	dir := strings.TrimSpace(s.LocalIngestDir)
+	if dir != "" && len(liveingest.GlobLocalSegments(dir)) > 0 {
+		nominal := int64(model.LiveSegmentDurationSec) * 1000
+		idx := liveingest.LoadMediaTimelineIndex(dir, nominal)
+		spans, err := idx.Range(sourceStartMS, sourceStartMS+int64(captionDiagOnsetWindowMS))
+		if err == nil && len(spans) > 0 {
+			spans = liveingest.AttachFilePaths(dir, spans)
+			if st, err := os.Stat(spans[0].FilePath); err == nil && st.Size() > 0 {
+				return spans[0].FilePath, float64(spans[0].OffsetMS) / 1000.0, true
+			}
+		}
+	}
+	src := strings.TrimSpace(s.SourcePath)
+	if src != "" {
+		if st, err := os.Stat(src); err == nil && !st.IsDir() && st.Size() > 0 {
+			return src, float64(sourceStartMS) / 1000.0, true
+		}
+		// SourcePath 可能是 ingest 目录
+		if st, err := os.Stat(src); err == nil && st.IsDir() {
+			final := filepath.Join(src, "final.mp4")
+			if st2, err := os.Stat(final); err == nil && st2.Size() > 0 {
+				return final, float64(sourceStartMS) / 1000.0, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
+func classifyCaptionDiag(sum CaptionDiagSummary) (layer, desc string) {
+	cutHeavy := sum.ClipCount > 0 && float64(sum.SuspectCutClips)/float64(sum.ClipCount) >= 0.2 &&
+		sum.DeltaMSP90 >= captionDiagDeltaSuspectMS
+	mapHeavy := sum.SuspectMapRatio >= 0.1 || sum.MapErrMSP90Abs >= captionDiagMapErrSuspect
+	windowGapHeavy := sum.ASRWindowGapCount > 0 && sum.ASRMaxWindowGapMS >= 3000
+	contentHeavy := sum.ClipCount > 0 && sum.SuspectContentClips > 0 &&
+		(sum.SuspectContentClips >= 2 || float64(sum.SuspectContentClips)/float64(sum.ClipCount) >= 0.3)
+	// propHeavy：均分漂移与切片时长、行数成正比，短切片单行均分等于「整条时间就是这句 ASR 时间」，
+	// 本来就没得选（words 缺失时唯一的分配方式），不算异常——只有长切片均分，或整批字幕大面积均分时才算。
+	propHeavy := sum.ProportionalLongCaptions > 0 ||
+		(sum.ProportionalCaptions >= 3 && float64(sum.ProportionalCaptions) >= 0.5*float64(sum.CaptionCount))
+
+	switch {
+	case sum.CaptionCount == 0 && sum.ClipCount == 0:
+		return "none", "无切片与字幕，无法判断对齐"
+	case contentHeavy && !mapHeavy:
+		return "content_seek_mismatch", "片头 onset 校验显示裁切内容与源起点错位（map 可能仍自洽）；优先修 seg+offset / seek"
+	case contentHeavy && mapHeavy:
+		return "content_seek_mismatch", "onset 与映射误差同时异常，优先排查裁切内容错位"
+	case propHeavy && !cutHeavy && !contentHeavy:
+		return "L4_timing_proportional", fmt.Sprintf(
+			"有 %d 条字幕（其中 %d 条位于 ≥%dms 的长切片）时间来自按字数均分：words 词级对齐失败，"+
+				"行时间按字数摊平，语速/停顿差异全丢，长条会整体漂移（裁切与映射本身自洽）",
+			sum.ProportionalCaptions, sum.ProportionalLongCaptions, captionDiagProportionalSpanMS)
+	case windowGapHeavy && !cutHeavy && !mapHeavy && !contentHeavy:
+		return "L1_window_boundary", "本次用到的源区间内，live_asr 在窗口边界附近出现异常空隙/跳跃；成片选中跨接缝的片段会整体错位"
+	case sum.CaptionCount == 0:
+		if contentHeavy {
+			return "content_seek_mismatch", "无字幕条目；onset 显示裁切内容错位"
+		}
+		if cutHeavy {
+			return "L2_cut", "无字幕条目；多段 actual-want 偏差偏大，优先怀疑裁切起点/时长"
+		}
+		if windowGapHeavy {
+			return "L1_window_boundary", "无草稿字幕条目，但源 ASR 在窗口边界有异常空隙"
+		}
+		return "none", "无字幕条目，无法判断对齐"
+	case cutHeavy && mapHeavy:
+		return "L2_and_L1", "裁切偏差与映射误差同时偏高，建议先修裁切再看 ASR"
+	case cutHeavy:
+		return "L2_cut", "多段 actual-want 偏差偏大，优先怀疑裁切起点/时长（混合 seek 或关键帧）"
+	case mapHeavy:
+		return "L1_or_L4_asr", "映射公式自洽误差大或个别句异常，优先怀疑 ASR 时间或拆句均分"
+	case windowGapHeavy:
+		return "L1_window_boundary", "草稿映射自洽，但源 ASR 在窗口边界有异常空隙；成片若选中边界后片段会整体错位"
+	default:
+		return "ok_or_mild", "统计未显示明显成簇异常；若体感仍不齐：①源视频 10 分钟窗后是否已错（L1）②仅成片错则查裁切内容平移（onset）"
+	}
+}
+
+// sourceRangeMS 源时间轴上的一个半开区间 [StartMS, EndMS)，用于把整场扫描限定在草稿实际用到的范围。
+type sourceRangeMS struct {
+	StartMS int64
+	EndMS   int64
+}
+
+// usedSourceRanges 取本次草稿用到的源区间；跳过非正区间。
+func usedSourceRanges(placements []session.ClipPlacement) []sourceRangeMS {
+	out := make([]sourceRangeMS, 0, len(placements))
+	for _, p := range placements {
+		if p.SourceEndMS > p.SourceStartMS {
+			out = append(out, sourceRangeMS{StartMS: p.SourceStartMS, EndMS: p.SourceEndMS})
+		}
+	}
+	return out
+}
+
+// fillASRWindowGapSummary 扫描 live_asr：在调度窗口倍数附近的大空隙，提示窗间接缝问题。
+// ranges 为本草稿实际用到的源区间（一般由 ClipPlacements 得来）：非空时只统计与这些区间相交的空隙。
+// 整场 ASR 里别处的接缝与本次成片无关，扫全量会把无关窗口的空隙报成本次问题（曾据此误判成 L1）。
+func fillASRWindowGapSummary(liveASRJSON string, ranges []sourceRangeMS, sum *CaptionDiagSummary) {
+	if sum == nil {
+		return
+	}
+	utterances := asr.FormatUtterancesForAPI(liveASRJSON)
+	sum.ASRUtteranceCount = len(utterances)
+	if len(utterances) < 2 {
+		return
+	}
+	windowMS := int64(model.LiveASRWindowDuration / time.Millisecond)
+	if windowMS <= 0 {
+		windowMS = 10 * 60 * 1000
+	}
+	const nearMS = 45 * 1000  // 落在窗边界 ±45s 内
+	const gapSuspectMS = 3500 // 空隙超过该值视为可疑（正常句间停顿通常更短）
+	var prevEnd int64 = -1
+	for _, u := range utterances {
+		if prevEnd >= 0 {
+			gap := u.StartTime - prevEnd
+			if gap >= gapSuspectMS && gapWithinRanges(prevEnd, u.StartTime, ranges) {
+				mid := prevEnd + gap/2
+				boundary := ((mid + windowMS/2) / windowMS) * windowMS
+				if boundary > 0 && absInt64(mid-boundary) <= nearMS {
+					sum.ASRWindowGapCount++
+					if gap > sum.ASRMaxWindowGapMS {
+						sum.ASRMaxWindowGapMS = gap
+					}
+					sum.ASRWindowGapBoundaries = appendUniqueInt64(sum.ASRWindowGapBoundaries, boundary)
+				}
+			}
+		}
+		if u.EndTime > prevEnd {
+			prevEnd = u.EndTime
+		}
+	}
+}
+
+// gapWithinRanges ranges 为空表示不限制；否则空隙须与某个使用区间相交。
+// 半开区间判交：紧贴区间端点的空隙（切片外的停顿）不算在内。
+func gapWithinRanges(gapStartMS, gapEndMS int64, ranges []sourceRangeMS) bool {
+	if len(ranges) == 0 {
+		return true
+	}
+	for _, r := range ranges {
+		if gapStartMS < r.EndMS && gapEndMS > r.StartMS {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUniqueInt64(vals []int64, v int64) []int64 {
+	for _, x := range vals {
+		if x == v {
+			return vals
+		}
+	}
+	return append(vals, v)
+}
+
+// WriteCaptionDiagReport 写入 staging/caption_diag.json。
+func WriteCaptionDiagReport(stagingDir string, report *CaptionDiagReport) (string, error) {
+	if report == nil {
+		return "", fmt.Errorf("report 为空")
+	}
+	stagingDir = strings.TrimSpace(stagingDir)
+	if stagingDir == "" {
+		return "", fmt.Errorf("stagingDir 为空")
+	}
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(stagingDir, captionDiagFileName)
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// BuildCaptionDiagObjectKey 对象键：temp/draft/{jobID}/caption_diag.json。
+func BuildCaptionDiagObjectKey(jobID string) string {
+	id := strings.TrimSpace(jobID)
+	if id == "" {
+		id = "unknown"
+	}
+	return path.Join(storage.SubDirTemp, "draft", id, captionDiagFileName)
+}
+
+// WriteAndUploadCaptionDiag 生成诊断报告、落盘并上传；失败返回 error（调用方可降级为仅记日志）。
+func WriteAndUploadCaptionDiag(ctx context.Context, s *session.Session, uploader ObjectUploader, prober media.MediaTimelineProber, logger *zap.Logger) (localPath, url string, err error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	report, err := BuildCaptionDiagReport(ctx, s, prober)
+	if err != nil {
+		return "", "", err
+	}
+	localPath, err = WriteCaptionDiagReport(s.StagingDir, report)
+	if err != nil {
+		return "", "", err
+	}
+	logger.Info("已写入字幕对齐诊断报告",
+		zap.String("job_id", s.JobID),
+		zap.String("path", localPath),
+		zap.String("likely_layer", report.Summary.LikelyLayer),
+		zap.Int("suspect_cut_clips", report.Summary.SuspectCutClips),
+		zap.Int("suspect_map_captions", report.Summary.SuspectMapCaptions),
+		zap.Float64("suspect_map_ratio", report.Summary.SuspectMapRatio),
+	)
+	if uploader == nil {
+		return localPath, "", nil
+	}
+	url, err = uploader.UploadFile(ctx, localPath, BuildCaptionDiagObjectKey(s.JobID))
+	if err != nil {
+		return localPath, "", fmt.Errorf("上传 caption_diag 失败: %w", err)
+	}
+	return localPath, url, nil
+}
+
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// captionSourceLabel 标注本次字幕来源：clips1（切片文案）/ asr（兜底）/ mixed（部分切片无文案）。
+func captionSourceLabel(clipTexts []model.ClipWithText, placements []session.ClipPlacement) string {
+	if len(placements) == 0 || len(clipTexts) != len(placements) {
+		return "asr"
+	}
+	withText := 0
+	for _, c := range clipTexts {
+		if strings.TrimSpace(c.Text) != "" {
+			withText++
+		}
+	}
+	switch {
+	case withText == len(placements):
+		return "clips1"
+	case withText == 0:
+		return "asr"
+	default:
+		return "mixed"
+	}
+}
+
+// captionLinesSourceLabel 标注断行来源：llm / rule / mixed（仅统计有文案的切片）。
+func captionLinesSourceLabel(clipTexts []model.ClipWithText, captionLines [][]string) string {
+	withText, withLLM := 0, 0
+	for i, c := range clipTexts {
+		if strings.TrimSpace(c.Text) == "" {
+			continue
+		}
+		withText++
+		if i < len(captionLines) && len(captionLines[i]) > 0 {
+			withLLM++
+		}
+	}
+	switch {
+	case withText == 0 || withLLM == 0:
+		return "rule"
+	case withLLM == withText:
+		return "llm"
+	default:
+		return "mixed"
+	}
+}
+
+func sortedCopy(vals []int64) []int64 {
+	out := append([]int64(nil), vals...)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func sortedCopyAbs(vals []int64) []int64 {
+	out := make([]int64, len(vals))
+	for i, v := range vals {
+		out[i] = absInt64(v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func percentileSortedInt64(sorted []int64, p int) int64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if p <= 0 {
+		return sorted[0]
+	}
+	if p >= 100 {
+		return sorted[len(sorted)-1]
+	}
+	idx := int(math.Ceil(float64(p)/100*float64(len(sorted)))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+func truncateRunesDiag(s string, max int) string {
+	r := []rune(s)
+	if max <= 0 || len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}

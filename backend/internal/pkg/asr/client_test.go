@@ -145,6 +145,48 @@ func TestClient_Transcribe_SilenceAudioError(t *testing.T) {
 	if !strings.Contains(err.Error(), "静音") || !strings.Contains(err.Error(), "重新解析") {
 		t.Fatalf("error = %v, want friendly silence message", err)
 	}
+	if !IsSilenceAudioError(err) {
+		t.Fatalf("IsSilenceAudioError(%v) = false, want true", err)
+	}
+}
+
+func TestIsSilenceAudioError(t *testing.T) {
+	if !IsSilenceAudioError(fmt.Errorf("ASR 查询失败: 20000003 源音频被识别为静音")) {
+		t.Fatal("want true for 20000003")
+	}
+	if !IsSilenceAudioError(fmt.Errorf("no valid speech in audio")) {
+		t.Fatal("want true for no valid speech")
+	}
+	if IsSilenceAudioError(fmt.Errorf("ASR 查询失败: 50000000 boom")) {
+		t.Fatal("want false for other codes")
+	}
+	if IsSilenceAudioError(nil) {
+		t.Fatal("want false for nil")
+	}
+}
+
+func TestClassifyTranscribeFailure(t *testing.T) {
+	cases := []struct {
+		err  error
+		want TranscribeFailureKind
+	}{
+		{fmt.Errorf("ASR 查询失败: 20000003 静音"), TranscribeFailureSilence},
+		{fmt.Errorf("ASR 任务轮询超时，已尝试 360 次"), TranscribeFailureTimeout},
+		{fmt.Errorf("ASR 提交失败: 45000132 音频超过厂商大小限制（<512MB）"), TranscribeFailureTooLarge},
+		{fmt.Errorf("ASR 提交失败: 45000131 半小时累计提交时长超限"), TranscribeFailureQuota},
+		{fmt.Errorf("ASR 查询失败: 55000031 厂商服务繁忙"), TranscribeFailureBusy},
+		{fmt.Errorf("ASR 提交失败: 45000001 bad"), TranscribeFailureReject},
+		{context.Canceled, TranscribeFailureCanceled},
+		{fmt.Errorf("network boom"), TranscribeFailureOther},
+	}
+	for _, tc := range cases {
+		if got := ClassifyTranscribeFailure(tc.err); got != tc.want {
+			t.Fatalf("ClassifyTranscribeFailure(%v)=%q want %q", tc.err, got, tc.want)
+		}
+	}
+	if VendorMaxAudioDuration != 5*time.Hour || VendorMaxAudioBytes != 512*1024*1024 {
+		t.Fatalf("vendor limits changed unexpectedly: %v / %d", VendorMaxAudioDuration, VendorMaxAudioBytes)
+	}
 }
 
 // TestClient_Transcribe_QueryTimeoutThenSuccess 单次 query 读超时后应继续轮询并最终成功。

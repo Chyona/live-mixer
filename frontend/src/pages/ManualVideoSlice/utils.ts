@@ -1,4 +1,5 @@
 import type { AsrParagraphs, AsrSummary, LiveAsrSegment } from '~/services/sourceVideo.model';
+import { toSliceProjectClips, type SliceProjectClip } from '~/services/sliceProject';
 import type {
   AiSegment,
   SelectedCopySegment,
@@ -60,6 +61,50 @@ export function getParagraphRange(paragraph: TranscriptParagraph) {
     start: firstSegment.start,
     end: lastSegment.end,
   };
+}
+
+function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/**
+ * 定位跟随时，把左侧单击映射到右侧已选片段。
+ * 优先 sourceParagraphId；否则用时间相交。多个候选时优先包含 seek 时间的、列表中靠前的；
+ * 都不包含该时间时取起点最近的。
+ */
+export function findCopySegmentForTranscriptClick(
+  segments: SelectedCopySegment[],
+  paragraph: TranscriptParagraph,
+  timeSec: number
+): SelectedCopySegment | null {
+  const linked = segments.filter((item) => item.sourceParagraphId === paragraph.id);
+  let candidates = linked;
+  if (candidates.length === 0) {
+    const range = getParagraphRange(paragraph);
+    candidates = segments.filter((item) =>
+      rangesOverlap(item.start, item.end, range.start, range.end)
+    );
+  }
+  if (candidates.length === 0) return null;
+
+  const containing = candidates.filter(
+    (item) => item.start <= timeSec && timeSec <= item.end
+  );
+  if (containing.length > 0) return containing[0] ?? null;
+
+  let closest = candidates[0];
+  if (!closest) return null;
+  let bestDistance = Math.abs(closest.start - timeSec);
+  for (let index = 1; index < candidates.length; index += 1) {
+    const item = candidates[index];
+    if (!item) continue;
+    const distance = Math.abs(item.start - timeSec);
+    if (distance < bestDistance) {
+      closest = item;
+      bestDistance = distance;
+    }
+  }
+  return closest;
 }
 
 /**
@@ -1735,6 +1780,40 @@ function boundsForPartialDeletePiece(
   };
 }
 
+/**
+ * 片段提交给后端的字级时间：优先按当前文案从原文案分段解析，其次用片段自带的 words，
+ * 并裁到片段区间内——局部删除后区间外的词（含被删的字）不会随 clips1 提交，
+ * 后端生成字幕时也就不会再出现「画面里没有、字幕里有」。
+ */
+export function resolveSegmentClipWords(
+  segment: SelectedCopySegment,
+  paragraphs: TranscriptParagraph[]
+): TranscriptWord[] {
+  const resolved = resolveCopySegmentWords(segment, paragraphs);
+  const words = resolved.length ? resolved : segment.words ?? [];
+  return words.filter(
+    (word) =>
+      isTimingTranscriptWord(word) &&
+      word.end > segment.start &&
+      word.start < segment.end
+  );
+}
+
+/** 组装提交给后端的 clips1：片段文案 + 字级时间（毫秒转换在 toSliceProjectClips 内完成） */
+export function buildClips1Payload(
+  segments: SelectedCopySegment[],
+  paragraphs: TranscriptParagraph[]
+): SliceProjectClip[] {
+  return toSliceProjectClips(
+    segments.map((segment) => ({
+      start: segment.start,
+      end: segment.end,
+      text: segment.text,
+      words: resolveSegmentClipWords(segment, paragraphs),
+    }))
+  );
+}
+
 /** 从 transcript 中解析 copy 片段对应的字级时间轴 */
 export function resolveCopySegmentWords(
   segment: SelectedCopySegment,
@@ -2257,30 +2336,54 @@ export function insertSegmentsByTimelineProximity(
   }, segments);
 }
 
-export function reorderSegments(
+/**
+ * 将 incoming 插入到 anchorId 对应片段之后（保持 incoming 顺序）。
+ * 锚点不存在时返回 null，调用方据此回退到按时间插入。
+ */
+export function insertSegmentsAfterId(
   segments: SelectedCopySegment[],
-  fromIndex: number,
-  toIndex: number
-) {
-  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return segments;
-  if (fromIndex >= segments.length || toIndex > segments.length) return segments;
+  incoming: SelectedCopySegment[],
+  anchorId: string
+): SelectedCopySegment[] | null {
+  if (incoming.length === 0) return segments;
+  const anchorIndex = segments.findIndex((segment) => segment.id === anchorId);
+  if (anchorIndex < 0) return null;
 
   const next = [...segments];
-  const [moved] = next.splice(fromIndex, 1);
-  if (!moved) return segments;
-
-  if (toIndex >= next.length) {
-    next.push(moved);
-    return next;
-  }
-
-  let targetIndex = toIndex;
-  if (fromIndex < toIndex) {
-    targetIndex -= 1;
-  }
-
-  next.splice(targetIndex, 0, moved);
+  next.splice(anchorIndex + 1, 0, ...incoming);
   return next;
+}
+
+/**
+ * 将指定 id 的片段整体移动到 toIndex（原数组中的插入位置，0..length），
+ * 选中片段保持原有相对顺序，用于多选拖动排序。
+ * 顺序未变化时返回原数组引用，便于调用方判断是否需要更新。
+ */
+export function moveSegmentsByIds(
+  segments: SelectedCopySegment[],
+  ids: string[],
+  toIndex: number
+): SelectedCopySegment[] {
+  if (segments.length === 0 || ids.length === 0) return segments;
+
+  const idSet = new Set(ids);
+  const moving = segments.filter((segment) => idSet.has(segment.id));
+  if (moving.length === 0) return segments;
+
+  const remaining = segments.filter((segment) => !idSet.has(segment.id));
+  const clamped = Math.max(0, Math.min(toIndex, segments.length));
+  const removedBefore = segments
+    .slice(0, clamped)
+    .filter((segment) => idSet.has(segment.id)).length;
+  const insertAt = Math.max(0, Math.min(clamped - removedBefore, remaining.length));
+
+  const next = [
+    ...remaining.slice(0, insertAt),
+    ...moving,
+    ...remaining.slice(insertAt),
+  ];
+  const unchanged = next.every((segment, index) => segment.id === segments[index]?.id);
+  return unchanged ? segments : next;
 }
 
 function escapeHtml(text: string) {
@@ -2336,10 +2439,6 @@ export function downloadTextFile(content: string, filename: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-export function sanitizeDownloadFilename(name: string) {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'subtitle';
 }
 
 /** 文案列表滚动时，将目标元素置于视口偏上位置（默认约 36%，居中为 50%） */

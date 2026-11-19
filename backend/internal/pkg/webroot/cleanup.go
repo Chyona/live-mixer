@@ -14,7 +14,7 @@ type stagingDir struct {
 }
 
 // CleanupStaging 将 rootDir/staging 下一级子目录按 mtime 降序保留最多 keep 个，删除更早的。
-// 跳过 ASR 调试树与直播源共享缓存目录，避免误删长期复用数据。
+// 跳过 ASR 调试树、直播源共享缓存与跟播工作目录，避免误删长期复用或正在录像的数据。
 // staging 目录不存在时视为成功（removed=0）；单个子目录删除失败时跳过并继续，最终返回聚合错误。
 func CleanupStaging(rootDir string, keep int) (removed int, err error) {
 	if rootDir == "" {
@@ -27,8 +27,9 @@ func CleanupStaging(rootDir string, keep int) (removed int, err error) {
 		filepath.Join(rootDir, "staging"),
 		keep,
 		map[string]struct{}{
-			ASRStagingSubDir:   {},
-			SourceCacheSubDir:  {},
+			ASRStagingSubDir:  {},
+			SourceCacheSubDir: {},
+			LiveIngestSubDir:  {},
 		},
 	)
 }

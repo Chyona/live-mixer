@@ -1,25 +1,53 @@
-# Live Clip Workbench
+<p align="center">
+  <a href="https://gogoshine.com"><img src="LiveMix/resources/brand/logo.png" width="96" alt="LiveMix Studio"></a>
+</p>
 
-[中文](README.md) · [English](README.en.md)
+<h1 align="center">Live Clip Workbench</h1>
 
-> **AI-assisted live stream clipping** · Speech-to-text · Smart clip selection · CapCut drafts · One-click export  
-> Technical repo name: `live-mixer` · Help creators and ops teams cut highlights much faster
+<p align="center">
+  <strong>AI-assisted live stream clipping</strong> · Speech-to-text · Smart clip selection · CapCut drafts · One-click export
+</p>
 
-Stack: Go 1.25+ · PostgreSQL 14+ · Docker Compose · see LICENSE in this repo
+<p align="center">
+  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+</p>
+
+> Technical repo name: `live-mixer`. The product has two parts: the **LiveMix Studio desktop client** for capture and local editing, and the **live-mixer server** for ASR, AI clip selection, CapCut drafts, and export jobs.
 
 ---
 
-## Try It Online
+## Download the client
 
-> **Live demo: [https://gogoshine.com](https://gogoshine.com)**
+> **Download: [https://gogoshine.com](https://gogoshine.com)**
 >
-> No local deployment needed — open your browser to experience the full Live Clip Workbench: material ingest, ASR, AI clipping, CapCut drafts, and one-click export.
+> Available for **macOS and Windows**. No install needed — [try the full workbench in your browser](https://gogoshine.com).
 
 ---
 
-## Why Live Clip Workbench?
+## Desktop client LiveMix Studio
 
-An end-to-end pipeline for **live replay / recorded streams**: ingest media, run ASR, let AI pick highlight segments, then generate CapCut drafts and optional final videos. Use fully automatic **one-click export**, or **AI draft + human refine** when quality matters most.
+LiveMix Studio is built with **Qt 6 / C++17** and works with the live-mixer server. It brings the whole “capture → ASR → AI selection → CapCut draft” pipeline to the desktop, for teams that record locally and ship clips in batches.
+
+![LiveMix Studio desktop client demo](LiveMix/help.gif)
+
+### Core features
+
+| Feature | Description |
+|---------|-------------|
+| Source capture | Record live streams (`http/https/rtmp/rtsp`) and Douyin live rooms (URL or room ID), download direct mp4 links, and import local videos (drag & drop); auto-detects duration and resolution |
+| Video preview | Auto thumbnails on cards; built-in player with play/pause and seek; HLS recordings start playing while remuxing continues |
+| One-click export | Full-length ASR → LLM selects clips by prompt → precise ffmpeg cuts → CapCut draft, with live stage and progress on the pipeline page |
+| On-demand draft download | Drafts are recorded locally first; draft files and media download only when you click “Open draft folder”, saving disk space |
+| Task center | Jobs persisted in local SQLite with live progress, retry on failure, and result access when done |
+| Local-first | Config and business data stay on your machine (JSON + SQLite); packaged for macOS and Windows |
+
+> See [LiveMix/README.md](LiveMix/README.md) for build, packaging (macOS DMG / Windows installer), and implementation details.
+
+---
+
+## Server deployment and usage (live-mixer)
+
+`live-mixer` is a self-hosted backend for **live replays / recordings**: material ingest, ASR, AI segment selection, CapCut drafts, and final video export in one pipeline. The desktop client and web workbench share the same API, supporting both fully automatic one-click export and **AI draft + human refine** — let the model handle repetitive work while you keep control of the final quality.
 
 **Who it is for**
 
@@ -27,9 +55,7 @@ An end-to-end pipeline for **live replay / recorded streams**: ingest media, run
 - Creators and editors who want LLMs to speed up “listen and select”, then finish polish in CapCut
 - Engineering teams that need a self-hosted backend for live clipping / remix workflows
 
----
-
-## Core features
+### Core features
 
 | Feature | Description |
 |---------|-------------|
@@ -52,9 +78,7 @@ Ingest live material
   → Download CapCut draft for finishing
 ```
 
----
-
-## Tech stack
+### Tech stack
 
 | Layer | Stack |
 |-------|--------|
@@ -66,17 +90,15 @@ Ingest live material
 | Object storage | Tencent COS / Alibaba OSS / Volcengine TOS (pick one) |
 | Deploy | Docker Compose (API + capcut-mate + nginx) |
 
----
+### Quick start (Docker)
 
-## Quick start (Docker)
-
-### Prerequisites
+#### Prerequisites
 
 - Docker / Docker Compose
 - Reachable **PostgreSQL 14+** (create the database first; the app does not bundle a DB)
 - Configured object storage, ASR key, and LLM key
 
-### 1. Environment variables
+#### 1. Environment variables
 
 ```bash
 cd docker
@@ -92,7 +114,7 @@ Inside Compose, CapCut base URL is usually `http://nginx`. Optional:
 
 Config priority: **`APP_*` env vars > external yaml > embedded defaults**.
 
-### 2. Initialize the database
+#### 2. Initialize the database
 
 ```bash
 go run ./cmd/envinit init
@@ -106,7 +128,7 @@ Default account: `admin` / `admin` (change immediately in production).
 go run ./cmd/envinit reset-password -p 'YourStrongPassword'
 ```
 
-### 3. Start and verify
+#### 3. Start and verify
 
 ```bash
 cd docker
@@ -123,13 +145,11 @@ curl http://localhost:81/openapi/live-mixer/v1/auth/login
 | `capcut-mate` | CapCut draft service | `31001` |
 | `nginx` | Static assets + reverse proxy | `81` |
 
-Logs: `docker/logs/` · Staging: `docker/html/`
+Logs: `docker/logs/` · Staging: `docker/html/` · ASR temp: `docker/temp/` (auto-cleaned after 24h)
 
 > When deploying to a new network, update `PROXY_*` / `DRAFT_URL` in `docker-compose.yaml` to match your gateway and domain.
 
----
-
-## Main APIs
+### Main APIs
 
 JWT required except login. Full docs: Swagger at `http://localhost:30000/swagger/index.html`.
 
@@ -145,17 +165,15 @@ JWT required except login. Full docs: Swagger at `http://localhost:30000/swagger
 | POST | `/openapi/live-mixer/v1/tasks/ai-slice-draft` | One-click export job |
 | GET | `/openapi/live-mixer/v1/tasks/:id` | Poll progress / draft & video URLs |
 
----
+### Local development
 
-## Local development
-
-### Requirements
+#### Requirements
 
 - Go **1.25+**
 - PostgreSQL **14+**
 - ffmpeg (ASR audio extract and clip cutting; included in the Docker image)
 
-### Layout
+#### Layout
 
 ```text
 live-mixer/
@@ -169,7 +187,7 @@ live-mixer/
 └── migrations/        # reference SQL
 ```
 
-### Common commands
+#### Common commands
 
 ```bash
 go mod download
@@ -197,14 +215,14 @@ $env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 
 Without a full stack locally, run `docker compose up -d capcut-mate nginx` and point `capcut_mate.base_url` to `http://localhost:81`.
 
-### Contributing tips
+#### Contributing tips
 
 - Layers: `handler` → `service` → `repository` → `model`; async jobs in `scheduler`, CapCut pipeline in `draft`
 - New APIs: add Swagger comments, register in `internal/routes/v1`, put auth-required routes under `JWTAuth`
 - New config: update `config.yaml.example`, structs, and `docker/.env.example`
 - AI clip / draft / one-click jobs are async; clients poll `GET /tasks/:id`
 
-### Publishing images
+#### Publishing images
 
 Pushing a tag like `v1.0.0` triggers GitHub Actions to build and push the Docker Hub image.
 
@@ -216,6 +234,7 @@ Pushing a tag like `v1.0.0` triggers GitHub Actions to build and push the Docker
 |----------|-------------|
 | [README.md](README.md) | Chinese docs (default) |
 | [README.en.md](README.en.md) | English documentation |
+| [LiveMix/README.md](LiveMix/README.md) | Desktop client build, packaging, and implementation notes |
 | [LICENSE](LICENSE) | License |
 
 Keywords: live stream clipping, AI clipping, live remix, speech recognition ASR, CapCut draft, one-click export, Live Clip Workbench, live-mixer

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
@@ -69,6 +70,8 @@ type aiSliceWorker struct {
 	concurrency      int
 	pollInterval     time.Duration
 	staleTimeout     time.Duration
+	// heartbeatInterval 调大模型期间刷新 updated_at 的间隔，防孤儿回收误杀（见 startTaskHeartbeat）。
+	heartbeatInterval time.Duration
 
 	wake      chan struct{}
 	startOnce sync.Once
@@ -98,16 +101,17 @@ func NewAISliceWorker(
 		staleTimeout = aiSliceStaleTimeout
 	}
 	return &aiSliceWorker{
-		taskRepo:         taskRepo,
-		liveMaterialRepo: liveMaterialRepo,
-		videoProjectRepo: videoProjectRepo,
-		llmClient:        llmClient,
-		web:              web,
-		logger:           logger,
-		concurrency:      concurrency,
-		pollInterval:     aiSlicePollInterval,
-		staleTimeout:     staleTimeout,
-		wake:             newWakeChan(concurrency),
+		taskRepo:          taskRepo,
+		liveMaterialRepo:  liveMaterialRepo,
+		videoProjectRepo:  videoProjectRepo,
+		llmClient:         llmClient,
+		web:               web,
+		logger:            logger,
+		concurrency:       concurrency,
+		pollInterval:      aiSlicePollInterval,
+		staleTimeout:      staleTimeout,
+		heartbeatInterval: taskHeartbeatInterval,
+		wake:              newWakeChan(concurrency),
 	}
 }
 
@@ -321,14 +325,30 @@ func (w *aiSliceWorker) ProcessWithOptions(ctx context.Context, task *model.Task
 		return w.fail(ctx, task.ID, progress, fmt.Errorf("LLM 客户端未配置"))
 	}
 
+	// 思考模式 + 全量 ASR 提示词的单次生成实测 6.5~8.8 分钟（非流式，响应头要等生成完），
+	// 期间没有任何写库：心跳刷新 updated_at，避免被判成孤儿任务重排后重复调用大模型。
+	stopHeartbeat := startTaskHeartbeat(ctx, w.taskRepo, w.logger,
+		task.ID, task.Version, progress, w.heartbeatInterval)
+	llmStarted := time.Now()
 	// AI 切片显式开启思考模式，提升复杂剪辑决策质量。
 	content, err := w.llmClient.ChatThinking(ctx, []llm.ChatMessage{
 		{Role: "system", Content: sysPrompt},
 		{Role: "user", Content: userContent},
 	})
+	llmElapsed := time.Since(llmStarted)
+	stopHeartbeat() // 心跳只覆盖大模型调用；后续步骤本身都会写库
 	if err != nil {
-		return w.fail(ctx, task.ID, progress, fmt.Errorf("调用大模型失败: %w", err))
+		return w.fail(ctx, task.ID, progress, fmt.Errorf("调用大模型失败(耗时 %s, 句段 %d): %w",
+			llmElapsed.Round(time.Second), len(segments), err))
 	}
+	// 这个耗时是判断「客户端超时预算够不够」的唯一线上依据，务必保留。
+	w.logger.Info("AI 切片大模型调用完成",
+		zap.String("task_id", task.ID),
+		zap.Int("segments", len(segments)),
+		zap.Int("prompt_runes", utf8.RuneCountInString(userContent)),
+		zap.Int("content_runes", utf8.RuneCountInString(content)),
+		zap.Duration("elapsed", llmElapsed),
+	)
 
 	progress = setProgress(70)
 

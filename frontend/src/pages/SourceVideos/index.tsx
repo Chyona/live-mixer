@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useNavigate } from 'react-router-dom';
 import { Button, DatePicker, Input, Popconfirm, Space } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { LuPlus, LuScissors, LuSparkles, LuTrash2 } from 'react-icons/lu';
+import { LuDownload, LuPlus, LuScissors, LuSparkles, LuTrash2 } from 'react-icons/lu';
 import CopyableText from '~/components/CopyableText';
 
 import DisabledActionWrap from '~/components/DisabledActionWrap';
@@ -18,19 +18,21 @@ import { useAppSEO } from '~/hooks/useAppSEO';
 import { useListFilters } from '~/hooks/useListFilters';
 import { useTableColumnVisibility } from '~/hooks/useTableColumnVisibility';
 import { buildManualVideoSliceLink, buildSlicesListLink, buildSourceVideoSliceLink } from '~/routes/links';
+import { sanitizeDownloadFilename } from '~/services/blobDownload';
 import { AppError } from '~/services/http';
 import {
   deleteSourceVideo,
+  downloadSourceVideoAsrSubtitle,
   fetchSourceVideoList,
   fetchSourceVideoRelatedProjects,
   retrySourceVideoAsr,
   retrySourceVideoIngest,
   updateSourceVideo,
   isLiveIngesting,
-  sourceVideoPlayUrl,
+  sourceVideoListDisplayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
-import { formatToDateTime } from '~/utils/date';
+import { formatToDateTime, formatToDateTimeMin } from '~/utils/date';
 import { formatVideoDurationMs } from '~/utils/duration';
 import KeywordSearchInput from '~/components/KeywordSearchInput';
 import { parseHighlightKeywords, toApiKeywords } from '~/utils/listKeywords';
@@ -45,6 +47,23 @@ const SOURCE_VIDEOS_COLUMN_STORAGE_KEY = 'source-videos-table-columns-v5';
 const SOURCE_VIDEOS_LOCKED_COLUMN_KEYS = ['name', 'actions'];
 /** 默认隐藏：ASR 开始/完成时间；创建时间默认展示 */
 const SOURCE_VIDEOS_DEFAULT_HIDDEN_COLUMN_KEYS = ['asr_started_at', 'asr_updated_at'];
+
+/** 各列最小宽度：横向滚动宽度按「可见列」计算，隐藏列不再占宽 */
+const SOURCE_VIDEOS_COLUMN_MIN_WIDTHS: Record<string, number> = {
+  name: 150,
+  remark: 120,
+  live_url: 140,
+  live_status: 110,
+  duration: 90,
+  asr_progress: 180,
+  asr_started_at: 180,
+  asr_updated_at: 180,
+  created_by: 80,
+  created_at: 180,
+  project_count: 90,
+  actions: 330,
+};
+const SOURCE_VIDEOS_COLUMN_SETTING_COL_WIDTH = 44;
 
 const SOURCE_VIDEOS_COLUMN_SETTINGS: TableColumnSettingItem[] = [
   { key: 'name', label: '源视频名称', locked: true },
@@ -110,7 +129,7 @@ function SourceVideoDeleteButton({
     const toastKey = `delete-source-video-related-${record.id}`;
     toast.notify.warning(
       '存在关联的项目',
-      `关联的 ${projectCount} 个剪辑项目将一并删除，若存在进行中的任务可能导致任务执行失败，此操作不可撤销。`,
+      `关联的 ${projectCount} 个剪辑项目将一并删除，进行中的跟播将停止；此操作不可撤销。`,
       {
         key: toastKey,
         duration: 0,
@@ -164,7 +183,7 @@ function SourceVideoDeleteButton({
   return (
     <Popconfirm
       title="确认删除该源视频？"
-      description="删除后不可恢复"
+      description="删除后不可恢复，进行中的跟播将停止"
       okText="删除"
       cancelText="取消"
       okButtonProps={{ danger: true, loading: actionLoading }}
@@ -217,6 +236,7 @@ const SourceVideosPage = () => {
   const [pageSize, setPageSize] = useState(10);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [retryingAsrId, setRetryingAsrId] = useState<number | null>(null);
+  const [downloadingSubtitleId, setDownloadingSubtitleId] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
   const columnKeys = useMemo(
@@ -230,6 +250,13 @@ const SourceVideosPage = () => {
       lockedKeys: SOURCE_VIDEOS_LOCKED_COLUMN_KEYS,
       defaultHiddenKeys: SOURCE_VIDEOS_DEFAULT_HIDDEN_COLUMN_KEYS,
     });
+
+  const tableScrollX = useMemo(
+    () =>
+      visibleKeys.reduce((sum, key) => sum + (SOURCE_VIDEOS_COLUMN_MIN_WIDTHS[key] ?? 120), 0) +
+      SOURCE_VIDEOS_COLUMN_SETTING_COL_WIDTH,
+    [visibleKeys]
+  );
 
   const loadList = useCallback(async (options?: { silent?: boolean; refresh?: boolean }) => {
     const silent = options?.silent ?? false;
@@ -440,6 +467,27 @@ const SourceVideosPage = () => {
     }
   }, [list.length, loadList, page]);
 
+  const handleDownloadSubtitle = useCallback(async (record: SourceVideo) => {
+    setDownloadingSubtitleId(record.id);
+    try {
+      const filename = `${sanitizeDownloadFilename(record.name)}-字幕.txt`;
+      await downloadSourceVideoAsrSubtitle(record.id, filename);
+      if (record.asr_status !== 'completed') {
+        toast.notify.info('已下载当前已识别字幕');
+      } else {
+        toast.notify.success('字幕文件已开始下载');
+      }
+    } catch (error) {
+      if (error instanceof AppError) {
+        showAppError(error);
+      } else {
+        toast.notify.error(error instanceof Error ? error.message : '字幕下载失败');
+      }
+    } finally {
+      setDownloadingSubtitleId(null);
+    }
+  }, []);
+
   const columns = useMemo<ColumnsType<SourceVideo>>(() => {
     const allColumns: ColumnsType<SourceVideo> = [
       {
@@ -461,6 +509,7 @@ const SourceVideosPage = () => {
         title: '备注',
         dataIndex: 'remark',
         key: 'remark',
+        width: 120,
         render: (remark: string, record) => (
           <RemarkEditor
             value={remark}
@@ -475,7 +524,7 @@ const SourceVideosPage = () => {
         ellipsis: true,
         render: (_url: string, record) => (
           <CopyableText
-            text={sourceVideoPlayUrl(record)}
+            text={sourceVideoListDisplayUrl(record)}
             layout="row"
             className="source-videos-url-cell"
             emptyFallback="-"
@@ -489,11 +538,21 @@ const SourceVideosPage = () => {
         width: 110,
         render: (status: string, record) => {
           const label = LIVE_STATUS_LABEL[status] || status || '-';
+          const scheduledAt = status === 'waiting' ? record.scheduled_at?.trim() : '';
+          const scheduledLabel = scheduledAt ? formatToDateTimeMin(scheduledAt) : '';
           if (status === 'failed') {
             const msg = record.ingest_error_msg?.trim();
             return (
               <span title={msg || label} className="source-videos-live-status is-failed">
                 {label}
+              </span>
+            );
+          }
+          if (scheduledAt && scheduledLabel && scheduledLabel !== '-') {
+            return (
+              <span className="source-videos-live-status">
+                <span>{label}</span>
+                <span className="source-videos-live-status__time">{scheduledLabel}</span>
               </span>
             );
           }
@@ -538,24 +597,30 @@ const SourceVideosPage = () => {
         title: 'ASR开始时间',
         dataIndex: 'asr_started_at',
         key: 'asr_started_at',
-        width: 170,
+        width: 180,
         align: 'right',
-        render: (value: string) => formatToDateTime(value),
+        render: (value: string) => (
+          <span className="source-videos-datetime">{formatToDateTime(value)}</span>
+        ),
       },
       {
         title: 'ASR完成时间',
         dataIndex: 'asr_updated_at',
         key: 'asr_updated_at',
-        width: 170,
+        width: 180,
         align: 'right',
         render: (value: string, record) =>
-          record.asr_status === 'completed' ? formatToDateTime(value) : '-',
+          record.asr_status === 'completed' ? (
+            <span className="source-videos-datetime">{formatToDateTime(value)}</span>
+          ) : (
+            '-'
+          ),
       },
       {
         title: '创建者',
         dataIndex: 'created_by',
         key: 'created_by',
-        width: 100,
+        width: 80,
         ellipsis: true,
         render: (createdBy: string) => (
           <EllipsisTooltip text={createdBy || '-'} className="list-page__cell-ellipsis" />
@@ -565,8 +630,10 @@ const SourceVideosPage = () => {
         title: '创建时间',
         dataIndex: 'created_at',
         key: 'created_at',
-        width: 170,
-        render: (created_at: string) => formatToDateTime(created_at),
+        width: 180,
+        render: (created_at: string) => (
+          <span className="source-videos-datetime">{formatToDateTime(created_at)}</span>
+        ),
       },
       {
         title: '关联项目',
@@ -598,7 +665,7 @@ const SourceVideosPage = () => {
       {
         title: '操作',
         key: 'actions',
-        width: 245,
+        width: 330,
         fixed: 'right',
         render: (_, record) => {
           const asrDisabledReason = getAsrActionDisabledReason(record);
@@ -620,6 +687,16 @@ const SourceVideosPage = () => {
                 disabledReason: asrDisabledReason,
                 onNavigate: navigate,
               })}
+              <Button
+                type="link"
+                size="small"
+                className="list-page__action-btn"
+                icon={<LuDownload size={14} />}
+                loading={downloadingSubtitleId === record.id}
+                onClick={() => void handleDownloadSubtitle(record)}
+              >
+                字幕下载
+              </Button>
               <SourceVideoDeleteButton
                 record={record}
                 deletingId={deletingId}
@@ -658,7 +735,9 @@ const SourceVideosPage = () => {
   }, [
     deletingId,
     defaultVisibleKeys,
+    downloadingSubtitleId,
     handleDelete,
+    handleDownloadSubtitle,
     navigate,
     retryingAsrId,
     handleRetryIngest,
@@ -747,7 +826,7 @@ const SourceVideosPage = () => {
         loading={tableLoadingProp}
         columns={columns}
         dataSource={list}
-        scrollX={1600}
+        scrollX={tableScrollX}
         expandable={{
           showExpandColumn: false,
           expandedRowKeys: asrHitExpandedRowKeys,

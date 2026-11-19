@@ -196,8 +196,14 @@ func TestGenerator_Build_Success(t *testing.T) {
 	project := &model.VideoProject{
 		ID: 9, Width: 1080, Height: 1920, EnableCaptions: model.EnableCaptionsOn,
 		Clips1: []model.ClipWithText{
-			{Text: "a", StartTime: 0, EndTime: 1000, Words: []model.ClipWord{}},
-			{Text: "b", StartTime: 2000, EndTime: 3500, Words: []model.ClipWord{}},
+			{
+				Text: "第一段", StartTime: 0, EndTime: 1000,
+				Words: []model.ClipWord{{Text: "第一段", StartTime: 100, EndTime: 800}},
+			},
+			{
+				Text: "第二段", StartTime: 2000, EndTime: 3500,
+				Words: []model.ClipWord{{Text: "第二段", StartTime: 2100, EndTime: 3000}},
+			},
 		},
 	}
 	var progressLog []int16
@@ -220,6 +226,9 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if result.ClipsTarURL != "https://oss.example/temp/draft/job-1/job-1.tar" {
 		t.Errorf("ClipsTarURL = %q", result.ClipsTarURL)
 	}
+	if result.CaptionDiagURL != "https://oss.example/temp/draft/job-1/caption_diag.json" {
+		t.Errorf("CaptionDiagURL = %q", result.CaptionDiagURL)
+	}
 	if capcut.createCalls != 1 || capcut.addCalls != 1 || capcut.captionsCalls != 1 {
 		t.Errorf("capcut calls create=%d add=%d captions=%d", capcut.createCalls, capcut.addCalls, capcut.captionsCalls)
 	}
@@ -237,9 +246,9 @@ func TestGenerator_Build_Success(t *testing.T) {
 	if !strings.Contains(capcut.lastAdd.VideoInfos, "https://oss.example/temp/draft/job-1/clip_000.mp4") {
 		t.Errorf("video_infos = %s, want object storage URL", capcut.lastAdd.VideoInfos)
 	}
-	// 2 个切片 + 1 个 tar 包。
-	if len(uploader.calls) != 3 {
-		t.Errorf("upload calls = %d, want 3", len(uploader.calls))
+	// 2 个切片 + caption_diag.json + 1 个 tar 包。
+	if len(uploader.calls) != 4 {
+		t.Errorf("upload calls = %d, want 4", len(uploader.calls))
 	}
 	if len(progressLog) == 0 {
 		t.Error("expected progress callbacks")
@@ -383,5 +392,90 @@ func TestResolveCanvasSize(t *testing.T) {
 	w, h = ResolveCanvasSize(0, 0, &model.VideoProject{})
 	if w != DefaultCanvasWidth || h != DefaultCanvasHeight {
 		t.Fatalf("default = %dx%d", w, h)
+	}
+}
+
+func TestResolveAlignedClipTexts(t *testing.T) {
+	project := &model.VideoProject{
+		Clips1: []model.ClipWithText{
+			{Text: "甲", StartTime: 0, EndTime: 1000},
+			// gap = 500 → 与区间同规则合并
+			{Text: "乙", StartTime: 1500, EndTime: 2000},
+		},
+	}
+	clips := prepare.MergeAdjacentClipRanges([]model.ClipRange{
+		{StartTime: 0, EndTime: 1000},
+		{StartTime: 1500, EndTime: 2000},
+	}, prepare.ClipMergeGapMS)
+
+	got := resolveAlignedClipTexts(Request{JobID: "j", Project: project}, clips, zap.NewNop())
+	if len(got) != 1 || got[0].Text != "甲乙" || got[0].EndTime != 2000 {
+		t.Fatalf("aligned = %#v", got)
+	}
+	// 区间不一致（如显式传入 clips）→ 回退 nil，字幕走 ASR
+	if got := resolveAlignedClipTexts(Request{JobID: "j", Project: project},
+		[]model.ClipRange{{StartTime: 0, EndTime: 1000}}, zap.NewNop()); got != nil {
+		t.Errorf("mismatched = %#v, want nil", got)
+	}
+	// 无 clips1 → nil
+	if got := resolveAlignedClipTexts(Request{JobID: "j", Project: &model.VideoProject{}}, clips, zap.NewNop()); got != nil {
+		t.Errorf("no clips1 = %#v, want nil", got)
+	}
+	if got := resolveAlignedClipTexts(Request{JobID: "j"}, clips, zap.NewNop()); got != nil {
+		t.Errorf("nil project = %#v, want nil", got)
+	}
+}
+
+// 端到端：人工局部删除后（clips1 文案与词级时间都不含被删的字），字幕不得回灌。
+func TestGenerator_Build_CaptionsFollowEditedClips1(t *testing.T) {
+	stagingRoot := t.TempDir()
+	jobID := "job-edit"
+	capcut := &mockCapCutAPI{}
+	gen := NewGenerator(GeneratorDeps{
+		CapCut: capcut, Cutter: &mockVideoCutter{}, Downloader: &mockDownloader{},
+		Uploader: &mockObjectUploader{}, Logger: zap.NewNop(),
+	})
+
+	material := &model.LiveMaterial{
+		LiveURL: "https://example.com/live.mp4",
+		LiveASR: `{"result":{"utterances":[
+			{"additions":{},"start_time":10000,"end_time":13000,"text":"大家有没有注意到这个细节","words":[]}
+		]}}`,
+	}
+	project := &model.VideoProject{
+		ID: 9, Width: 1080, Height: 1920, EnableCaptions: model.EnableCaptionsOn,
+		Clips1: []model.ClipWithText{
+			{
+				Text: "大家", StartTime: 10000, EndTime: 10400,
+				Words: []model.ClipWord{{Text: "大家", StartTime: 10000, EndTime: 10400}},
+			},
+			{
+				Text: "注意到这个细节", StartTime: 11000, EndTime: 13000,
+				Words: []model.ClipWord{
+					{Text: "注意", StartTime: 11000, EndTime: 11500},
+					{Text: "到", StartTime: 11500, EndTime: 11700},
+					{Text: "这个", StartTime: 11700, EndTime: 12200},
+					{Text: "细节", StartTime: 12200, EndTime: 13000},
+				},
+			},
+		},
+	}
+	_, err := gen.Build(context.Background(), Request{
+		JobID:      jobID,
+		Material:   material,
+		Project:    project,
+		CanvasW:    1080,
+		CanvasH:    1920,
+		StagingDir: filepath.Join(stagingRoot, "staging", jobID),
+		RecordDir:  filepath.Join(stagingRoot, "staging", jobID, "capcut_mate"),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if strings.Contains(capcut.lastCaptions.Captions, "有没有") {
+		t.Errorf("字幕回灌了已删除的文字：%s", capcut.lastCaptions.Captions)
+	}
+	if !strings.Contains(capcut.lastCaptions.Captions, "注意到这个细节") {
+		t.Errorf("字幕缺少保留文案：%s", capcut.lastCaptions.Captions)
 	}
 }

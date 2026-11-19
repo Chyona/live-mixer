@@ -22,36 +22,46 @@ const (
 
 // 创建时用户选择的源模式。
 const (
-	SourceModeUpcoming = "upcoming" // 将要直播
-	SourceModeLive     = "live"     // 正在直播
+	SourceModeUpcoming = "upcoming" // 历史「将要直播」，创建时映射为 live
+	SourceModeLive     = "live"     // 直播
 	SourceModeReplay   = "replay"   // 回放 / 点播文件
 )
 
 // 推流直播生命周期状态（live_status）。
 const (
 	LiveStatusNone       = "none"       // 回放 / 文件，不跟播
-	LiveStatusWaiting    = "waiting"    // 将要直播，等待开播窗
-	LiveStatusConnecting = "connecting" // 正在直播，尚未读到媒体
+	LiveStatusWaiting    = "waiting"    // 等待开播窗
+	LiveStatusConnecting = "connecting" // 尚未读到媒体
 	LiveStatusLive       = "live"       // 已读到媒体，分片录像中
 	LiveStatusEnding     = "ending"     // 关播，正在合成 final.mp4
 	LiveStatusEnded      = "ended"      // 合成成功
 	LiveStatusFailed     = "failed"     // 截止前无流或不可恢复错误
 )
 
-// LiveWaitGrace 将要直播：计划开播后允许延迟开播的时长。
+// LiveWaitGrace 直播：开播后允许延迟出流的时长。
 const LiveWaitGrace = 2 * time.Hour
 
-// LiveConnectGrace 正在直播：创建后允许尚未读到媒体的时长。
+// LiveConnectGrace 历史「正在直播」无 scheduled_at 时：创建后允许尚未读到媒体的时长。
 const LiveConnectGrace = 2 * time.Hour
 
-// LiveEarlyProbe 将要直播：计划时间前提前开始探测，减少早开丢片。
+// LiveEarlyProbe 开播前提前开始探测，减少早开丢片。
 const LiveEarlyProbe = 15 * time.Minute
 
 // LiveSegmentDurationSec 跟播分片时长（秒）。
 const LiveSegmentDurationSec = 6
 
-// LiveASRWindowDuration 窗口 ASR 覆盖的录像时长。
-const LiveASRWindowDuration = 3 * time.Minute
+// LiveMediaWindowDuration 离散媒体窗默认步长：每满一步直接 ffmpeg -t 录一份 window_N.mp4，再拼前 N 窗为 master.mp4。
+// 预览 / ASR / 一键成片始终同源该 master。
+// 进程默认值可由 APP_INGEST_MEDIA_WINDOW_MIN 覆盖，并在创建素材时写入 media_window_ms。
+const LiveMediaWindowDuration = 10 * time.Minute
+
+// LiveASRWindowDuration 兼容旧名：媒体窗步长。
+const LiveASRWindowDuration = LiveMediaWindowDuration
+
+// MaxASRTranscribeDuration 历史短 chunk 上限（跟播曾按 ≤2min 切块 merge）。
+// 跟播现改为每次 master 变长后对整份 master 做 1 次全量 ASR，不再用此常量切块。
+// 仍保留供测试工具 / 旧脚本引用；生产跟播路径请勿再按此切分。
+const MaxASRTranscribeDuration = 2 * time.Minute
 
 // ASRSummarySegment AI 对完整 ASR 的主题分段（毫秒）。
 // Title 长度宜 ≤6 字；单段时长宜在 5~60 分钟（不合规段后处理时丢弃）。
@@ -86,22 +96,37 @@ type LiveMaterial struct {
 	// URLType 当前成片/点播主地址：m3u8 或 file。
 	URLType string `gorm:"column:url_type;size:16;not null;default:file;comment:当前主地址file或m3u8" json:"url_type"`
 	// SourceMode 创建模式：upcoming/live/replay。
-	SourceMode string `gorm:"column:source_mode;size:16;not null;default:replay;comment:upcoming/live/replay" json:"source_mode"`
+	SourceMode string `gorm:"column:source_mode;size:16;not null;default:replay;comment:live/replay（upcoming 历史兼容）" json:"source_mode"`
 	// LiveStatus 跟播生命周期。
 	LiveStatus        string              `gorm:"column:live_status;size:16;not null;default:none;index;comment:跟播状态" json:"live_status"`
 	ScheduledAt       *time.Time          `gorm:"column:scheduled_at;comment:计划开播时间" json:"scheduled_at,omitempty"`
-	WaitDeadlineAt    *time.Time          `gorm:"column:wait_deadline_at;comment:将要直播开播截止" json:"wait_deadline_at,omitempty"`
-	ConnectDeadlineAt *time.Time          `gorm:"column:connect_deadline_at;comment:正在直播连上截止" json:"connect_deadline_at,omitempty"`
+	WaitDeadlineAt    *time.Time          `gorm:"column:wait_deadline_at;comment:开播探测截止" json:"wait_deadline_at,omitempty"`
+	ConnectDeadlineAt *time.Time          `gorm:"column:connect_deadline_at;comment:历史无 scheduled_at 的连上截止" json:"connect_deadline_at,omitempty"`
 	StreamStartedAt   *time.Time          `gorm:"column:stream_started_at;comment:第一次读到媒体的时间" json:"stream_started_at,omitempty"`
 	ASRCursorMS       int64               `gorm:"column:asr_cursor_ms;not null;default:0;comment:ASR已覆盖毫秒" json:"asr_cursor_ms"`
-	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:跟播抢占代数" json:"ingest_epoch"`
-	NextSeg           int64               `gorm:"column:next_seg;not null;default:0;comment:下一分片序号" json:"next_seg"`
-	LastHeartbeatAt   *time.Time          `gorm:"column:last_heartbeat_at;comment:跟播心跳" json:"last_heartbeat_at,omitempty"`
+	IngestEpoch       int64               `gorm:"column:ingest_epoch;not null;default:0;comment:录像/收尾抢占代数" json:"ingest_epoch"`
+	ASREpoch          int64               `gorm:"column:asr_epoch;not null;default:0;comment:窗口ASR抢占代数" json:"asr_epoch"`
+	NextSeg           int64               `gorm:"column:next_seg;not null;default:0;comment:下一媒体窗序号(与next_window_seg对齐)" json:"next_seg"`
+	LastHeartbeatAt   *time.Time          `gorm:"column:last_heartbeat_at;comment:录像/收尾心跳" json:"last_heartbeat_at,omitempty"`
+	ASRHeartbeatAt    *time.Time          `gorm:"column:asr_heartbeat_at;comment:窗口ASR心跳" json:"asr_heartbeat_at,omitempty"`
+	LastProgressAt    *time.Time          `gorm:"column:last_progress_at;comment:最近一次录像进度时间" json:"last_progress_at,omitempty"`
+	ASRDue            bool                `gorm:"column:asr_due;not null;default:false;comment:是否有待跑窗口ASR" json:"asr_due"`
+	IngestResumeSeg   int64               `gorm:"column:ingest_resume_seg;not null;default:0;comment:本场录像起始窗序号" json:"ingest_resume_seg"`
 	IngestErrorMsg    string              `gorm:"column:ingest_error_msg;type:text;comment:跟播失败原因" json:"ingest_error_msg,omitempty"`
+	// ASRNextAttemptAt 直播中推迟全量 ASR 后的最早重试时间门；非空且未到时不可被抢占。
+	ASRNextAttemptAt  *time.Time          `gorm:"column:asr_next_attempt_at;comment:ASR最早重试时间门" json:"asr_next_attempt_at,omitempty"`
+	// ASRDeferredSince 连续推迟的起点（只在推迟链首写一次）；用于保底强制跑判定，真正跑到 ASR 时清空。
+	ASRDeferredSince  *time.Time          `gorm:"column:asr_deferred_since;comment:ASR连续推迟起点" json:"asr_deferred_since,omitempty"`
+	// MediaWindowMS 主 MP4 递增步长（毫秒）；创建时写入，默认 LiveMediaWindowDuration。
+	MediaWindowMS int64 `gorm:"column:media_window_ms;not null;default:0;comment:主MP4递增步长毫秒" json:"media_window_ms"`
+	// MediaWindows 离散媒体窗元数据 JSON（window_0..N-1）；拼接主片见 live_url。
+	MediaWindows string `gorm:"column:media_windows;type:jsonb;not null;default:'[]';comment:媒体窗元数据JSON" json:"media_windows"`
+	// NextWindowSeg 下一要录的媒体窗下标（= 已就绪窗数）。
+	NextWindowSeg int64 `gorm:"column:next_window_seg;not null;default:0;comment:下一媒体窗下标" json:"next_window_seg"`
 	LiveASR           string              `gorm:"column:live_asr;type:jsonb;not null;default:'{}';comment:直播视频ASR识别结果JSON" json:"live_asr"`
 	ASRSummaries      []ASRSummarySegment `gorm:"column:asr_summaries;serializer:json;type:jsonb;not null;default:'[]';comment:AI主题分段" json:"asr_summaries"`
 	ASRParagraphs     []ASRParagraph      `gorm:"column:asr_paragraphs;serializer:json;type:jsonb;not null;default:'[]';comment:全文段落划分" json:"asr_paragraphs"`
-	Duration          int64               `gorm:"not null;default:0;comment:直播时长毫秒" json:"duration"`
+	Duration          int64               `gorm:"not null;default:0;comment:本地跟播录像真实时长毫秒" json:"duration"`
 	Width             int                 `gorm:"not null;default:0;comment:直播画面宽度像素" json:"width"`
 	Height            int                 `gorm:"not null;default:0;comment:直播画面高度像素" json:"height"`
 	ASRStatus         string              `gorm:"column:asr_status;size:20;not null;default:pending;index;comment:ASR识别状态" json:"asr_status"`
@@ -130,7 +155,7 @@ func (m *LiveMaterial) IsReplaySource() bool {
 	return m.SourceMode == SourceModeReplay || m.SourceMode == "" || m.LiveStatus == LiveStatusNone
 }
 
-// NeedsLiveIngest 将要直播或正在直播（含失败后可重试）。
+// NeedsLiveIngest 直播跟播（含失败后可重试；upcoming 为历史行）。
 func (m *LiveMaterial) NeedsLiveIngest() bool {
 	if m == nil {
 		return false
@@ -151,24 +176,98 @@ func (m *LiveMaterial) CanUpdateM3U8() bool {
 	}
 }
 
-// PlayURL 前端播放地址：关播后用 mp4；跟播中用自有分片列表；否则用户 m3u8 或 live_url。
+// PlayURL 前端播放地址。
+// 跟播/收尾/关播：只用前 N 窗拼接主 MP4（live_url），绝不回退到源站滑动 m3u8。
+// 主片未写出前：仅一窗就绪时可暂用该窗 URL；否则返回空。
+// 回放素材：用户 m3u8 / live_url。
 func (m *LiveMaterial) PlayURL() string {
 	if m == nil {
 		return ""
 	}
-	if m.URLType == URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
-		return m.LiveURL
-	}
-	switch m.LiveStatus {
-	case LiveStatusLive, LiveStatusEnding:
-		if u := strings.TrimSpace(m.RecordPlaylistURL); u != "" {
+	if u := m.MasterMP4URL(); u != "" {
+		switch m.LiveStatus {
+		case LiveStatusWaiting, LiveStatusConnecting, LiveStatusLive, LiveStatusEnding, LiveStatusEnded:
 			return u
 		}
 	}
-	if u := strings.TrimSpace(m.M3U8URL); u != "" {
+	switch m.LiveStatus {
+	case LiveStatusWaiting, LiveStatusConnecting, LiveStatusLive, LiveStatusEnding:
+		windows := m.ParsedMediaWindows()
+		if windows.ReadyCount() == 1 {
+			if w, ok := windows.FirstReady(); ok {
+				if u := strings.TrimSpace(w.URL); u != "" && !IsProbablyM3U8URL(u) {
+					return u
+				}
+			}
+		}
+		return ""
+	case LiveStatusEnded:
+		if u := m.MasterMP4URL(); u != "" {
+			return u
+		}
+		return ""
+	}
+	if m.URLType == URLTypeFile {
+		return strings.TrimSpace(m.LiveURL)
+	}
+	if m.IsReplaySource() {
+		if u := strings.TrimSpace(m.M3U8URL); u != "" {
+			return u
+		}
+		return strings.TrimSpace(m.LiveURL)
+	}
+	return ""
+}
+
+// MasterMP4URL 返回已写出的拼接主 MP4 地址（非 m3u8 的 live_url）。
+// 创建时预分配的 live_url 在首窗拼接完成前不视为就绪。
+func (m *LiveMaterial) MasterMP4URL() string {
+	if m == nil {
+		return ""
+	}
+	u := strings.TrimSpace(m.LiveURL)
+	if u == "" || IsProbablyM3U8URL(u) {
+		return ""
+	}
+	if m.ParsedMediaWindows().ReadyCount() > 0 {
 		return u
 	}
-	return strings.TrimSpace(m.LiveURL)
+	// duration 仅在 CommitMasterMP4 后写入；列表项可能不含 media_windows，用时长判断就绪。
+	if m.Duration > 0 {
+		return u
+	}
+	return ""
+}
+
+// MasterReadyMS 拼接主片已就绪时长（毫秒）：优先 duration，否则窗覆盖终点。
+func (m *LiveMaterial) MasterReadyMS() int64 {
+	if m == nil {
+		return 0
+	}
+	if m.Duration > 0 {
+		return m.Duration
+	}
+	return m.ParsedMediaWindows().TotalReadyMS()
+}
+
+// EffectiveMediaWindowMS 本素材媒体窗毫秒。
+func (m *LiveMaterial) EffectiveMediaWindowMS() int64 {
+	if m != nil && m.MediaWindowMS > 0 {
+		return m.MediaWindowMS
+	}
+	ms := int64(LiveMediaWindowDuration / time.Millisecond)
+	if ms <= 0 {
+		ms = 10 * 60 * 1000
+	}
+	return ms
+}
+
+// ParsedMediaWindows 解析媒体窗列表。
+func (m *LiveMaterial) ParsedMediaWindows() MediaWindowList {
+	if m == nil {
+		return nil
+	}
+	return ParseMediaWindows(m.MediaWindows)
 }
 
 // ProcessMediaURL ASR（回放）与成片在 url_type=file 或回放 m3u8 时使用的媒体地址。

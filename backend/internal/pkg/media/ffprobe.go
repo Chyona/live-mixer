@@ -40,6 +40,39 @@ type MediaTimeline struct {
 	FormatDurationSec float64
 }
 
+// DurationMS 取最可靠的媒体时长（毫秒）：优先容器，其次视频，再次音频。
+func (t MediaTimeline) DurationMS() int64 {
+	sec := t.FormatDurationSec
+	if sec <= 0 {
+		sec = t.VideoDurationSec
+	}
+	if sec <= 0 {
+		sec = t.AudioDurationSec
+	}
+	if sec <= 0 {
+		return 0
+	}
+	return int64(math.Round(sec * 1000))
+}
+
+// SumDurationMS 探测并累加多个媒体文件的时长（毫秒）；单个失败则跳过。
+func SumDurationMS(ctx context.Context, prober MediaTimelineProber, paths []string) int64 {
+	if prober == nil || len(paths) == 0 {
+		return 0
+	}
+	var sum int64
+	for _, p := range paths {
+		tl, err := prober.ProbeMediaTimeline(ctx, p)
+		if err != nil {
+			continue
+		}
+		if d := tl.DurationMS(); d > 0 {
+			sum += d
+		}
+	}
+	return sum
+}
+
 // ASRAlignOptions 将音轨对齐到视频时间轴所需的转码参数。
 type ASRAlignOptions struct {
 	// LeadPadMs 音轨晚于参考起点时，片头补静音的毫秒数。

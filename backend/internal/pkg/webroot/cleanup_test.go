@@ -96,15 +96,19 @@ func TestCleanupStaging_RejectsInvalidArgs(t *testing.T) {
 	}
 }
 
-func TestCleanupStaging_SkipsASRAndSourceCache(t *testing.T) {
+func TestCleanupStaging_SkipsASRSourceCacheAndLiveIngest(t *testing.T) {
 	root := t.TempDir()
 	staging := filepath.Join(root, "staging")
 	asrChild := filepath.Join(staging, ASRStagingSubDir, "1-v1")
 	cacheChild := filepath.Join(staging, SourceCacheSubDir, "abc")
+	ingestChild := filepath.Join(staging, LiveIngestSubDir, "1", "e1")
 	if err := os.MkdirAll(asrChild, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(cacheChild, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ingestChild, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	base := time.Now().Add(-5 * time.Hour)
@@ -131,6 +135,9 @@ func TestCleanupStaging_SkipsASRAndSourceCache(t *testing.T) {
 	}
 	if _, err := os.Stat(cacheChild); err != nil {
 		t.Fatalf("source cache should remain: %v", err)
+	}
+	if _, err := os.Stat(ingestChild); err != nil {
+		t.Fatalf("live_ingest child should remain: %v", err)
 	}
 }
 

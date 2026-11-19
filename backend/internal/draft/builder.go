@@ -7,6 +7,7 @@ import (
 	"live-mixer/internal/draft/prepare"
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/draft/steps"
+	"live-mixer/internal/model"
 
 	"go.uber.org/zap"
 )
@@ -17,6 +18,8 @@ type Builder struct {
 	API      CapCutMateAPI
 	Uploader steps.ObjectUploader
 	Logger   *zap.Logger
+	// Segmenter 可选的 LLM 断句器；nil 表示字幕行完全由规则折行决定（开关关闭或未配置 LLM key 时）。
+	Segmenter CaptionSegmenter
 }
 
 // NewBuilder 创建草稿组装器。
@@ -56,6 +59,7 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	}
 	beforeMerge := len(clips)
 	clips = prepare.MergeAdjacentClipRanges(clips, prepare.ClipMergeGapMS)
+	clipTexts := resolveAlignedClipTexts(req, clips, b.Logger)
 	b.Logger.Info("草稿裁剪前合并相邻片段",
 		zap.String("job_id", req.JobID),
 		zap.Int("clips_before", beforeMerge),
@@ -72,16 +76,19 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	s := &session.Session{
-		JobID:      req.JobID,
-		Project:    req.Project,
-		Material:   req.Material,
-		StagingDir: req.StagingDir,
-		RecordDir:  req.RecordDir,
-		Clips:      clips,
-		CanvasW:    req.CanvasW,
-		CanvasH:    req.CanvasH,
-		Timeline:   session.NewTimeline(),
-		Progress:   req.Progress,
+		JobID:          req.JobID,
+		Project:        req.Project,
+		Material:       req.Material,
+		StagingDir:     req.StagingDir,
+		RecordDir:      req.RecordDir,
+		LocalIngestDir: req.LocalIngestDir,
+		Clips:          clips,
+		ClipTexts:      clipTexts,
+		CaptionLines:   b.segmentCaptionLines(ctx, req.JobID, clipTexts, req.Project),
+		CanvasW:        req.CanvasW,
+		CanvasH:        req.CanvasH,
+		Timeline:       session.NewTimeline(),
+		Progress:       req.Progress,
 	}
 
 	if err := b.Prepare.Run(ctx, s); err != nil {
@@ -104,8 +111,24 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	result := &Result{DraftURL: s.DraftURL}
-	// 将本地 clip_XXX.mp4 打成 {jobID}.tar 并上传；失败仅记日志，不阻断草稿成功。
-	clipsTarURL, err := PackAndUploadClipsTar(ctx, b.Uploader, s.StagingDir, s.JobID, s.ClipPaths)
+
+	// 方案 A：写出 caption_diag.json（clip want/actual/delta + caption map_err），上传供留存；失败不阻断草稿。
+	diagPath, diagURL, diagErr := steps.WriteAndUploadCaptionDiag(ctx, s, b.Uploader, nil, b.Logger)
+	if diagErr != nil {
+		b.Logger.Warn("字幕对齐诊断报告失败",
+			zap.String("job_id", s.JobID),
+			zap.Error(diagErr),
+		)
+	} else {
+		result.CaptionDiagURL = diagURL
+	}
+
+	// 将本地 clip_XXX.mp4（及可选 caption_diag.json）打成 {jobID}.tar 并上传；失败仅记日志，不阻断草稿成功。
+	packPaths := append([]string(nil), s.ClipPaths...)
+	if diagPath != "" {
+		packPaths = append(packPaths, diagPath)
+	}
+	clipsTarURL, err := PackAndUploadClipsTar(ctx, b.Uploader, s.StagingDir, s.JobID, packPaths)
 	if err != nil {
 		b.Logger.Error("切片 tar 打包上传失败",
 			zap.String("job_id", s.JobID),
@@ -115,6 +138,90 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Result, error) {
 		result.ClipsTarURL = clipsTarURL
 	}
 	return result, nil
+}
+
+// SubtitleTexts 返回与提交成片/剪映草稿 add_captions 完全一致的字幕文本行（不含时间轴）。
+// 只做文本计算，不下载/裁剪视频；供人工切片页「字幕下载」预览使用。
+func (b *Builder) SubtitleTexts(ctx context.Context, jobID string, material *model.LiveMaterial, project *model.VideoProject) ([]string, error) {
+	if b == nil {
+		return nil, fmt.Errorf("builder 未配置")
+	}
+	if project == nil {
+		return nil, fmt.Errorf("project 不能为空")
+	}
+	if project.EnableCaptions == model.EnableCaptionsOff {
+		return nil, nil
+	}
+	clips, err := prepare.ResolveClipRanges(project)
+	if err != nil {
+		return nil, err
+	}
+	clips = prepare.MergeAdjacentClipRanges(clips, prepare.ClipMergeGapMS)
+	if err := prepare.ValidateClipRanges(clips); err != nil {
+		return nil, err
+	}
+	clipTexts := resolveAlignedClipTexts(Request{Project: project}, clips, b.Logger)
+	lines := b.segmentCaptionLines(ctx, jobID, clipTexts, project)
+	liveASR := ""
+	if material != nil {
+		liveASR = material.LiveASR
+	}
+	return steps.BuildCaptionTexts(liveASR, clips, clipTexts, lines), nil
+}
+
+// resolveAlignedClipTexts 取 video_project.clips1，按同一合并规则与切片区间对齐。
+// 对齐成功返回带 text/words 的切片（字幕据此生成，人工删除的文字不会再回到字幕）；
+// 未对齐（如显式传入 clips、clips1 与区间不一致）返回 nil，字幕回退 live_asr 映射。
+func resolveAlignedClipTexts(req Request, clips []model.ClipRange, logger *zap.Logger) []model.ClipWithText {
+	if req.Project == nil || len(req.Project.Clips1) == 0 {
+		return nil
+	}
+	merged := prepare.MergeAdjacentClipTexts(req.Project.Clips1, prepare.ClipMergeGapMS)
+	if !prepare.ClipTextsMatchRanges(clips, merged) {
+		logger.Warn("clips1 与切片区间不一致，字幕回退 ASR 时间轴",
+			zap.String("job_id", req.JobID),
+			zap.Int("clip_count", len(clips)),
+			zap.Int("clip_text_count", len(merged)),
+		)
+		return nil
+	}
+	return merged
+}
+
+// segmentCaptionLines 用 LLM 为切片文案的超长小句补切点位置，拼出字幕行（标点优先断句在前）。
+// 未配置断句器、项目未开字幕、无文案或一条文案都没用上模型结果时返回 nil，字幕步骤据此走规则折行；
+// 部分失败时保留 nil 元素，字幕步骤只对该条回退规则。
+func (b *Builder) segmentCaptionLines(ctx context.Context, jobID string, clipTexts []model.ClipWithText, project *model.VideoProject) [][]string {
+	if b.Segmenter == nil || len(clipTexts) == 0 {
+		return nil
+	}
+	// 项目未开字幕时字幕步骤会整段跳过，先别花这次调用。
+	if project != nil && project.EnableCaptions == model.EnableCaptionsOff {
+		return nil
+	}
+	texts := make([]string, len(clipTexts))
+	for i, c := range clipTexts {
+		texts[i] = c.Text
+	}
+	lines := b.Segmenter.SegmentTexts(ctx, texts)
+	if len(lines) != len(clipTexts) {
+		return nil
+	}
+	used := 0
+	for _, item := range lines {
+		if len(item) > 0 {
+			used++
+		}
+	}
+	if used == 0 {
+		return nil
+	}
+	b.Logger.Info("LLM 断句完成",
+		zap.String("job_id", jobID),
+		zap.Int("clips", len(clipTexts)),
+		zap.Int("llm_clips", used),
+	)
+	return lines
 }
 
 // 确保 steps 包被引用（DefaultRecipe 已引用）。

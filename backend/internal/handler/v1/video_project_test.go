@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"live-mixer/internal/model"
-	"live-mixer/internal/service"
 	jwtpkg "live-mixer/internal/pkg/jwt"
+	"live-mixer/internal/service"
 )
 
 // mockVideoProjectService 用于 handler 单元测试。
@@ -21,6 +21,7 @@ type mockVideoProjectService struct {
 	listFn               func(ctx context.Context, page, pageSize int, opts service.VideoProjectListOptions) ([]model.VideoProjectListItem, int64, error)
 	listByLiveMaterialFn func(ctx context.Context, liveID uint, page, pageSize int) ([]model.VideoProjectListItem, int64, error)
 	getFn                func(ctx context.Context, id uint) (*model.VideoProject, error)
+	subtitleTextsFn      func(ctx context.Context, input service.VideoProjectSubtitleInput) ([]string, error)
 }
 
 func (m *mockVideoProjectService) Create(ctx context.Context, createdBy uint, input service.CreateVideoProjectInput) (*model.VideoProject, error) {
@@ -61,6 +62,13 @@ func (m *mockVideoProjectService) ListByLiveMaterial(ctx context.Context, liveID
 func (m *mockVideoProjectService) Get(ctx context.Context, id uint) (*model.VideoProject, error) {
 	if m.getFn != nil {
 		return m.getFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockVideoProjectService) SubtitleTexts(ctx context.Context, input service.VideoProjectSubtitleInput) ([]string, error) {
+	if m.subtitleTextsFn != nil {
+		return m.subtitleTextsFn(ctx, input)
 	}
 	return nil, nil
 }
@@ -387,6 +395,93 @@ func TestVideoProjectHandler_Get_NotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/video-projects/99", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// TestVideoProjectHandler_DownloadSubtitle_Success 验证按当前 clips1 返回 TXT 字幕。
+func TestVideoProjectHandler_DownloadSubtitle_Success(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{
+		subtitleTextsFn: func(ctx context.Context, input service.VideoProjectSubtitleInput) ([]string, error) {
+			if input.LiveID != 7 {
+				t.Errorf("liveID = %d, want 7", input.LiveID)
+			}
+			if len(input.Clips1) != 1 || input.Clips1[0].Text != "第一行字幕第二行字幕" {
+				t.Errorf("clips1 = %#v", input.Clips1)
+			}
+			if input.EnableCaptions == nil || !*input.EnableCaptions {
+				t.Errorf("enableCaptions = %v, want true", input.EnableCaptions)
+			}
+			return []string{"第一行字幕", "第二行字幕"}, nil
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.DownloadVideoProjectSubtitle, http.MethodPost, "/video-projects/subtitle")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	body := `{"live_id":7,"clips1":[{"text":"第一行字幕第二行字幕","start_time":0,"end_time":2000}],"enable_captions":true}`
+	req := httptest.NewRequest(http.MethodPost, "/video-projects/subtitle", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Body.String(); got != "第一行字幕\n第二行字幕\n" {
+		t.Errorf("body = %q", got)
+	}
+	if got := w.Header().Get("Content-Disposition"); got != `attachment; filename="project_subtitle_7.txt"` {
+		t.Errorf("Content-Disposition = %q", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q", got)
+	}
+}
+
+// TestVideoProjectHandler_DownloadSubtitle_CaptionsDisabled 验证未开启字幕返回 400。
+func TestVideoProjectHandler_DownloadSubtitle_CaptionsDisabled(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{
+		subtitleTextsFn: func(ctx context.Context, input service.VideoProjectSubtitleInput) ([]string, error) {
+			return nil, service.ErrProjectCaptionsDisabled
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.DownloadVideoProjectSubtitle, http.MethodPost, "/video-projects/subtitle")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	body := `{"live_id":7,"clips1":[{"text":"文案","start_time":0,"end_time":1000}],"enable_captions":false}`
+	req := httptest.NewRequest(http.MethodPost, "/video-projects/subtitle", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestVideoProjectHandler_DownloadSubtitle_MaterialNotFound 验证素材不存在返回 404。
+func TestVideoProjectHandler_DownloadSubtitle_MaterialNotFound(t *testing.T) {
+	secret := "handler-test-secret"
+	handler := NewVideoProjectHandler(&mockVideoProjectService{
+		subtitleTextsFn: func(ctx context.Context, input service.VideoProjectSubtitleInput) ([]string, error) {
+			return nil, service.ErrLiveMaterialNotFoundForProject
+		},
+	}, nil)
+	r := newAuthedRouter(secret, handler.DownloadVideoProjectSubtitle, http.MethodPost, "/video-projects/subtitle")
+	token, _ := jwtpkg.GenerateToken(secret, 7200, jwtpkg.UserClaims{UserID: 1, Username: "admin"})
+
+	body := `{"live_id":99,"clips1":[{"text":"文案","start_time":0,"end_time":1000}]}`
+	req := httptest.NewRequest(http.MethodPost, "/video-projects/subtitle", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"live-mixer/internal/model"
@@ -341,44 +339,30 @@ func TestGenerateASRSummaries_MultiWindowReduce(t *testing.T) {
 	if out.Summaries[0].Title != "开场" || out.Summaries[1].Title != "后半" {
 		t.Fatalf("summaries titles = %+v", out.Summaries)
 	}
-	if n := calls.Load(); n < 4 { // 2 summary windows + 2 paragraph windows
-		t.Fatalf("calls = %d, want >= 4 for multi-window map", n)
+	if n := calls.Load(); n < 2 { // 2 summary windows only (paragraphs are local algo)
+		t.Fatalf("calls = %d, want >= 2 for multi-window summaries", n)
 	}
 }
 
-func TestGenerateASRParagraphs_MultiWindowOffsetStitch(t *testing.T) {
+func TestBuildASRParagraphsAlgo_PreservesDistantSameSpeaker(t *testing.T) {
+	const gapMs = int64(25 * 60 * 1000)
 	uts := []asr.Utterance{
 		{Speaker: "1", StartTime: 0, EndTime: 1000, Text: "甲", Words: asrWordsFromContentText("甲", 0, 1000)},
-		{Speaker: "1", StartTime: asrParagraphWindowMs + 1, EndTime: asrParagraphWindowMs + 2000, Text: "乙", Words: asrWordsFromContentText("乙", asrParagraphWindowMs+1, asrParagraphWindowMs+2000)},
+		{Speaker: "1", StartTime: gapMs + 1, EndTime: gapMs + 2000, Text: "乙", Words: asrWordsFromContentText("乙", gapMs+1, gapMs+2000)},
 	}
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			sys := ""
-			for _, msg := range messages {
-				if msg.Role == "system" {
-					sys = msg.Content
-				}
-			}
-			if strings.Contains(sys, "主题提炼") {
-				return `{"items":[]}`, nil
-			}
-			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
-		},
-	}
-	dur := asrParagraphWindowMs + 2000
-	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, dur, nil, nil)
+	dur := gapMs + 2000
+	paras, _, err := BuildASRParagraphsAlgo(uts, dur, 0, nil)
 	if err != nil {
-		t.Fatalf("generateASRParagraphs() error = %v", err)
+		t.Fatalf("BuildASRParagraphsAlgo() error = %v", err)
 	}
-	if len(paras) != 2 {
-		t.Fatalf("paragraphs = %+v, want 2", paras)
+	if len(paras) != 1 {
+		t.Fatalf("paragraphs = %+v, want 1 (min-gap merge)", paras)
 	}
-	joined := paras[0].Text + paras[1].Text
-	if joined != "甲乙" {
-		t.Fatalf("joined text = %q, want 甲乙", joined)
+	if paras[0].Text != "甲乙" {
+		t.Fatalf("text = %q, want 甲乙", paras[0].Text)
 	}
-	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != dur {
-		t.Fatalf("timeline = %d-%d, want words bounds 0-%d", paras[0].StartTime, paras[len(paras)-1].EndTime, dur)
+	if paras[0].StartTime != 0 || paras[0].EndTime != dur {
+		t.Fatalf("timeline = %d-%d, want 0-%d", paras[0].StartTime, paras[0].EndTime, dur)
 	}
 }
 
@@ -487,25 +471,10 @@ func TestRunASRPostprocess_EmptySummariesOK(t *testing.T) {
 
 func TestRunASRParagraphs_OnlyParagraphs(t *testing.T) {
 	const dur = int64(10 * 60 * 1000)
-	var summaryCalls atomic.Int32
 	liveASR := string(sampleLiveASRJSON(dur, "你好世界"))
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			for _, msg := range messages {
-				if msg.Role == "system" && strings.Contains(msg.Content, "主题提炼") {
-					summaryCalls.Add(1)
-					return `{"items":[]}`, nil
-				}
-			}
-			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
-		},
-	}
-	paras, err := RunASRParagraphs(context.Background(), llmClient, liveASR, dur, nil)
+	paras, err := RunASRParagraphs(context.Background(), liveASR, dur, nil)
 	if err != nil {
 		t.Fatalf("RunASRParagraphs() error = %v", err)
-	}
-	if summaryCalls.Load() != 0 {
-		t.Fatalf("summary LLM calls = %d, want 0", summaryCalls.Load())
 	}
 	if len(paras) == 0 || paras[0].Text != "你好世界" {
 		t.Fatalf("paragraphs = %+v", paras)
@@ -544,55 +513,28 @@ func TestRunASRPostprocess_KeepsInRangeSummary(t *testing.T) {
 	}
 }
 
-func TestRunASRPostprocess_SummariesAndParagraphsRunInParallel(t *testing.T) {
+func TestRunASRPostprocess_ParagraphsWithoutLLM(t *testing.T) {
 	const dur = int64(10 * 60 * 1000)
-	var (
-		summaryEntered   atomic.Bool
-		paragraphEntered atomic.Bool
-		sawOverlap       atomic.Bool
-		closeGate        sync.Once
-	)
-	gate := make(chan struct{})
-
+	var paragraphSysCalls atomic.Int32
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			sys := ""
 			for _, msg := range messages {
-				if msg.Role == "system" {
-					sys = msg.Content
+				if msg.Role == "system" && strings.Contains(msg.Content, "段落划分") {
+					paragraphSysCalls.Add(1)
+				}
+				if msg.Role == "system" && strings.Contains(msg.Content, "主题提炼") {
+					return `{"items":[{"title":"讲解","start_index":0,"end_index":0}]}`, nil
 				}
 			}
-			isSummary := strings.Contains(sys, "主题提炼")
-			if isSummary {
-				summaryEntered.Store(true)
-				if paragraphEntered.Load() {
-					sawOverlap.Store(true)
-				}
-				// 等待 paragraphs 侧也进入，证明两路重叠。
-				select {
-				case <-gate:
-				case <-time.After(2 * time.Second):
-					return "", errors.New("timed out waiting for paragraph phase")
-				case <-ctx.Done():
-					return "", ctx.Err()
-				}
-				return `{"items":[{"title":"讲解","start_index":0,"end_index":0}]}`, nil
-			}
-			paragraphEntered.Store(true)
-			if summaryEntered.Load() {
-				sawOverlap.Store(true)
-			}
-			closeGate.Do(func() { close(gate) })
-			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
+			return `{"items":[]}`, nil
 		},
 	}
-
 	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好世界")), dur, nil, nil)
 	if err != nil {
 		t.Fatalf("runASRPostprocess() error = %v", err)
 	}
-	if !sawOverlap.Load() {
-		t.Fatal("summaries and paragraphs did not overlap in time")
+	if paragraphSysCalls.Load() != 0 {
+		t.Fatalf("paragraph LLM calls = %d, want 0", paragraphSysCalls.Load())
 	}
 	if len(out.Summaries) != 1 || out.Summaries[0].Title != "讲解" {
 		t.Fatalf("Summaries = %+v", out.Summaries)
@@ -610,16 +552,7 @@ func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 	llmClient := &workerMockLLM{
 		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
 			calls.Add(1)
-			sys := ""
-			for _, msg := range messages {
-				if msg.Role == "system" {
-					sys = msg.Content
-				}
-			}
-			if strings.Contains(sys, "主题提炼") {
-				return "not-json", nil
-			}
-			return "also-not-json", nil
+			return "not-json", nil
 		},
 	}
 	out, err := runASRPostprocess(context.Background(), llmClient, string(sampleLiveASRJSON(dur, "你好")), dur, nil, logger)
@@ -630,15 +563,13 @@ func TestRunASRPostprocess_BadJSONFallsBackWithoutRepair(t *testing.T) {
 		t.Fatalf("summaries = %+v, want empty fallback", out.Summaries)
 	}
 	if len(out.Paragraphs) == 0 || out.Paragraphs[0].Text != "你好" {
-		t.Fatalf("paragraphs = %+v, want local fallback", out.Paragraphs)
+		t.Fatalf("paragraphs = %+v, want algo result", out.Paragraphs)
 	}
-	if n := calls.Load(); n != 2 {
-		t.Fatalf("calls = %d, want 2 (no content repair)", n)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("calls = %d, want 1 (summaries only, no paragraph LLM)", n)
 	}
-	summaryWarns := logs.FilterMessageSnippet("ASR summaries 窗结果不可用").Len()
-	paraWarns := logs.FilterMessageSnippet("ASR paragraphs 窗不可用").Len()
-	if summaryWarns < 1 || paraWarns < 1 {
-		t.Fatalf("fallback warn logs: summary=%d paragraphs=%d, want both >= 1", summaryWarns, paraWarns)
+	if logs.FilterMessageSnippet("ASR summaries 窗结果不可用").Len() < 1 {
+		t.Fatalf("expected summary fallback warn")
 	}
 }
 
@@ -654,10 +585,9 @@ func TestRunASRPostprocess_LLMTransportRetriesThenFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// 两路并行：每路最多 asrLLMTransportMaxAttempts 次；一路失败后另一路可能被取消，故区间为 [N, 2N]。
 	n := int(calls.Load())
-	if n < asrLLMTransportMaxAttempts || n > 2*asrLLMTransportMaxAttempts {
-		t.Fatalf("calls = %d, want between %d and %d", n, asrLLMTransportMaxAttempts, 2*asrLLMTransportMaxAttempts)
+	if n != asrLLMTransportMaxAttempts {
+		t.Fatalf("calls = %d, want %d", n, asrLLMTransportMaxAttempts)
 	}
 }
 
@@ -718,26 +648,22 @@ func TestStitchASRParagraphs_AllowsLongText(t *testing.T) {
 	}
 }
 
-func TestBuildParagraphRangesLocally_BySpeaker(t *testing.T) {
+func TestBuildASRParagraphsAlgo_BySpeakerNoCrossMerge(t *testing.T) {
 	uts := []asr.Utterance{
-		{Speaker: "1", Text: "a"},
-		{Speaker: "1", Text: "b"},
-		{Speaker: "2", Text: "c"},
-		{Speaker: "1", Text: "d"},
+		{Speaker: "1", StartTime: 0, EndTime: 50, Text: "a", Words: asrWordsFromContentText("a", 0, 50)},
+		{Speaker: "1", StartTime: 60, EndTime: 100, Text: "b", Words: asrWordsFromContentText("b", 60, 100)},
+		{Speaker: "2", StartTime: 110, EndTime: 150, Text: "c", Words: asrWordsFromContentText("c", 110, 150)},
+		{Speaker: "1", StartTime: 160, EndTime: 200, Text: "d", Words: asrWordsFromContentText("d", 160, 200)},
 	}
-	got := buildParagraphRangesLocally(uts)
-	want := []asrParagraphRange{
-		{StartIndex: 0, EndIndex: 1},
-		{StartIndex: 2, EndIndex: 2},
-		{StartIndex: 3, EndIndex: 3},
+	paras, _, err := BuildASRParagraphsAlgo(uts, 200, 0, nil)
+	if err != nil {
+		t.Fatalf("error = %v", err)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("got = %+v, want %+v", got, want)
+	if len(paras) != 3 {
+		t.Fatalf("paras = %+v, want 3 (ab / c / d)", paras)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got[%d] = %+v, want %+v", i, got[i], want[i])
-		}
+	if paras[0].Text != "ab" || paras[1].Text != "c" || paras[2].Text != "d" {
+		t.Fatalf("texts = %q %q %q", paras[0].Text, paras[1].Text, paras[2].Text)
 	}
 }
 
@@ -1040,42 +966,30 @@ func TestSplitASRParagraphBySentences_WordsAlign(t *testing.T) {
 	}
 }
 
-func TestBuildParagraphRangesLocally_PacksByMaxRunes(t *testing.T) {
+func TestBuildASRParagraphsAlgo_PacksByMaxRunes(t *testing.T) {
 	longA := strings.Repeat("甲", 120)
-	longB := strings.Repeat("乙", 120) // 120+120 > 200
+	longB := strings.Repeat("乙", 120)
 	uts := []asr.Utterance{
-		{Speaker: "1", Text: longA},
-		{Speaker: "1", Text: longB},
+		{Speaker: "1", StartTime: 0, EndTime: 100, Text: longA, Words: asrWordsFromContentText(longA, 0, 100)},
+		{Speaker: "1", StartTime: 110, EndTime: 200, Text: longB, Words: asrWordsFromContentText(longB, 110, 200)},
 	}
-	got := buildParagraphRangesLocally(uts)
-	if len(got) != 2 || got[0].EndIndex != 0 || got[1].StartIndex != 1 {
-		t.Fatalf("got = %+v, want two ranges", got)
+	paras, _, err := BuildASRParagraphsAlgo(uts, 200, 0, nil)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(paras) != 2 {
+		t.Fatalf("paras = %d, want 2", len(paras))
 	}
 }
 
-func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
+func TestBuildASRParagraphsAlgo_EnforcesMaxRunes(t *testing.T) {
 	s1 := strings.Repeat("开", 110) + "。"
 	s2 := strings.Repeat("场", 110) + "。"
-	text := s1 + s2
+	textContent := s1 + s2
 	uts := []asr.Utterance{
-		{Speaker: "1", StartTime: 0, EndTime: 500, Text: text, Words: asrWordsFromContentText(text, 0, 500)},
+		{Speaker: "1", StartTime: 0, EndTime: 500, Text: textContent, Words: asrWordsFromContentText(textContent, 0, 500)},
 	}
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			sys := ""
-			for _, msg := range messages {
-				if msg.Role == "system" {
-					sys = msg.Content
-				}
-			}
-			if strings.Contains(sys, "主题提炼") {
-				return `{"items":[]}`, nil
-			}
-			// 模型故意返回整段一个区间（超 200）
-			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
-		},
-	}
-	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, 1000, nil, nil)
+	paras, _, err := BuildASRParagraphsAlgo(uts, 1000, 0, nil)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1083,13 +997,13 @@ func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
 		t.Fatalf("paragraphs = %d, want split >= 2", len(paras))
 	}
 	var joined strings.Builder
-	for _, p := range paras {
-		if utf8.RuneCountInString(p.Text) > asrParagraphMaxRunes {
-			t.Fatalf("paragraph exceeds max: %d", utf8.RuneCountInString(p.Text))
+	for _, para := range paras {
+		if utf8.RuneCountInString(para.Text) > asrParagraphMaxRunes {
+			t.Fatalf("paragraph exceeds max: %d", utf8.RuneCountInString(para.Text))
 		}
-		joined.WriteString(p.Text)
+		joined.WriteString(para.Text)
 	}
-	if joined.String() != text {
+	if joined.String() != textContent {
 		t.Fatal("joined text mismatch")
 	}
 	if paras[0].StartTime != 0 || paras[len(paras)-1].EndTime != 500 {
@@ -1097,73 +1011,18 @@ func TestGenerateASRParagraphs_EnforcesMaxRunes(t *testing.T) {
 	}
 }
 
-func TestGenerateASRParagraphsWindow_LocalFallbackOnOverlap(t *testing.T) {
-	win := utteranceWindow{
-		Utterances: []asr.Utterance{
-			{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲"},
-			{Speaker: "2", StartTime: 120, EndTime: 200, Text: "乙"},
-		},
-	}
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			// 漏盖：只覆盖一句
-			return `{"items":[{"start_index":0,"end_index":0}]}`, nil
-		},
-	}
-	ranges, _, err := generateASRParagraphsWindow(context.Background(), llmClient, win, nil)
-	if err != nil {
-		t.Fatalf("error = %v", err)
-	}
-	if len(ranges) != 2 || ranges[0].EndIndex != 0 || ranges[1].StartIndex != 1 {
-		t.Fatalf("ranges = %+v, want local by speaker", ranges)
-	}
-}
-
-func TestGenerateASRParagraphsWindow_LLMTransportFallsBackLocally(t *testing.T) {
-	win := utteranceWindow{
-		Utterances: []asr.Utterance{
-			{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲"},
-			{Speaker: "1", StartTime: 120, EndTime: 200, Text: "乙"},
-			{Speaker: "2", StartTime: 300, EndTime: 400, Text: "丙"},
-		},
-	}
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			return "", context.DeadlineExceeded
-		},
-	}
-	ranges, _, err := generateASRParagraphsWindow(context.Background(), llmClient, win, nil)
-	if err != nil {
-		t.Fatalf("error = %v, want local fallback without error", err)
-	}
-	want := buildParagraphRangesLocally(win.Utterances)
-	if len(ranges) != len(want) {
-		t.Fatalf("ranges = %+v, want %+v", ranges, want)
-	}
-	for i := range want {
-		if ranges[i] != want[i] {
-			t.Fatalf("ranges[%d] = %+v, want %+v", i, ranges[i], want[i])
-		}
-	}
-}
-
-func TestGenerateASRParagraphs_LLMTransportFallsBackLocally(t *testing.T) {
+func TestBuildASRParagraphsAlgo_MergesSameSpeaker(t *testing.T) {
 	uts := []asr.Utterance{
 		{Speaker: "1", StartTime: 0, EndTime: 100, Text: "甲", Words: asrWordsFromContentText("甲", 0, 100)},
 		{Speaker: "1", StartTime: 120, EndTime: 200, Text: "乙", Words: asrWordsFromContentText("乙", 120, 200)},
 		{Speaker: "2", StartTime: 300, EndTime: 400, Text: "丙", Words: asrWordsFromContentText("丙", 300, 400)},
 	}
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			return "", fmt.Errorf("请求 LLM 失败: connection reset")
-		},
-	}
-	paras, err := generateASRParagraphs(context.Background(), llmClient, uts, 1000, nil, nil)
+	paras, _, err := BuildASRParagraphsAlgo(uts, 1000, 0, nil)
 	if err != nil {
-		t.Fatalf("generateASRParagraphs() error = %v", err)
+		t.Fatalf("BuildASRParagraphsAlgo() error = %v", err)
 	}
 	if len(paras) != 2 {
-		t.Fatalf("paragraphs = %+v, want 2 (speaker-adjacent merge)", paras)
+		t.Fatalf("paragraphs = %+v, want 2", paras)
 	}
 	if paras[0].Text != "甲乙" || paras[1].Text != "丙" {
 		t.Fatalf("texts = %q / %q", paras[0].Text, paras[1].Text)
@@ -1173,15 +1032,10 @@ func TestGenerateASRParagraphs_LLMTransportFallsBackLocally(t *testing.T) {
 	}
 }
 
-func TestRunASRParagraphs_LLMTransportStillSucceeds(t *testing.T) {
+func TestRunASRParagraphs_NoLLMRequired(t *testing.T) {
 	const dur = int64(10 * 60 * 1000)
 	liveASR := string(sampleLiveASRJSON(dur, "你好世界"))
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			return "", context.DeadlineExceeded
-		},
-	}
-	paras, err := RunASRParagraphs(context.Background(), llmClient, liveASR, dur, nil)
+	paras, err := RunASRParagraphs(context.Background(), liveASR, dur, nil)
 	if err != nil {
 		t.Fatalf("RunASRParagraphs() error = %v", err)
 	}

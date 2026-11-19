@@ -17,6 +17,8 @@ type Request struct {
 	CanvasW, CanvasH int
 	StagingDir       string
 	RecordDir        string
+	// LocalIngestDir 可选：跟播本地分片目录，优先于远程 m3u8 裁切（与窗口 ASR 同源）。
+	LocalIngestDir string
 	// Progress 可选：本地进度 0–100；由任务层映射到 task.progress。
 	Progress func(local int16)
 	// Recipe 为空时使用 DefaultRecipe。
@@ -25,8 +27,9 @@ type Request struct {
 
 // Result 草稿组装产出。
 type Result struct {
-	DraftURL    string
-	ClipsTarURL string // 切片 tar 包下载地址；打包/上传失败时为空
+	DraftURL       string
+	ClipsTarURL    string // 切片 tar 包下载地址；打包/上传失败时为空
+	CaptionDiagURL string // 字幕对齐诊断 caption_diag.json；写入/上传失败时为空
 }
 
 // Generator 纯草稿组装能力：给定素材与 clips，产出 draft_url（及可选 clips_tar_url）。

@@ -9,6 +9,7 @@ import (
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/pkg/capcutmate"
+	"live-mixer/internal/pkg/media"
 	"live-mixer/internal/pkg/storage"
 
 	"go.uber.org/zap"
@@ -24,7 +25,9 @@ type ObjectUploader interface {
 type VideosStep struct {
 	API      CapCutMateAPI
 	Uploader ObjectUploader
-	Logger   *zap.Logger
+	// Prober 探测切片真实时长；nil 时使用默认 ffprobe。
+	Prober media.MediaTimelineProber
+	Logger *zap.Logger
 }
 
 // Name 返回步骤名。
@@ -52,7 +55,7 @@ func (st VideosStep) Run(ctx context.Context, s *session.Session) error {
 		s.Timeline = session.NewTimeline()
 	}
 
-	videoInfos, placements, err := buildVideoInfos(ctx, s, st.Uploader, logger)
+	videoInfos, placements, err := buildVideoInfos(ctx, s, st.Uploader, st.mediaProber(), logger)
 	if err != nil {
 		return err
 	}
@@ -90,9 +93,17 @@ func (st VideosStep) Run(ctx context.Context, s *session.Session) error {
 	return nil
 }
 
+// mediaProber 返回时长探测器；未注入时使用默认 ffprobe。
+func (st VideosStep) mediaProber() media.MediaTimelineProber {
+	if st.Prober != nil {
+		return st.Prober
+	}
+	return media.NewFFprobeProber("")
+}
+
 // buildVideoInfos 将本地切片上传到对象存储，组装 add_videos 所需的 VideoInfo 列表，
 // 同时生成源时间轴 ↔ 草稿时间轴的 ClipPlacement，供字幕同步使用。
-func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUploader, logger *zap.Logger) ([]capcutmate.VideoInfo, []session.ClipPlacement, error) {
+func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUploader, prober media.MediaTimelineProber, logger *zap.Logger) ([]capcutmate.VideoInfo, []session.ClipPlacement, error) {
 	infos := make([]capcutmate.VideoInfo, 0, len(s.ClipPaths))
 	placements := make([]session.ClipPlacement, 0, len(s.ClipPaths))
 	for i, localPath := range s.ClipPaths {
@@ -110,10 +121,14 @@ func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUpl
 		if strings.TrimSpace(videoURL) == "" {
 			return nil, nil, fmt.Errorf("第 %d 段切片上传后 URL 为空", i)
 		}
-		durMS := s.Clips[i].EndTime - s.Clips[i].StartTime
-		if durMS <= 0 {
+		sourceStart := s.Clips[i].StartTime
+		sourceEnd := s.Clips[i].EndTime
+		wantMS := sourceEnd - sourceStart
+		if wantMS <= 0 {
 			return nil, nil, fmt.Errorf("第 %d 段时长无效", i)
 		}
+		// 草稿轨时长用切片真实时长，避免 CapCut 按文件时长铺轨后与字幕（按理论时长）错位。
+		durMS := resolveClipDraftDurationMS(ctx, prober, localPath, wantMS)
 		durUS := durMS * 1000 // 毫秒 → 微秒
 		startUS := s.Timeline.Advance(durUS)
 		endUS := startUS + durUS
@@ -124,13 +139,36 @@ func buildVideoInfos(ctx context.Context, s *session.Session, uploader ObjectUpl
 			Volume:   1,
 		})
 		placements = append(placements, session.ClipPlacement{
-			SourceStartMS: s.Clips[i].StartTime,
-			SourceEndMS:   s.Clips[i].EndTime,
+			SourceStartMS: sourceStart,
+			SourceEndMS:   sourceEnd,
 			DraftStartUS:  startUS,
 			DraftEndUS:    endUS,
 		})
 	}
 	return infos, placements, nil
+}
+
+// resolveClipDraftDurationMS 探测切片真实时长；失败或偏差过大时回退理论时长。
+func resolveClipDraftDurationMS(ctx context.Context, prober media.MediaTimelineProber, localPath string, wantMS int64) int64 {
+	if wantMS <= 0 {
+		return 0
+	}
+	if prober == nil {
+		return wantMS
+	}
+	tl, err := prober.ProbeMediaTimeline(ctx, localPath)
+	if err != nil {
+		return wantMS
+	}
+	actual := tl.DurationMS()
+	if actual <= 0 {
+		return wantMS
+	}
+	const maxSkewMS int64 = 2500
+	if actual > wantMS+maxSkewMS || wantMS > actual+maxSkewMS {
+		return wantMS
+	}
+	return actual
 }
 
 // BuildDraftClipObjectKey 生成草稿切片对象键：temp/draft/{jobID}/{文件名}。

@@ -19,6 +19,8 @@ type LiveMaterialRepository interface {
 	Create(ctx context.Context, material *model.LiveMaterial) error
 	// GetByID 根据主键查询直播素材。
 	GetByID(ctx context.Context, id uint) (*model.LiveMaterial, error)
+	// ListByIDs 按主键批量查询直播素材，返回 id → Material 映射（缺失的 id 不会出现在 map 中）。
+	ListByIDs(ctx context.Context, ids []uint) (map[uint]*model.LiveMaterial, error)
 	// GetByName 根据素材名称精确查询。
 	GetByName(ctx context.Context, name string) (*model.LiveMaterial, error)
 	// GetByLiveURL 根据直播链接精确查询。
@@ -81,6 +83,25 @@ func (r *liveMaterialRepository) GetByID(ctx context.Context, id uint) (*model.L
 		return nil, err
 	}
 	return &material, nil
+}
+
+func (r *liveMaterialRepository) ListByIDs(ctx context.Context, ids []uint) (map[uint]*model.LiveMaterial, error) {
+	out := make(map[uint]*model.LiveMaterial, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []model.LiveMaterial
+	if err := r.db.WithContext(ctx).
+		Select("id", "live_status", "asr_status", "ingest_epoch", "media_windows", "live_url").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		m := rows[i]
+		out[m.ID] = &m
+	}
+	return out, nil
 }
 
 func (r *liveMaterialRepository) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {

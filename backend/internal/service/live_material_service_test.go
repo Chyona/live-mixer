@@ -46,6 +46,19 @@ func (m *mockLiveMaterialRepo) GetByID(ctx context.Context, id uint) (*model.Liv
 	return &stored, nil
 }
 
+func (m *mockLiveMaterialRepo) ListByIDs(ctx context.Context, ids []uint) (map[uint]*model.LiveMaterial, error) {
+	out := make(map[uint]*model.LiveMaterial, len(ids))
+	for _, id := range ids {
+		material, ok := m.materials[id]
+		if !ok {
+			continue
+		}
+		stored := *material
+		out[id] = &stored
+	}
+	return out, nil
+}
+
 func (m *mockLiveMaterialRepo) GetByName(ctx context.Context, name string) (*model.LiveMaterial, error) {
 	for _, material := range m.materials {
 		if material.Name == name {
@@ -192,6 +205,24 @@ func TestLiveMaterialService_Create_Success(t *testing.T) {
 	}
 	if material.ASRProgress != 0 {
 		t.Errorf("ASRProgress = %d, want 0", material.ASRProgress)
+	}
+	if material.MediaWindowMS != int64(model.LiveMediaWindowDuration/time.Millisecond) {
+		t.Errorf("MediaWindowMS = %d, want %d", material.MediaWindowMS, model.LiveMediaWindowDuration/time.Millisecond)
+	}
+}
+
+func TestLiveMaterialService_Create_CustomMediaWindow(t *testing.T) {
+	repo := &mockLiveMaterialRepo{}
+	svc := NewLiveMaterialServiceFull(repo, nil, nil, nil, nil, 5*time.Minute)
+
+	material, err := svc.Create(context.Background(), 2, CreateLiveMaterialInput{
+		Name: "窗长素材", SourceURL: "https://example.com/live.mp4",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if material.MediaWindowMS != 5*60*1000 {
+		t.Errorf("MediaWindowMS = %d, want %d", material.MediaWindowMS, 5*60*1000)
 	}
 }
 
@@ -577,22 +608,52 @@ func TestLiveMaterialService_List_PassesFilter(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_Delete_Success 验证删除时调用仓储层。
+// TestLiveMaterialService_Delete_Success 验证删除时先取消跟播再调用仓储层。
 func TestLiveMaterialService_Delete_Success(t *testing.T) {
 	var deletedID uint
+	var seq, cancelOrder, deleteOrder int
 	repo := &mockLiveMaterialRepo{
 		deleteFn: func(ctx context.Context, id uint) error {
+			seq++
+			deleteOrder = seq
 			deletedID = id
 			return nil
 		},
 	}
-	svc := NewLiveMaterialService(repo, nil)
+	ingest := &mockIngestWorker{
+		onCancel: func(id uint) {
+			seq++
+			cancelOrder = seq
+		},
+	}
+	svc := NewLiveMaterialServiceFull(repo, nil, ingest, nil, nil, 0)
 	if err := svc.Delete(context.Background(), 3); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 	if deletedID != 3 {
 		t.Errorf("deletedID = %d, want 3", deletedID)
 	}
+	if len(ingest.canceled) != 1 || ingest.canceled[0] != 3 {
+		t.Errorf("canceled = %v, want [3]", ingest.canceled)
+	}
+	if cancelOrder != 1 || deleteOrder != 2 {
+		t.Errorf("call order cancel=%d delete=%d, want cancel=1 delete=2", cancelOrder, deleteOrder)
+	}
+}
+
+type mockIngestWorker struct {
+	canceled []uint
+	onCancel func(id uint)
+}
+
+func (m *mockIngestWorker) Enqueue()                  {}
+func (m *mockIngestWorker) Start(ctx context.Context) {}
+func (m *mockIngestWorker) Cancel(materialID uint) bool {
+	if m.onCancel != nil {
+		m.onCancel(materialID)
+	}
+	m.canceled = append(m.canceled, materialID)
+	return true
 }
 
 // TestLiveMaterialService_Delete_NotFound 验证素材不存在时返回错误。
@@ -642,17 +703,31 @@ func TestLiveMaterialService_DownloadASRSubtitle_Success(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialService_DownloadASRSubtitle_NotReady 验证未完成 ASR 时拒绝导出。
-func TestLiveMaterialService_DownloadASRSubtitle_NotReady(t *testing.T) {
+// TestLiveMaterialService_DownloadASRSubtitle_Partial 验证 ASR 未完成但已有段落时导出当前内容。
+func TestLiveMaterialService_DownloadASRSubtitle_Partial(t *testing.T) {
 	repo := &mockLiveMaterialRepo{
 		materials: map[uint]*model.LiveMaterial{
-			1: {ID: 1, ASRStatus: model.ASRStatusProcessing, LiveASR: `{"result":{}}`},
+			1: {
+				ID:        1,
+				ASRStatus: model.ASRStatusProcessing,
+				ASRParagraphs: []model.ASRParagraph{
+					{Speaker: "1", StartTime: 2000, EndTime: 4000, Text: "已识别片段"},
+				},
+			},
 		},
 	}
 	svc := NewLiveMaterialService(repo, nil)
-	_, _, err := svc.DownloadASRSubtitle(context.Background(), 1)
-	if !errors.Is(err, ErrASRSubtitleNotReady) {
-		t.Errorf("error = %v, want %v", err, ErrASRSubtitleNotReady)
+
+	content, fileName, err := svc.DownloadASRSubtitle(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("DownloadASRSubtitle() error = %v", err)
+	}
+	want := "关键词\n\n\n文字记录\n说话人1 00:02\n已识别片段\n"
+	if string(content) != want {
+		t.Errorf("content =\n%q\nwant\n%q", content, want)
+	}
+	if fileName != "asr_subtitle_1.txt" {
+		t.Errorf("fileName = %q, want asr_subtitle_1.txt", fileName)
 	}
 }
 
@@ -693,6 +768,9 @@ func TestLiveMaterialService_Create_UpcomingAndLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upcoming Create() error = %v", err)
 	}
+	if upcoming.SourceMode != model.SourceModeLive {
+		t.Errorf("upcoming SourceMode = %q, want live", upcoming.SourceMode)
+	}
 	if upcoming.LiveStatus != model.LiveStatusWaiting {
 		t.Errorf("upcoming LiveStatus = %q, want waiting", upcoming.LiveStatus)
 	}
@@ -705,27 +783,55 @@ func TestLiveMaterialService_Create_UpcomingAndLive(t *testing.T) {
 	if upcoming.URLType != model.URLTypeM3U8 {
 		t.Errorf("upcoming URLType = %q", upcoming.URLType)
 	}
+	if upcoming.ScheduledAt == nil || upcoming.WaitDeadlineAt == nil {
+		t.Fatal("upcoming should set scheduled_at and wait_deadline_at")
+	}
 
+	before := time.Now().UTC()
 	live, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{
-		Name: "正在直播", SourceMode: model.SourceModeLive,
+		Name: "直播缺省开播时间", SourceMode: model.SourceModeLive,
 		SourceURL: "https://example.com/now/index.m3u8",
 	})
+	after := time.Now().UTC()
 	if err != nil {
 		t.Fatalf("live Create() error = %v", err)
 	}
-	if live.LiveStatus != model.LiveStatusConnecting {
-		t.Errorf("live LiveStatus = %q, want connecting", live.LiveStatus)
+	if live.LiveStatus != model.LiveStatusWaiting {
+		t.Errorf("live LiveStatus = %q, want waiting", live.LiveStatus)
 	}
-	if live.ConnectDeadlineAt == nil {
-		t.Fatal("live ConnectDeadlineAt should be set")
+	if live.ConnectDeadlineAt != nil {
+		t.Fatal("new live should not set connect_deadline_at")
+	}
+	if live.ScheduledAt == nil || live.WaitDeadlineAt == nil {
+		t.Fatal("live should default scheduled_at and wait_deadline_at")
+	}
+	if live.ScheduledAt.Before(before.Add(-time.Second)) || live.ScheduledAt.After(after.Add(time.Second)) {
+		t.Errorf("default scheduled_at = %v, want around now", live.ScheduledAt)
 	}
 
-	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{
-		Name: "缺计划", SourceMode: model.SourceModeUpcoming,
-		SourceURL: "https://example.com/miss/index.m3u8",
+	future := time.Now().UTC().Add(time.Hour)
+	futureLive, err := svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "未来开播", SourceMode: model.SourceModeLive,
+		SourceURL: "https://example.com/future/index.m3u8", ScheduledAt: &future,
 	})
-	if !errors.Is(err, ErrScheduledAtRequired) {
-		t.Errorf("missing scheduled_at error = %v", err)
+	if err != nil {
+		t.Fatalf("future live Create() error = %v", err)
+	}
+	if futureLive.LiveStatus != model.LiveStatusWaiting {
+		t.Errorf("future LiveStatus = %q, want waiting", futureLive.LiveStatus)
+	}
+	wantDeadline := future.Add(model.LiveWaitGrace)
+	if futureLive.WaitDeadlineAt == nil || !futureLive.WaitDeadlineAt.Equal(wantDeadline) {
+		t.Errorf("future WaitDeadlineAt = %v, want %v", futureLive.WaitDeadlineAt, wantDeadline)
+	}
+
+	expired := time.Now().UTC().Add(-3 * time.Hour)
+	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{
+		Name: "过期开播", SourceMode: model.SourceModeLive,
+		SourceURL: "https://example.com/old/index.m3u8", ScheduledAt: &expired,
+	})
+	if !errors.Is(err, ErrScheduledAtExpired) {
+		t.Errorf("expired scheduled_at error = %v", err)
 	}
 
 	_, err = svc.Create(context.Background(), 1, CreateLiveMaterialInput{

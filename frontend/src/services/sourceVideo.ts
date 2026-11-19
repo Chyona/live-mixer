@@ -1,6 +1,3 @@
-import axios from 'axios';
-
-import { apiPath } from '~/utils/api';
 import {
   getAsrParagraphsApiKey,
   isAsrParagraphsApiKeyOverridden,
@@ -9,9 +6,11 @@ import {
 import { verifyAsrParagraphsFieldsFromRaw } from '~/utils/asrParagraphsVerify';
 
 import type { BaseResponse } from './types';
-import { AppError, DEFAULT_REQUEST_TIMEOUT_MS, request } from './http';
+import { downloadBlob } from './blobDownload';
+import { request } from './http';
 
 export type {
+  AlignDiagSnapshot,
   AsrStatus,
   LiveStatus,
   SourceMode,
@@ -23,60 +22,13 @@ export {
   hlsStartPositionForSourceVideo,
   isSourceVideoUrlDuplicateError,
   isLiveIngesting,
+  sourceVideoListDisplayUrl,
   sourceVideoPlayUrl,
   SOURCE_VIDEO_URL_DUPLICATE_CODE,
 } from './sourceVideo.model';
 
-import type { AsrParagraphs, SourceVideo } from './sourceVideo.model';
+import type { AlignDiagSnapshot, AsrParagraphs, MediaWindowMeta, SourceVideo } from './sourceVideo.model';
 import { sourceVideoPlayUrl } from './sourceVideo.model';
-
-function parseContentDispositionFilename(header?: string): string | null {
-  if (!header) return null;
-
-  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(header);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1].trim());
-    } catch {
-      return utf8Match[1].trim();
-    }
-  }
-
-  const plainMatch = /filename="?([^";]+)"?/i.exec(header);
-  return plainMatch?.[1]?.trim() || null;
-}
-
-function triggerBlobDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-async function resolveBlobErrorMessage(error: unknown, fallback: string): Promise<string> {
-  if (!(error instanceof AppError)) {
-    return fallback;
-  }
-
-  const data = error.resp?.response?.data;
-  if (data instanceof Blob) {
-    try {
-      const text = await data.text();
-      const payload = JSON.parse(text) as { message?: string; errorMessage?: string };
-      const message =
-        (typeof payload.message === 'string' && payload.message.trim()) ||
-        (typeof payload.errorMessage === 'string' && payload.errorMessage.trim()) ||
-        '';
-      if (message) return message;
-    } catch {
-      // ignore parse failure
-    }
-  }
-
-  return error.errorMessage || fallback;
-}
 
 export interface SourceVideoListParams {
   /** 开始日期 YYYY-MM-DD */
@@ -175,6 +127,44 @@ function normalizeAsrParagraphs(raw: Record<string, unknown>): AsrParagraphs | n
   }
 }
 
+function normalizeMediaWindows(raw: unknown): MediaWindowMeta[] {
+  if (!Array.isArray(raw)) return [];
+  const list: MediaWindowMeta[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const url = String(row.url ?? '').trim();
+    const tsUrl = String(row.ts_url ?? '').trim();
+    list.push({
+      i: Number(row.i ?? 0) || 0,
+      start_ms: Number(row.start_ms ?? 0) || 0,
+      end_ms: Number(row.end_ms ?? 0) || 0,
+      dur_ms: Number(row.dur_ms ?? 0) || 0,
+      url: url || undefined,
+      ts_url: tsUrl || undefined,
+      ready: Boolean(row.ready),
+    });
+  }
+  return list;
+}
+
+function normalizeAlignDiag(raw: unknown): AlignDiagSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  return {
+    play_url: String(row.play_url ?? ''),
+    live_url: String(row.live_url ?? ''),
+    same_play_and_live: Boolean(row.same_play_and_live),
+    master_ready_ms: Number(row.master_ready_ms ?? 0) || 0,
+    duration_ms: Number(row.duration_ms ?? 0) || 0,
+    window_count: Number(row.window_count ?? 0) || 0,
+    asr_cursor_ms: Number(row.asr_cursor_ms ?? 0) || 0,
+    asr_progress: Number(row.asr_progress ?? 0) || 0,
+    live_status: String(row.live_status ?? ''),
+    hint: String(row.hint ?? ''),
+  };
+}
+
 export function normalizeSourceVideo(
   raw: Partial<SourceVideo> & Record<string, unknown>
 ): SourceVideo {
@@ -205,15 +195,16 @@ export function normalizeSourceVideo(
     updated_at: String(raw.updated_at ?? ''),
     created_by: String(raw.created_by ?? ''),
     project_count: normalizeProjectCount(raw),
+    media_windows: normalizeMediaWindows(raw.media_windows),
     matched_paragraphs: normalizeMatchedParagraphs(
       raw.matched_paragraphs ?? raw.matchedParagraphs
     ),
     asr_paragraphs: normalizeAsrParagraphs(raw),
     asr_summaries: normalizeAsrSummaries(raw.asr_summaries),
+    align_diag: normalizeAlignDiag(raw.align_diag),
   };
-  if (!video.play_url.trim()) {
-    video.play_url = sourceVideoPlayUrl(video);
-  }
+  // 始终按 live_status 重算，避免跟播误用源站 m3u8 作为 play_url
+  video.play_url = sourceVideoPlayUrl(video);
   return video;
 }
 
@@ -375,39 +366,18 @@ export async function retrySourceVideoIngest(
 }
 
 /**
- * 下载 ASR 字幕（原始 asr JSON）。
- * 仅 asr_status=completed 且内容非空时可下载。
+ * 下载 ASR 字幕（TXT）。
+ * asr_paragraphs 非空即可下载，不要求 ASR 完成；没有已识别段落时接口返回错误。
  */
 export async function downloadSourceVideoAsrSubtitle(
   id: SourceVideoId,
   fallbackFilename: string
 ): Promise<void> {
-  try {
-    const response = await axios.request<Blob>({
-      url: apiPath(`/v1/live-materials/${id}/asr/subtitle`),
-      method: 'get',
-      responseType: 'blob',
-      timeout: DEFAULT_REQUEST_TIMEOUT_MS,
-    });
-
-    const blob = response.data;
-    if (!blob || blob.size === 0) {
-      throw new Error('暂无字幕文案');
-    }
-
-    const filename =
-      parseContentDispositionFilename(response.headers['content-disposition']) || fallbackFilename;
-
-    triggerBlobDownload(blob, filename);
-  } catch (error) {
-    if (error instanceof Error && error.message === '暂无字幕文案') {
-      throw error;
-    }
-
-    const message = await resolveBlobErrorMessage(error, '字幕下载失败');
-    if (error instanceof AppError) {
-      throw new AppError(message, error.errorCode, error.resp);
-    }
-    throw new Error(message);
-  }
+  await downloadBlob({
+    url: `/v1/live-materials/${id}/asr/subtitle`,
+    method: 'get',
+    fallbackFilename,
+    fallbackError: '字幕下载失败',
+    emptyMessage: '暂无字幕文案',
+  });
 }

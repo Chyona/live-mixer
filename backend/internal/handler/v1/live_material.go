@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -74,6 +75,8 @@ type LiveMaterialDetailResponse struct {
 	WaitDeadlineAt    *time.Time      `json:"wait_deadline_at,omitempty"`
 	ConnectDeadlineAt *time.Time      `json:"connect_deadline_at,omitempty"`
 	ASRCursorMS       int64           `json:"asr_cursor_ms"`
+	MediaWindowMS     int64           `json:"media_window_ms"`
+	MediaWindows      json.RawMessage `json:"media_windows"`
 	IngestErrorMsg    string          `json:"ingest_error_msg,omitempty"`
 	LiveASR      []asr.Utterance `json:"live_asr"`
 	ASRSummaries  []model.ASRSummarySegment `json:"asr_summaries"`
@@ -91,6 +94,8 @@ type LiveMaterialDetailResponse struct {
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	Ext            string          `json:"ext"`
+	// AlignDiag 跟播音画/字幕对齐诊断摘要（staging/align_diag.jsonl 的 API 侧快照）。
+	AlignDiag *model.AlignDiagSnapshot `json:"align_diag,omitempty"`
 }
 
 func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, material *model.LiveMaterial) LiveMaterialDetailResponse {
@@ -101,6 +106,10 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 	paragraphs := material.ASRParagraphs
 	if paragraphs == nil {
 		paragraphs = []model.ASRParagraph{}
+	}
+	mediaWindows := json.RawMessage([]byte(material.MediaWindows))
+	if len(strings.TrimSpace(material.MediaWindows)) == 0 {
+		mediaWindows = json.RawMessage([]byte("[]"))
 	}
 	return LiveMaterialDetailResponse{
 		ID:             material.ID,
@@ -117,6 +126,8 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		WaitDeadlineAt:    material.WaitDeadlineAt,
 		ConnectDeadlineAt: material.ConnectDeadlineAt,
 		ASRCursorMS:       material.ASRCursorMS,
+		MediaWindowMS:     material.EffectiveMediaWindowMS(),
+		MediaWindows:      mediaWindows,
 		IngestErrorMsg:    material.IngestErrorMsg,
 		LiveASR:        asr.FormatUtterancesForAPI(material.LiveASR),
 		ASRSummaries:   summaries,
@@ -133,6 +144,7 @@ func (h *LiveMaterialHandler) toLiveMaterialDetailResponse(ctx context.Context, 
 		CreatedBy:      h.createdBy.nameOf(ctx, material.CreatedBy),
 		CreatedAt:      material.CreatedAt,
 		UpdatedAt:      material.UpdatedAt,
+		AlignDiag:      service.BuildAlignDiagSnapshot(material),
 		Ext:            material.Ext,
 	}
 }
@@ -275,7 +287,7 @@ func (h *LiveMaterialHandler) ListLiveMaterials(c *gin.Context) {
 
 // CreateLiveMaterial 创建直播素材
 // @Summary      创建直播素材
-// @Description  添加直播素材。source_mode=upcoming|live|replay；将要/正在直播填 m3u8_url（或 live_url 中的 m3u8）；回放可填 m3u8 或 mp4。live_url 在直播类创建时由服务端预分配且之后不可改。
+// @Description  添加直播素材。source_mode=live|replay（upcoming 兼容为 live）；直播填 m3u8_url（或 live_url 中的 m3u8），可带 scheduled_at（缺省为当前时间）；回放可填 m3u8 或 mp4。live_url 在直播类创建时由服务端预分配且之后不可改。
 // @Tags         直播素材
 // @Accept       json
 // @Produce      json
@@ -406,7 +418,7 @@ func (h *LiveMaterialHandler) UpdateLiveMaterial(c *gin.Context) {
 
 // DeleteLiveMaterial 删除直播素材
 // @Summary      删除直播素材
-// @Description  物理删除直播素材，并级联删除 video_project 中关联的剪辑项目
+// @Description  物理删除直播素材，取消进行中的跟播任务，并级联删除 video_project 中关联的剪辑项目
 // @Tags         直播素材
 // @Produce      json
 // @Param        id   path  int  true  "素材 ID"
@@ -470,7 +482,7 @@ func (h *LiveMaterialHandler) RetryASR(c *gin.Context) {
 
 // DownloadASRSubtitle 下载直播素材 ASR 字幕（TXT 文件）
 // @Summary      下载 ASR 字幕
-// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；仅 asr_status=completed 且 asr_paragraphs 非空时可下载
+// @Description  返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；asr_paragraphs 非空即可下载，不要求 ASR 完成
 // @Tags         直播素材
 // @Produce      text/plain
 // @Param        id   path  int  true  "素材 ID"
@@ -492,7 +504,7 @@ func (h *LiveMaterialHandler) DownloadASRSubtitle(c *gin.Context) {
 			response.NotFound(c, err.Error())
 			return
 		}
-		if errors.Is(err, service.ErrASRSubtitleNotReady) || errors.Is(err, service.ErrASRSubtitleEmpty) {
+		if errors.Is(err, service.ErrASRSubtitleEmpty) {
 			response.BadRequest(c, err.Error())
 			return
 		}

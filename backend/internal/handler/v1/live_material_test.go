@@ -639,12 +639,12 @@ func TestLiveMaterialHandler_DownloadASRSubtitle_Success(t *testing.T) {
 	}
 }
 
-// TestLiveMaterialHandler_DownloadASRSubtitle_NotReady 验证 ASR 未完成时返回 400。
-func TestLiveMaterialHandler_DownloadASRSubtitle_NotReady(t *testing.T) {
+// TestLiveMaterialHandler_DownloadASRSubtitle_Empty 验证没有已识别字幕时返回 400。
+func TestLiveMaterialHandler_DownloadASRSubtitle_Empty(t *testing.T) {
 	secret := "handler-test-secret"
 	handler := NewLiveMaterialHandler(&mockLiveMaterialService{
 		downloadASRSubtitleFn: func(ctx context.Context, id uint) ([]byte, string, error) {
-			return nil, "", service.ErrASRSubtitleNotReady
+			return nil, "", service.ErrASRSubtitleEmpty
 		},
 	}, nil)
 	r := newAuthedRouter(secret, handler.DownloadASRSubtitle, http.MethodGet, "/live-materials/:id/asr/subtitle")

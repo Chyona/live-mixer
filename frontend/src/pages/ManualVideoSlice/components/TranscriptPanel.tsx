@@ -1,8 +1,9 @@
-import { Switch, Tooltip } from 'antd';
+import { Segmented, Switch, Tooltip } from 'antd';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { LuCheck, LuPlus } from 'react-icons/lu';
 import { highlightPlainKeyword } from '~/utils/listKeywords';
-import type { TranscriptParagraph } from '../types';
+import type { CopyInsertMode, TranscriptParagraph } from '../types';
 import KeywordSearchBar from './KeywordSearchBar';
 import {
   formatSliceTime,
@@ -33,8 +34,15 @@ interface TranscriptPanelProps {
   matchParagraphIds: string[];
   onSeek: (time: number) => void;
   onSelectSegment: (segment: ReturnType<typeof paragraphToCopySegment>) => void;
+  /** 定位跟随开启时，单击文案通知页面滚动右侧预览 */
+  onLocateParagraph?: (paragraph: TranscriptParagraph, timeSec: number) => void;
+  /** 加入右侧时的插入方式 */
+  insertMode: CopyInsertMode;
+  onInsertModeChange: (mode: CopyInsertMode) => void;
   /** 只读：可定位播放，不可点选/拖选文案 */
   readOnly?: boolean;
+  /** 录像时长超过 ASR 覆盖时，在文案列表末尾提示字幕仍在生成 */
+  asrPending?: boolean;
 }
 
 const TRANSCRIPT_AUTO_SCROLL_KEY = 'manual-slice-transcript-auto-scroll';
@@ -80,11 +88,20 @@ type TranscriptParagraphItemProps = {
   keyword: string;
   isKeywordMatch: boolean;
   isCurrentKeywordMatch: boolean;
+  /** 当前选中的段落（明显的选中态） */
+  isSelected: boolean;
+  /** 该段已加入右侧预览的片段数 */
+  addedCount: number;
   readOnly: boolean;
+  onAddParagraph: (paragraph: TranscriptParagraph) => void;
   onParagraphClick: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
   onParagraphDoubleClick: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
   onTextSelection: (event: React.MouseEvent<HTMLDivElement>, paragraph: TranscriptParagraph) => void;
-  onSegmentClick: (event: React.MouseEvent<HTMLSpanElement>, start: number) => void;
+  onSegmentClick: (
+    event: React.MouseEvent<HTMLSpanElement>,
+    paragraph: TranscriptParagraph,
+    start: number
+  ) => void;
 };
 
 const TranscriptParagraphItem = ({
@@ -95,7 +112,10 @@ const TranscriptParagraphItem = ({
   keyword,
   isKeywordMatch,
   isCurrentKeywordMatch,
+  isSelected,
+  addedCount,
   readOnly,
+  onAddParagraph,
   onParagraphClick,
   onParagraphDoubleClick,
   onTextSelection,
@@ -165,7 +185,7 @@ const TranscriptParagraphItem = ({
           ]
             .filter(Boolean)
             .join(' ')}
-          onClick={(event) => onSegmentClick(event, segment.start)}
+          onClick={(event) => onSegmentClick(event, paragraph, segment.start)}
         >
           {inner}
         </span>
@@ -181,6 +201,7 @@ const TranscriptParagraphItem = ({
         isPlaybackParagraph ? 'active' : '',
         isKeywordMatch ? 'matched' : '',
         isCurrentKeywordMatch ? 'matched-current' : '',
+        isSelected ? 'selected' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -195,6 +216,34 @@ const TranscriptParagraphItem = ({
           <span className="slice-editor-paragraph-time">
             {formatSliceTime(paragraphRange.start)} - {formatSliceTime(paragraphRange.end)}
           </span>
+        </div>
+        <div className="slice-editor-paragraph-head-side">
+          {addedCount > 0 ? (
+            <span
+              className="slice-editor-paragraph-added"
+              title={`该段已有 ${addedCount} 条文案加入右侧预览`}
+            >
+              <LuCheck size={12} />
+              {addedCount > 1 ? `已添加 ${addedCount}` : '已添加'}
+            </span>
+          ) : null}
+          {!readOnly ? (
+            <button
+              type="button"
+              className="slice-editor-paragraph-add"
+              title="加入右侧文案预览（也可双击整段）"
+              onClick={(event) => {
+                event.stopPropagation();
+                // 双击按钮只算一次加入
+                if (event.detail > 1) return;
+                onAddParagraph(paragraph);
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+            >
+              <LuPlus size={12} />
+              加入预览
+            </button>
+          ) : null}
         </div>
       </div>
       <div
@@ -225,17 +274,22 @@ const TranscriptPanel = ({
   matchParagraphIds,
   onSeek,
   onSelectSegment,
+  onLocateParagraph,
+  insertMode,
+  onInsertModeChange,
   readOnly = false,
+  asrPending = false,
 }: TranscriptPanelProps) => {
   const transcriptBodyRef = useRef<HTMLDivElement>(null);
   const lastAutoScrolledTargetRef = useRef<string | null>(null);
   const autoScrollPauseTimerRef = useRef<number>(0);
-  const pendingSeekTimerRef = useRef<number>(0);
   const suppressNextClickSeekRef = useRef(false);
   const [autoScrollPaused, setAutoScrollPaused] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(() => {
     return localStorage.getItem(TRANSCRIPT_AUTO_SCROLL_KEY) !== 'false';
   });
+  /** 最近点选的段落：用于明显选中态，帮助用户确认操作对象 */
+  const [selectedParagraphId, setSelectedParagraphId] = useState<string | null>(null);
 
   const speakers = useMemo(
     () => [...new Set(paragraphs.map((item) => item.speaker))],
@@ -304,6 +358,21 @@ const TranscriptPanel = ({
     [highlightLayoutKey, trimmedKeyword]
   );
 
+  /**
+   * 虚拟列表项 key 必须只跟段落本身绑定：
+   * 若把搜索词/高亮布局拼进 key，选中文案时所有行都会被当成新行重建，
+   * 已测高度失效并被重新估算，虚拟列表会为“首次测量”的行补偿滚动，
+   * 表现为滚动条异常跳动。
+   */
+  const getVirtualItemKey = useCallback(
+    (index: number) => {
+      const paragraph = paragraphs[index];
+      if (!paragraph) return `index-${index}`;
+      return paragraph.id;
+    },
+    [paragraphs]
+  );
+
   const virtualizer = useVirtualizer({
     count: paragraphs.length,
     getScrollElement: () => transcriptBodyRef.current,
@@ -335,23 +404,8 @@ const TranscriptPanel = ({
       return height;
     },
     overscan: 6,
-    getItemKey: (index) => {
-      const paragraph = paragraphs[index];
-      if (!paragraph) return String(index);
-      return getParagraphSizeCacheKey(paragraph.id);
-    },
+    getItemKey: getVirtualItemKey,
   });
-
-  useLayoutEffect(() => {
-    if (!shouldVirtualize) return;
-    virtualizer.measure();
-  }, [
-    shouldVirtualize,
-    highlightLayoutKey,
-    trimmedKeyword,
-    paragraphSyncKey,
-    virtualizer,
-  ]);
 
   const scrollToParagraphIndex = useCallback(
     (index: number, behavior: ScrollBehavior = 'smooth') => {
@@ -409,23 +463,7 @@ const TranscriptPanel = ({
   useEffect(() => {
     return () => {
       window.clearTimeout(autoScrollPauseTimerRef.current);
-      window.clearTimeout(pendingSeekTimerRef.current);
     };
-  }, []);
-
-  const scheduleSeek = useCallback(
-    (time: number) => {
-      window.clearTimeout(pendingSeekTimerRef.current);
-      pendingSeekTimerRef.current = window.setTimeout(() => {
-        onSeek(time);
-      }, 220);
-    },
-    [onSeek]
-  );
-
-  const cancelPendingSeek = useCallback(() => {
-    window.clearTimeout(pendingSeekTimerRef.current);
-    pendingSeekTimerRef.current = 0;
   }, []);
 
   useEffect(() => {
@@ -523,8 +561,26 @@ const TranscriptPanel = ({
     }
 
     const range = getParagraphRange(paragraph);
-    scheduleSeek(range.start);
+    onSeek(range.start);
+    if (!readOnly) {
+      setSelectedParagraphId(paragraph.id);
+    }
+    if (autoScrollEnabled) {
+      onLocateParagraph?.(paragraph, range.start);
+    }
   };
+
+  const handleAddParagraph = useCallback(
+    (paragraph: TranscriptParagraph) => {
+      if (readOnly) return;
+      setSelectedParagraphId(paragraph.id);
+      const copySegment = paragraphToCopySegment(paragraph);
+      if (copySegment) {
+        onSelectSegment(copySegment);
+      }
+    },
+    [onSelectSegment, readOnly]
+  );
 
   const handleParagraphDoubleClick = (
     event: React.MouseEvent<HTMLDivElement>,
@@ -533,14 +589,10 @@ const TranscriptPanel = ({
     if (readOnly) return;
     event.preventDefault();
     event.stopPropagation();
-    cancelPendingSeek();
     suppressNextClickSeekRef.current = false;
     window.getSelection()?.removeAllRanges();
 
-    const copySegment = paragraphToCopySegment(paragraph);
-    if (copySegment) {
-      onSelectSegment(copySegment);
-    }
+    handleAddParagraph(paragraph);
   };
 
   const handleTextSelection = (
@@ -556,20 +608,30 @@ const TranscriptPanel = ({
     const copySegment = paragraphSelectionToCopySegment(event.currentTarget, paragraph);
     if (copySegment) {
       suppressNextClickSeekRef.current = true;
-      cancelPendingSeek();
+      setSelectedParagraphId(paragraph.id);
       onSelectSegment(copySegment);
       selection.removeAllRanges();
     }
   };
 
-  const handleSegmentClick = (event: React.MouseEvent<HTMLSpanElement>, start: number) => {
+  const handleSegmentClick = (
+    event: React.MouseEvent<HTMLSpanElement>,
+    paragraph: TranscriptParagraph,
+    start: number
+  ) => {
     event.stopPropagation();
     if (event.detail > 1) return;
     if (suppressNextClickSeekRef.current) {
       suppressNextClickSeekRef.current = false;
       return;
     }
-    scheduleSeek(start);
+    if (!readOnly) {
+      setSelectedParagraphId(paragraph.id);
+    }
+    onSeek(start);
+    if (autoScrollEnabled) {
+      onLocateParagraph?.(paragraph, start);
+    }
   };
 
   const renderParagraphItem = (
@@ -587,7 +649,10 @@ const TranscriptPanel = ({
       keyword={keyword}
       isKeywordMatch={options.isKeywordMatch}
       isCurrentKeywordMatch={options.isCurrentKeywordMatch}
+      isSelected={selectedParagraphId === paragraph.id}
+      addedCount={highlightCountByParagraphId.get(paragraph.id) ?? 0}
       readOnly={readOnly}
+      onAddParagraph={handleAddParagraph}
       onParagraphClick={handleParagraphClick}
       onParagraphDoubleClick={handleParagraphDoubleClick}
       onTextSelection={handleTextSelection}
@@ -609,7 +674,22 @@ const TranscriptPanel = ({
         <div className="slice-editor-transcript-head">
           <div className="slice-editor-transcript-head-main">
             <div className="slice-editor-panel-title">文案分段</div>
-            <Tooltip title="开启后，播放视频时文案列表会自动滚动，将当前朗读段落居中显示">
+            {!readOnly ? (
+              <Tooltip title="新文案加入右侧的位置：按时间排序，或插入到右侧当前选中片段之后">
+                <span className="slice-editor-transcript-insert-mode">
+                  <Segmented
+                    size="small"
+                    value={insertMode}
+                    onChange={(value) => onInsertModeChange(value as CopyInsertMode)}
+                    options={[
+                      { label: '按时间', value: 'timeline' },
+                      { label: '跟随选中', value: 'after-selected' },
+                    ]}
+                  />
+                </span>
+              </Tooltip>
+            ) : null}
+            <Tooltip title="开启后，播放视频时文案列表会自动滚动，将当前朗读段落居中显示；单击文案时，右侧预览会滚到对应片段">
               <label className="slice-editor-transcript-follow">
                 <Switch
                   size="small"
@@ -684,11 +764,12 @@ const TranscriptPanel = ({
             );
           })
         )}
+        {asrPending ? <p className="slice-editor-transcript-asr-pending">ASR字幕生成中</p> : null}
       </div>
       <p className="slice-editor-transcript-tip">
         {readOnly
           ? '当前为只读模式，单击可定位视频，暂不可选择文案。'
-          : '单击定位视频，双击选中整段；拖拽选中部分文字可提取对应片段。'}
+          : '单击定位并选中段落；双击或点「加入预览」加入整段，拖拽选中部分文字可提取片段。'}
       </p>
     </div>
   );

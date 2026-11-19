@@ -4,6 +4,7 @@ import {
   LuArrowLeft,
   LuCircleAlert,
   LuFileWarning,
+  LuHourglass,
   LuLink2Off,
   LuRotateCw,
 } from 'react-icons/lu';
@@ -12,7 +13,11 @@ import { appendDebugAsrKeyToPath } from '~/utils/asrParagraphsKey';
 
 import './index.css';
 
-export type SlicePageEmptyVariant = 'video-unavailable' | 'no-playback-url' | 'unsupported-format';
+export type SlicePageEmptyVariant =
+  | 'video-unavailable'
+  | 'no-playback-url'
+  | 'record-preview-pending'
+  | 'unsupported-format';
 
 interface SlicePageEmptyStateProps {
   variant: SlicePageEmptyVariant;
@@ -33,6 +38,18 @@ const variantConfig = {
     title: '暂无可用播放地址',
     description: '该源视频尚未配置可播放链接，补充播放地址后即可开始切片。',
     reasons: ['前往源视频管理查看并编辑该视频', '确认已上传或填写有效的播放链接'],
+  },
+  'record-preview-pending': {
+    icon: LuHourglass,
+    tone: 'info',
+    title: '录像预览生成中',
+    description:
+      '跟播需等首个媒体窗就绪后，才能用与文案同一时间轴的录像预览。不会使用源站直播地址，以免文案与声音错位。',
+    reasons: [
+      '通常约 10 分钟封出首个媒体窗',
+      '就绪后刷新本页即可对齐预览',
+      '文案若已出，也可稍后再打开人工切片',
+    ],
   },
   'unsupported-format': {
     icon: LuFileWarning,

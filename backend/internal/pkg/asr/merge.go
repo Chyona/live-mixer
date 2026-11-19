@@ -18,8 +18,8 @@ type utteranceTimes struct {
 	Additions struct {
 		Speaker string `json:"speaker"`
 	} `json:"additions"`
-	EndTime   int64 `json:"end_time"`
-	StartTime int64 `json:"start_time"`
+	EndTime   int64  `json:"end_time"`
+	StartTime int64  `json:"start_time"`
 	Text      string `json:"text"`
 	Words     []struct {
 		EndTime   int64  `json:"end_time"`
@@ -29,7 +29,8 @@ type utteranceTimes struct {
 }
 
 // MergeWindowASR 将窗口识别结果按 offsetMS 平移后追加到已有 live_asr JSON。
-func MergeWindowASR(existing string, window json.RawMessage, offsetMS int64) (merged string, newDuration int64, err error) {
+// skipBeforeMS > 0 时丢弃平移后 start_time < skipBeforeMS 的分句，避免与上一窗尾部重叠重转。
+func MergeWindowASR(existing string, window json.RawMessage, offsetMS, skipBeforeMS int64) (merged string, newDuration int64, err error) {
 	base := liveASRPayload{}
 	if existing != "" && existing != "{}" {
 		if err := json.Unmarshal([]byte(existing), &base); err != nil {
@@ -43,8 +44,11 @@ func MergeWindowASR(existing string, window json.RawMessage, offsetMS int64) (me
 		}
 	}
 	for _, raw := range win.Result.Utterances {
-		shifted, shiftErr := shiftUtteranceRaw(raw, offsetMS)
+		shifted, startMS, shiftErr := shiftUtteranceRaw(raw, offsetMS)
 		if shiftErr != nil {
+			continue
+		}
+		if skipBeforeMS > 0 && startMS < skipBeforeMS {
 			continue
 		}
 		base.Result.Utterances = append(base.Result.Utterances, shifted)
@@ -61,10 +65,10 @@ func MergeWindowASR(existing string, window json.RawMessage, offsetMS int64) (me
 	return string(out), base.AudioInfo.Duration, nil
 }
 
-func shiftUtteranceRaw(raw json.RawMessage, offsetMS int64) (json.RawMessage, error) {
+func shiftUtteranceRaw(raw json.RawMessage, offsetMS int64) (json.RawMessage, int64, error) {
 	var u utteranceTimes
 	if err := json.Unmarshal(raw, &u); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	u.StartTime += offsetMS
 	u.EndTime += offsetMS
@@ -72,5 +76,9 @@ func shiftUtteranceRaw(raw json.RawMessage, offsetMS int64) (json.RawMessage, er
 		u.Words[i].StartTime += offsetMS
 		u.Words[i].EndTime += offsetMS
 	}
-	return json.Marshal(u)
+	out, err := json.Marshal(u)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, u.StartTime, nil
 }

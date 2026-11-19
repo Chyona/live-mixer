@@ -63,6 +63,23 @@ llm:
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   model: "qwen3.7-max"
   flash_model: "qwen3.7-flash"
+  # 单次 Chat Completions 的客户端超时（秒）；环境变量：APP_LLM_TIMEOUT_SEC
+  # 非流式请求，响应头要等模型生成完才返回，所以这必须是「整次生成」的预算：
+  # AI 切片（思考模式 + 全量 ASR）实测单次 6.5~8.8 分钟，给小了会被客户端超时掐死。
+  timeout_sec: 1800
+
+# 成片字幕断句：用 LLM（flash_model）做语义断行，解决"词表枚举不全导致切词"的问题。
+# 默认开启（本节整个不写也是开启）；置 enabled: false 关闭，关闭时字幕行完全由规则折行决定。
+# 开启后每条切片文案一次调用（并发受 concurrency 限制），单条失败只回退该条的规则折行。
+# 未配置 llm.api_key 时自动跳过（走规则折行），不会每条都发一次注定失败的请求。
+# 提示词为代码常量（service.CaptionSegmentPrompt），改提示词需发版；输出仍受内容一致性校验 + 行宽 + 不切词硬约束。
+# 行宽不可配：两条路径（LLM 断句与规则折行）必须同一上限，取 asr.MaxCaptionRunes（12）。
+# 环境变量：APP_CAPTION_SEGMENT_ENABLED / _TIMEOUT_MS / _CONCURRENCY / _CACHE_SIZE
+caption_segment:
+  enabled: true        # 全局开关：false 时关闭 LLM 断句（缺省即 true）
+  timeout_ms: 15000    # 单条文案调用总预算（含重试）
+  concurrency: 4       # 同时打向 LLM 的断句请求上限
+  cache_size: 512      # 断句结果进程内缓存条数（重跑复用同一断句）
 
 # 剪映草稿服务（capcut-mate）；可用 APP_CAPCUT_MATE_BASE_URL 或 CAPCUT_MATE_URL 覆盖
 # 视频生成密钥可用 APP_CAPCUT_MATE_API_KEY 或 CAPCUT_MATE_API_KEY 覆盖
@@ -78,12 +95,18 @@ capcut_mate:
 
 # WEB 本地暂存根目录：切片落盘到 root_dir/staging/{task_id}；对外 URL 由对象存储上传提供
 # 可用 APP_WEB_ROOT_DIR 或 WEB_ROOT_DIR 覆盖
-# staging 清理：APP_WEB_STAGING_MAX_DIRS / APP_WEB_SOURCE_CACHE_MAX_DIRS / APP_WEB_STAGING_CLEANUP_INTERVAL_MIN
+# staging 清理：APP_WEB_STAGING_MAX_DIRS / APP_WEB_SOURCE_CACHE_MAX_DIRS / APP_WEB_LIVE_INGEST_MAX_DIRS / APP_WEB_STAGING_CLEANUP_INTERVAL_MIN
 web:
   root_dir: "docker/html"
   staging_max_dirs: 80              # staging 最多保留任务子目录数（按 mtime 保留最新）
   source_cache_max_dirs: 3          # 直播源共享缓存最多保留场数（按最近命中 mtime）
+  live_ingest_max_dirs: 20          # 跟播本地素材 ID 目录最多保留数（进行中永不删）
   staging_cleanup_interval_min: 60  # 全局定时清理间隔（分钟）
+
+# 跟播录像；媒体窗步长可用 APP_INGEST_MEDIA_WINDOW_MIN 覆盖（分钟）
+# 创建素材时写入 media_window_ms，只影响新建素材；已有素材沿用库里的步长
+ingest:
+  media_window_min: 10
 
 # 后台 Worker 调度；可用 APP_WORKER_*_CONCURRENCY / APP_WORKER_*_STALE_TIMEOUT_MIN 覆盖
 worker:

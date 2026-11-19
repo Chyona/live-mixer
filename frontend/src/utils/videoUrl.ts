@@ -103,7 +103,14 @@ export function resolveVideoCrossOrigin(
   return '';
 }
 
-export function getVideoErrorMessage(error: MediaError | null | undefined): string {
+/** 跟播预览解码失败时的说明。master 覆盖播放会触发该错误，不是成片损坏。 */
+export const LIVE_PREVIEW_DECODE_MESSAGE =
+  '直播录制中，预览文件会随新片段更新，当前位置暂时无法播放。这是正常现象，不是文件损坏，稍后重新播放即可，不影响成片。';
+
+export function getVideoErrorMessage(
+  error: MediaError | null | undefined,
+  decodeErrorMessage?: string
+): string {
   if (!error) {
     return '视频加载失败，请检查播放地址是否有效';
   }
@@ -114,7 +121,7 @@ export function getVideoErrorMessage(error: MediaError | null | undefined): stri
     case MediaError.MEDIA_ERR_NETWORK:
       return '视频网络加载失败，请检查网络或播放地址是否过期';
     case MediaError.MEDIA_ERR_DECODE:
-      return '视频解码失败，文件可能已损坏';
+      return decodeErrorMessage?.trim() || '视频解码失败，文件可能已损坏';
     case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
       return '无法播放该视频，播放地址可能已过期或格式不受支持';
     default:

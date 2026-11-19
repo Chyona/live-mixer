@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"live-mixer/internal/pkg/llm"
 )
@@ -11,6 +12,7 @@ func TestLoad_LLMEnvOverride(t *testing.T) {
 	t.Setenv("APP_LLM_BASE_URL", "https://llm.example.com/v1")
 	t.Setenv("APP_LLM_MODEL", "custom-model")
 	t.Setenv("APP_LLM_FLASH_MODEL", "custom-flash")
+	t.Setenv("APP_LLM_TIMEOUT_SEC", "1200")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -27,6 +29,9 @@ func TestLoad_LLMEnvOverride(t *testing.T) {
 	}
 	if cfg.LLM.FlashModel != "custom-flash" {
 		t.Errorf("FlashModel = %q", cfg.LLM.FlashModel)
+	}
+	if got := cfg.LLM.Timeout(); got != 20*time.Minute {
+		t.Errorf("Timeout() = %v, want 20m", got)
 	}
 }
 
@@ -72,5 +77,43 @@ func TestLLMConfig_FlashModelOrDefault(t *testing.T) {
 	}
 	if got := (LLMConfig{}).FlashModelOrDefault(); got != defaultLLMFlashModel {
 		t.Fatalf("got %q, want %q", got, defaultLLMFlashModel)
+	}
+}
+
+// TestLLMConfig_Timeout 验证单次调用超时的回落与换算。
+func TestLLMConfig_Timeout(t *testing.T) {
+	tests := []struct {
+		name string
+		sec  int
+		want time.Duration
+	}{
+		{name: "未配置回落默认", sec: 0, want: DefaultLLMTimeout},
+		{name: "非正值回落默认", sec: -1, want: DefaultLLMTimeout},
+		{name: "显式配置生效", sec: 60, want: time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (LLMConfig{TimeoutSec: tt.sec}).Timeout(); got != tt.want {
+				t.Fatalf("Timeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	// 默认值必须能容纳线上最慢的一次生成（AI 切片实测 6.5~8.8 分钟）。
+	if DefaultLLMTimeout < 15*time.Minute {
+		t.Fatalf("DefaultLLMTimeout = %v, 小于实测最慢生成的 2 倍，AI 切片会被客户端超时掐死", DefaultLLMTimeout)
+	}
+}
+
+// TestLLMConfig_ClientConfigsCarryTimeout 验证两个客户端配置都把超时透传到 llm.Config。
+func TestLLMConfig_ClientConfigsCarryTimeout(t *testing.T) {
+	cfg := LLMConfig{APIKey: "k", Model: "m", FlashModel: "f", TimeoutSec: 900}
+	if got := cfg.LLMClientConfig().Timeout; got != 900*time.Second {
+		t.Errorf("LLMClientConfig().Timeout = %v, want 900s", got)
+	}
+	if got := cfg.LLMClientConfigForASR().Timeout; got != 900*time.Second {
+		t.Errorf("LLMClientConfigForASR().Timeout = %v, want 900s", got)
+	}
+	if got := (LLMConfig{}).LLMClientConfig().Timeout; got != DefaultLLMTimeout {
+		t.Errorf("未配置时 LLMClientConfig().Timeout = %v, want %v", got, DefaultLLMTimeout)
 	}
 }

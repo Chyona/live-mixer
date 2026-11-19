@@ -14,6 +14,9 @@ const ASRStagingSubDir = "asr"
 // SourceCacheSubDir staging 下直播源共享缓存目录名；CleanupStaging 会跳过它。
 const SourceCacheSubDir = "source_cache"
 
+// LiveIngestSubDir staging 下跟播本地工作目录名；CleanupStaging 会跳过它（由独立配额清理）。
+const LiveIngestSubDir = "live_ingest"
+
 // Config 本地暂存根目录配置。
 type Config struct {
 	// RootDir 本地暂存根目录，例如 D:\code\GitHub\live-mixer\docker\html

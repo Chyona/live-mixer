@@ -111,9 +111,19 @@ var liveMaterialIngestColumns = []struct {
 	{name: "stream_started_at", pg: "TIMESTAMPTZ"},
 	{name: "asr_cursor_ms", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "ingest_epoch", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "asr_epoch", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "next_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "last_heartbeat_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_heartbeat_at", pg: "TIMESTAMPTZ"},
+	{name: "last_progress_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_due", pg: "BOOLEAN NOT NULL DEFAULT FALSE"},
+	{name: "asr_next_attempt_at", pg: "TIMESTAMPTZ"},
+	{name: "asr_deferred_since", pg: "TIMESTAMPTZ"},
+	{name: "ingest_resume_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 	{name: "ingest_error_msg", pg: "TEXT"},
+	{name: "media_window_ms", pg: "BIGINT NOT NULL DEFAULT 0"},
+	{name: "media_windows", pg: "JSONB NOT NULL DEFAULT '[]'"},
+	{name: "next_window_seg", pg: "BIGINT NOT NULL DEFAULT 0"},
 }
 
 // ensureLiveMaterialIngestSchema 补齐跟播列，并把 live_url/m3u8_url 改为部分唯一（失败记录可重试）。
@@ -143,6 +153,9 @@ func ensureLiveMaterialIngestSchema(db *gorm.DB, logger *zap.Logger) error {
 		_ = db.Exec(`ALTER TABLE live_material DROP CONSTRAINT IF EXISTS chk_live_material_source_mode`).Error
 		if err := db.Exec(`ALTER TABLE live_material ADD CONSTRAINT chk_live_material_source_mode CHECK (source_mode IN ('upcoming', 'live', 'replay'))`).Error; err != nil {
 			logger.Warn("更新 source_mode 约束失败（可能已是新约束）", zap.Error(err))
+		}
+		if err := db.Exec(`UPDATE live_material SET source_mode = 'live' WHERE source_mode = 'upcoming'`).Error; err != nil {
+			return fmt.Errorf("回填 source_mode upcoming→live 失败: %w", err)
 		}
 		if err := db.Exec(`DROP INDEX IF EXISTS idx_live_material_live_url`).Error; err != nil {
 			return fmt.Errorf("删除旧 live_url 唯一索引失败: %w", err)

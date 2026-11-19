@@ -86,6 +86,23 @@ func TestBuildCaptionsFromASR_ClampsPartialOverlap(t *testing.T) {
 	}
 }
 
+func TestBuildCaptionsFromASR_ScalesWhenDraftDurationDiffers(t *testing.T) {
+	// 源选区 1000ms，草稿轨仅 900ms：相对位置应按 0.9 缩放。
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 900_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":0,"end_time":1000,"text":"整段","words":[]}
+	]}}`
+	got := BuildCaptionsFromASR(liveASR, placements)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Start != 0 || got[0].End != 900_000 {
+		t.Fatalf("scaled caption = %#v, want 0-900000", got[0])
+	}
+}
+
 func TestBuildCaptionsFromASR_SplitsLongCaption(t *testing.T) {
 	placements := []session.ClipPlacement{
 		{SourceStartMS: 0, SourceEndMS: 20000, DraftStartUS: 0, DraftEndUS: 20_000_000},
@@ -220,5 +237,294 @@ func TestCaptionsStep_Run_APIError(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "添加字幕失败") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// 人工二次编辑（局部删除）后，字幕必须以切片文案为准，不能再回灌已被剪掉的文字。
+func TestBuildCaptionsForPlacements_PrefersEditedClipText(t *testing.T) {
+	// 源句在 [10000,13000]，人工删掉中间的「有没有」，切片被拆成两段：
+	// [10000,10400]="大家"、[11000,13000]="注意到这个细节"。
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 10000, SourceEndMS: 10400, DraftStartUS: 0, DraftEndUS: 400_000},
+		{SourceStartMS: 11000, SourceEndMS: 13000, DraftStartUS: 400_000, DraftEndUS: 2_400_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{
+			Text: "大家", StartTime: 10000, EndTime: 10400,
+			Words: []model.ClipWord{{Text: "大家", StartTime: 10000, EndTime: 10400}},
+		},
+		{
+			Text: "注意到这个细节", StartTime: 11000, EndTime: 13000,
+			Words: []model.ClipWord{
+				{Text: "注意", StartTime: 11000, EndTime: 11500},
+				{Text: "到", StartTime: 11500, EndTime: 11700},
+				{Text: "这个", StartTime: 11700, EndTime: 12200},
+				{Text: "细节", StartTime: 12200, EndTime: 13000},
+			},
+		},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":10000,"end_time":13000,"text":"大家有没有注意到这个细节","words":[]}
+	]}}`
+
+	// 兜底路径（无切片文案）会把这句原样挂到两段上 —— 即问题现象，先确认夹具能复现。
+	fromASR := BuildCaptionsFromASR(liveASR, placements)
+	if !captionsContain(fromASR, "有没有") {
+		t.Fatalf("夹具未复现旧问题：%#v", fromASR)
+	}
+
+	got := BuildCaptionsForPlacements(liveASR, placements, clipTexts)
+	if captionsContain(got, "有没有") {
+		t.Errorf("字幕回灌了已删除的文字：%#v", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Text != "大家" || got[0].Start != 0 || got[0].End != 400_000 {
+		t.Errorf("caption[0] = %#v", got[0])
+	}
+	// 第二段按词级时间映射：源 11000/13000 → 草稿 400000/2400000
+	if got[1].Text != "注意到这个细节" || got[1].Start != 400_000 || got[1].End != 2_400_000 {
+		t.Errorf("caption[1] = %#v", got[1])
+	}
+}
+
+// 片段文案没有词级时间时，字幕按比例分配在片段区间内（不越界、不回灌）。
+func TestBuildCaptionsForPlacements_TextWithoutWordsProportional(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{Text: "好，我里面给你们去搭个这个嗯蕾丝美学的米色", StartTime: 0, EndTime: 1000},
+	}
+	got := BuildCaptionsForPlacements("{}", placements, clipTexts)
+	if len(got) < 2 {
+		t.Fatalf("len = %d, want >= 2: %#v", len(got), got)
+	}
+	for i, c := range got {
+		if c.Start < 0 || c.End > 1_000_000 || c.End <= c.Start {
+			t.Errorf("caption[%d] 越界或时长非法: %#v", i, c)
+		}
+	}
+	// 每行仍受 12 字上限约束
+	for _, c := range got {
+		if n := len([]rune(c.Text)); n > 12 {
+			t.Errorf("caption 超长: %q", c.Text)
+		}
+	}
+}
+
+// 文案与切片不齐（数量不一致）时整场回退 ASR，避免错行。
+func TestBuildCaptionsForPlacements_FallsBackWhenNotAligned(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":0,"end_time":800,"text":"原句","words":[]}
+	]}}`
+	got := BuildCaptionsForPlacements(liveASR, placements, []model.ClipWithText{
+		{Text: "甲", StartTime: 0, EndTime: 100},
+		{Text: "乙", StartTime: 200, EndTime: 300},
+	})
+	if len(got) != 1 || got[0].Text != "原句" {
+		t.Fatalf("got = %#v, want 回退 ASR 的「原句」", got)
+	}
+}
+
+// 传入 LLM 断行建议时，字幕按建议拆行；该条无建议则仍按规则折行（不动其他切片）。
+func TestBuildCaptionsForPlacements_UsesProvidedLines(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 11000, SourceEndMS: 13000, DraftStartUS: 400_000, DraftEndUS: 2_400_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{
+			Text: "注意到这个细节", StartTime: 11000, EndTime: 13000,
+			Words: []model.ClipWord{
+				{Text: "注意", StartTime: 11000, EndTime: 11500},
+				{Text: "到", StartTime: 11500, EndTime: 11700},
+				{Text: "这个", StartTime: 11700, EndTime: 12200},
+				{Text: "细节", StartTime: 12200, EndTime: 13000},
+			},
+		},
+	}
+
+	// 规则折行：7 字 ≤ 12，整句一行。
+	byRule := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, nil)
+	if len(byRule) != 1 || byRule[0].Text != "注意到这个细节" {
+		t.Fatalf("规则折行 = %#v, want 单行整句", byRule)
+	}
+
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"注意到这个", "细节"}})
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	// 建议的「细节」只有 2 字，是提示词明令避免的孤行：吸附时把切点前移到「注意到|这个细节」，
+	// 两行 3+4 字（切点位移 2 字换掉一个孤行，见 asr.snapCuts 的孤行惩罚）。
+	// 行时间仍取词级时间戳：源 11000/11700/13000 → 草稿 400000/1100000/2400000
+	wantTexts := []string{"注意到", "这个细节"}
+	wantStarts := []int64{400_000, 1_100_000}
+	wantEnds := []int64{1_100_000, 2_400_000}
+	for i := range wantTexts {
+		if got[i].Text != wantTexts[i] || got[i].Start != wantStarts[i] || got[i].End != wantEnds[i] {
+			t.Errorf("caption[%d] = %#v, want %q [%d,%d]",
+				i, got[i], wantTexts[i], wantStarts[i], wantEnds[i])
+		}
+	}
+}
+
+// 断行建议条数与切片文案不一致时整体忽略，避免错位。
+func TestBuildCaptionsForPlacements_IgnoresMismatchedLines(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+		{SourceStartMS: 2000, SourceEndMS: 3000, DraftStartUS: 1_000_000, DraftEndUS: 2_000_000},
+	}
+	clipTexts := []model.ClipWithText{
+		{Text: "第一段话", StartTime: 0, EndTime: 1000},
+		{Text: "第二段话", StartTime: 2000, EndTime: 3000},
+	}
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"第一段话"}})
+	if len(got) != 2 || got[0].Text != "第一段话" || got[1].Text != "第二段话" {
+		t.Fatalf("条数不一致时应整体忽略断行建议，got %#v", got)
+	}
+}
+
+// 断行建议若不是原文的无损切分（上游实现有 bug 或伪造），字幕必须回退规则折行，不把改写文本写进成片。
+func TestBuildCaptionsForPlacements_RejectsLinesThatRewriteText(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 11000, SourceEndMS: 13000, DraftStartUS: 0, DraftEndUS: 2_000_000},
+	}
+	clipTexts := []model.ClipWithText{{Text: "注意到这个细节", StartTime: 11000, EndTime: 13000}}
+
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"注意到", "这个细节真好"}})
+	if len(got) != 1 || got[0].Text != "注意到这个细节" {
+		t.Fatalf("非无损切分应回退规则折行，got %#v", got)
+	}
+	if captionsContain(got, "真好") {
+		t.Errorf("改写的文字进入了字幕：%#v", got)
+	}
+}
+
+// 断行建议切在词内部时，成片链路同样吸附到最近的合法词边界，而不是整条回退规则折行
+// （断句器已吸附过一次，这里是边界防线；内容一致性仍由 SnapCaptionLines 硬性保证）。
+func TestBuildCaptionsForPlacements_SnapsCutInsideToken(t *testing.T) {
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 2000, DraftStartUS: 0, DraftEndUS: 2_000_000},
+	}
+	clipTexts := []model.ClipWithText{{Text: "中产阶级的消费观念正在发生改变", StartTime: 0, EndTime: 2000}}
+
+	got := BuildCaptionsForPlacementsWithLines("", placements, clipTexts, [][]string{{"中产阶", "级的消费观念正在发生改变"}})
+	wantTexts := []string{"中产阶级", "的消费观念正在发生改变"}
+	if len(got) != len(wantTexts) {
+		t.Fatalf("len = %d, want %d: %#v", len(got), len(wantTexts), got)
+	}
+	for i := range wantTexts {
+		if got[i].Text != wantTexts[i] {
+			t.Errorf("caption[%d].Text = %q, want %q", i, got[i].Text, wantTexts[i])
+		}
+	}
+}
+
+func TestCaptionLinesSourceLabel(t *testing.T) {
+	clipTexts := []model.ClipWithText{{Text: "甲"}, {Text: "乙"}}
+	if got := captionLinesSourceLabel(clipTexts, nil); got != "rule" {
+		t.Errorf("无断行建议 = %q, want rule", got)
+	}
+	if got := captionLinesSourceLabel(clipTexts, [][]string{{"甲"}, {"乙"}}); got != "llm" {
+		t.Errorf("全部有断行建议 = %q, want llm", got)
+	}
+	if got := captionLinesSourceLabel(clipTexts, [][]string{nil, {"乙"}}); got != "mixed" {
+		t.Errorf("部分有断行建议 = %q, want mixed", got)
+	}
+	// 文案为空的切片不计入分母。
+	if got := captionLinesSourceLabel([]model.ClipWithText{{Text: " "}, {Text: "乙"}}, [][]string{nil, {"乙"}}); got != "llm" {
+		t.Errorf("空文案切片应被跳过 = %q, want llm", got)
+	}
+}
+
+func TestCaptionSourceLabel(t *testing.T) {
+	placements := []session.ClipPlacement{{SourceStartMS: 0, SourceEndMS: 1}, {SourceStartMS: 2, SourceEndMS: 3}}
+	asrOnly := BuildCaptionsFromASR("", placements)
+	if asrOnly != nil {
+		t.Errorf("空 ASR 应返回 nil，got %#v", asrOnly)
+	}
+	if got := captionSourceLabel(nil, placements); got != "asr" {
+		t.Errorf("nil clipTexts = %q, want asr", got)
+	}
+	if got := captionSourceLabel([]model.ClipWithText{{Text: "甲"}, {Text: "乙"}}, placements); got != "clips1" {
+		t.Errorf("all text = %q, want clips1", got)
+	}
+	if got := captionSourceLabel([]model.ClipWithText{{Text: "甲"}, {Text: " "}}, placements); got != "mixed" {
+		t.Errorf("partial text = %q, want mixed", got)
+	}
+	if got := captionSourceLabel([]model.ClipWithText{{Text: "甲"}}, placements); got != "asr" {
+		t.Errorf("count mismatch = %q, want asr", got)
+	}
+}
+
+func captionsContain(items []capcutmate.CaptionItem, sub string) bool {
+	for _, c := range items {
+		if strings.Contains(c.Text, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// BuildCaptionTexts 必须与草稿字幕逐条一致（文本与顺序），只是去掉时间轴。
+func TestBuildCaptionTexts_MatchesDraftCaptions(t *testing.T) {
+	clips := []model.ClipRange{{StartTime: 0, EndTime: 1000}, {StartTime: 2000, EndTime: 3500}}
+	clipTexts := []model.ClipWithText{
+		{Text: "第一段话", StartTime: 0, EndTime: 1000},
+		{Text: "第二段话", StartTime: 2000, EndTime: 3500},
+	}
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 0, SourceEndMS: 1000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+		{SourceStartMS: 2000, SourceEndMS: 3500, DraftStartUS: 1_000_000, DraftEndUS: 2_500_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":100,"end_time":800,"text":"ASR不应回灌","words":[]}
+	]}}`
+
+	items := BuildCaptionsForPlacementsWithLines(liveASR, placements, clipTexts, nil)
+	want := make([]string, 0, len(items))
+	for _, item := range items {
+		want = append(want, item.Text)
+	}
+
+	got := BuildCaptionTexts(liveASR, clips, clipTexts, nil)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("texts = %#v, want %#v", got, want)
+	}
+}
+
+// 无 clipTexts 时与草稿一致地回退 ASR 分句。
+func TestBuildCaptionTexts_FallsBackToASR(t *testing.T) {
+	clips := []model.ClipRange{{StartTime: 1000, EndTime: 2000}}
+	placements := []session.ClipPlacement{
+		{SourceStartMS: 1000, SourceEndMS: 2000, DraftStartUS: 0, DraftEndUS: 1_000_000},
+	}
+	liveASR := `{"result":{"utterances":[
+		{"additions":{},"start_time":500,"end_time":1500,"text":"跨边界","words":[]}
+	]}}`
+
+	items := BuildCaptionsForPlacementsWithLines(liveASR, placements, nil, nil)
+	want := make([]string, 0, len(items))
+	for _, item := range items {
+		want = append(want, item.Text)
+	}
+
+	got := BuildCaptionTexts(liveASR, clips, nil, nil)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("texts = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildCaptionTexts_Empty(t *testing.T) {
+	if got := BuildCaptionTexts("", nil, nil, nil); got != nil {
+		t.Errorf("no clips = %#v, want nil", got)
+	}
+	clips := []model.ClipRange{{StartTime: 0, EndTime: 1000}}
+	if got := BuildCaptionTexts("", clips, nil, nil); got != nil {
+		t.Errorf("no asr/texts = %#v, want nil", got)
 	}
 }

@@ -4,16 +4,44 @@ import "testing"
 
 func TestLiveMaterial_PlayURL(t *testing.T) {
 	m := &LiveMaterial{
-		LiveURL:           "https://cdn.example/final.mp4",
+		LiveURL:           "https://cdn.example/master.mp4",
 		M3U8URL:           "https://src.example/live.m3u8",
 		RecordPlaylistURL: "https://cdn.example/live.m3u8",
 		URLType:           URLTypeM3U8,
 		LiveStatus:        LiveStatusLive,
 	}
-	if got := m.PlayURL(); got != m.RecordPlaylistURL {
-		t.Errorf("live PlayURL = %q, want record playlist", got)
+	if got := m.PlayURL(); got != "" {
+		t.Errorf("live without sealed windows PlayURL = %q, want empty (preallocated live_url ignored)", got)
 	}
+
+	m.MediaWindows = MediaWindowList{{
+		Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true,
+		URL: "https://cdn.example/windows/window_00000.mp4",
+	}}.Marshal()
+	m.Duration = 600000
+	if got := m.PlayURL(); got != "https://cdn.example/master.mp4" {
+		t.Errorf("live with master PlayURL = %q, want live_url master", got)
+	}
+
+	m.LiveURL = ""
+	if got := m.PlayURL(); got != "https://cdn.example/windows/window_00000.mp4" {
+		t.Errorf("single window fallback PlayURL = %q", got)
+	}
+
+	m.LiveURL = "https://cdn.example/master.mp4"
+	m.MediaWindows = MediaWindowList{
+		{Index: 0, StartMS: 0, EndMS: 600000, DurMS: 600000, Ready: true, URL: "https://cdn.example/w0.mp4"},
+		{Index: 1, StartMS: 600000, EndMS: 1200000, DurMS: 600000, Ready: true, URL: "https://cdn.example/w1.mp4"},
+	}.Marshal()
+	m.Duration = 1200000
+	if got := m.PlayURL(); got != "https://cdn.example/master.mp4" {
+		t.Errorf("multi-window PlayURL = %q, want concat master", got)
+	}
+
+	m.MediaWindows = "[]"
 	m.URLType = URLTypeFile
+	m.LiveStatus = LiveStatusEnded
+	m.Duration = 1200000
 	if got := m.PlayURL(); got != m.LiveURL {
 		t.Errorf("ended PlayURL = %q, want live_url", got)
 	}

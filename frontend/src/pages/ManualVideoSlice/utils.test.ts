@@ -7,6 +7,7 @@ import {
   attachSourceParagraphIdToCopySegment,
   buildCopySegmentFromParagraphRange,
   buildCopySegmentsFromAiSegment,
+  findCopySegmentForTranscriptClick,
   buildSelectedCopyHighlightRanges,
   clampCopySegmentPlaybackBounds,
   deleteSelectedRangeFromSegment,
@@ -26,7 +27,10 @@ import {
   resolveTimingForCharRange,
   findInsertIndexByTimelineProximity,
   insertSegmentsByTimelineProximity,
-  reorderSegments,
+  buildClips1Payload,
+  resolveSegmentClipWords,
+  insertSegmentsAfterId,
+  moveSegmentsByIds,
   sanitizeSelectedCopySegments,
   splitCaptionClauses,
   splitTextByHighlightRanges,
@@ -86,17 +90,64 @@ describe('insertSegmentsByTimelineProximity', () => {
   });
 });
 
-describe('reorderSegments', () => {
-  it('moves an earlier segment to the last position', () => {
-    const segments = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => makeCopySegment(id));
-    const next = reorderSegments(segments, 3, segments.length);
-    expect(next.map((item) => item.id)).toEqual(['a', 'b', 'c', 'e', 'f', 'g', 'd']);
+describe('insertSegmentsAfterId', () => {
+  const makeSegments = (ids: string[]) => ids.map((id) => makeCopySegment(id));
+
+  it('inserts one segment right after the anchor', () => {
+    const segments = makeSegments(['a', 'b', 'c']);
+    const next = insertSegmentsAfterId(segments, [makeCopySegment('x')], 'b');
+    expect(next?.map((item) => item.id)).toEqual(['a', 'b', 'x', 'c']);
   });
 
-  it('keeps order when dropping after the last item at the last index', () => {
-    const segments = ['a', 'b', 'c'].map((id) => makeCopySegment(id));
-    const next = reorderSegments(segments, 2, segments.length);
-    expect(next.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+  it('inserts multiple segments after the anchor in order', () => {
+    const segments = makeSegments(['a', 'b']);
+    const next = insertSegmentsAfterId(
+      segments,
+      [makeCopySegment('x'), makeCopySegment('y')],
+      'b'
+    );
+    expect(next?.map((item) => item.id)).toEqual(['a', 'b', 'x', 'y']);
+  });
+
+  it('returns null when the anchor is missing so callers can fall back', () => {
+    const segments = makeSegments(['a', 'b']);
+    expect(insertSegmentsAfterId(segments, [makeCopySegment('x')], 'missing')).toBeNull();
+  });
+});
+
+describe('moveSegmentsByIds', () => {
+  const makeSegments = (ids: string[]) => ids.map((id) => makeCopySegment(id));
+
+  it('moves a contiguous selection down, keeping relative order', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['b', 'c'], 5);
+    expect(next.map((item) => item.id)).toEqual(['a', 'd', 'e', 'b', 'c']);
+  });
+
+  it('moves a contiguous selection up', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['c', 'd'], 1);
+    expect(next.map((item) => item.id)).toEqual(['a', 'c', 'd', 'b', 'e']);
+  });
+
+  it('moves a non-contiguous selection and keeps relative order', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['a', 'd'], 4);
+    expect(next.map((item) => item.id)).toEqual(['b', 'c', 'a', 'd', 'e']);
+  });
+
+  it('accounts for selected items removed before the drop index', () => {
+    const segments = makeSegments(['a', 'b', 'c', 'd', 'e']);
+    const next = moveSegmentsByIds(segments, ['b', 'c'], 4);
+    expect(next.map((item) => item.id)).toEqual(['a', 'd', 'b', 'c', 'e']);
+  });
+
+  it('returns the same reference when order is unchanged', () => {
+    const segments = makeSegments(['a', 'b', 'c']);
+    expect(moveSegmentsByIds(segments, ['b'], 1)).toBe(segments);
+    expect(moveSegmentsByIds(segments, ['a', 'b', 'c'], 0)).toBe(segments);
+    expect(moveSegmentsByIds(segments, [], 2)).toBe(segments);
+    expect(moveSegmentsByIds(segments, ['missing'], 0)).toBe(segments);
   });
 });
 
@@ -1635,5 +1686,129 @@ describe('deleteSelectedRangeFromSegment', () => {
     expect(segments).toHaveLength(1);
     expect(segments[0]!.text).toBe('手机的销量跌了10%');
     expect(segments[0]!.start).toBeCloseTo(3503.5, 1);
+  });
+});
+
+describe('findCopySegmentForTranscriptClick', () => {
+  const paragraph: TranscriptParagraph = {
+    id: 'p1',
+    speaker: '1',
+    speakerName: '说话人1',
+    segments: [
+      { id: 's1', start: 10, end: 20, text: '前半' },
+      { id: 's2', start: 20, end: 30, text: '后半' },
+    ],
+  };
+
+  it('picks the partial segment that contains the click time', () => {
+    const earlier = { ...makeCopySegment('a', 10, 20), sourceParagraphId: 'p1' };
+    const later = { ...makeCopySegment('b', 20, 30), sourceParagraphId: 'p1' };
+
+    expect(findCopySegmentForTranscriptClick([later, earlier], paragraph, 22)?.id).toBe('b');
+    expect(findCopySegmentForTranscriptClick([later, earlier], paragraph, 12)?.id).toBe('a');
+  });
+
+  it('falls back to time overlap when sourceParagraphId is missing', () => {
+    const overlap = makeCopySegment('hit', 12, 18);
+    const other = makeCopySegment('miss', 40, 50);
+
+    expect(findCopySegmentForTranscriptClick([other, overlap], paragraph, 15)?.id).toBe('hit');
+  });
+
+  it('returns null when nothing matches', () => {
+    const otherParagraph: TranscriptParagraph = {
+      id: 'p2',
+      speaker: '2',
+      speakerName: '说话人2',
+      segments: [{ id: 's3', start: 100, end: 110, text: '别处' }],
+    };
+
+    expect(
+      findCopySegmentForTranscriptClick(
+        [{ ...makeCopySegment('a', 10, 20), sourceParagraphId: 'p1' }],
+        otherParagraph,
+        105
+      )
+    ).toBeNull();
+  });
+
+  it('uses the nearest start when the click time falls in a gap', () => {
+    const earlier = { ...makeCopySegment('a', 10, 14), sourceParagraphId: 'p1' };
+    const later = { ...makeCopySegment('b', 24, 30), sourceParagraphId: 'p1' };
+
+    expect(findCopySegmentForTranscriptClick([earlier, later], paragraph, 20)?.id).toBe('b');
+  });
+});
+
+describe('resolveSegmentClipWords / buildClips1Payload', () => {
+  // 原句「大家有没有注意到这个细节」，人工删掉「有没有」后拆成两段：
+  // [10.0,10.4]="大家"、[11.0,13.0]="注意到这个细节"
+  const paragraph: TranscriptParagraph = {
+    id: 'p-del',
+    speaker: '1',
+    speakerName: '说话人1',
+    segments: [
+      {
+        id: 's-del',
+        start: 10,
+        end: 13,
+        text: '大家有没有注意到这个细节',
+        words: [
+          { start: 10, end: 10.4, text: '大家' },
+          { start: 10.4, end: 11, text: '有没有' },
+          { start: 11, end: 11.5, text: '注意' },
+          { start: 11.5, end: 11.7, text: '到' },
+          { start: 11.7, end: 12.2, text: '这个' },
+          { start: 12.2, end: 13, text: '细节' },
+        ],
+      },
+    ],
+  };
+
+  const keptPiece: SelectedCopySegment = {
+    id: 'seg-b',
+    speaker: '1',
+    speakerName: '说话人1',
+    text: '注意到这个细节',
+    start: 11,
+    end: 13,
+    originStart: 11,
+    originEnd: 13,
+  };
+
+  it('局部删除后只提交保留文字的词级时间', () => {
+    const words = resolveSegmentClipWords(keptPiece, [paragraph]);
+    expect(words.map((word) => word.text)).toEqual(['注意', '到', '这个', '细节']);
+  });
+
+  it('无法在原文案定位时用片段自带 words，并裁掉区间外的词', () => {
+    // speaker 在原文案里不存在 → 解析不到字级时间，退回片段自带 words
+    const orphan: SelectedCopySegment = {
+      ...keptPiece,
+      id: 'seg-orphan',
+      speaker: '2',
+      text: '不存在的文案',
+      words: [
+        { start: 10.4, end: 11, text: '有没有' },
+        { start: 11.2, end: 11.9, text: '注意' },
+        { start: 14, end: 14.5, text: '区间外' },
+      ],
+    };
+    const words = resolveSegmentClipWords(orphan, [paragraph]);
+    expect(words.map((word) => word.text)).toEqual(['注意']);
+  });
+
+  it('clips1 负载带毫秒级 words 与文案', () => {
+    const clips = buildClips1Payload([keptPiece], [paragraph]);
+    expect(clips).toHaveLength(1);
+    expect(clips[0]!.start_time).toBe(11000);
+    expect(clips[0]!.end_time).toBe(13000);
+    expect(clips[0]!.text).toBe('注意到这个细节');
+    expect(clips[0]!.words).toEqual([
+      { text: '注意', start_time: 11000, end_time: 11500 },
+      { text: '到', start_time: 11500, end_time: 11700 },
+      { text: '这个', start_time: 11700, end_time: 12200 },
+      { text: '细节', start_time: 12200, end_time: 13000 },
+    ]);
   });
 });

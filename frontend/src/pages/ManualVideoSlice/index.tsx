@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Button, Space, Tooltip } from 'antd';
+import { Button, Space } from 'antd';
 import { LuDownload } from 'react-icons/lu';
 import SliceVideoPlayer from '~/components/SliceVideoPlayer';
 import type { StreamVideoPlayerHandle } from '~/components/StreamVideoPlayer';
@@ -14,15 +14,16 @@ import {
 } from '~/components/SliceProjectTaskStatus';
 import { AppError } from '~/services/http';
 import {
-  downloadSourceVideoAsrSubtitle,
   fetchSourceVideoDetail,
   hlsStartPositionForSourceVideo,
   isLiveIngesting,
   sourceVideoPlayUrl,
   type SourceVideo,
 } from '~/services/sourceVideo';
-import { shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
+import { getAsrSelectableEndSec, shouldPollLiveAsrProgress } from '../SourceVideos/asrUtils';
+import { sanitizeDownloadFilename } from '~/services/blobDownload';
 import {
+  downloadSliceProjectSubtitle,
   fetchSliceProjectDetail,
   saveSliceProject,
   toSliceProjectClips,
@@ -31,8 +32,9 @@ import {
 import { submitDraft } from '~/services/slice';
 import { formatToDateTime } from '~/utils/date';
 import { showAppError, toast } from '~/utils/toast';
-import { isPlayableVideoUrl, mediaResourceKey } from '~/utils/videoUrl';
+import { isPlayableVideoUrl, LIVE_PREVIEW_DECODE_MESSAGE, mediaResourceKey } from '~/utils/videoUrl';
 import { resolveSliceTimelineDurationSec } from '~/utils/duration';
+import { seekHtmlVideo } from '~/utils/seekMedia';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import type { SliceEditorEntryFrom } from '~/routes/links';
@@ -42,20 +44,29 @@ import {
   buildTasksListLink,
   parseProjectId,
 } from '~/routes/links';
-import { mergeDebugAsrKeySearchParams } from '~/utils/asrParagraphsKey';
+import { mergeDebugAsrKeySearchParams, isDebugModeEnabled } from '~/utils/asrParagraphsKey';
 import { buildSliceBreadcrumbItems, resolveSlicePageTitle } from '~/utils/sliceBreadcrumbs';
 import { serializeManualSliceProjectState } from '~/utils/sliceProjectDirty';
+import AlignDiagDebugPanel from './components/AlignDiagDebugPanel';
 import TranscriptPanel from './components/TranscriptPanel';
 import VideoTranscriptResizeHandle from './components/VideoTranscriptResizeHandle';
-import SelectedCopyPanel from './components/SelectedCopyPanel';
+import SelectedCopyPanel, { type SelectedCopyPanelHandle } from './components/SelectedCopyPanel';
 import SegmentPreviewModal from './components/SegmentPreviewModal';
 import SaveDraftModal from './components/SaveDraftModal';
-import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from './types';
+import type {
+  AiSegment,
+  CopyInsertMode,
+  SelectedCopySegment,
+  TranscriptParagraph,
+} from './types';
 import {
+  buildClips1Payload,
   deleteSelectedRangeFromSegment,
+  insertSegmentsAfterId,
   resolveCopySegmentWords,
   adjustSegmentEdge,
   findActiveSegment,
+  findCopySegmentForTranscriptClick,
   buildTranscriptHighlight,
   buildSelectedCopyHighlightRanges,
   getParagraphText,
@@ -64,7 +75,6 @@ import {
   asrSummariesToAiSegments,
   buildCopySegmentsFromAiSegment,
   normalizeTranscriptParagraphs,
-  sanitizeDownloadFilename,
   sanitizeSelectedCopySegments,
   clampCopySegmentPlaybackBounds,
   insertSegmentsByTimelineProximity,
@@ -86,6 +96,27 @@ function buildManualProjectAutoName() {
 const MANUAL_SLICE_SAVE_NOTIFY_DESC =
   '您可以继续调整内容，或直接提交成片。提交后将创建任务并跳转至任务列表。';
 
+const INSERT_MODE_STORAGE_KEY = 'manual-slice-insert-mode';
+
+function readInsertMode(): CopyInsertMode {
+  try {
+    return localStorage.getItem(INSERT_MODE_STORAGE_KEY) === 'after-selected'
+      ? 'after-selected'
+      : 'timeline';
+  } catch {
+    return 'timeline';
+  }
+}
+
+/** 加入文案预览时用于提示的短摘要 */
+function buildCopySegmentExcerpt(text: string, maxLength = 18) {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}…`
+    : normalized;
+}
+
 const ManualVideoSlicePage = () => {
   const { id: sourceVideoId = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -93,6 +124,7 @@ const ManualVideoSlicePage = () => {
   const location = useLocation();
   const entryFrom = useSliceEntryFrom();
   const playerRef = useRef<StreamVideoPlayerHandle>(null);
+  const copyPanelRef = useRef<SelectedCopyPanelHandle>(null);
   const panelLeftRef = useRef<HTMLDivElement>(null);
   const videoBlockRef = useRef<HTMLDivElement>(null);
   const lastCurrentTimeRef = useRef(0);
@@ -125,6 +157,8 @@ const ManualVideoSlicePage = () => {
   const [savingProject, setSavingProject] = useState(false);
   const [downloadingSubtitle, setDownloadingSubtitle] = useState(false);
   const [enableCaptions, setEnableCaptions] = useState(false);
+  /** 左侧文案加入右侧的插入方式：默认按时间，可选择跟随右侧选中片段 */
+  const [insertMode, setInsertMode] = useState<CopyInsertMode>(readInsertMode);
   const [draftName, setDraftName] = useState(() => localStorage.getItem(DRAFT_STORAGE_KEY) ?? '');
   const [projectRemark, setProjectRemark] = useState('');
   const [projectTitle, setProjectTitle] = useState('');
@@ -136,6 +170,14 @@ const ManualVideoSlicePage = () => {
   useEffect(() => {
     setProjectId(projectIdFromQuery);
   }, [projectIdFromQuery]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(INSERT_MODE_STORAGE_KEY, insertMode);
+    } catch {
+      // 忽略隐私模式/配额异常
+    }
+  }, [insertMode]);
 
   useAppSEO({
     title: resolveSlicePageTitle({
@@ -210,8 +252,23 @@ const ManualVideoSlicePage = () => {
     [paragraphs, currentTime]
   );
 
+  const asrPending = useMemo(() => {
+    const asrEndSec = getAsrSelectableEndSec(video);
+    return asrEndSec != null && videoDuration - asrEndSec > 1;
+  }, [video, videoDuration]);
+
   const activeParagraphId = activeSync?.paragraphId ?? null;
   const activeTranscriptSegmentId = activeSync?.segmentId ?? null;
+
+  const alignDiagActiveAsr = useMemo(() => {
+    if (!activeParagraphId || !activeTranscriptSegmentId) return null;
+    const paragraph = paragraphs.find((item) => item.id === activeParagraphId);
+    const segment = paragraph?.segments.find((item) => item.id === activeTranscriptSegmentId);
+    if (!segment) return null;
+    return { start: segment.start, end: segment.end, text: segment.text };
+  }, [paragraphs, activeParagraphId, activeTranscriptSegmentId]);
+
+  const showAlignDiagDebug = isDebugModeEnabled();
 
   const transcriptHighlight = useMemo(
     () =>
@@ -507,25 +564,68 @@ const ManualVideoSlicePage = () => {
 
   const handleSeek = useCallback((time: number) => {
     const videoEl = playerRef.current?.video;
-    if (videoEl) {
-      videoEl.currentTime = time;
-      if (videoEl.paused) {
-        void videoEl.play().catch(() => undefined);
-      }
-    }
-    lastCurrentTimeRef.current = time;
-    setCurrentTime(time);
+    const nextTime = videoEl ? seekHtmlVideo(videoEl, time) : time;
+    lastCurrentTimeRef.current = nextTime;
+    setCurrentTime(nextTime);
   }, []);
+
+  const handleLocateParagraph = useCallback(
+    (paragraph: TranscriptParagraph, timeSec: number) => {
+      const match = findCopySegmentForTranscriptClick(selectedSegments, paragraph, timeSec);
+      if (!match) return;
+      copyPanelRef.current?.scrollToSegment(match.id);
+    },
+    [selectedSegments]
+  );
+
+  /** 按当前插入模式把文案加入右侧：跟随选中时插到锚点后，否则按时间排序 */
+  const insertIncomingSegments = useCallback(
+    (incoming: SelectedCopySegment[]) => {
+      const anchorId =
+        insertMode === 'after-selected'
+          ? copyPanelRef.current?.getInsertAnchorId() ?? null
+          : null;
+      const anchored = anchorId
+        ? insertSegmentsAfterId(selectedSegments, incoming, anchorId)
+        : null;
+      const nextSegments =
+        anchored ?? insertSegmentsByTimelineProximity(selectedSegments, incoming);
+      // 选了「跟随选中」但右侧没有选中片段时，回退按时间插入并提示。
+      const fellBack = insertMode === 'after-selected' && anchored === null;
+
+      setSelectedSegments(nextSegments);
+      const lastSegment = incoming[incoming.length - 1] ?? null;
+      setActiveSegmentId(lastSegment?.id ?? null);
+      if (lastSegment) {
+        // 右侧滚动到新片段并短暂高亮，明确「加的是哪条、位置在哪」
+        copyPanelRef.current?.scrollToSegment(lastSegment.id, { flash: true });
+      }
+      return { nextSegments, fellBack };
+    },
+    [insertMode, selectedSegments]
+  );
+
+  const insertModeLabel = useCallback(
+    (fellBack: boolean) => {
+      if (fellBack) return '右侧未选中片段，已按时间插入';
+      return insertMode === 'after-selected' ? '选中片段之后' : '按时间排序';
+    },
+    [insertMode]
+  );
 
   const handleSelectSegment = useCallback((segment: SelectedCopySegment | null) => {
     if (!segment) return;
 
     const sanitized = clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration);
-    setSelectedSegments((prev) => insertSegmentsByTimelineProximity(prev, sanitized));
-    setActiveSegmentId(sanitized.id);
-    // 选片只加入预览，不打断当前播放进度
-    toast.notify.success('已添加到文案预览');
-  }, [paragraphs, videoDuration]);
+    const { nextSegments, fellBack } = insertIncomingSegments([sanitized]);
+
+    const position = nextSegments.findIndex((item) => item.id === sanitized.id) + 1;
+    const excerpt = buildCopySegmentExcerpt(sanitized.text);
+    toast.notify.success(
+      `已加入第 ${position} 段`,
+      `共 ${nextSegments.length} 段 · ${insertModeLabel(fellBack)}${excerpt ? ` · 「${excerpt}」` : ''}`
+    );
+  }, [insertIncomingSegments, insertModeLabel, paragraphs, videoDuration]);
 
   const aiSegments = useMemo(
     () => asrSummariesToAiSegments(video?.asr_summaries),
@@ -543,15 +643,26 @@ const ManualVideoSlicePage = () => {
       const sanitized = segments.map((segment) =>
         clampCopySegmentPlaybackBounds(segment, paragraphs, videoDuration)
       );
-      setSelectedSegments((prev) => insertSegmentsByTimelineProximity(prev, sanitized));
-      setActiveSegmentId(sanitized[sanitized.length - 1]?.id ?? null);
+      const { nextSegments, fellBack } = insertIncomingSegments(sanitized);
+
+      const positions = sanitized
+        .map((item) => nextSegments.findIndex((segmentItem) => segmentItem.id === item.id) + 1)
+        .filter((position) => position > 0);
+      const firstPosition = positions[0] ?? 0;
+      const lastPosition = positions[positions.length - 1] ?? firstPosition;
+      const contiguous = positions.length > 1 && lastPosition - firstPosition + 1 === positions.length;
+      const title =
+        sanitized.length === 1
+          ? `已加入第 ${firstPosition} 段`
+          : contiguous
+            ? `已加入第 ${firstPosition}-${lastPosition} 段`
+            : `已加入 ${sanitized.length} 个片段`;
       toast.notify.success(
-        sanitized.length > 1
-          ? `已添加 ${sanitized.length} 个片段到文案预览`
-          : '已添加到文案预览'
+        title,
+        `共 ${nextSegments.length} 段 · ${insertModeLabel(fellBack)}`
       );
     },
-    [paragraphs, videoDuration]
+    [insertIncomingSegments, insertModeLabel, paragraphs, videoDuration]
   );
 
   const handleDeleteSegment = useCallback((segmentId: string) => {
@@ -683,7 +794,7 @@ const ManualVideoSlicePage = () => {
         project_source: 'manual' as const,
         enable_captions: enableCaptions,
         clips0: [] as ReturnType<typeof toSliceProjectClips>,
-        clips1: toSliceProjectClips(selectedSegments),
+        clips1: buildClips1Payload(selectedSegments, paragraphs),
       };
 
       setSavingProject(true);
@@ -732,6 +843,7 @@ const ManualVideoSlicePage = () => {
     [
       draftName,
       enableCaptions,
+      paragraphs,
       projectId,
       projectRemark,
       resetDirtyBaseline,
@@ -852,7 +964,7 @@ const ManualVideoSlicePage = () => {
           description: projectDescription,
           topics: projectTopics,
           clips0: [],
-          clips1: toSliceProjectClips(selectedSegments),
+          clips1: buildClips1Payload(selectedSegments, paragraphs),
         });
 
         if (response.code !== 0) {
@@ -890,6 +1002,7 @@ const ManualVideoSlicePage = () => {
     [
       handleSaveProject,
       enableCaptions,
+      paragraphs,
       projectId,
       projectDescription,
       projectRemark,
@@ -925,16 +1038,29 @@ const ManualVideoSlicePage = () => {
     void handleSaveProject();
   };
 
+  /** 下载与提交成片/剪映草稿完全一致的字幕（由后端复用草稿断行规则生成） */
   const handleDownloadSubtitle = useCallback(async () => {
-    if (!sourceVideoId) {
-      toast.notify.warning('暂无字幕文案');
+    if (!video) return;
+    if (selectedSegments.length === 0) {
+      toast.notify.warning('请先选择至少一个片段');
+      return;
+    }
+    if (!enableCaptions) {
+      toast.notify.warning('请先勾选「生成字幕」再下载');
       return;
     }
 
     setDownloadingSubtitle(true);
     try {
-      const filename = `${sanitizeDownloadFilename(video?.name ?? 'subtitle')}-字幕.json`;
-      await downloadSourceVideoAsrSubtitle(sourceVideoId, filename);
+      const filename = `${sanitizeDownloadFilename(video.name || 'subtitle')}-字幕.txt`;
+      await downloadSliceProjectSubtitle(
+        {
+          live_id: video.id,
+          clips1: buildClips1Payload(selectedSegments, paragraphs),
+          enable_captions: enableCaptions,
+        },
+        filename
+      );
       toast.notify.success('字幕文件已开始下载');
     } catch (error) {
       if (error instanceof AppError) {
@@ -945,7 +1071,7 @@ const ManualVideoSlicePage = () => {
     } finally {
       setDownloadingSubtitle(false);
     }
-  }, [sourceVideoId, video?.name]);
+  }, [enableCaptions, paragraphs, selectedSegments, video]);
 
   const handleSwitchToTimeline = useCallback(() => {
     confirmLeave(() => {
@@ -1042,7 +1168,13 @@ const ManualVideoSlicePage = () => {
       {!canPreview ? (
         <div className="slice-page-empty-shell">
           <SlicePageEmptyState
-            variant={streamUrl ? 'unsupported-format' : 'no-playback-url'}
+            variant={
+              streamUrl
+                ? 'unsupported-format'
+                : video && isLiveIngesting(video.live_status)
+                  ? 'record-preview-pending'
+                  : 'no-playback-url'
+            }
             entryFrom={entryFrom}
           />
         </div>
@@ -1075,9 +1207,24 @@ const ManualVideoSlicePage = () => {
                     onSeek={handleSeek}
                     screenshotBaseName={video?.name ?? 'video-screenshot'}
                     onDurationChange={handleDurationChange}
+                    decodeErrorMessage={
+                      video && isLiveIngesting(video.live_status)
+                        ? LIVE_PREVIEW_DECODE_MESSAGE
+                        : undefined
+                    }
                     hlsStartPosition={hlsStartPositionForSourceVideo(video)}
                   />
                 </div>
+                {showAlignDiagDebug ? (
+                  <AlignDiagDebugPanel
+                    playUrl={streamUrl}
+                    liveUrl={video?.live_url ?? ''}
+                    mediaDurationSec={videoDuration}
+                    currentTime={currentTime}
+                    activeAsr={alignDiagActiveAsr}
+                    alignDiag={video?.align_diag}
+                  />
+                ) : null}
               </div>
 
               <VideoTranscriptResizeHandle
@@ -1111,17 +1258,23 @@ const ManualVideoSlicePage = () => {
                 matchParagraphIds={matchParagraphIds}
                 onSeek={handleSeek}
                 onSelectSegment={handleSelectSegment}
+                onLocateParagraph={handleLocateParagraph}
+                insertMode={insertMode}
+                onInsertModeChange={setInsertMode}
                 readOnly={projectTaskReadOnly}
+                asrPending={asrPending}
               />
             </div>
           </div>
 
           <SelectedCopyPanel
+            ref={copyPanelRef}
             segments={selectedSegments}
             paragraphs={paragraphs}
             aiSegments={aiSegments}
             currentTime={currentTime}
             activeSegmentId={activeSegmentId}
+            insertMode={insertMode}
             speakers={speakers}
             maxTotalDuration={MAX_TOTAL_DURATION}
             videoDuration={videoDuration}

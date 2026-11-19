@@ -692,7 +692,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；仅 asr_status=completed 且 asr_paragraphs 非空时可下载",
+                "description": "返回 TXT：关键词取自 asr_summaries.title；文字记录分段与 asr_paragraphs 完全一致（说话人 / start_time / text），显示为「说话人${speaker}」；asr_paragraphs 非空即可下载，不要求 ASR 完成",
                 "produces": [
                     "text/plain"
                 ],

@@ -5,6 +5,8 @@ bin
 .env
 docker/.env
 docker/html
+docker/temp
 logs/
+temp/
 **/*_test.go
 internal/config/config.yaml

@@ -73,11 +73,8 @@ var ErrASRAlreadyProcessing = errors.New("ASR 进行中，请勿重复提交")
 // ErrASRRetryOnlyFailed 仅失败状态允许重试 ASR。
 var ErrASRRetryOnlyFailed = errors.New("仅 ASR 失败状态可重试")
 
-// ErrASRSubtitleNotReady ASR 未完成，无法导出字幕。
-var ErrASRSubtitleNotReady = errors.New("ASR 未完成，无法导出字幕")
-
-// ErrASRSubtitleEmpty ASR 字幕内容为空。
-var ErrASRSubtitleEmpty = errors.New("ASR 字幕为空，无法导出")
+// ErrASRSubtitleEmpty 当前没有已识别字幕，无法导出。
+var ErrASRSubtitleEmpty = errors.New("暂无已识别字幕，无法导出")
 
 // LiveMaterialService 直播素材业务接口。
 type LiveMaterialService interface {
@@ -97,32 +94,39 @@ type liveMaterialService struct {
 	ingestWorker     LiveIngestWorker
 	ingestRepo       repository.LiveIngestRepository
 	allocator        LiveRecordURLAllocator
+	mediaWindow      time.Duration
 }
 
 // NewLiveMaterialService 创建直播素材业务服务实例。
 func NewLiveMaterialService(liveMaterialRepo repository.LiveMaterialRepository, asrWorker LiveMaterialASRWorker) LiveMaterialService {
-	return NewLiveMaterialServiceFull(liveMaterialRepo, asrWorker, nil, nil, nil)
+	return NewLiveMaterialServiceFull(liveMaterialRepo, asrWorker, nil, nil, nil, 0)
 }
 
-// NewLiveMaterialServiceFull 注入跟播 Worker 与对象存储预分配。
+// NewLiveMaterialServiceFull 注入跟播 Worker、对象存储预分配与媒体窗步长。
+// mediaWindow ≤0 时使用 model.LiveMediaWindowDuration。
 func NewLiveMaterialServiceFull(
 	liveMaterialRepo repository.LiveMaterialRepository,
 	asrWorker LiveMaterialASRWorker,
 	ingestWorker LiveIngestWorker,
 	ingestRepo repository.LiveIngestRepository,
 	allocator LiveRecordURLAllocator,
+	mediaWindow time.Duration,
 ) LiveMaterialService {
+	if mediaWindow <= 0 {
+		mediaWindow = model.LiveMediaWindowDuration
+	}
 	return &liveMaterialService{
 		liveMaterialRepo: liveMaterialRepo,
 		asrWorker:        asrWorker,
 		ingestWorker:     ingestWorker,
 		ingestRepo:       ingestRepo,
 		allocator:        allocator,
+		mediaWindow:      mediaWindow,
 	}
 }
 
 func (s *liveMaterialService) Create(ctx context.Context, createdBy uint, in CreateLiveMaterialInput) (*model.LiveMaterial, error) {
-	material, err := buildCreateMaterial(createdBy, in, s.allocator)
+	material, err := buildCreateMaterial(createdBy, in, s.allocator, s.mediaWindow)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +291,10 @@ func (s *liveMaterialService) Get(ctx context.Context, id uint) (*model.LiveMate
 }
 
 func (s *liveMaterialService) Delete(ctx context.Context, id uint) error {
+	// 先取消进行中的跟播，释放并发槽与 ffmpeg；未在跑则 no-op。
+	if s.ingestWorker != nil {
+		s.ingestWorker.Cancel(id)
+	}
 	if err := s.liveMaterialRepo.Delete(ctx, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrLiveMaterialNotFound
@@ -368,10 +376,6 @@ func (s *liveMaterialService) DownloadASRSubtitle(ctx context.Context, id uint) 
 			return nil, "", ErrLiveMaterialNotFound
 		}
 		return nil, "", err
-	}
-
-	if material.ASRStatus != model.ASRStatusCompleted {
-		return nil, "", ErrASRSubtitleNotReady
 	}
 
 	if len(material.ASRParagraphs) == 0 {

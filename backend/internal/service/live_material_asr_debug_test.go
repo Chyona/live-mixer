@@ -91,7 +91,6 @@ func TestLiveMaterialASRWorker_Process_WritesStagingDebug(t *testing.T) {
 		"001_prepare.json",
 		"002_asr_raw.json",
 		"003_llm_summaries.json",
-		"004_llm_paragraphs.json",
 		"005_postprocess_result.json",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {

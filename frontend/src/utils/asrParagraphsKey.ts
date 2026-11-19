@@ -75,6 +75,14 @@ export function isAsrParagraphsApiKeyOverridden(): boolean {
   return debugSafe(() => readAsrKeyFromCurrentUrl() != null, false);
 }
 
+/** 当前 URL 是否开启 isdebug（?isdebug=true） */
+export function isDebugModeEnabled(): boolean {
+  return debugSafe(() => {
+    if (typeof window === 'undefined') return false;
+    return isDebugModeFromSearch(window.location.search);
+  }, false);
+}
+
 /** 路由跳转时把 isdebug 合并进目标 query，避免换页丢失 */
 export function mergeDebugAsrKeySearchParams(search: URLSearchParams): URLSearchParams {
   return debugSafe(() => {

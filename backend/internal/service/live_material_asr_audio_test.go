@@ -265,8 +265,9 @@ func TestLiveMaterialASRAudioPreparer_Prepare_RetryWithoutAlignOnSilence(t *test
 				if convertCalls == 1 && align.LeadPadMs == 0 && align.TargetDurSec == 0 {
 					t.Fatalf("first convert should use probed align, got %+v", align)
 				}
-				if convertCalls == 2 && (align.LeadPadMs != 0 || align.TrimStartSec != 0 || align.TargetDurSec != 0) {
-					t.Fatalf("second convert should clear align, got %+v", align)
+				// 重试放弃 lead/trim，但保留 TargetDurSec 以保持输出与片长等长。
+				if convertCalls == 2 && (align.LeadPadMs != 0 || align.TrimStartSec != 0 || align.TargetDurSec == 0) {
+					t.Fatalf("second convert should clear lead/trim and keep TargetDurSec, got %+v", align)
 				}
 				return os.WriteFile(outputPath, []byte("mp3"), 0644)
 			},

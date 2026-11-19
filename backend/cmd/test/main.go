@@ -1,416 +1,268 @@
-// ASR paragraphs 专项测试工具：读取 live_asr JSON（默认 asr_raw.json），
-// 跳过 ASR 识别与 asr_summaries，仅跑 worker 同款 asr_paragraphs 计算；
-// 将 live_material.asr_paragraphs 的完整字段值写入 JSON 文件。
+// ASR / 跟播本地验证工具（backend/cmd/test）。
+//
+// 模式：
+//
+//	paragraphs   — 从 live_asr JSON 用 MinGap 算法生成 asr_paragraphs（无 LLM）
+//	live-window  — 拉取跟播 m3u8 分片，按当前窗口 ASR 逻辑转写并输出 JSON
+//	add-live     — 模拟 UI 添加「直播」源视频，轮询直至 ASR 推进
+//	one-click    — 对源视频发起一键成片（POST /v1/tasks/ai-slice-draft），轮询至完成
+//	live-e2e     — 直播 m3u8 → 跟播满 -duration → 等 ASR 覆盖 → 一键成片（打真实 webserver）
 package main
 
 import (
-	"bufio"
-	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"time"
-
-	"live-mixer/internal/config"
-	"live-mixer/internal/model"
-	"live-mixer/internal/pkg/asr"
-	"live-mixer/internal/pkg/llm"
-	"live-mixer/internal/service"
-
-	"go.uber.org/zap"
 )
 
 func main() {
-	configPath := flag.String("config", "", "外部配置文件路径（可选；否则用内嵌 config + 环境变量）")
-	asrPath := flag.String("asr", "", "live_asr JSON 路径（默认仓库根目录 asr_raw.json）")
-	outPath := flag.String("out", "asr_paragraphs.json", "asr_paragraphs 完整 JSON 输出路径（默认 asr_paragraphs.json）")
-	reportPath := flag.String("report", "", "可选：额外写入含 LLM 提示词的文本报告路径")
-	envFile := flag.String("env", "", "可选 .env 路径（默认尝试 docker/.env），用于注入 APP_LLM_*")
+	mode := flag.String("mode", "", "paragraphs | live-window | add-live | one-click | live-e2e")
+	configPath := flag.String("config", "", "外部配置文件路径（可选；paragraphs/live-window）")
+	envFile := flag.String("env", "", "可选 .env 路径（默认尝试 docker/.env）")
+
+	// paragraphs
+	asrPath := flag.String("asr", "", "live_asr JSON 路径（paragraphs 模式；默认仓库根 asr_raw.json）")
+	outPath := flag.String("out", "", "输出 JSON 路径")
+	reportPath := flag.String("report", "", "paragraphs：可选含 LLM 提示词的文本报告")
+
+	// live-window
+	m3u8URL := flag.String("url", "", "m3u8 地址（live-window=跟播列表；add-live=源站直播地址）")
+	workDir := flag.String("workdir", "", "本地工作目录（默认 ./tmp/live-window-asr）")
+	maxWindows := flag.Int("max-windows", 2, "最多跑几窗 ASR（控制费用；0=追平全部已下载分片）")
+	maxSegs := flag.Int("max-segs", 0, "最多下载分片数（0=按 max-windows 自动估算）")
+	skipASR := flag.Bool("skip-asr", false, "只下载/探测/规划窗口，不调用 ASR（不产生费用）")
+
+	// HTTP 联调（add-live / one-click）
+	baseURL := flag.String("base-url", "", "webserver 根地址（默认 http://127.0.0.1:30000 或 LIVE_MIXER_BASE_URL）")
+	apiPrefix := flag.String("api-prefix", "/openapi/live-mixer", "API 前缀（与 webserver Group 一致）")
+	username := flag.String("user", "", "登录用户（默认 admin 或 LIVE_MIXER_USER）")
+	password := flag.String("password", "", "登录密码（默认 admin 或 LIVE_MIXER_PASSWORD）")
+	token := flag.String("token", "", "已有 JWT；默认从配置 jwt.secret 本地签发")
+	jwtSecret := flag.String("jwt-secret", "", "显式 JWT 密钥（默认自动尝试 config.yaml 与 APP_JWT_SECRET）")
+	userID := flag.Uint("user-id", 1, "本地签发 JWT 的用户 ID（默认 1）")
+	forceLogin := flag.Bool("login", false, "强制密码登录（默认用配置 JWT 签发）")
+	name := flag.String("name", "", "源视频名称（add-live；默认 test-live-时间戳）")
+	sourceMode := flag.String("source-mode", "live", "live|replay（add-live，默认 live；upcoming 兼容为 live）")
+	remark := flag.String("remark", "", "备注（add-live）")
+	pollEvery := flag.Duration("poll", 15*time.Second, "轮询间隔（add-live / one-click）")
+	waitFor := flag.Duration("wait", 0, "最长等待（add-live 默认 15m；one-click 默认 30m；live-e2e 默认 duration+15m）")
+	noWait := flag.Bool("no-wait", false, "只提交不轮询（add-live / one-click）")
+
+	// one-click
+	liveID := flag.Uint("live-id", 0, "源视频 ID（one-click，add-live 返回的 id）")
+	promptID := flag.Uint("prompt-id", 1, "系统提示词 ID（one-click，默认 1）")
+	clipMS := flag.String("clip", "", "选区毫秒 start-end，多个逗号分隔：0-600000")
+	clipSec := flag.String("clip-sec", "", "选区秒 start-end，多个逗号分隔：0-600")
+	autoClip := flag.Bool("auto-clip", true, "未指定 -clip 时按 asr_cursor 自动选区 [0,end]")
+	maxClipMS := flag.Int64("max-clip-ms", 0, "自动选区最大毫秒（one-click 默认 10m；live-e2e 默认跟 -duration）")
+	projectSource := flag.String("project-source", "timeline", "项目来源（one-click，默认 timeline）")
+	canvasW := flag.Int("canvas-width", 0, "画布宽（可选）")
+	canvasH := flag.Int("canvas-height", 0, "画布高（可选）")
+
+	// live-e2e
+	duration := flag.Duration("duration", 10*time.Minute, "live-e2e：目标时长（默认 10m，可传 20m/30m；同时作为录像门槛与一键成片选区上限）")
+	recordFor := flag.Duration("record-for", 0, "live-e2e：仅覆盖录像门槛（默认= -duration）")
+	skipOneClick := flag.Bool("skip-one-click", false, "live-e2e：录制+ASR 后不发起一键成片")
 	flag.Parse()
 
 	repoRoot := findRepoRoot()
 	if err := loadDotEnv(firstNonEmpty(*envFile, filepath.Join(repoRoot, "docker", ".env"))); err != nil {
 		fmt.Fprintf(os.Stderr, "警告: 加载 .env 失败: %v\n", err)
 	}
+	setHTTPAPIPrefix(firstNonEmpty(strings.TrimSpace(*apiPrefix), os.Getenv("LIVE_MIXER_API_PREFIX"), "/openapi/live-mixer"))
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
-		os.Exit(1)
-	}
-	if cfg.LLM.APIKey == "" {
-		fmt.Fprintln(os.Stderr, "LLM API Key 未配置，请设置 APP_LLM_API_KEY 或在配置文件中填写 llm.api_key")
-		os.Exit(1)
-	}
-
-	path := *asrPath
-	if path == "" {
-		path = filepath.Join(repoRoot, "asr_raw.json")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "读取 ASR 文件失败: %s: %v\n", path, err)
-		os.Exit(1)
-	}
-
-	liveASR, durationMs, err := parseASRInput(raw)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "解析 ASR 输入失败: %v\n", err)
-		os.Exit(1)
-	}
-
-	utterances := asr.FormatUtterancesForAPI(liveASR)
-	modelName := cfg.LLM.FlashModelOrDefault()
-	fmt.Fprintf(os.Stderr, "ASR 文件: %s\n", path)
-	fmt.Fprintf(os.Stderr, "时长: %dms  句段数: %d  模型: %s (flash)\n", durationMs, len(utterances), modelName)
-	fmt.Fprintln(os.Stderr, "开始计算 asr_paragraphs（跳过 ASR 识别与 asr_summaries）...")
-
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
-		os.Exit(1)
-	}
-	defer logger.Sync() //nolint:errcheck
-
-	capture := &captureLLM{inner: llm.NewClient(cfg.LLM.LLMClientConfigForASR())}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	started := time.Now()
-	paragraphs, err := service.RunASRParagraphs(ctx, capture, liveASR, durationMs, logger)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "asr_paragraphs 计算失败: %v\n", err)
-		os.Exit(1)
-	}
-	elapsed := time.Since(started).Round(time.Millisecond)
-	fmt.Fprintf(os.Stderr, "完成: paragraphs=%d llm_calls=%d 耗时=%s\n",
-		len(paragraphs), len(capture.Calls()), elapsed)
-
-	if paragraphs == nil {
-		paragraphs = []model.ASRParagraph{}
-	}
-	if issues := checkParagraphTimeline(paragraphs); len(issues) > 0 {
-		fmt.Fprintf(os.Stderr, "时间线校验失败 (%d):\n", len(issues))
-		for _, issue := range issues {
-			fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+	resolved := strings.TrimSpace(*mode)
+	if resolved == "" {
+		if strings.TrimSpace(*m3u8URL) != "" {
+			resolved = "live-window"
+		} else {
+			resolved = "paragraphs"
 		}
-		os.Exit(1)
-	}
-	fmt.Fprintln(os.Stderr, "时间线校验通过（无重叠、start<end、words 无非法时间）")
-
-	jsonBytes, err := marshalASRParagraphsField(paragraphs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "序列化 asr_paragraphs 失败: %v\n", err)
-		os.Exit(1)
 	}
 
-	out := strings.TrimSpace(*outPath)
-	if out == "" {
-		out = "asr_paragraphs.json"
-	}
-	if err := os.WriteFile(out, jsonBytes, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "写入 JSON 失败: %s: %v\n", out, err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stderr, "已写入 live_material.asr_paragraphs 完整值: %s (%d bytes, %d 段)\n",
-		out, len(jsonBytes), len(paragraphs))
+	httpBase := firstNonEmpty(strings.TrimSpace(*baseURL), os.Getenv("LIVE_MIXER_BASE_URL"), "http://127.0.0.1:30000")
 
-	if report := strings.TrimSpace(*reportPath); report != "" {
-		text := formatParagraphReport(path, modelName, durationMs, len(utterances), elapsed, capture.Calls(), paragraphs)
-		if err := os.WriteFile(report, []byte(text), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "写入报告失败: %s: %v\n", report, err)
-			os.Exit(1)
+	switch resolved {
+	case "paragraphs":
+		out := strings.TrimSpace(*outPath)
+		if out == "" {
+			out = "asr_paragraphs.json"
 		}
-		fmt.Fprintf(os.Stderr, "已写入调试报告: %s\n", report)
-	}
-}
-
-// asrParagraphDTO 与 live_material.asr_paragraphs 元素一致；words 始终输出（含空数组）。
-type asrParagraphDTO struct {
-	Speaker   string           `json:"speaker"`
-	Text      string           `json:"text"`
-	StartTime int64            `json:"start_time"`
-	EndTime   int64            `json:"end_time"`
-	Words     []model.ClipWord `json:"words"`
-}
-
-// marshalASRParagraphsField 序列化为入库字段 live_material.asr_paragraphs 的完整 JSON 数组。
-func marshalASRParagraphsField(paragraphs []model.ASRParagraph) ([]byte, error) {
-	out := make([]asrParagraphDTO, 0, len(paragraphs))
-	for _, p := range paragraphs {
-		words := p.Words
-		if words == nil {
-			words = []model.ClipWord{}
-		}
-		out = append(out, asrParagraphDTO{
-			Speaker:   p.Speaker,
-			Text:      p.Text,
-			StartTime: p.StartTime,
-			EndTime:   p.EndTime,
-			Words:     words,
+		runParagraphsMode(paragraphsArgs{
+			ASRPath:    *asrPath,
+			OutPath:    out,
+			ReportPath: *reportPath,
+			RepoRoot:   repoRoot,
 		})
-	}
-	payload, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(payload, '\n'), nil
-}
-
-type llmCall struct {
-	Messages []llm.ChatMessage
-	Response string
-	Err      error
-}
-
-// captureLLM 包装真实 LLM，记录每次 ChatStructured 的完整提示词与响应。
-type captureLLM struct {
-	inner *llm.Client
-	mu    sync.Mutex
-	calls []llmCall
-}
-
-func (c *captureLLM) Chat(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-	return c.ChatStructured(ctx, messages)
-}
-
-func (c *captureLLM) ChatStructured(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-	resp, err := c.inner.ChatThinking(ctx, messages)
-	copied := make([]llm.ChatMessage, len(messages))
-	copy(copied, messages)
-	c.mu.Lock()
-	c.calls = append(c.calls, llmCall{Messages: copied, Response: resp, Err: err})
-	c.mu.Unlock()
-	return resp, err
-}
-
-func (c *captureLLM) ChatThinking(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-	return c.inner.ChatThinking(ctx, messages)
-}
-
-func (c *captureLLM) Calls() []llmCall {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]llmCall, len(c.calls))
-	copy(out, c.calls)
-	return out
-}
-
-func formatParagraphReport(
-	asrPath, modelName string,
-	durationMs int64,
-	utteranceCount int,
-	elapsed time.Duration,
-	calls []llmCall,
-	paragraphs []model.ASRParagraph,
-) string {
-	var b strings.Builder
-	sep := strings.Repeat("=", 72)
-	sub := strings.Repeat("-", 72)
-
-	fmt.Fprintf(&b, "%s\n", sep)
-	b.WriteString("asr_paragraphs 专项测试报告\n")
-	fmt.Fprintf(&b, "%s\n", sep)
-	fmt.Fprintf(&b, "ASR 文件: %s\n", asrPath)
-	fmt.Fprintf(&b, "模型: %s\n", modelName)
-	fmt.Fprintf(&b, "时长(ms): %d\n", durationMs)
-	fmt.Fprintf(&b, "句段数: %d\n", utteranceCount)
-	fmt.Fprintf(&b, "段落数: %d\n", len(paragraphs))
-	fmt.Fprintf(&b, "LLM 调用次数: %d\n", len(calls))
-	fmt.Fprintf(&b, "耗时: %s\n", elapsed)
-	fmt.Fprintf(&b, "生成时间: %s\n", time.Now().Format(time.RFC3339))
-	b.WriteString("校验: 通过（无重叠 / start<end / words 时间合法）\n\n")
-
-	b.WriteString(sep + "\n")
-	b.WriteString("一、LLM 提示词与响应（asr_paragraphs）\n")
-	b.WriteString(sep + "\n\n")
-	if len(calls) == 0 {
-		b.WriteString("（无 LLM 调用记录）\n\n")
-	}
-	for i, call := range calls {
-		fmt.Fprintf(&b, "%s\n", sub)
-		fmt.Fprintf(&b, "【调用 #%d】\n", i+1)
-		fmt.Fprintf(&b, "%s\n", sub)
-		for _, msg := range call.Messages {
-			fmt.Fprintf(&b, "\n----- %s -----\n", strings.ToUpper(msg.Role))
-			b.WriteString(msg.Content)
-			if !strings.HasSuffix(msg.Content, "\n") {
-				b.WriteByte('\n')
-			}
+	case "live-window":
+		out := strings.TrimSpace(*outPath)
+		if out == "" {
+			out = "live_window_asr.json"
 		}
-		b.WriteString("\n----- MODEL RAW RESPONSE -----\n")
-		if call.Err != nil {
-			fmt.Fprintf(&b, "ERROR: %v\n", call.Err)
+		wd := strings.TrimSpace(*workDir)
+		if wd == "" {
+			wd = filepath.Join(repoRoot, "tmp", "live-window-asr")
 		}
-		if call.Response != "" {
-			b.WriteString(call.Response)
-			if !strings.HasSuffix(call.Response, "\n") {
-				b.WriteByte('\n')
-			}
-		} else if call.Err == nil {
-			b.WriteString("（空响应）\n")
+		url := strings.TrimSpace(*m3u8URL)
+		if url == "" {
+			url = defaultLiveWindowTestURL
 		}
-		b.WriteByte('\n')
-	}
-
-	b.WriteString(sep + "\n")
-	b.WriteString("二、asr_paragraphs 摘要（完整值见 JSON 文件）\n")
-	b.WriteString(sep + "\n\n")
-	if len(paragraphs) == 0 {
-		b.WriteString("（空）\n\n")
-	}
-	for i, p := range paragraphs {
-		fmt.Fprintf(&b, "[%d] speaker=%s  start_time=%d  end_time=%d  duration_ms=%d  words=%d\n",
-			i+1, p.Speaker, p.StartTime, p.EndTime, p.EndTime-p.StartTime, len(p.Words))
-		b.WriteString(p.Text)
-		if !strings.HasSuffix(p.Text, "\n") {
-			b.WriteByte('\n')
+		runLiveWindowMode(liveWindowArgs{
+			ConfigPath: *configPath,
+			URL:        url,
+			WorkDir:    wd,
+			OutPath:    out,
+			MaxWindows: *maxWindows,
+			MaxSegs:    *maxSegs,
+			SkipASR:    *skipASR,
+			RepoRoot:   repoRoot,
+		})
+	case "add-live":
+		out := strings.TrimSpace(*outPath)
+		if out == "" {
+			out = "add_live_report.json"
 		}
-		b.WriteByte('\n')
-	}
-
-	return b.String()
-}
-
-// checkParagraphTimeline 复核段落时间线硬约束（与 service 校验一致，供 CLI 二次确认）。
-func checkParagraphTimeline(paragraphs []model.ASRParagraph) []string {
-	var issues []string
-	for i, p := range paragraphs {
-		if p.StartTime >= p.EndTime {
-			issues = append(issues, fmt.Sprintf("[%d] start_time(%d) >= end_time(%d)", i+1, p.StartTime, p.EndTime))
+		wait := *waitFor
+		if wait <= 0 {
+			wait = 15 * time.Minute
 		}
-		for j, w := range p.Words {
-			if w.StartTime < 0 || w.EndTime < 0 {
-				issues = append(issues, fmt.Sprintf("[%d].words[%d] 非法时间 start=%d end=%d text=%q",
-					i+1, j, w.StartTime, w.EndTime, w.Text))
-			} else if w.EndTime < w.StartTime {
-				issues = append(issues, fmt.Sprintf("[%d].words[%d] 时间颠倒 start=%d end=%d",
-					i+1, j, w.StartTime, w.EndTime))
-			}
+		runAddLiveMode(addLiveArgs{
+			BaseURL:      httpBase,
+			ConfigPath:   *configPath,
+			JWTSecret:    *jwtSecret,
+			Username:     *username,
+			Password:     *password,
+			Token:        *token,
+			UserID:       uint(*userID),
+			ForceLogin:   *forceLogin,
+			Name:         *name,
+			M3U8URL:      strings.TrimSpace(*m3u8URL),
+			SourceMode:   *sourceMode,
+			Remark:       *remark,
+			PollInterval: *pollEvery,
+			Wait:         wait,
+			NoWait:       *noWait,
+			OutPath:      out,
+		})
+	case "one-click":
+		out := strings.TrimSpace(*outPath)
+		if out == "" {
+			out = "one_click_report.json"
 		}
-		if i > 0 && p.StartTime < paragraphs[i-1].EndTime {
-			issues = append(issues, fmt.Sprintf("[%d] 与上一段重叠: start=%d < prev.end=%d",
-				i+1, p.StartTime, paragraphs[i-1].EndTime))
+		clips, err := parseClipList(*clipMS, false)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "-clip: %v\n", err)
+			os.Exit(2)
 		}
-	}
-	return issues
-}
-
-// parseASRInput 支持包装格式 {"duration_ms":N,"live_asr":{...}}，
-// 以及旧格式（直接豆包 ASR 根对象，含 result.utterances）。
-func parseASRInput(raw []byte) (liveASR string, durationMs int64, err error) {
-	if !json.Valid(raw) {
-		return "", 0, fmt.Errorf("不是合法 JSON")
-	}
-
-	var wrapped struct {
-		DurationMs int64           `json:"duration_ms"`
-		LiveASR    json.RawMessage `json:"live_asr"`
-	}
-	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.LiveASR) > 0 && json.Valid(wrapped.LiveASR) {
-		liveASR = string(wrapped.LiveASR)
-		durationMs = wrapped.DurationMs
-		if durationMs <= 0 {
-			durationMs = asr.ParseDurationMs(wrapped.LiveASR)
+		if secClips, err := parseClipList(*clipSec, true); err != nil {
+			fmt.Fprintf(os.Stderr, "-clip-sec: %v\n", err)
+			os.Exit(2)
+		} else {
+			clips = append(clips, secClips...)
 		}
-		if len(asr.FormatUtterancesForAPI(liveASR)) == 0 {
-			return "", 0, fmt.Errorf("live_asr 中无有效句段")
+		wait := *waitFor
+		if wait <= 0 {
+			wait = 30 * time.Minute
 		}
-		return liveASR, durationMs, nil
-	}
-
-	liveASR = string(raw)
-	durationMs = asr.ParseDurationMs(raw)
-	if len(asr.FormatUtterancesForAPI(liveASR)) == 0 {
-		return "", 0, fmt.Errorf("未识别到 asr_raw 包装格式，且根对象无有效句段")
-	}
-	return liveASR, durationMs, nil
-}
-
-func findRepoRoot() string {
-	_, self, _, ok := runtime.Caller(0)
-	if ok {
-		root := filepath.Clean(filepath.Join(filepath.Dir(self), "..", ".."))
-		if fileExists(filepath.Join(root, "go.mod")) {
-			return root
+		clipCap := *maxClipMS
+		if clipCap <= 0 {
+			clipCap = int64((10 * time.Minute) / time.Millisecond)
 		}
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	dir := cwd
-	for {
-		if fileExists(filepath.Join(dir, "go.mod")) {
-			return dir
+		runOneClickMode(oneClickArgs{
+			BaseURL:      httpBase,
+			ConfigPath:   *configPath,
+			JWTSecret:    *jwtSecret,
+			Username:     *username,
+			Password:     *password,
+			Token:        *token,
+			UserID:       uint(*userID),
+			ForceLogin:   *forceLogin,
+			LiveID:       uint(*liveID),
+			PromptID:     uint(*promptID),
+			Clips:        clips,
+			AutoClip:     *autoClip && len(clips) == 0,
+			MaxClipMS:    clipCap,
+			ProjectSrc:   *projectSource,
+			CanvasW:      *canvasW,
+			CanvasH:      *canvasH,
+			PollInterval: *pollEvery,
+			Wait:         wait,
+			NoWait:       *noWait,
+			OutPath:      out,
+		})
+	case "live-e2e":
+		out := strings.TrimSpace(*outPath)
+		if out == "" {
+			out = "live_e2e_report.json"
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return cwd
+		e2eDur, recFor, clipCap, err := resolveLiveE2EDurations(*duration, *recordFor, *maxClipMS)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(2)
 		}
-		dir = parent
+		wait := *waitFor
+		if wait <= 0 {
+			wait = e2eDur + 15*time.Minute
+		}
+		oneClickWait := 30 * time.Minute
+		if e2eDur > 10*time.Minute {
+			oneClickWait = e2eDur + 20*time.Minute
+		}
+		runLiveE2EMode(liveE2EArgs{
+			BaseURL:      httpBase,
+			ConfigPath:   *configPath,
+			JWTSecret:    *jwtSecret,
+			Username:     *username,
+			Password:     *password,
+			Token:        *token,
+			UserID:       uint(*userID),
+			ForceLogin:   *forceLogin,
+			Name:         *name,
+			M3U8URL:      strings.TrimSpace(*m3u8URL),
+			Remark:       *remark,
+			Duration:     e2eDur,
+			RecordFor:    recFor,
+			PollInterval: *pollEvery,
+			Wait:         wait,
+			PromptID:     uint(*promptID),
+			MaxClipMS:    clipCap,
+			ProjectSrc:   *projectSource,
+			CanvasW:      *canvasW,
+			CanvasH:      *canvasH,
+			OneClickWait: oneClickWait,
+			SkipOneClick: *skipOneClick,
+			OutPath:      out,
+		})
+	default:
+		fmt.Fprintf(os.Stderr, "未知 mode=%q，请用 paragraphs | live-window | add-live | one-click | live-e2e\n", resolved)
+		os.Exit(2)
 	}
 }
 
-func fileExists(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && !st.IsDir()
+// resolveLiveE2EDurations 解析 live-e2e 目标时长：
+// -duration 默认 10m，同时作为录像门槛与一键选区上限；
+// -record-for / -max-clip-ms 为 0 时跟 duration。
+func resolveLiveE2EDurations(duration, recordFor time.Duration, maxClipMS int64) (e2eDur, recFor time.Duration, clipCap int64, err error) {
+	e2eDur = duration
+	if e2eDur <= 0 {
+		e2eDur = 10 * time.Minute
+	}
+	recFor = recordFor
+	if recFor <= 0 {
+		recFor = e2eDur
+	}
+	clipCap = maxClipMS
+	if clipCap <= 0 {
+		clipCap = e2eDur.Milliseconds()
+	}
+	if e2eDur < time.Minute {
+		return 0, 0, 0, fmt.Errorf("-duration 过短: %s（建议 10m / 20m / 30m）", e2eDur)
+	}
+	return e2eDur, recFor, clipCap, nil
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func loadDotEnv(path string) error {
-	if strings.TrimSpace(path) == "" {
-		return nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "export ") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
-		if key == "" {
-			continue
-		}
-		if len(val) >= 2 {
-			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
-				val = val[1 : len(val)-1]
-			}
-		}
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
-		_ = os.Setenv(key, val)
-	}
-	return sc.Err()
-}
+// 用户提供的跟播列表，便于本地复现。
+const defaultLiveWindowTestURL = "https://live-mixer-1426793176.cos.ap-shanghai.myqcloud.com/video_editing/live-record/1e84428cac6e4dd1ac24b8bdcec0a3c8/live.m3u8"

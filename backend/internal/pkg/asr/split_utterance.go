@@ -9,34 +9,86 @@ import (
 // MaxCaptionRunes 单条字幕最大字数（按 Unicode rune 计，含标点与英文字母）。
 const MaxCaptionRunes = 12
 
+// CaptionTimingSource 字幕行时间的来源。
+type CaptionTimingSource string
+
+const (
+	// CaptionTimingWords 词级时间戳对齐（正常路径）：行时间取自 ASR 字级时间。
+	CaptionTimingWords CaptionTimingSource = "words"
+	// CaptionTimingProportional 整条按字数均分（词级对齐失败的降级）：语音的停顿/语速变化无法体现，
+	// 行长越长漂移越大（实测典型 1s、可达数秒），诊断里要能一眼看出。
+	CaptionTimingProportional CaptionTimingSource = "proportional"
+)
+
 // TimedSegment 断句后的字幕片段（源时间轴，毫秒）。
 type TimedSegment struct {
 	Text      string
 	StartTime int64
 	EndTime   int64
+	// TimingSource 该行时间是怎么来的，见 CaptionTimingSource。
+	TimingSource CaptionTimingSource
 }
 
 type captionAtom struct {
 	text       string
-	keepIntact bool // 英文词 / 数字词整段不拆
+	keepIntact bool // 英文词 / 数字词 / 中文词典词整段不拆
 	runes      int
 }
 
-// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则均分（英文词与数字词不拆），并切分时间。
+// SplitUtteranceForCaptions 将一句 ASR 按标点断句，超长则按最少行数折行（英文/数字/中文词典词不拆），并切分时间。
 // 成片每行会剥离首尾断句标点，保证行首行尾均非标点。
 func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
-	text := strings.TrimSpace(u.Text)
+	lines := splitLinesForText(strings.TrimSpace(u.Text), buildExtraCJKWords(u.Words), MaxCaptionRunes)
+	if len(lines) == 0 {
+		return nil
+	}
+	return TimedSegmentsForLines(u, lines)
+}
+
+// SplitLinesByRule 按产品折行规则把文本切成字幕行：标点断句 → 剥离首尾标点 → 超长按最少行数折行，
+// 静态词表里的中文词、西文词与数字词整段不拆。
+// 供外部断句（如 LLM 折行）的兜底与超长行修正复用，不涉及时间。
+func SplitLinesByRule(text string) []string {
+	return splitLinesForText(strings.TrimSpace(text), nil, MaxCaptionRunes)
+}
+
+// SplitLinesByRuleMax 与 SplitLinesByRule 同规则，行宽上限由调用方指定。
+func SplitLinesByRuleMax(text string, max int) []string {
+	if max <= 0 {
+		max = MaxCaptionRunes
+	}
+	return splitLinesForText(strings.TrimSpace(text), nil, max)
+}
+
+// TimedSegmentsForLines 为已切好的字幕行分配时间：词级对齐优先，失败整条回退比例分配。
+// 行必须是原文的连续切分（字符与顺序与原文一致），否则词级对齐必然失败并整体降级为比例分配——
+// 这也意味着「换一种断句」不影响时间分配的可达性，只是分组不同。
+func TimedSegmentsForLines(u Utterance, lines []string) []TimedSegment {
+	segs, _ := TimedSegmentsForLinesWithSource(u, lines)
+	return segs
+}
+
+// TimedSegmentsForLinesWithSource 同 TimedSegmentsForLines，并返回时间来源：
+// words=词级对齐成功，proportional=整条按字数均分（字幕会随语速/停顿漂移，诊断要能区分）。
+func TimedSegmentsForLinesWithSource(u Utterance, lines []string) ([]TimedSegment, CaptionTimingSource) {
+	if len(lines) == 0 {
+		return nil, ""
+	}
+	if segs, ok := assignTimesWithWords(u, lines); ok {
+		return segs, CaptionTimingWords
+	}
+	return assignTimesProportional(u, lines), CaptionTimingProportional
+}
+
+// splitLinesForText 折行管线：标点断句 → 边缘清理 → 超长按最少行数折行 → 再清理。
+// extra 为当次动态补充的中文词（来自 ASR Words），nil 表示只用词表。
+func splitLinesForText(text string, extra map[string]struct{}, max int) []string {
 	if text == "" {
 		return nil
 	}
-
 	var lines []string
-	for _, clause := range splitByPunctuation(text) {
-		clause = trimCaptionEdgePunct(clause)
-		if clause == "" {
-			continue
-		}
-		for _, line := range splitBalancedPreferIntact(clause, MaxCaptionRunes) {
+	for _, clause := range splitClauses(text) {
+		for _, line := range splitBalancedPreferIntact(clause, max, extra) {
 			line = trimCaptionEdgePunct(line)
 			if line == "" {
 				continue
@@ -44,14 +96,20 @@ func SplitUtteranceForCaptions(u Utterance) []TimedSegment {
 			lines = append(lines, line)
 		}
 	}
-	if len(lines) == 0 {
-		return nil
-	}
+	return lines
+}
 
-	if segs, ok := assignTimesWithWords(u, lines); ok {
-		return segs
+// splitClauses 标点断句 + 剥掉每段首尾标点与空白，空段丢弃。
+// 与 SplitCaptionClauses 同源：折行路径（本函数）与「超长小句交给 LLM 补切点」的路径
+// 必须切出完全相同的子句，否则两条路径的行边界会不一致。
+func splitClauses(text string) []string {
+	var out []string
+	for _, clause := range splitByPunctuation(text) {
+		if trimmed := trimCaptionEdgePunct(clause); trimmed != "" {
+			out = append(out, trimmed)
+		}
 	}
-	return assignTimesProportional(u, lines)
+	return out
 }
 
 // trimCaptionEdgePunct 去掉首尾空白与断句标点（含 … / ...），使成片行首行尾非标点。
@@ -136,8 +194,54 @@ func isBreakPunctRune(r rune) bool {
 	}
 }
 
-func tokenizeCaptionAtoms(text string) []captionAtom {
+// captionWordMatcher 从 i 起匹配中文词，返回词的后一个位置；i 处不是多字词时返回 i。
+type captionWordMatcher func(i int) int
+
+// tokenizeCaptionAtoms 校验路径（ValidateCaptionLines）的原子划分：
+// 中文按静态小词表正向最大匹配，只保护 2–3 字的常用词。
+//
+// 校验刻意保持这个宽严度：切点只要不落在西文词/数字词/小词表词内部就算通过，
+// 否则 LLM 给出的整条断句会被判死、退化成规则折行。要收紧校验得先用「吸附」把
+// 非法切点挪到最近合法边界（见 captionWordEnds 的词表），而不是直接拒绝。
+func tokenizeCaptionAtoms(text string, extra map[string]struct{}) []captionAtom {
 	runes := []rune(text)
+	return tokenizeAtoms(runes, func(i int) int { return matchCJKWord(runes, i, extra) })
+}
+
+// tokenizeCaptionAtomsForSplit 折行路径的原子划分：中文按频率词表做最大概率分词
+// （见 captionWordEnds），词边界比校验路径密且准——「上市公司」「中产阶级」这类词
+// 不会被拆开；西文词与数字词仍是硬原子。
+func tokenizeCaptionAtomsForSplit(text string, extra map[string]struct{}) []captionAtom {
+	return tokenizeCaptionAtomsForSplitRunes([]rune(text), extra)
+}
+
+// tokenizeCaptionAtomsForSplitRunes 同上，直接吃 runes：调用方已持有 runes 时省掉一次往返转换。
+func tokenizeCaptionAtomsForSplitRunes(runes []rune, extra map[string]struct{}) []captionAtom {
+	ends := captionWordEnds(runes, extra)
+	return tokenizeAtoms(runes, func(i int) int {
+		if end := ends[i]; end > i+1 {
+			return end
+		}
+		return i
+	})
+}
+
+// captionAtomCuts 返回 runes 的合法切点（升序，含 0 与 len(runes)）：
+// 折行（splitBalancedPreferIntact）与吸附（SnapCaptionLines）共用的切点集合，
+// 只落在「西文词 / 数字词 / 频率词表中文词」的接缝上。
+// extra 的含义同 splitBalancedPreferIntact。
+func captionAtomCuts(runes []rune, extra map[string]struct{}) []int {
+	atoms := tokenizeCaptionAtomsForSplitRunes(runes, extra)
+	cuts := make([]int, 1, len(atoms)+1)
+	off := 0
+	for _, atom := range atoms {
+		off += atom.runes
+		cuts = append(cuts, off)
+	}
+	return cuts
+}
+
+func tokenizeAtoms(runes []rune, cjkWord captionWordMatcher) []captionAtom {
 	if len(runes) == 0 {
 		return nil
 	}
@@ -157,6 +261,12 @@ func tokenizeCaptionAtoms(text string) []captionAtom {
 			s := string(runes[i:j])
 			out = append(out, captionAtom{text: s, keepIntact: true, runes: j - i})
 			i = j
+			continue
+		}
+		if end := cjkWord(i); end > i {
+			s := string(runes[i:end])
+			out = append(out, captionAtom{text: s, keepIntact: true, runes: end - i})
+			i = end
 			continue
 		}
 		out = append(out, captionAtom{text: string(runes[i]), keepIntact: false, runes: 1})
@@ -224,89 +334,109 @@ func isLatinLetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
-// splitBalancedPreferIntact 超长时按最少行数均分；英文词与数字词整段不拆。
-func splitBalancedPreferIntact(text string, max int) []string {
+// splitBalancedPreferIntact 超长时按最少行数折行：行边界只能落在原子边界上
+// （英文词/数字词/词典中文词整段不可切），每行切点取离均分目标最近的那个。
+//
+// 与「累加到超过均分目标就封口」的旧写法相比有两处差异：
+//  1. 切点从「位置驱动」改成「在目标位附近搜合法边界」。旧写法在原子偏大时会提前很远封口，
+//     留下 1~2 个字的孤行（实测占超长小句的近四分之一）。
+//  2. 行数由「剩余文本最少还要几行」的可行解推出，而不是硬取 ceil(n/max)。后者在标点/词原子
+//     挡住目标位时无解，只能挤出一个超宽行。
+func splitBalancedPreferIntact(text string, max int, extra map[string]struct{}) []string {
 	if text == "" {
 		return nil
 	}
-	n := utf8.RuneCountInString(text)
+	runes := []rune(text)
+	n := len(runes)
 	if n <= max {
 		return []string{text}
 	}
 
-	atoms := tokenizeCaptionAtoms(text)
-	parts := (n + max - 1) / max
-	base, rem := n/parts, n%parts
-	targets := make([]int, parts)
-	for i := 0; i < parts; i++ {
-		targets[i] = base
-		if i < rem {
-			targets[i]++
-		}
-	}
+	// cuts 为升序合法切点（含 0 与 n）；行边界只能落在原子边界上。
+	cuts := captionAtomCuts(runes, extra)
 
-	targetOf := func(idx int) int {
-		if idx < len(targets) {
-			return targets[idx]
-		}
-		return max
-	}
-
-	var lines []string
-	var cur strings.Builder
-	curLen := 0
-	targetIdx := 0
-
-	flush := func() {
-		if curLen == 0 {
-			return
-		}
-		lines = append(lines, cur.String())
-		cur.Reset()
-		curLen = 0
-		targetIdx++
-	}
-
-	for _, atom := range atoms {
-		if curLen == 0 {
-			cur.WriteString(atom.text)
-			curLen = atom.runes
+	// minLines[i]：从 cuts[i] 起到文本末尾，每行不超过 max 折行所需的最少行数；-1 表示放不下。
+	minLines := make([]int, len(cuts))
+	for i := len(cuts) - 1; i >= 0; i-- {
+		if cuts[i] == n {
+			minLines[i] = 0
 			continue
 		}
-		next := curLen + atom.runes
-		tgt := targetOf(targetIdx)
-		if next <= tgt {
-			cur.WriteString(atom.text)
-			curLen = next
-			continue
-		}
-		// 超过当前行目标。
-		if next <= max {
-			if atom.keepIntact {
-				// 英文/数字整词优先换行，避免为凑目标而跨行切开。
-				flush()
-				cur.WriteString(atom.text)
-				curLen = atom.runes
+		minLines[i] = -1
+		for j := i + 1; j < len(cuts); j++ {
+			if cuts[j]-cuts[i] > max {
+				// 超宽只允许发生在「一个原子比 max 还长」时：让它独占一行。
+				if j == i+1 && minLines[j] >= 0 {
+					minLines[i] = minLines[j] + 1
+				}
+				break
+			}
+			if minLines[j] < 0 {
 				continue
 			}
-			// 单字 Other：封口后起新行，保证纯中文均分与 targets 一致。
-			flush()
-			cur.WriteString(atom.text)
-			curLen = atom.runes
-			continue
+			if minLines[i] < 0 || minLines[j]+1 < minLines[i] {
+				minLines[i] = minLines[j] + 1
+			}
 		}
-		// 超过上限：封口，整原子起新行（超长 keepIntact 允许该行 > max）。
-		flush()
-		cur.WriteString(atom.text)
-		curLen = atom.runes
 	}
-	flush()
+
+	parts := minLines[0]
+	if parts <= 0 {
+		return []string{text}
+	}
+
+	lines := make([]string, 0, parts)
+	at := 0
+	for k := 0; k < parts-1; k++ {
+		rest := parts - 1 - k // 本行之后还剩几行
+		ideal := balancedCut(n, parts, k+1)
+		best, bestDist := -1, 0
+		for j := at + 1; j < len(cuts); j++ {
+			if cuts[j]-cuts[at] > max {
+				// 只能吃掉一个超长原子（与 minLines 的判定保持一致）。
+				if j == at+1 && minLines[j] == rest {
+					best = j
+				}
+				break
+			}
+			if minLines[j] != rest {
+				continue
+			}
+			dist := cuts[j] - ideal
+			if dist < 0 {
+				dist = -dist
+			}
+			// 距离相同取靠前的切点：原子边界本身可能是分词误合并（如 上市|公司 之于「上市公司」），
+			// 往前切能把它整体留给下一行，不会拦腰截断。
+			if best < 0 || dist < bestDist {
+				best, bestDist = j, dist
+			}
+		}
+		if best < 0 {
+			break
+		}
+		lines = append(lines, string(runes[cuts[at]:cuts[best]]))
+		at = best
+	}
+	if at < len(cuts)-1 {
+		lines = append(lines, string(runes[cuts[at]:]))
+	}
 	return lines
+}
+
+// balancedCut 返回把 n 个字均分到 parts 行时，第 idx 行末尾的名义切点（idx 从 1 起）：
+// 前 n%parts 行各多一个字。
+func balancedCut(n, parts, idx int) int {
+	base, rem := n/parts, n%parts
+	if idx < rem {
+		return base*idx + idx
+	}
+	return base*idx + rem
 }
 
 // splitBalancedPreferLatin 保留旧名，供既有测试与调用兼容。
 func splitBalancedPreferLatin(text string, max int) []string {
-	return splitBalancedPreferIntact(text, max)
+	return splitBalancedPreferIntact(text, max, nil)
 }
 
 func stripBreakPunct(s string) string {
@@ -355,7 +485,7 @@ func assignTimesWithWords(u Utterance, lines []string) ([]TimedSegment, bool) {
 				end = start + 1
 			}
 		}
-		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end})
+		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end, TimingSource: CaptionTimingWords})
 	}
 	return out, true
 }
@@ -385,6 +515,18 @@ func (c *wordCursor) peekTime(words []Word, fallbackStart, fallbackEnd int64) (i
 	return fallbackStart, fallbackEnd
 }
 
+// isASRFillerRune 词流里的填充字符：空白、省略号、断句标点。
+// 厂商会给这些字符单独成词（空格条目甚至带 start=end=-1），而待对齐的文本已由 stripBreakPunct
+// 去掉它们，两侧逐字比对必然在第一个填充字符处失败——一个空格就能让整条切片退化成均分。
+func isASRFillerRune(r rune) bool {
+	return unicode.IsSpace(r) || r == '…' || isBreakPunctRune(r)
+}
+
+// validWordTime 词是否带可用时间戳；厂商的空格填充词写的是 start=end=-1。
+func validWordTime(w Word) bool {
+	return w.StartTime >= 0 && w.EndTime >= w.StartTime
+}
+
 func (c *wordCursor) consume(need string, words []Word) (startTime, endTime int64, ok bool) {
 	needRunes := []rune(need)
 	if len(needRunes) == 0 {
@@ -405,19 +547,31 @@ func (c *wordCursor) consume(need string, words []Word) (startTime, endTime int6
 				c.runeOffset = 0
 				continue
 			}
+			w := words[c.idx]
+			// 填充字符不参与对齐：跳过它继续找 need 里的下一个字。need 来自 stripBreakPunct，
+			// 本身不含这些字符，所以跳过不会漏掉任何一个待匹配的字。
+			if isASRFillerRune(wr[c.runeOffset]) {
+				c.runeOffset++
+				continue
+			}
 			if wr[c.runeOffset] != nr {
 				return 0, 0, false
 			}
-			w := words[c.idx]
-			t := interpolateWordTime(w, c.runeOffset, len(wr))
-			tEnd := interpolateWordTimeEnd(w, c.runeOffset, len(wr))
+			at := c.runeOffset
+			c.runeOffset++
+			matched = true
+			if !validWordTime(w) {
+				// 字对上了但没有有效时间（厂商的空格/占位词）：字符照样消费，时间另取，
+				// 免得 -1 渗进行时间。
+				break
+			}
+			t := interpolateWordTime(w, at, len(wr))
+			tEnd := interpolateWordTimeEnd(w, at, len(wr))
 			if first {
 				startTime = t
 				first = false
 			}
 			endTime = tEnd
-			c.runeOffset++
-			matched = true
 			break
 		}
 		if !matched {
@@ -476,7 +630,7 @@ func assignTimesProportional(u Utterance, lines []string) []TimedSegment {
 		if end <= start {
 			end = start + 1
 		}
-		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end})
+		out = append(out, TimedSegment{Text: line, StartTime: start, EndTime: end, TimingSource: CaptionTimingProportional})
 	}
 	return out
 }

@@ -26,11 +26,38 @@ type mockLLMChat struct {
 	err      error
 	calls    int
 	lastMsgs []llm.ChatMessage
+	// delay 模拟大模型生成耗时（心跳类测试用）。
+	delay time.Duration
+	// started 在进入 Chat 时关闭一次，通知测试「调用已开始」。
+	started chan struct{}
+	// release 非 nil 时阻塞到关闭（或 ctx 取消）为止，便于在调用进行中做断言。
+	release chan struct{}
 }
 
 func (m *mockLLMChat) Chat(ctx context.Context, messages []llm.ChatMessage) (string, error) {
 	m.calls++
 	m.lastMsgs = messages
+	if m.started != nil {
+		select {
+		case <-m.started:
+		default:
+			close(m.started)
+		}
+	}
+	if m.delay > 0 {
+		select {
+		case <-time.After(m.delay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	if m.release != nil {
+		select {
+		case <-m.release:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 	if m.err != nil {
 		return "", m.err
 	}
@@ -54,6 +81,13 @@ func setupAISliceWorkerTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&model.LiveMaterial{}, &model.VideoProject{}, &model.Task{}); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
+	// 限制单连接：心跳测试里有 goroutine 并发写库，而 :memory: 的每条连接都是独立库，
+	// 连接池一旦开出第二条连接，心跳线程就会撞上 "no such table: tasks"。
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB(): %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	return db
 }
 
@@ -518,5 +552,103 @@ func TestAISliceWorker_Process_PreprocessClips0(t *testing.T) {
 	}
 	if updated.Clips0[0].StartTime != 4000 || updated.Clips0[1].StartTime != 1500 || updated.Clips0[2].StartTime != 3000 {
 		t.Errorf("clips0 order/values mutated: %#v", updated.Clips0)
+	}
+}
+
+// TestAISliceWorker_Process_HeartbeatDuringLLMCall 验证大模型调用期间任务在持续心跳。
+// 没有心跳时，单次生成 6.5~8.8 分钟 > AI 切片 20 分钟的回收阈值只是时间问题：
+// 任务会被 RequeueStale 判成孤儿、改回 pending 并被另一个 Worker 再跑一遍（重复计费）。
+func TestAISliceWorker_Process_HeartbeatDuringLLMCall(t *testing.T) {
+	db, claimed := setupClaimedAISliceTask(t)
+	base := repository.NewTaskRepository(db)
+	repo := &heartbeatCountingRepo{TaskRepository: base}
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	mock := &mockLLMChat{
+		content: `{"indices":[0],"title":"标题","description":"描述","topics":["话题"]}`,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	worker := NewAISliceWorker(repo, liveRepo, projectRepo, mock, zap.NewNop(), 1, 0, webroot.Config{}).(*aiSliceWorker)
+	worker.heartbeatInterval = 20 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() { done <- worker.Process(ctx, claimed) }()
+
+	select {
+	case <-mock.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("大模型调用未开始")
+	}
+
+	// 调用期间本不会有任何写库：把 updated_at 回拨到回收阈值之外，再等心跳把它拉回来。
+	before := repo.heartbeatCalls()
+	staleAt := time.Now().Add(-30 * time.Minute)
+	backdateTask(t, db, claimed.ID, staleAt)
+	waitHeartbeatCalls(t, repo, before+1, 2*time.Second)
+
+	mid, err := base.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !mid.UpdatedAt.After(staleAt) {
+		t.Errorf("调用大模型期间 updated_at = %v 未刷新（回拨值 %v）：会被孤儿回收重复执行", mid.UpdatedAt, staleAt)
+	}
+	if mid.Status != model.TaskStatusProcessing {
+		t.Errorf("Status = %q, want processing（心跳不得改动状态）", mid.Status)
+	}
+
+	close(mock.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	final, err := base.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if final.Status != model.TaskStatusCompleted {
+		t.Errorf("Status = %q, want completed", final.Status)
+	}
+	// 大模型返回后由后续步骤自己写库，心跳必须已停止。
+	assertHeartbeatQuiet(t, repo, 20*time.Millisecond)
+}
+
+// TestAISliceWorker_Process_LLMFailureNamesElapsed 验证失败串带上「跑了多久、多少个句段」。
+// 线上只有 "context deadline exceeded" 时，分不清是客户端预算用尽还是上游抖动。
+func TestAISliceWorker_Process_LLMFailureNamesElapsed(t *testing.T) {
+	db, claimed := setupClaimedAISliceTask(t)
+	taskRepo := repository.NewTaskRepository(db)
+	liveRepo := repository.NewLiveMaterialRepository(db)
+	projectRepo := repository.NewVideoProjectRepository(db)
+	ctx := context.Background()
+
+	mock := &mockLLMChat{
+		err:   errors.New("请求 LLM 失败(LLM 客户端超时, 耗时 30m0s, 客户端超时上限 30m0s): context deadline exceeded"),
+		delay: 20 * time.Millisecond,
+	}
+	worker := NewAISliceWorker(taskRepo, liveRepo, projectRepo, mock, zap.NewNop(), 1, 0, webroot.Config{})
+
+	err := worker.Process(ctx, claimed)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{"调用大模型失败", "耗时", "句段 "} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want contains %q", err.Error(), want)
+		}
+	}
+
+	got, err := taskRepo.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != model.TaskStatusFailed {
+		t.Errorf("Status = %q, want failed", got.Status)
+	}
+	if !strings.Contains(got.ErrorMessage, "调用大模型失败") || !strings.Contains(got.ErrorMessage, "耗时") {
+		t.Errorf("落库 error_message = %q，缺少耗时/阶段信息", got.ErrorMessage)
 	}
 }

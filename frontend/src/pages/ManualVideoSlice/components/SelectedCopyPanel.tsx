@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Checkbox } from 'antd';
 import {
   LuArrowLeft,
+  LuCornerDownRight,
   LuGripVertical,
   LuMinus,
   LuPlay,
@@ -12,7 +13,12 @@ import {
   LuTrash2,
 } from 'react-icons/lu';
 import { CopyIcon } from '~/components/CopyIcon';
-import type { AiSegment, SelectedCopySegment, TranscriptParagraph } from '../types';
+import type {
+  AiSegment,
+  CopyInsertMode,
+  SelectedCopySegment,
+  TranscriptParagraph,
+} from '../types';
 import {
   formatPadSeconds,
   formatSliceTime,
@@ -22,7 +28,8 @@ import {
   getSpeakerColor,
   getTextSelectionOffsets,
   getTotalSelectedDuration,
-  reorderSegments,
+  moveSegmentsByIds,
+  scrollElementIntoViewPreferUpper,
   SEGMENT_EXTEND_STEP_SEC,
 } from '../utils';
 import { formatVideoDuration } from '~/utils/duration';
@@ -35,6 +42,8 @@ type DropMarker = {
 
 type DragGhost = {
   index: number;
+  /** 本次拖动的片段数量（多选拖动时 > 1） */
+  count: number;
   x: number;
   y: number;
   width: number;
@@ -61,20 +70,30 @@ const DRAG_AUTO_SCROLL_EDGE_PX = 48;
 /** 拖拽自动滚动最大速度（px / frame） */
 const DRAG_AUTO_SCROLL_MAX_SPEED_PX = 18;
 
-function getReorderToIndex(target: DropMarker, length: number) {
-  if (target.placement === 'before') return target.index;
-  // 最后一项之后：插入到数组末尾（toIndex === length）
-  if (target.index >= length - 1) return length;
-  return target.index + 1;
+function getDropInsertIndex(target: DropMarker, length: number) {
+  return target.placement === 'before'
+    ? target.index
+    : Math.min(target.index + 1, length);
 }
 
-function wouldReorder(fromIndex: number, target: DropMarker, length: number) {
-  let insertIndex = target.placement === 'before' ? target.index : Math.min(target.index + 1, length);
-  if (fromIndex < insertIndex) {
-    insertIndex -= 1;
-  }
-  return insertIndex !== fromIndex;
+/** 多选拖动落点是否会产生顺序变化（落在选中块内部时视为无变化）。 */
+function wouldReorderSelection(
+  segments: SelectedCopySegment[],
+  ids: string[],
+  target: DropMarker
+) {
+  if (!segments.length || !ids.length) return false;
+  return (
+    moveSegmentsByIds(segments, ids, getDropInsertIndex(target, segments.length)) !== segments
+  );
 }
+
+export type SelectedCopyPanelHandle = {
+  /** 滚动到指定片段；flash 为 true 时短暂高亮，用于提示新加入位置 */
+  scrollToSegment: (id: string, options?: { flash?: boolean }) => void;
+  /** 「跟随选中」模式下新增文案的插入锚点（选中块最后一段）；无选中时返回 null */
+  getInsertAnchorId: () => string | null;
+};
 
 interface SelectedCopyPanelProps {
   segments: SelectedCopySegment[];
@@ -84,6 +103,8 @@ interface SelectedCopyPanelProps {
   aiSegments?: AiSegment[];
   currentTime?: number;
   activeSegmentId: string | null;
+  /** 左侧加入文案时的插入方式；after-selected 时在锚点片段上展示提示 */
+  insertMode?: CopyInsertMode;
   speakers: string[];
   maxTotalDuration: number;
   videoDuration: number;
@@ -113,12 +134,13 @@ interface SelectedCopyPanelProps {
   readOnly?: boolean;
 }
 
-const SelectedCopyPanel = ({
+const SelectedCopyPanel = forwardRef<SelectedCopyPanelHandle, SelectedCopyPanelProps>(function SelectedCopyPanel({
   segments,
   paragraphs,
   aiSegments = [],
   currentTime = 0,
   activeSegmentId,
+  insertMode = 'timeline',
   speakers,
   maxTotalDuration,
   videoDuration,
@@ -141,26 +163,84 @@ const SelectedCopyPanel = ({
   onExportDraft,
   onSubmit,
   readOnly = false,
-}: SelectedCopyPanelProps) => {
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
+}, ref) {
+  const [dragIds, setDragIds] = useState<string[]>([]);
   const [dropMarker, setDropMarker] = useState<DropMarker | null>(null);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
+  /** 刚从左侧加入的片段：短暂高亮，帮助用户定位 */
+  const [flashSegmentId, setFlashSegmentId] = useState<string | null>(null);
+  /** 多选：与系统文件管理器一致，Ctrl/Cmd 点选切换、Shift 点选连续范围 */
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [aiPanelHeight, setAiPanelHeight] = useState<number | null>(null);
-  const dragIndexRef = useRef<number | null>(null);
+  const dragIdsRef = useRef<string[]>([]);
+  const selectedIdsRef = useRef<string[]>([]);
+  const selectionAnchorIdRef = useRef<string | null>(null);
+  /** 记录由本组件主动设置的 active id，避免外部 active 同步逻辑覆盖多选 */
+  const selfActiveIdRef = useRef<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const aiBlockRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const flashTimerRef = useRef(0);
+
+  /** 「跟随选中」的插入锚点：多选时取列表中最后一段，未多选时取 active 片段。 */
+  const insertAnchorId = useMemo(() => {
+    if (insertMode !== 'after-selected') return null;
+    const selectedInOrder = segments.filter((segment) => selectedIds.includes(segment.id));
+    const lastSelected = selectedInOrder[selectedInOrder.length - 1];
+    if (lastSelected) return lastSelected.id;
+    if (activeSegmentId && segments.some((segment) => segment.id === activeSegmentId)) {
+      return activeSegmentId;
+    }
+    return null;
+  }, [activeSegmentId, insertMode, segments, selectedIds]);
+
+  const revealSegment = (id: string, attempt = 0) => {
+    const container = listRef.current;
+    if (!container) return;
+    const node = container.querySelector<HTMLElement>(`[data-copy-id="${CSS.escape(id)}"]`);
+    // 刚 setState 后节点可能尚未挂载：重试几帧再滚动。
+    if (!node) {
+      if (attempt < 6) {
+        requestAnimationFrame(() => revealSegment(id, attempt + 1));
+      }
+      return;
+    }
+    scrollElementIntoViewPreferUpper(container, node);
+    setFlashSegmentId(id);
+    window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => setFlashSegmentId(null), 1800);
+  };
+
+  useImperativeHandle(ref, () => ({
+    scrollToSegment(id: string, options?: { flash?: boolean }) {
+      if (options?.flash) {
+        revealSegment(id);
+        return;
+      }
+      const container = listRef.current;
+      if (!container) return;
+      const node = container.querySelector<HTMLElement>(`[data-copy-id="${CSS.escape(id)}"]`);
+      if (!node) return;
+      scrollElementIntoViewPreferUpper(container, node);
+    },
+    getInsertAnchorId() {
+      return insertAnchorId;
+    },
+  }));
   const pointerDraggingRef = useRef(false);
   const suppressItemClickRef = useRef(false);
   const textSelectionRef = useRef<{ segmentId: string; start: number; end: number } | null>(null);
   const dragPointerYRef = useRef(0);
   const dragAutoScrollRafRef = useRef(0);
-  const segmentsLengthRef = useRef(segments.length);
-  segmentsLengthRef.current = segments.length;
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
   const totalDuration = getTotalSelectedDuration(segments);
   const isOverLimit = totalDuration > maxTotalDuration;
   const canDragSort = !readOnly && segments.length > 1;
   const hasSegments = segments.length > 0;
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const dragIdSet = useMemo(() => new Set(dragIds), [dragIds]);
+  const showMultiSelection = selectedIds.length > 1;
   const showAiResizeHandle = aiSegments.length > 0;
   const activeAiSegmentId = useMemo(() => {
     if (!aiSegments.length) return null;
@@ -168,7 +248,13 @@ const SelectedCopyPanel = ({
       aiSegments.find((item) => currentTime >= item.start && currentTime < item.end)?.id ?? null
     );
   }, [aiSegments, currentTime]);
-  const draggingSegment = dragIndex != null ? segments[dragIndex] ?? null : null;
+  const draggingSegment = dragIds.length
+    ? segments.find((segment) => segment.id === dragIds[0]) ?? null
+    : null;
+  const showDropMarker =
+    dragIds.length > 0 &&
+    dropMarker != null &&
+    wouldReorderSelection(segments, dragIds, dropMarker);
 
   useEffect(() => {
     if (!aiSegments.length) {
@@ -176,11 +262,41 @@ const SelectedCopyPanel = ({
     }
   }, [aiSegments]);
 
+  // 外部（左侧文案分段、加载项目等）切换 active 时，把多选收敛为该片段。
+  useEffect(() => {
+    if (!activeSegmentId) {
+      selectedIdsRef.current = [];
+      setSelectedIds([]);
+      selectionAnchorIdRef.current = null;
+      selfActiveIdRef.current = null;
+      return;
+    }
+    if (selfActiveIdRef.current === activeSegmentId) {
+      selfActiveIdRef.current = null;
+      return;
+    }
+    selectedIdsRef.current = [activeSegmentId];
+    setSelectedIds([activeSegmentId]);
+    selectionAnchorIdRef.current = activeSegmentId;
+  }, [activeSegmentId]);
+
+  // 片段被删除/替换后清理已失效的选中项。
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const existing = new Set(segments.map((segment) => segment.id));
+      const next = prev.filter((id) => existing.has(id));
+      if (next.length === prev.length) return prev;
+      selectedIdsRef.current = next;
+      return next;
+    });
+  }, [segments]);
+
   useEffect(() => {
     return () => {
       if (dragAutoScrollRafRef.current) {
         cancelAnimationFrame(dragAutoScrollRafRef.current);
       }
+      window.clearTimeout(flashTimerRef.current);
     };
   }, []);
 
@@ -215,8 +331,7 @@ const SelectedCopyPanel = ({
       if (!target) return;
 
       setDropMarker(target);
-      const fromIndex = dragIndexRef.current;
-      if (fromIndex != null && wouldReorder(fromIndex, target, segmentsLengthRef.current)) {
+      if (wouldReorderSelection(segmentsRef.current, dragIdsRef.current, target)) {
         suppressItemClickRef.current = true;
       }
     },
@@ -267,24 +382,27 @@ const SelectedCopyPanel = ({
   const resetDragState = () => {
     stopDragAutoScroll();
     pointerDraggingRef.current = false;
-    dragIndexRef.current = null;
-    setDragIndex(null);
+    dragIdsRef.current = [];
+    setDragIds([]);
     setDropMarker(null);
     setDragGhost(null);
   };
 
   const finishPointerDrag = useCallback(
     (clientY: number) => {
-      const fromIndex = dragIndexRef.current;
+      const list = segmentsRef.current;
+      const ids = dragIdsRef.current;
       const target = getDropTarget(clientY);
-      if (fromIndex != null && target && wouldReorder(fromIndex, target, segments.length)) {
-        const toIndex = getReorderToIndex(target, segments.length);
-        onReorder(reorderSegments(segments, fromIndex, toIndex));
-        suppressItemClickRef.current = true;
+      if (ids.length && target) {
+        const next = moveSegmentsByIds(list, ids, getDropInsertIndex(target, list.length));
+        if (next !== list) {
+          onReorder(next);
+          suppressItemClickRef.current = true;
+        }
       }
       resetDragState();
     },
-    [getDropTarget, onReorder, segments]
+    [getDropTarget, onReorder]
   );
 
   const handleDragHandlePointerDown = (index: number) => (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -293,9 +411,29 @@ const SelectedCopyPanel = ({
     event.preventDefault();
     event.stopPropagation();
     suppressItemClickRef.current = false;
+
+    const list = segmentsRef.current;
+    const segment = list[index];
+    if (!segment) return;
+
+    // 拖动已选中的片段时整组移动；拖动未选中片段时先把它设为唯一选中项。
+    const currentSelection = selectedIdsRef.current;
+    const movingIds =
+      currentSelection.includes(segment.id) && currentSelection.length > 1
+        ? list.filter((item) => currentSelection.includes(item.id)).map((item) => item.id)
+        : [segment.id];
+
+    if (movingIds.length === 1) {
+      selectedIdsRef.current = movingIds;
+      setSelectedIds(movingIds);
+      selectionAnchorIdRef.current = segment.id;
+      selfActiveIdRef.current = segment.id;
+      onActiveSegmentChange(segment.id);
+    }
+
     pointerDraggingRef.current = true;
-    dragIndexRef.current = index;
-    setDragIndex(index);
+    dragIdsRef.current = movingIds;
+    setDragIds(movingIds);
     setDropMarker({ index, placement: 'before' });
 
     const item = event.currentTarget.closest<HTMLElement>('.slice-editor-copy-item');
@@ -303,6 +441,7 @@ const SelectedCopyPanel = ({
     if (rect) {
       setDragGhost({
         index,
+        count: movingIds.length,
         x: event.clientX,
         y: event.clientY,
         width: Math.min(rect.width, 360),
@@ -315,7 +454,7 @@ const SelectedCopyPanel = ({
   };
 
   const handleDragHandlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!pointerDraggingRef.current || dragIndexRef.current == null) return;
+    if (!pointerDraggingRef.current || dragIdsRef.current.length === 0) return;
 
     dragPointerYRef.current = event.clientY;
 
@@ -345,6 +484,61 @@ const SelectedCopyPanel = ({
     }
 
     resetDragState();
+  };
+
+  /**
+   * 片段点选：与系统文件管理器一致。
+   * - 普通点击：仅选中当前片段
+   * - Ctrl / Cmd + 点击：切换当前片段是否选中
+   * - Shift + 点击：选中锚点到当前片段的连续范围
+   */
+  const handleSegmentSelect = (index: number, event: React.MouseEvent) => {
+    if (suppressItemClickRef.current) {
+      suppressItemClickRef.current = false;
+      return;
+    }
+    if (pointerDraggingRef.current) return;
+
+    const list = segmentsRef.current;
+    const segment = list[index];
+    if (!segment) return;
+
+    const applySelection = (ids: string[]) => {
+      selectedIdsRef.current = ids;
+      setSelectedIds(ids);
+      selfActiveIdRef.current = segment.id;
+      onActiveSegmentChange(segment.id);
+      onSeek(segment.start);
+    };
+
+    if (event.shiftKey) {
+      const anchorId = selectionAnchorIdRef.current ?? activeSegmentId ?? segment.id;
+      const anchorIndex = list.findIndex((item) => item.id === anchorId);
+      if (anchorIndex < 0) {
+        selectionAnchorIdRef.current = segment.id;
+        applySelection([segment.id]);
+        return;
+      }
+      const from = Math.min(anchorIndex, index);
+      const to = Math.max(anchorIndex, index);
+      applySelection(list.slice(from, to + 1).map((item) => item.id));
+      return;
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      const nextSet = new Set(selectedIdsRef.current);
+      if (nextSet.has(segment.id)) {
+        nextSet.delete(segment.id);
+      } else {
+        nextSet.add(segment.id);
+      }
+      selectionAnchorIdRef.current = segment.id;
+      applySelection(list.filter((item) => nextSet.has(item.id)).map((item) => item.id));
+      return;
+    }
+
+    selectionAnchorIdRef.current = segment.id;
+    applySelection([segment.id]);
   };
 
   return (
@@ -495,7 +689,7 @@ const SelectedCopyPanel = ({
         className={[
           'slice-editor-copy-list',
           segments.length === 0 ? 'slice-editor-copy-list_empty' : '',
-          dragIndex != null ? 'slice-editor-copy-list_dragging' : '',
+          dragIds.length > 0 ? 'slice-editor-copy-list_dragging' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -517,40 +711,35 @@ const SelectedCopyPanel = ({
           segments.map((segment, index) => {
             const color = getSpeakerColor(segment.speaker, speakers);
             const isActive = activeSegmentId === segment.id;
+            const isMultiSelected = showMultiSelection && selectedIdSet.has(segment.id);
             const frontPad = isActive ? getSegmentFrontPadSeconds(segment) : 0;
             const backPad = isActive ? getSegmentBackPadSeconds(segment) : 0;
             const showInsertBefore =
-              dragIndex != null &&
+              showDropMarker &&
               dropMarker?.index === index &&
-              dropMarker.placement === 'before' &&
-              wouldReorder(dragIndex, dropMarker, segments.length);
+              dropMarker.placement === 'before';
             const showInsertAfter =
-              dragIndex != null &&
+              showDropMarker &&
               dropMarker?.index === index &&
-              dropMarker.placement === 'after' &&
-              wouldReorder(dragIndex, dropMarker, segments.length);
+              dropMarker.placement === 'after';
 
             return (
               <div
                 key={segment.id}
+                data-copy-id={segment.id}
                 className={[
                   'slice-editor-copy-item',
                   isActive ? 'active' : '',
-                  dragIndex === index ? 'slice-editor-copy-item_dragging' : '',
+                  isMultiSelected ? 'is-multi-selected' : '',
+                  insertAnchorId === segment.id ? 'is-insert-anchor' : '',
+                  flashSegmentId === segment.id ? 'slice-editor-copy-item_just-added' : '',
+                  dragIdSet.has(segment.id) ? 'slice-editor-copy-item_dragging' : '',
                   showInsertBefore ? 'slice-editor-copy-item_insert-before' : '',
                   showInsertAfter ? 'slice-editor-copy-item_insert-after' : '',
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                onClick={() => {
-                  if (suppressItemClickRef.current) {
-                    suppressItemClickRef.current = false;
-                    return;
-                  }
-                  if (pointerDraggingRef.current) return;
-                  onActiveSegmentChange(segment.id);
-                  onSeek(segment.start);
-                }}
+                onClick={(event) => handleSegmentSelect(index, event)}
               >
                 <div className="slice-editor-copy-item-head">
                   {canDragSort ? (
@@ -575,12 +764,30 @@ const SelectedCopyPanel = ({
                   <span className="slice-editor-copy-time">
                     {formatSliceTime(segment.start)} - {formatSliceTime(segment.end)}
                   </span>
+                  {flashSegmentId === segment.id ? (
+                    <span className="slice-editor-copy-just-added-tag">刚刚加入</span>
+                  ) : null}
+                  {insertAnchorId === segment.id ? (
+                    <span
+                      className="slice-editor-copy-insert-anchor-tag"
+                      title="左侧新加入的文案会插入到该片段之后"
+                    >
+                      <LuCornerDownRight size={12} />
+                      新内容插入到此之后
+                    </span>
+                  ) : null}
                 </div>
 
                 <p
                   className={`slice-editor-copy-text${isActive ? ' slice-editor-copy-text_active' : ''}`}
                   data-copy-text-id={segment.id}
-                  onMouseDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => {
+                    event.stopPropagation();
+                    // 组合键点选时阻止浏览器的 Shift 扩展文本选择，否则 click 会被文本选区拦截。
+                    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                      event.preventDefault();
+                    }
+                  }}
                   onMouseUp={(event) => {
                     event.stopPropagation();
                     const target = event.currentTarget;
@@ -598,16 +805,29 @@ const SelectedCopyPanel = ({
                       });
                       return;
                     }
+                    // 选中文字仅切换当前编辑片段，不覆盖已有多选。
+                    selfActiveIdRef.current = segment.id;
                     onActiveSegmentChange(segment.id);
                     onSeek(segment.start);
                   }}
                   onClick={(event) => {
                     event.stopPropagation();
-                    const selection = window.getSelection();
-                    if (selection && !selection.isCollapsed) return;
+                    const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+                    if (!additive) {
+                      const selection = window.getSelection();
+                      const anchorNode = selection?.anchorNode;
+                      // 普通点击且正在选中本片段文字时，保留文本选择，不切换选中态。
+                      if (
+                        selection &&
+                        !selection.isCollapsed &&
+                        anchorNode &&
+                        event.currentTarget.contains(anchorNode)
+                      ) {
+                        return;
+                      }
+                    }
 
-                    onActiveSegmentChange(segment.id);
-                    onSeek(segment.start);
+                    handleSegmentSelect(index, event);
                   }}
                 >
                   {segment.text}
@@ -777,7 +997,7 @@ const SelectedCopyPanel = ({
       {segments.length > 0 ? (
         <p className="slice-editor-copy-tip">
           {canDragSort
-            ? '拖动左侧把手可调整片段顺序；单击某一片段可对其进行编辑。'
+            ? '拖动左侧把手可调整片段顺序；按住 Ctrl/Cmd 点击可多选，Shift 点击选择连续片段。'
             : ''}
         </p>
       ) : null}
@@ -795,7 +1015,9 @@ const SelectedCopyPanel = ({
           >
             <div className="slice-editor-copy-drag-ghost-head">
               <LuGripVertical size={14} />
-              <span className="slice-editor-copy-index">片段 {dragGhost.index + 1}</span>
+              <span className="slice-editor-copy-index">
+                {dragGhost.count > 1 ? `拖动 ${dragGhost.count} 个片段` : `片段 ${dragGhost.index + 1}`}
+              </span>
               <span
                 className="slice-editor-speaker"
                 style={{ color: getSpeakerColor(draggingSegment.speaker, speakers) }}
@@ -817,6 +1039,6 @@ const SelectedCopyPanel = ({
         : null}
     </div>
   );
-};
+});
 
 export default SelectedCopyPanel;

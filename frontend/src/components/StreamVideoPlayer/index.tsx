@@ -41,6 +41,8 @@ export interface StreamVideoPlayerProps
   onFirstFramePrepared?: () => void;
   onDurationChange?: (duration: number) => void;
   onPlaybackError?: (message: string) => void;
+  /** 仅替换 MEDIA_ERR_DECODE 的展示文案；其它错误码仍用默认提示 */
+  decodeErrorMessage?: string;
   onVideoLoadedMetadata?: VideoHTMLAttributes<HTMLVideoElement>['onLoadedMetadata'];
   onVideoDurationChange?: VideoHTMLAttributes<HTMLVideoElement>['onDurationChange'];
   /** HLS 起播位置（秒）；跟播 EVENT 列表传 0，未传则用 hls.js 默认（直播边沿 / VOD 开头） */
@@ -217,6 +219,8 @@ function attachFirstFrameHandler(
 
   const attempt = () => {
     if (preparedRef.current || preparingRef.current || !video.paused) return;
+    // 用户已 seek/播过，不要再抢回片头
+    if ((video.currentTime || 0) > 1) return;
 
     preparingRef.current = true;
     void renderFirstFrame(video, firstFrameTime, skipPlaybackSeek).then((ok) => {
@@ -249,6 +253,7 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
       onFirstFramePrepared,
       onDurationChange,
       onPlaybackError,
+      decodeErrorMessage,
       onVideoLoadedMetadata,
       onVideoDurationChange,
       hlsStartPosition,
@@ -287,9 +292,13 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
     const sourceType = useMemo(() => detectVideoSourceType(sourceUrl), [sourceUrl]);
 
     useImperativeHandle(ref, () => ({
-      video: videoRef.current,
-      sourceType,
-    }));
+      get video() {
+        return videoRef.current;
+      },
+      get sourceType() {
+        return sourceType;
+      },
+    }), [sourceType]);
 
     const emitDuration = () => {
       let duration = readDuration(videoRef.current);
@@ -462,7 +471,7 @@ const StreamVideoPlayer = forwardRef<StreamVideoPlayerHandle, StreamVideoPlayerP
 
     const handleVideoError = () => {
       if (hlsRef.current) return;
-      emitError(getVideoErrorMessage(videoRef.current?.error));
+      emitError(getVideoErrorMessage(videoRef.current?.error, decodeErrorMessage));
     };
 
     return (

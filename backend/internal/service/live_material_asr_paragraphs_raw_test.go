@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,11 +11,10 @@ import (
 
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/asr"
-	"live-mixer/internal/pkg/llm"
 )
 
 // TestGenerateASRParagraphs_FromASRRawJSONFiles 分别以仓库根目录下多个 ASR 样例为 live_asr，
-// 走与 worker 相同的 paragraphs 管线（LLM 不可用时窗内本地合并），严格校验：
+// 走 MinGap 算法 paragraphs 管线，严格校验：
 // 1) words 与 live_asr 总数相等且按序 1:1（text/start/end）；
 // 2) 每段 strip(text)==strip(join(words))；
 // 3) 全文 text 拼接一致；4) 段级时间线合法；5) 单段 ≤200 字。
@@ -78,15 +76,9 @@ func assertASRParagraphsFromLiveASR(t *testing.T, fixtureName, liveASR string, d
 		t.Fatalf("%s duration_ms 无效", fixtureName)
 	}
 
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			return "not-json", nil
-		},
-	}
-
-	paras, err := generateASRParagraphs(context.Background(), llmClient, utterances, durationMs, nil, nil)
+	paras, _, err := BuildASRParagraphsAlgo(utterances, durationMs, 0, nil)
 	if err != nil {
-		t.Fatalf("generateASRParagraphs(%s): %v", fixtureName, err)
+		t.Fatalf("BuildASRParagraphsAlgo(%s): %v", fixtureName, err)
 	}
 	if len(paras) == 0 {
 		t.Fatalf("%s paragraphs 为空", fixtureName)
@@ -310,11 +302,7 @@ func TestReproduceASRParagraphEndClampedByDuration_LiveASR03(t *testing.T) {
 	t.Logf("source ok: utterance=[%d,%d] last_word_end=%d audio_info.duration=%d",
 		srcUT.StartTime, srcUT.EndTime, wantLastWordEnd, naturalDur)
 
-	llmClient := &workerMockLLM{
-		chatFn: func(ctx context.Context, messages []llm.ChatMessage) (string, error) {
-			return "not-json", nil // 本地合并，排除 LLM 边界干扰
-		},
-	}
+	// paragraphs 已改为 MinGap 算法，不再依赖 LLM。
 
 	// 目标：任意包含末字「上」@136460 的段落（合并后该字不一定是段内最后一词）。
 	findTarget := func(t *testing.T, paras []model.ASRParagraph) (para *model.ASRParagraph, wordEnd int64) {
@@ -351,9 +339,9 @@ func TestReproduceASRParagraphEndClampedByDuration_LiveASR03(t *testing.T) {
 	}
 
 	t.Run("natural_duration_no_clamp", func(t *testing.T) {
-		paras, err := generateASRParagraphs(context.Background(), llmClient, utterances, naturalDur, nil, nil)
+		paras, _, err := BuildASRParagraphsAlgo(utterances, naturalDur, 0, nil)
 		if err != nil {
-			t.Fatalf("generateASRParagraphs: %v", err)
+			t.Fatalf("BuildASRParagraphsAlgo: %v", err)
 		}
 		p, wordEnd := findTarget(t, paras)
 		if p == nil {
@@ -369,9 +357,9 @@ func TestReproduceASRParagraphEndClampedByDuration_LiveASR03(t *testing.T) {
 	})
 
 	t.Run("undersized_duration_still_covers_words", func(t *testing.T) {
-		paras, err := generateASRParagraphs(context.Background(), llmClient, utterances, naturalDur, nil, nil)
+		paras, _, err := BuildASRParagraphsAlgo(utterances, naturalDur, 0, nil)
 		if err != nil {
-			t.Fatalf("generateASRParagraphs(natural): %v", err)
+			t.Fatalf("BuildASRParagraphsAlgo(natural): %v", err)
 		}
 		p, wordEnd := findTarget(t, paras)
 		if p == nil {
@@ -434,6 +422,9 @@ func loadRepoLiveASRFixture(t *testing.T, name string) (liveASR string, duration
 	path := filepath.Join(root, name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("缺少 ASR 样例文件（可选）: %s", path)
+		}
 		t.Fatalf("读取 %s 失败: %v", path, err)
 	}
 	if len(raw) == 0 {

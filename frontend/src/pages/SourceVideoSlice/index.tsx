@@ -26,6 +26,7 @@ import {
 import { showAppError, toast } from '~/utils/toast';
 import { formatToDateTime } from '~/utils/date';
 import { formatVideoDuration, formatVideoDurationMs, resolveSliceTimelineDurationSec } from '~/utils/duration';
+import { seekHtmlVideo } from '~/utils/seekMedia';
 import { useSliceEntryFrom } from '~/hooks/useSliceEntryFrom';
 import { useSliceProjectLeaveGuard } from '~/context/SliceLeaveGuardContext';
 import {
@@ -35,7 +36,13 @@ import {
 } from '~/routes/links';
 import { buildSliceBreadcrumbItems, resolveSlicePageTitle } from '~/utils/sliceBreadcrumbs';
 import { serializeTimelineSliceProjectState } from '~/utils/sliceProjectDirty';
-import { getVideoFormatLabel, isPlayableVideoUrl, isSameMediaResource, mediaResourceKey } from '~/utils/videoUrl';
+import {
+  getVideoFormatLabel,
+  isPlayableVideoUrl,
+  isSameMediaResource,
+  LIVE_PREVIEW_DECODE_MESSAGE,
+  mediaResourceKey,
+} from '~/utils/videoUrl';
 import SelectedSegmentsPanel from './SelectedSegmentsPanel';
 import SourceVideoSlicePageSkeleton from './SourceVideoSlicePageSkeleton';
 import TimelineLoadingSkeleton from './TimelineLoadingSkeleton';
@@ -420,13 +427,8 @@ const SourceVideoSlicePage = () => {
 
   const handleTimeChange = useCallback((time: number) => {
     const video = playerRef.current?.video;
-    if (video) {
-      video.currentTime = time;
-      if (video.paused) {
-        void video.play().catch(() => undefined);
-      }
-    }
-    setCurrentTime(time);
+    const nextTime = video ? seekHtmlVideo(video, time) : time;
+    setCurrentTime(nextTime);
   }, []);
 
   const asrSelectableEndSec = useMemo(() => getAsrSelectableEndSec(video), [video]);
@@ -742,7 +744,14 @@ const SourceVideoSlicePage = () => {
 
       {!hasVideoUrl ? (
         <div className="slice-page-empty-shell">
-          <SlicePageEmptyState variant="no-playback-url" entryFrom={entryFrom} />
+          <SlicePageEmptyState
+            variant={
+              video && isLiveIngesting(video.live_status)
+                ? 'record-preview-pending'
+                : 'no-playback-url'
+            }
+            entryFrom={entryFrom}
+          />
         </div>
       ) : !canPreview ? (
         <div className="slice-page-empty-shell">
@@ -763,6 +772,11 @@ const SourceVideoSlicePage = () => {
                 screenshotBaseName={video?.name ?? 'video-screenshot'}
                 onDurationChange={handleDurationChange}
                 onPlaybackError={handlePlaybackError}
+                decodeErrorMessage={
+                  video && isLiveIngesting(video.live_status)
+                    ? LIVE_PREVIEW_DECODE_MESSAGE
+                    : undefined
+                }
                 hlsStartPosition={hlsStartPositionForSourceVideo(video)}
               />
             </div>

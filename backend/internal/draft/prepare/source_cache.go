@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"live-mixer/internal/pkg/media"
+
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -40,11 +42,12 @@ func NewCachingDownloader(inner FileDownloader, cacheDir string, logger *zap.Log
 }
 
 // Download 先确保缓存中有完整源文件，再落到 dest。
+// m3u8 播放列表体积小且跟播中持续变长，不进共享缓存，避免裁切用到过期清单。
 func (d *CachingDownloader) Download(ctx context.Context, url, dest string) (string, error) {
 	if d == nil || d.Inner == nil {
 		return "", fmt.Errorf("下载器未配置")
 	}
-	if d.CacheDir == "" {
+	if d.CacheDir == "" || media.IsM3U8URL(url) {
 		return d.Inner.Download(ctx, url, dest)
 	}
 

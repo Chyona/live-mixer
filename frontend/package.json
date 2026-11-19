@@ -41,6 +41,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^15.15.0",
+    "husky": "^9.1.7",
     "jsdom": "^25.0.1",
     "lint-staged": "^15.5.1",
     "mockjs": "^1.1.0",
@@ -62,6 +63,7 @@
     "vitest": "^2.0.0"
   },
   "scripts": {
+    "prepare": "cd .. && husky frontend/.husky",
     "dev": "vite",
     "dev:mock": "cross-env VITE_MOCK=true vite",
     "build": "pnpm clean:dist && pnpm generate-sitemap && vite build",
@@ -77,6 +79,12 @@
     "generate-sitemap": "node scripts/generate-sitemap.js",
     "clean:dist": "rimraf dist",
     "clean:cache": "rimraf node_modules/.cache/ && rimraf node_modules/.vite"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "esbuild"
+    ]
   },
   "lint-staged": {
     "src/**/*.{js,jsx,ts,tsx}": [

@@ -1,5 +1,6 @@
 export type AsrStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+/** upcoming 仅历史数据兼容；新建直播一律 live。 */
 export type SourceMode = 'upcoming' | 'live' | 'replay';
 
 export type LiveStatus =
@@ -37,6 +38,31 @@ export interface AsrSummary {
   end_time: number;
 }
 
+/** 跟播离散媒体窗（与后端 media_windows jsonb 对齐）；预览/ASR 用前 N 窗拼接的 master（live_url） */
+export interface MediaWindowMeta {
+  i: number;
+  start_ms: number;
+  end_ms: number;
+  dur_ms: number;
+  url?: string;
+  ts_url?: string;
+  ready: boolean;
+}
+
+/** 跟播音画/字幕对齐诊断摘要（详情 API align_diag） */
+export interface AlignDiagSnapshot {
+  play_url: string;
+  live_url: string;
+  same_play_and_live: boolean;
+  master_ready_ms: number;
+  duration_ms: number;
+  window_count: number;
+  asr_cursor_ms: number;
+  asr_progress: number;
+  live_status: string;
+  hint: string;
+}
+
 export interface SourceVideo {
   id: number;
   name: string;
@@ -66,6 +92,8 @@ export interface SourceVideo {
   created_by: string;
   /** 关联的剪辑项目数量 */
   project_count: number;
+  /** 跟播离散媒体窗；拼接主片见 live_url */
+  media_windows?: MediaWindowMeta[];
   /**
    * 列表按 asr_keywords 搜索时返回的命中段落（视频文案正文）。
    * 无文案搜索时通常为空或不返回。时间单位为 ms。
@@ -75,6 +103,8 @@ export interface SourceVideo {
   asr_paragraphs?: AsrParagraphs | null;
   /** 详情接口返回的 ASR 摘要选区；无 clips0 时用于填充时间轴 */
   asr_summaries?: AsrSummary[] | null;
+  /** 跟播对齐诊断摘要（仅详情接口） */
+  align_diag?: AlignDiagSnapshot | null;
 }
 
 export type SourceVideoAsrFields = Pick<
@@ -99,28 +129,114 @@ export function isSourceVideoUrlDuplicateError(payload: { code?: number }): bool
   return Number(payload.code) === SOURCE_VIDEO_URL_DUPLICATE_CODE;
 }
 
-export function sourceVideoPlayUrl(
-  video: Pick<SourceVideo, 'play_url' | 'record_playlist_url' | 'm3u8_url' | 'live_url'>
-): string {
+function isProbablyM3u8Url(url: string): boolean {
+  return /\.m3u8(\?|#|$)/i.test(url.trim());
+}
+
+function readyMediaWindows(windows: MediaWindowMeta[] | undefined): MediaWindowMeta[] {
+  if (!windows?.length) return [];
+  return windows.filter((w) => w.ready && Boolean(w.url?.trim() || w.ts_url?.trim()));
+}
+
+function firstReadyWindowMp4Url(windows: MediaWindowMeta[] | undefined): string {
+  const ready = readyMediaWindows(windows);
+  if (ready.length !== 1) return '';
+  return ready[0]?.url?.trim() || '';
+}
+
+function isLiveIngestStatus(status: string | undefined): boolean {
   return (
-    video.play_url?.trim() ||
-    video.record_playlist_url?.trim() ||
-    video.m3u8_url?.trim() ||
-    video.live_url?.trim() ||
-    ''
+    status === 'waiting' ||
+    status === 'connecting' ||
+    status === 'live' ||
+    status === 'ending' ||
+    status === 'ended'
   );
+}
+
+/**
+ * 切片页预览地址：跟播必须与前 N 窗拼接主 MP4（live_url）/ ASR / 一键成片同一时间轴。
+ * 禁止回退到源站滑动 m3u8。
+ * - 优先 live_url（非 m3u8 的拼接 master）
+ * - 仅一窗就绪且尚无 master 时，可暂用该窗 MP4
+ * - >=2 窗时必须使用 master，不得用单窗或 HLS
+ */
+export type SourceVideoPlayUrlInput = Pick<
+  SourceVideo,
+  'play_url' | 'm3u8_url' | 'live_url' | 'live_status'
+> &
+  Partial<Pick<SourceVideo, 'record_playlist_url' | 'duration'>> & {
+    media_windows?: MediaWindowMeta[];
+  };
+
+export function sourceVideoPlayUrl(video: SourceVideoPlayUrlInput): string {
+  const status = String(video.live_status ?? 'none');
+  const backendPlay = video.play_url?.trim() || '';
+  const live = video.live_url?.trim() || '';
+  const remote = video.m3u8_url?.trim() || '';
+  const windows = video.media_windows;
+  const ready = readyMediaWindows(windows);
+  const duration = Number(video.duration ?? 0) || 0;
+  const masterReady = ready.length > 0 || status === 'ended' || duration > 0;
+
+  if (isLiveIngestStatus(status)) {
+    if (live && !isProbablyM3u8Url(live) && masterReady) {
+      return live;
+    }
+    if (ready.length === 1) {
+      const win = firstReadyWindowMp4Url(windows);
+      if (win) return win;
+    }
+    if (
+      backendPlay &&
+      backendPlay !== remote &&
+      !isProbablyM3u8Url(backendPlay) &&
+      masterReady
+    ) {
+      return backendPlay;
+    }
+    return '';
+  }
+
+  return backendPlay || live || remote || '';
+}
+
+/**
+ * 源视频列表「视频 URL」展示：
+ * - 跟播进行中（waiting/connecting/live/ending）：显示用户填写的源站 m3u8
+ * - 跟播结束（ended）：显示 master.mp4（live_url）
+ * - 失败：优先 m3u8，便于核对拉流地址
+ * 注意：切片预览请继续用 sourceVideoPlayUrl，禁止播源站滑动 m3u8。
+ */
+export function sourceVideoListDisplayUrl(video: SourceVideoPlayUrlInput): string {
+  const status = String(video.live_status ?? 'none');
+  const remote = video.m3u8_url?.trim() || '';
+  const live = video.live_url?.trim() || '';
+
+  if (status === 'ended') {
+    const master = sourceVideoPlayUrl(video);
+    if (master) return master;
+    if (live && !isProbablyM3u8Url(live)) return live;
+    return remote;
+  }
+
+  if (isLiveIngesting(status) || status === 'failed') {
+    if (remote) return remote;
+    if (live && isProbablyM3u8Url(live)) return live;
+    return '';
+  }
+
+  // 回放等：与可播地址一致
+  return sourceVideoPlayUrl(video) || live || remote || '';
 }
 
 export function isLiveIngesting(status: string | undefined): boolean {
   return status === 'waiting' || status === 'connecting' || status === 'live' || status === 'ending';
 }
 
-/** 跟播自有 EVENT 列表从开头起播，便于切片时间轴；源站滑动直播窗仍走直播边沿。 */
+/** 跟播预览为递增 MP4，无需 HLS startPosition。 */
 export function hlsStartPositionForSourceVideo(
-  video: Pick<SourceVideo, 'live_status' | 'record_playlist_url'> | null | undefined
+  _video: Pick<SourceVideo, 'live_status' | 'record_playlist_url'> | null | undefined
 ): number | undefined {
-  if (!video) return undefined;
-  if (video.live_status !== 'live' && video.live_status !== 'ending') return undefined;
-  if (!video.record_playlist_url?.trim()) return undefined;
-  return 0;
+  return undefined;
 }

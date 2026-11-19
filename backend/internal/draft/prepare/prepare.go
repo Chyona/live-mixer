@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
+	"live-mixer/internal/pkg/liveingest"
 	"live-mixer/internal/pkg/media"
 
 	"go.uber.org/zap"
@@ -58,13 +60,6 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	if s.Material == nil {
 		return fmt.Errorf("直播素材为空")
 	}
-	sourceURL := resolveDraftSourceURL(s.Material)
-	if sourceURL == "" {
-		return fmt.Errorf("直播素材没有可裁剪的媒体地址")
-	}
-	if p.Downloader == nil {
-		return fmt.Errorf("下载器未配置")
-	}
 	if p.Cutter == nil {
 		return fmt.Errorf("裁剪器未配置")
 	}
@@ -76,18 +71,146 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 		return fmt.Errorf("创建 capcut-mate 录制目录失败: %w", err)
 	}
 
+	s.ReportProgress(15)
+
+	// 跟播中（live/ending）：强制递增主 MP4，与 ASR/预览同源。
+	if s.Material != nil && (s.Material.LiveStatus == model.LiveStatusLive || s.Material.LiveStatus == model.LiveStatusEnding) {
+		if !canUseMediaWindows(s) {
+			ready := s.Material.ParsedMediaWindows().TotalReadyMS()
+			return fmt.Errorf("主 MP4 尚未覆盖所选区间（已就绪 %dms），请等待下一档（10/20/30…分钟）合成后再一键成片", ready)
+		}
+		p.Logger.Info("开始准备直播视频（递增主 MP4）",
+			zap.String("job_id", s.JobID),
+			zap.String("staging_dir", s.StagingDir),
+			zap.Int64("ready_ms", s.Material.ParsedMediaWindows().TotalReadyMS()),
+		)
+		s.ReportProgress(25)
+		useFast := UseFastKeyframeCut(s.Clips)
+		s.FastKeyframe = useFast
+		if useFast {
+			s.CutMode = "keyframe_copy"
+		} else {
+			s.CutMode = "precise"
+		}
+		paths, err := p.cutClipsByMediaWindows(ctx, s, useFast)
+		if err != nil {
+			return err
+		}
+		s.ClipPaths = paths
+		s.ReportProgress(50)
+		return nil
+	}
+
+	// 已 ended：优先主/最终 MP4；再降级本地 Index / 远程源。
+	preferFinal := shouldPreferFinalMP4(s)
+	if !preferFinal && canUseMediaWindows(s) {
+		p.Logger.Info("开始准备直播视频（递增主 MP4）",
+			zap.String("job_id", s.JobID),
+			zap.String("staging_dir", s.StagingDir),
+			zap.Int64("ready_ms", s.Material.ParsedMediaWindows().TotalReadyMS()),
+		)
+		s.ReportProgress(25)
+		useFast := UseFastKeyframeCut(s.Clips)
+		s.FastKeyframe = useFast
+		if useFast {
+			s.CutMode = "keyframe_copy"
+		} else {
+			s.CutMode = "precise"
+		}
+		paths, err := p.cutClipsByMediaWindows(ctx, s, useFast)
+		if err != nil {
+			return err
+		}
+		s.ClipPaths = paths
+		s.ReportProgress(50)
+		return nil
+	}
+
+	if !preferFinal && canUseLocalTimelineIndex(s) {
+		p.Logger.Info("开始准备直播视频（本地时间轴索引）",
+			zap.String("job_id", s.JobID),
+			zap.String("local_ingest_dir", s.LocalIngestDir),
+			zap.String("staging_dir", s.StagingDir),
+		)
+		s.ReportProgress(25)
+		clips := s.Clips
+		useFast := UseFastKeyframeCut(clips)
+		cutMode := "precise"
+		if useFast {
+			cutMode = "keyframe_copy"
+		}
+		s.FastKeyframe = useFast
+		s.CutMode = cutMode
+		paths, err := p.cutClipsByTimelineIndex(ctx, s, useFast)
+		if err != nil {
+			return err
+		}
+		s.ClipPaths = paths
+		s.ReportProgress(50)
+		return nil
+	}
+
+	sourceURL := resolveDraftSourceURL(s.Material)
+	if sourceURL == "" {
+		// ended 优先 final 失败时，仍可尝试本地分片 Index 裁切。
+		if canUseLocalTimelineIndex(s) {
+			s.ReportProgress(25)
+			useFast := UseFastKeyframeCut(s.Clips)
+			s.FastKeyframe = useFast
+			if useFast {
+				s.CutMode = "keyframe_copy"
+			} else {
+				s.CutMode = "precise"
+			}
+			paths, err := p.cutClipsByTimelineIndex(ctx, s, useFast)
+			if err != nil {
+				return err
+			}
+			s.ClipPaths = paths
+			s.ReportProgress(50)
+			return nil
+		}
+		return fmt.Errorf("直播素材没有可裁剪的媒体地址")
+	}
+	if p.Downloader == nil {
+		return fmt.Errorf("下载器未配置")
+	}
+
 	skipDownload := media.IsM3U8URL(sourceURL)
 	p.Logger.Info("开始准备直播视频",
 		zap.String("job_id", s.JobID),
 		zap.String("source_url", sourceURL),
 		zap.Bool("hls_direct", skipDownload),
+		zap.Bool("prefer_final", preferFinal),
+		zap.String("local_ingest_dir", s.LocalIngestDir),
 		zap.String("staging_dir", s.StagingDir),
 	)
-	s.ReportProgress(15)
 
-	if skipDownload {
-		s.SourcePath = sourceURL
+	cleanupSource := func() {}
+	if localFinal, ok := tryLocalFinalMP4(s); ok {
+		s.SourcePath = localFinal
+		s.SourceMode = "final_mp4"
+	} else if skipDownload {
+		s.SourceMode = "remote_hls"
+		// 跟播中的 EVENT playlist 无 ENDLIST 时，ffmpeg 会从 live edge 起播。
+		// 先下载清单并 Seal 为 VOD，再按时间轴裁切。
+		vodPath, err := p.materializeVODPlaylist(ctx, s, sourceURL)
+		if err != nil {
+			return err
+		}
+		s.SourcePath = vodPath
+		cleanupSource = func() {
+			_ = os.Remove(vodPath)
+			if s.SourcePath == vodPath {
+				s.SourcePath = ""
+			}
+		}
 	} else {
+		if preferFinal || strings.Contains(strings.ToLower(sourceURL), "final") {
+			s.SourceMode = "final_mp4"
+		} else {
+			s.SourceMode = "downloaded"
+		}
 		s.SourcePath = filepath.Join(s.StagingDir, "source.mp4")
 		stopHeartbeat := startDownloadHeartbeat(ctx, s)
 		_, err := p.Downloader.Download(ctx, sourceURL, s.SourcePath)
@@ -97,8 +220,9 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 			s.SourcePath = ""
 			return fmt.Errorf("下载直播视频失败: %w", err)
 		}
-		defer p.removeDownloadedSource(s)
+		cleanupSource = func() { p.removeDownloadedSource(s) }
 	}
+	defer cleanupSource()
 
 	s.ReportProgress(25)
 
@@ -111,12 +235,85 @@ func (p *Pipeline) Run(ctx context.Context, s *session.Session) error {
 	return nil
 }
 
+// shouldPreferFinalMP4 关播完成后优先单文件主 MP4（本地 master.mp4 或 LiveURL）。
+func shouldPreferFinalMP4(s *session.Session) bool {
+	if s == nil || s.Material == nil {
+		return false
+	}
+	m := s.Material
+	if m.LiveStatus == model.LiveStatusLive || m.LiveStatus == model.LiveStatusEnding {
+		return false
+	}
+	if _, ok := tryLocalFinalMP4(s); ok {
+		return true
+	}
+	if m.URLType == model.URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
+		return true
+	}
+	if m.LiveStatus == model.LiveStatusEnded && strings.TrimSpace(m.LiveURL) != "" {
+		return true
+	}
+	return false
+}
+
+// tryLocalFinalMP4 若本地 ingest 目录仍有 master.mp4（或旧版 final.mp4）则返回路径。
+func tryLocalFinalMP4(s *session.Session) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	dir := strings.TrimSpace(s.LocalIngestDir)
+	if dir == "" {
+		return "", false
+	}
+	for _, name := range []string{liveingest.MasterMP4FileName(), "final.mp4"} {
+		p := filepath.Join(dir, name)
+		st, err := os.Stat(p)
+		if err != nil || st.Size() == 0 {
+			continue
+		}
+		return p, true
+	}
+	return "", false
+}
+
+// materializeVODPlaylist 下载远程 m3u8 并补 ENDLIST，返回本地路径供 ffmpeg 随机访问。
+func (p *Pipeline) materializeVODPlaylist(ctx context.Context, s *session.Session, sourceURL string) (string, error) {
+	dest := filepath.Join(s.StagingDir, "source_vod.m3u8")
+	if _, err := p.Downloader.Download(ctx, sourceURL, dest); err != nil {
+		return "", fmt.Errorf("下载跟播播放列表失败: %w", err)
+	}
+	raw, err := os.ReadFile(dest)
+	if err != nil {
+		_ = os.Remove(dest)
+		return "", fmt.Errorf("读取跟播播放列表失败: %w", err)
+	}
+	// 先删再写：CachingDownloader 可能硬链接到共享缓存，直接覆盖会污染缓存。
+	_ = os.Remove(dest)
+	sealed := liveingest.SealPlaylistAsVOD(string(raw))
+	hadEndlist := strings.Contains(string(raw), "#EXT-X-ENDLIST")
+	if err := os.WriteFile(dest, []byte(sealed), 0o644); err != nil {
+		_ = os.Remove(dest)
+		return "", fmt.Errorf("写入 VOD 播放列表失败: %w", err)
+	}
+	p.Logger.Info("已物化 VOD 播放列表供裁切",
+		zap.String("job_id", s.JobID),
+		zap.String("source_url", sourceURL),
+		zap.String("local_playlist", dest),
+		zap.Bool("appended_endlist", !hadEndlist),
+	)
+	return dest, nil
+}
+
 func resolveDraftSourceURL(m *model.LiveMaterial) string {
 	if m == nil {
 		return ""
 	}
-	if m.URLType == model.URLTypeFile && m.LiveURL != "" {
-		return m.LiveURL
+	// 已 ended / url_type=file：优先 final.mp4（LiveURL），远程 HLS 仅降级。
+	if m.URLType == model.URLTypeFile && strings.TrimSpace(m.LiveURL) != "" {
+		return strings.TrimSpace(m.LiveURL)
+	}
+	if m.LiveStatus == model.LiveStatusEnded && strings.TrimSpace(m.LiveURL) != "" {
+		return strings.TrimSpace(m.LiveURL)
 	}
 	if m.LiveStatus == model.LiveStatusLive || m.LiveStatus == model.LiveStatusEnding {
 		if m.RecordPlaylistURL != "" {
@@ -194,23 +391,30 @@ func fileSizeOrZero(path string) int64 {
 func (p *Pipeline) cutClips(ctx context.Context, s *session.Session) ([]string, error) {
 	clips := s.Clips
 	totalMS := TotalClipDurationMS(clips)
+	// 成片总时长 >10 分钟走关键帧快切；字幕对齐依赖 VideosStep 探测真实片长 + CaptionsStep 按比例缩放。
+	// 不再因「开字幕」强制全精确重编码：对 HLS 直切时精确模式曾极慢（逐段从片头解码）。
 	useFast := UseFastKeyframeCut(clips)
+	cutMode := "precise"
+	if useFast {
+		cutMode = "keyframe_copy"
+	}
+	s.FastKeyframe = useFast
+	s.CutMode = cutMode
 	p.Logger.Info("选择草稿切片裁剪方式",
 		zap.String("job_id", s.JobID),
 		zap.Int("clips", len(clips)),
 		zap.Int64("total_duration_ms", totalMS),
 		zap.Int64("fast_cut_threshold_ms", FastKeyframeCutMinDurationMS),
 		zap.Bool("fast_keyframe", useFast),
+		zap.String("cut_mode", cutMode),
+		zap.Bool("captions", projectWantsCaptions(s.Project)),
 	)
 	paths := make([]string, 0, len(clips))
 	for i, clip := range clips {
 		outPath := filepath.Join(s.StagingDir, fmt.Sprintf("clip_%03d.mp4", i))
 		startSec := float64(clip.StartTime) / 1000.0
 		endSec := float64(clip.EndTime) / 1000.0
-		mode := "precise"
-		if useFast {
-			mode = "keyframe_copy"
-		}
+		mode := cutMode
 		p.Logger.Info("开始 ffmpeg 裁剪切片",
 			zap.String("job_id", s.JobID),
 			zap.Int("index", i),
@@ -255,6 +459,14 @@ func UseFastKeyframeCut(clips []model.ClipRange) bool {
 	return TotalClipDurationMS(clips) > FastKeyframeCutMinDurationMS
 }
 
+// projectWantsCaptions 项目需要生成字幕时，裁剪必须帧精确，避免与 ASR 时间轴错位。
+func projectWantsCaptions(project *model.VideoProject) bool {
+	if project == nil {
+		return true
+	}
+	return project.EnableCaptions != model.EnableCaptionsOff
+}
+
 // ResolveClipRanges 优先从 video_project.clips1 提取时间段；为空则回退 clips0。
 func ResolveClipRanges(project *model.VideoProject) ([]model.ClipRange, error) {
 	if project == nil {
@@ -287,9 +499,66 @@ func ValidateClipRanges(clips []model.ClipRange) error {
 	return nil
 }
 
+// MergeAdjacentClipTexts 与 MergeAdjacentClipRanges 使用同一合并规则，对带文本/词级时间的切片
+// 做同步合并：text 按顺序拼接、words 依序追加，时间取 [cur.Start, max(cur.End, next.End)]。
+// 规则只依赖 (Start, End)，因此结果与 MergeAdjacentClipRanges 的区间一一对应。
+func MergeAdjacentClipTexts(clips []model.ClipWithText, maxGapMS int64) []model.ClipWithText {
+	if len(clips) == 0 {
+		return nil
+	}
+
+	out := make([]model.ClipWithText, 0, len(clips))
+	cur := cloneClipWithText(clips[0])
+	for i := 1; i < len(clips); i++ {
+		next := clips[i]
+		gap := next.StartTime - cur.EndTime
+		// 列表顺序优先：时间上回跳的相邻项不合，避免负 gap 误吞片段。
+		if next.StartTime >= cur.StartTime && gap <= maxGapMS {
+			cur.Text += next.Text
+			if next.EndTime > cur.EndTime {
+				cur.EndTime = next.EndTime
+			}
+			if len(next.Words) > 0 {
+				cur.Words = append(cur.Words, append([]model.ClipWord(nil), next.Words...)...)
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = cloneClipWithText(next)
+	}
+	out = append(out, cur)
+	return out
+}
+
+// ClipTextsMatchRanges 校验带文本切片与切片区间是否一一对应（起止时间完全一致）。
+// 不一致时字幕不能按文本生成，调用方应回退 ASR 映射。
+func ClipTextsMatchRanges(ranges []model.ClipRange, texts []model.ClipWithText) bool {
+	if len(ranges) != len(texts) {
+		return false
+	}
+	for i := range ranges {
+		if ranges[i].StartTime != texts[i].StartTime || ranges[i].EndTime != texts[i].EndTime {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneClipWithText(c model.ClipWithText) model.ClipWithText {
+	out := model.ClipWithText{
+		Text:      c.Text,
+		StartTime: c.StartTime,
+		EndTime:   c.EndTime,
+	}
+	if len(c.Words) > 0 {
+		out.Words = append([]model.ClipWord(nil), c.Words...)
+	}
+	return out
+}
+
 // MergeAdjacentClipRanges 按列表顺序合并相邻片段：严格保留入参顺序，不排序。
 // 仅当列表中相邻两项满足 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS
-//（含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。
+// （含向前重叠）时合并为 [cur.Start, max(cur.End, next.End)]。
 func MergeAdjacentClipRanges(clips []model.ClipRange, maxGapMS int64) []model.ClipRange {
 	if len(clips) == 0 {
 		return nil

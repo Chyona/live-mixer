@@ -80,49 +80,14 @@ func buildClips1FromIndices(segments []asr.Utterance, indices []int) []model.Cli
 	return mergeAdjacentClips1(out, prepare.ClipMergeGapMS)
 }
 
-// mergeAdjacentClips1 按列表顺序合并相邻 clips1：规则与草稿侧 MergeAdjacentClipRanges 一致。
-// 当 next.Start >= cur.Start 且 gap=next.Start-cur.End ≤ maxGapMS（含重叠）时合并；
-// 合并后 text / words 按顺序拼接，时间取 [cur.Start, max(cur.End, next.End)]。
+// mergeAdjacentClips1 按列表顺序合并相邻 clips1：规则与草稿侧 MergeAdjacentClipRanges 一致，
+// 实现复用 prepare.MergeAdjacentClipTexts，保证草稿侧按同一规则合并后与切片区间一一对应。
 func mergeAdjacentClips1(clips []model.ClipWithText, maxGapMS int64) []model.ClipWithText {
-	if len(clips) == 0 {
+	merged := prepare.MergeAdjacentClipTexts(clips, maxGapMS)
+	if merged == nil {
 		return []model.ClipWithText{}
 	}
-	if len(clips) == 1 {
-		return []model.ClipWithText{cloneClipWithText(clips[0])}
-	}
-
-	out := make([]model.ClipWithText, 0, len(clips))
-	cur := cloneClipWithText(clips[0])
-	for i := 1; i < len(clips); i++ {
-		next := clips[i]
-		gap := next.StartTime - cur.EndTime
-		if next.StartTime >= cur.StartTime && gap <= maxGapMS {
-			cur.Text += next.Text
-			if next.EndTime > cur.EndTime {
-				cur.EndTime = next.EndTime
-			}
-			if len(next.Words) > 0 {
-				cur.Words = append(cur.Words, append([]model.ClipWord(nil), next.Words...)...)
-			}
-			continue
-		}
-		out = append(out, cur)
-		cur = cloneClipWithText(next)
-	}
-	out = append(out, cur)
-	return out
-}
-
-func cloneClipWithText(c model.ClipWithText) model.ClipWithText {
-	out := model.ClipWithText{
-		Text:      c.Text,
-		StartTime: c.StartTime,
-		EndTime:   c.EndTime,
-	}
-	if len(c.Words) > 0 {
-		out.Words = append([]model.ClipWord(nil), c.Words...)
-	}
-	return out
+	return merged
 }
 
 // utteranceToClipWithText 将单条 ASR 分句转为 clips1 条目（含词级时间戳）。

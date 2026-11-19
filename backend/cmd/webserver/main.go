@@ -86,15 +86,24 @@ func main() {
 	}
 
 	asrService := service.NewASRServiceFromConfig(cfg.ASR.ASRClientConfig())
-	asrLLM := llm.NewClient(cfg.LLM.LLMClientConfigForASR())
+	asrLLMConfig := cfg.LLM.LLMClientConfigForASR()
+	asrLLM := llm.NewClient(asrLLMConfig)
 	sliceLLM := llm.NewClient(cfg.LLM.LLMClientConfig())
 	chatLLM := llm.NewClient(cfg.LLM.LLMClientConfig())
+	// 单次大模型调用的预算必须大于最慢一次真实生成（AI 切片实测 6.5~8.8 分钟），
+	// 否则请求会被客户端超时掐死（报 "awaiting headers"）。启动即打印，便于线上核对。
+	logger.Info("LLM 客户端已初始化",
+		zap.String("model", cfg.LLM.Model),
+		zap.String("flash_model", cfg.LLM.FlashModelOrDefault()),
+		zap.String("base_url", cfg.LLM.BaseURL),
+		zap.Duration("timeout", cfg.LLM.Timeout()),
+	)
 
 	audioPreparer := service.NewLiveMaterialASRAudioPreparer(
 		downloader,
 		media.NewFFmpegConverter(""),
 		storageClient,
-		"temp",
+		service.ASRTempDirName,
 		logger,
 		media.NewFFprobeProber(""),
 	)
@@ -110,12 +119,37 @@ func main() {
 	)
 
 	capcutClient := capcutmate.NewClient(cfg.CapCutMate.CapCutMateClientConfig())
+
+	// 成片字幕 LLM 断句：默认开启（caption_segment.enabled 缺省即开启，显式 false 关闭）。
+	// 未配置 LLM api_key 时保持 nil：否则每条切片都会撞一次注定失败的调用，不如直接走规则折行。
+	var captionSegmenter draft.CaptionSegmenter
+	if cfg.CaptionSegment.EnabledOrDefault() {
+		if asrLLMConfig.APIKey == "" {
+			logger.Warn("成片字幕 LLM 断句已开启但未配置 llm.api_key，本次跳过，字幕走规则折行")
+		} else {
+			captionSegmenter = &service.CaptionSegmenter{
+				Client:      asrLLM,
+				Logger:      logger,
+				Model:       cfg.LLM.FlashModelOrDefault(),
+				Timeout:     cfg.CaptionSegment.Timeout(),
+				Concurrency: cfg.CaptionSegment.ConcurrencyOrDefault(),
+				CacheSize:   cfg.CaptionSegment.CacheSizeOrDefault(),
+			}
+			logger.Info("成片字幕 LLM 断句已启用",
+				zap.String("model", cfg.LLM.FlashModelOrDefault()),
+				zap.Int("concurrency", cfg.CaptionSegment.ConcurrencyOrDefault()),
+				zap.Duration("timeout", cfg.CaptionSegment.Timeout()),
+			)
+		}
+	}
+
 	generator := draft.NewGenerator(draft.GeneratorDeps{
 		CapCut:     capcutClient,
 		Cutter:     media.NewFFmpegConverter(""),
 		Downloader: downloader,
 		Uploader:   storageClient,
 		Logger:     logger,
+		Segmenter:  captionSegmenter,
 	})
 	enableGenVideo := cfg.CapCutMate.GenVideoEnabled()
 	draftWorker := service.NewDraftWorker(service.DraftWorkerDeps{
@@ -169,9 +203,16 @@ func main() {
 		ingestWorker,
 		liveIngestRepo,
 		service.NewStorageLiveURLAllocator(storageClient),
+		cfg.Ingest.MediaWindowDuration(),
 	)
 	llmPromptService := service.NewLLMSystemPromptService(llmPromptRepo)
-	videoProjectService := service.NewVideoProjectServiceWithLogger(videoProjectRepo, liveMaterialRepo, logger)
+	// 字幕预览下载复用草稿组装器：断行规则/LLM 断句缓存与提交成片完全一致。
+	videoProjectService := service.NewVideoProjectServiceWithSubtitleBuilder(
+		videoProjectRepo,
+		liveMaterialRepo,
+		logger,
+		generator,
+	)
 	taskService := service.NewTaskService(
 		taskRepo,
 		liveMaterialRepo,
@@ -232,6 +273,57 @@ func main() {
 			}
 			if removed > 0 {
 				logger.Info("已清理过期直播源缓存", zap.Int("removed", removed))
+			}
+		},
+	})
+	sched.Register(scheduler.Job{
+		Name:     "cleanup-asr-temp",
+		Interval: cfg.Web.StagingCleanupInterval(),
+		Run: func(context.Context) {
+			removed, cleanErr := service.CleanupASRTempFiles(service.ASRTempDirName, service.ASRTempCleanupMaxAge)
+			if cleanErr != nil {
+				logger.Warn("清理 ASR 临时文件失败",
+					zap.String("dir", service.ASRTempDirName),
+					zap.Error(cleanErr),
+					zap.Int("removed", removed),
+				)
+				return
+			}
+			if removed > 0 {
+				logger.Info("已清理过期 ASR 临时文件",
+					zap.String("dir", service.ASRTempDirName),
+					zap.Int("removed", removed),
+				)
+			}
+		},
+	})
+	sched.Register(scheduler.Job{
+		Name:     "cleanup-live-ingest",
+		Interval: cfg.Web.StagingCleanupInterval(),
+		Run: func(jobCtx context.Context) {
+			result, cleanErr := service.CleanupLiveIngest(
+				jobCtx,
+				cfg.Web.RootDir,
+				cfg.Web.LiveIngestMaxDirs,
+				liveMaterialRepo,
+				logger,
+			)
+			if cleanErr != nil {
+				logger.Warn("清理 live_ingest 失败",
+					zap.Error(cleanErr),
+					zap.Int("removed_ids", result.RemovedIDs),
+					zap.Int("removed_epochs", result.RemovedEpoch),
+				)
+				return
+			}
+			if result.RemovedIDs > 0 || result.RemovedEpoch > 0 {
+				logger.Info("已清理 live_ingest 目录",
+					zap.Int("scanned", result.Scanned),
+					zap.Int("protected", result.Protected),
+					zap.Int("kept", result.Kept),
+					zap.Int("removed_ids", result.RemovedIDs),
+					zap.Int("removed_epochs", result.RemovedEpoch),
+				)
 			}
 		},
 	})

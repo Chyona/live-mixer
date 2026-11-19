@@ -10,9 +10,26 @@ import (
 	"live-mixer/internal/draft/session"
 	"live-mixer/internal/model"
 	"live-mixer/internal/pkg/capcutmate"
+	"live-mixer/internal/pkg/media"
 
 	"go.uber.org/zap"
 )
+
+type stubDurationProber struct {
+	msByPath map[string]int64
+}
+
+func (s stubDurationProber) ProbeVideoSize(ctx context.Context, inputPath string) (int, int, error) {
+	return 0, 0, nil
+}
+
+func (s stubDurationProber) ProbeMediaTimeline(ctx context.Context, inputPath string) (media.MediaTimeline, error) {
+	ms, ok := s.msByPath[inputPath]
+	if !ok || ms <= 0 {
+		return media.MediaTimeline{}, errors.New("not found")
+	}
+	return media.MediaTimeline{FormatDurationSec: float64(ms) / 1000}, nil
+}
 
 type mockUploader struct {
 	urls map[string]string
@@ -74,7 +91,12 @@ func TestVideosStep_Run_UploadsAndUsesObjectURL(t *testing.T) {
 	clip1 := filepath.Join(t.TempDir(), "clip_001.mp4")
 	uploader := &mockUploader{}
 	api := &mockVideosAPI{}
-	step := VideosStep{API: api, Uploader: uploader, Logger: zap.NewNop()}
+	step := VideosStep{
+		API:      api,
+		Uploader: uploader,
+		Prober:   stubDurationProber{msByPath: map[string]int64{clip0: 1000, clip1: 1500}},
+		Logger:   zap.NewNop(),
+	}
 
 	s := &session.Session{
 		JobID:     "task-42",
@@ -113,6 +135,49 @@ func TestVideosStep_Run_UploadsAndUsesObjectURL(t *testing.T) {
 	}
 	if s.ClipPlacements[1].DraftStartUS != 1_000_000 || s.ClipPlacements[1].DraftEndUS != 2_500_000 {
 		t.Errorf("placement[1] draft = %#v", s.ClipPlacements[1])
+	}
+}
+
+func TestResolveClipDraftDurationMS(t *testing.T) {
+	ctx := context.Background()
+	prober := stubDurationProber{msByPath: map[string]int64{"a.mp4": 980}}
+	if got := resolveClipDraftDurationMS(ctx, prober, "a.mp4", 1000); got != 980 {
+		t.Fatalf("got %d want 980", got)
+	}
+	if got := resolveClipDraftDurationMS(ctx, prober, "missing.mp4", 1000); got != 1000 {
+		t.Fatalf("fallback got %d", got)
+	}
+	// 偏差过大回退理论值
+	prober = stubDurationProber{msByPath: map[string]int64{"b.mp4": 8000}}
+	if got := resolveClipDraftDurationMS(ctx, prober, "b.mp4", 1000); got != 1000 {
+		t.Fatalf("skew fallback got %d", got)
+	}
+}
+
+func TestVideosStep_Run_UsesProbedDurationOnTimeline(t *testing.T) {
+	clip0 := filepath.Join(t.TempDir(), "clip_000.mp4")
+	api := &mockVideosAPI{}
+	step := VideosStep{
+		API:      api,
+		Uploader: &mockUploader{},
+		Prober:   stubDurationProber{msByPath: map[string]int64{clip0: 900}},
+		Logger:   zap.NewNop(),
+	}
+	s := &session.Session{
+		JobID:     "task-dur",
+		DraftURL:  "http://example.com/draft",
+		ClipPaths: []string{clip0},
+		Clips:     []model.ClipRange{{StartTime: 1000, EndTime: 2000}},
+		Timeline:  session.NewTimeline(),
+	}
+	if err := step.Run(context.Background(), s); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if s.ClipPlacements[0].DraftEndUS-s.ClipPlacements[0].DraftStartUS != 900_000 {
+		t.Fatalf("draft dur = %#v, want 900000us", s.ClipPlacements[0])
+	}
+	if s.ClipPlacements[0].SourceStartMS != 1000 || s.ClipPlacements[0].SourceEndMS != 2000 {
+		t.Fatalf("source range should stay requested: %#v", s.ClipPlacements[0])
 	}
 }
 

@@ -92,6 +92,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
     - name: 准备代码
       uses: actions/checkout@v4
@@ -106,7 +109,7 @@ jobs:
       with:
         node-version: 22
         cache: pnpm
-        cache-dependency-path: pnpm-lock.yaml
+        cache-dependency-path: frontend/pnpm-lock.yaml
 
     - name: 安装依赖
       run: pnpm install --frozen-lockfile
@@ -114,10 +117,10 @@ jobs:
         HUSKY: '0'
 
     - name: 构建前端
-      run: pnpm --filter base-ui build
+      run: pnpm build
 
     - name: 打包 dist.tar.gz
-      run: tar -czf frontend/dist.tar.gz -C frontend/dist .
+      run: tar -czf dist.tar.gz -C dist .
 
     - name: 上传 Actions Artifact
       uses: actions/upload-artifact@v4
