@@ -30,6 +30,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVideoSink>
 
 #include <climits>
 #include <functional>
@@ -153,7 +154,7 @@ QTemporaryFile *createEndedPlaylist(const QString &playlistPath,
 constexpr qint64 kHeadPreviewDurationMs = 60 * 1000;
 
 QStringList remuxArguments(const QString &playlistPath, const QString &tempPath,
-                           qint64 limitMs)
+                           qint64 limitMs, double readRate)
 {
     QStringList args{
         QStringLiteral("-y"),
@@ -164,24 +165,36 @@ QStringList remuxArguments(const QString &playlistPath, const QString &tempPath,
         QStringLiteral("-progress"),
         QStringLiteral("pipe:1"),
         QStringLiteral("-nostats"),
-        QStringLiteral("-i"),
-        playlistPath,
-        // 只保留画面和首条音轨，避免 HLS 中的附加数据流导致 MP4 封装失败。
-        QStringLiteral("-map"),
-        QStringLiteral("0:v:0"),
-        QStringLiteral("-map"),
-        QStringLiteral("0:a:0?"),
-        QStringLiteral("-c"),
-        QStringLiteral("copy"),
     };
+    if (readRate > 0.0) {
+        // 限制输入读取速度，避免完整预览转封装在播放期间占满磁盘。
+        args << QStringLiteral("-readrate")
+             << QString::number(readRate, 'f', 2);
+    }
+    args << QStringLiteral("-i") << playlistPath
+         // 只保留画面和首条音轨，避免 HLS 中的附加数据流导致 MP4 封装失败。
+         << QStringLiteral("-map") << QStringLiteral("0:v:0")
+         << QStringLiteral("-map") << QStringLiteral("0:a:0?")
+         << QStringLiteral("-c") << QStringLiteral("copy");
     if (limitMs > 0) {
         args << QStringLiteral("-t")
              << QString::number(limitMs / 1000.0, 'f', 3);
     }
-    args << QStringLiteral("-f") << QStringLiteral("mp4")
-         << QStringLiteral("-movflags") << QStringLiteral("+faststart")
-         << tempPath;
+    // 本地预览不需要 faststart：把 moov 移到文件头需要对整个文件再做一次
+    // 读写，长录像会成倍放大后台转封装的磁盘压力。
+    args << QStringLiteral("-f") << QStringLiteral("mp4") << tempPath;
     return args;
+}
+
+// 完整预览与 60 秒开头预览并行生成时，按录像时长限速到约 50 秒完成，
+// 把后台转封装的磁盘读写摊平，避免拖慢正在播放的开头预览。
+double pacedRemuxRate(qint64 durationMs)
+{
+    constexpr double kTargetSeconds = 50.0;
+    if (durationMs <= 0) {
+        return 0.0;
+    }
+    return qMax(1.0, durationMs / 1000.0 / kTargetSeconds);
 }
 
 void attachRemuxProgress(QProcess *process, QByteArray *buffer, qint64 durationMs,
@@ -313,35 +326,130 @@ VideoPreviewCard::VideoPreviewCard(const QString &title, const QString &filePath
     footer->addWidget(m_slider, 1);
     footer->addWidget(m_duration);
 
-    connect(m_player, &QMediaPlayer::durationChanged, this, [this](qint64 duration) {
-        const int seconds =
-            static_cast<int>(qMin<qint64>(qMax<qint64>(0, duration / 1000), INT_MAX));
-        m_slider->setRange(0, seconds);
-        m_duration->setText(MediaUtils::formatDuration(duration));
-    });
-    connect(m_player, &QMediaPlayer::positionChanged, this, [this](qint64 position) {
-        if (m_seeking) {
+    setupPlaybackConnections(m_player);
+
+    seekSlider->scrubStarted = [this](int value) {
+        m_seeking = true;
+        m_seekTargetMs = qint64(value) * 1000;
+        m_lastKnownPositionMs = m_seekTargetMs;
+        // 用户主动定位后，交接完成时的位置校验不再纠偏。
+        m_switchPositionGuardCancelled = true;
+        if (m_handoffActive) {
+            // 追帧交接中拖动进度：停止交接，松开后从新位置重新开始。
+            abortFullPreviewHandoff(true);
+        }
+        m_current->setText(MediaUtils::formatDuration(m_seekTargetMs));
+        m_player->setPosition(m_seekTargetMs);
+    };
+    seekSlider->scrubbed = [this](int value) {
+        m_seekTargetMs = qint64(value) * 1000;
+        m_lastKnownPositionMs = m_seekTargetMs;
+        m_current->setText(MediaUtils::formatDuration(m_seekTargetMs));
+    };
+    seekSlider->scrubFinished = [this](int value) {
+        m_seekTargetMs = qint64(value) * 1000;
+        m_lastKnownPositionMs = m_seekTargetMs;
+        if (m_pendingFullSwitch) {
+            // 完整预览已就绪（或在交接中被拖动打断），按松开时的位置重新交接。
+            m_pendingFullSwitch = false;
+            m_seeking = false;
+            m_player->setPosition(m_seekTargetMs);
+            if (m_preloadPlayer) {
+                beginFullPreviewHandoff();
+            } else {
+                preloadFullPreview();
+            }
             return;
         }
-        m_seekTargetMs = -1;
-        m_lastKnownPositionMs = position;
-        const int seconds =
-            static_cast<int>(qMin<qint64>(qMax<qint64>(0, position / 1000), INT_MAX));
-        m_slider->setValue(seconds);
-        m_current->setText(MediaUtils::formatDuration(position));
+        m_player->setPosition(m_seekTargetMs);
+        m_seeking = false;
+    };
+    connect(this, &ModalCard::closeRequested, this, [this] {
+        if (m_player) {
+            m_player->stop();
+        }
     });
-    connect(m_player, &QMediaPlayer::playbackStateChanged, this,
-            [this](QMediaPlayer::PlaybackState state) {
-                m_playButton->setGlyph(state == QMediaPlayer::PlayingState
-                                           ? Icons::Glyph::Pause
-                                           : Icons::Glyph::Play);
+    connect(m_playButton, &QAbstractButton::clicked, this, [this] {
+        if (m_error) {
+            return;
+        }
+        if (m_player->playbackState() == QMediaPlayer::PlayingState) {
+            m_playIntent = false;
+            // 用户主动暂停后停止交接后的位置校验，避免校验逻辑重新播放。
+            m_switchPositionGuardCancelled = true;
+            m_player->pause();
+            return;
+        }
+        m_playIntent = true;
+        // 播完后再次点击播放才从头开始；用户先把进度拖回中间时应从该位置继续。
+        if (m_player->mediaStatus() == QMediaPlayer::EndOfMedia
+            && m_player->position()
+                >= qMax<qint64>(0, m_player->duration() - 500)) {
+            m_player->setPosition(0);
+        }
+        m_player->play();
+    });
+
+    auto *space = new QShortcut(QKeySequence(Qt::Key_Space), this);
+    space->setContext(Qt::WindowShortcut);
+    connect(space, &QShortcut::activated, m_playButton, &QAbstractButton::click);
+
+    QTimer::singleShot(0, this, [this] { updateVideoGeometry(); });
+
+    if (filePath.endsWith(QLatin1String(".m3u8"), Qt::CaseInsensitive)) {
+        prepareHlsPreview(filePath);
+    } else {
+        setStatus(QStringLiteral("正在加载视频…"), false);
+        startPlayback(filePath);
+    }
+}
+
+// 活动播放器的信号统一在这里连接；预加载播放器也使用同一套处理函数，
+// 但只有成为 m_player 之后才会更新界面。
+void VideoPreviewCard::setupPlaybackConnections(QMediaPlayer *player)
+{
+    connect(player, &QMediaPlayer::durationChanged, this,
+            [this, player](qint64 duration) {
+                if (m_player != player) {
+                    return;
+                }
+                const int seconds = static_cast<int>(
+                    qMin<qint64>(qMax<qint64>(0, duration / 1000), INT_MAX));
+                m_slider->setRange(0, seconds);
+                m_duration->setText(MediaUtils::formatDuration(duration));
+            });
+    connect(player, &QMediaPlayer::positionChanged, this,
+            [this, player](qint64 position) {
+                if (m_player != player || m_seeking) {
+                    return;
+                }
+                m_seekTargetMs = -1;
+                m_lastKnownPositionMs = position;
+                const int seconds = static_cast<int>(
+                    qMin<qint64>(qMax<qint64>(0, position / 1000), INT_MAX));
+                m_slider->setValue(seconds);
+                m_current->setText(MediaUtils::formatDuration(position));
+            });
+    connect(player, &QMediaPlayer::playbackStateChanged, this,
+            [this, player](QMediaPlayer::PlaybackState state) {
+                if (m_player != player) {
+                    return;
+                }
+                if (!m_holdPausedFrame) {
+                    m_playButton->setGlyph(state == QMediaPlayer::PlayingState
+                                               ? Icons::Glyph::Pause
+                                               : Icons::Glyph::Play);
+                }
                 if (state == QMediaPlayer::PlayingState && !m_error
-                    && !m_headPreviewActive) {
+                    && !m_headPreviewActive && !m_holdPausedFrame) {
                     m_status->hide();
                 }
             });
-    connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
-            [this](QMediaPlayer::MediaStatus status) {
+    connect(player, &QMediaPlayer::mediaStatusChanged, this,
+            [this, player](QMediaPlayer::MediaStatus status) {
+                if (m_player != player) {
+                    return;
+                }
                 switch (status) {
                 case QMediaPlayer::LoadingMedia:
                     setStatus(QStringLiteral("正在加载视频…"), false);
@@ -350,46 +458,12 @@ VideoPreviewCard::VideoPreviewCard(const QString &title, const QString &filePath
                     setStatus(QStringLiteral("正在缓冲…"), false);
                     break;
                 case QMediaPlayer::LoadedMedia:
-                    if (m_error) {
-                        break;
-                    }
-                    if (m_switchingToFull) {
-                        // setSource 后旧的播放状态会残留一帧；等状态归零、新文件真正
-                        // 加载完成后再定位，避免 play() 变成空操作。
-                        if (m_player->playbackState()
-                            == QMediaPlayer::StoppedState) {
-                            restoreFullPreview();
-                        }
-                        break;
-                    }
-                    if (m_headPreviewActive) {
-                        if (m_pendingFullSwitch) {
-                            m_pendingFullSwitch = false;
-                            switchToFullPreview();
-                        } else if (m_fullPrepare) {
-                            setStatus(
-                                QStringLiteral("已加载开头部分，完整预览准备中…"),
-                                false);
-                        }
-                    } else {
-                        m_status->hide();
-                    }
-                    break;
                 case QMediaPlayer::BufferedMedia:
                     if (m_error) {
                         break;
                     }
-                    if (m_switchingToFull) {
-                        // 完整文件已就绪：从开头预览的当前位置继续播放。
-                        if (m_player->playbackState()
-                            == QMediaPlayer::StoppedState) {
-                            restoreFullPreview();
-                        }
-                    } else if (m_headPreviewActive) {
-                        if (m_pendingFullSwitch) {
-                            m_pendingFullSwitch = false;
-                            switchToFullPreview();
-                        } else if (m_fullPrepare) {
+                    if (m_headPreviewActive) {
+                        if (m_fullPrepare || m_fullPrepareScheduled) {
                             setStatus(
                                 QStringLiteral("已加载开头部分，完整预览准备中…"),
                                 false);
@@ -408,96 +482,16 @@ VideoPreviewCard::VideoPreviewCard(const QString &title, const QString &filePath
                     break;
                 }
             });
-    connect(m_player, &QMediaPlayer::errorOccurred, this,
-            [this](QMediaPlayer::Error, const QString &message) {
+    connect(player, &QMediaPlayer::errorOccurred, this,
+            [this, player](QMediaPlayer::Error, const QString &message) {
+                if (m_player != player) {
+                    return;
+                }
                 setStatus(QStringLiteral("播放失败：%1")
                               .arg(message.isEmpty() ? QStringLiteral("未知错误")
                                                      : message),
                           true);
             });
-
-    seekSlider->scrubStarted = [this](int value) {
-        m_seeking = true;
-        m_seekTargetMs = qint64(value) * 1000;
-        m_lastKnownPositionMs = m_seekTargetMs;
-        // 用户主动定位后，切换完整预览时的位置校验不再纠偏。
-        m_switchPositionGuardCancelled = true;
-        m_current->setText(MediaUtils::formatDuration(m_seekTargetMs));
-        if (m_switchingToFull) {
-            // 切换完整文件期间用户又拖动了进度，等加载完成后按新位置定位。
-            m_switchPositionMs = m_seekTargetMs;
-            return;
-        }
-        m_player->setPosition(m_seekTargetMs);
-    };
-    seekSlider->scrubbed = [this](int value) {
-        m_seekTargetMs = qint64(value) * 1000;
-        m_lastKnownPositionMs = m_seekTargetMs;
-        m_current->setText(MediaUtils::formatDuration(m_seekTargetMs));
-        if (m_switchingToFull) {
-            m_switchPositionMs = m_seekTargetMs;
-        }
-    };
-    seekSlider->scrubFinished = [this](int value) {
-        m_seekTargetMs = qint64(value) * 1000;
-        m_lastKnownPositionMs = m_seekTargetMs;
-        if (m_switchingToFull) {
-            m_switchPositionMs = m_seekTargetMs;
-            m_seeking = false;
-            return;
-        }
-        if (m_pendingFullSwitch) {
-            // 完整预览在拖动期间就绪，直接用目标位置切换，避免先跳到旧文件。
-            m_pendingFullSwitch = false;
-            m_switchPositionMs = m_seekTargetMs;
-            m_switchResume = m_player->playbackState() == QMediaPlayer::PlayingState;
-            m_switchPositionGuardCancelled = true;
-            m_switchingToFull = true;
-            if (m_switchResume) {
-                m_player->pause();
-            }
-            m_player->setSource(QUrl::fromLocalFile(m_hlsFullCachePath));
-            QTimer::singleShot(2000, this, [this] { restoreFullPreview(); });
-            m_seeking = false;
-            return;
-        }
-        m_player->setPosition(m_seekTargetMs);
-        m_seeking = false;
-    };
-    connect(this, &ModalCard::closeRequested, this, [this] {
-        if (m_player) {
-            m_player->stop();
-        }
-    });
-    connect(m_playButton, &QAbstractButton::clicked, this, [this] {
-        if (m_error) {
-            return;
-        }
-        // 播完后再次点击播放才从头开始；用户先把进度拖回中间时应从该位置继续。
-        if (m_player->mediaStatus() == QMediaPlayer::EndOfMedia
-            && m_player->position()
-                >= qMax<qint64>(0, m_player->duration() - 500)) {
-            m_player->setPosition(0);
-        }
-        if (m_player->playbackState() == QMediaPlayer::PlayingState) {
-            m_player->pause();
-        } else {
-            m_player->play();
-        }
-    });
-
-    auto *space = new QShortcut(QKeySequence(Qt::Key_Space), this);
-    space->setContext(Qt::WindowShortcut);
-    connect(space, &QShortcut::activated, m_playButton, &QAbstractButton::click);
-
-    QTimer::singleShot(0, this, [this] { updateVideoGeometry(); });
-
-    if (filePath.endsWith(QLatin1String(".m3u8"), Qt::CaseInsensitive)) {
-        prepareHlsPreview(filePath);
-    } else {
-        setStatus(QStringLiteral("正在加载视频…"), false);
-        startPlayback(filePath);
-    }
 }
 
 bool VideoPreviewCard::eventFilter(QObject *watched, QEvent *event)
@@ -546,6 +540,12 @@ VideoPreviewCard::~VideoPreviewCard()
     if (!m_fullTempPath.isEmpty()) {
         QFile::remove(m_fullTempPath);
     }
+    ++m_handoffGeneration;
+    m_handoffActive = false;
+    if (m_preloadPlayer) {
+        m_preloadPlayer->stop();
+        m_preloadPlayer->setSource(QUrl());
+    }
     if (m_player) {
         m_player->stop();
         m_player->setSource(QUrl());
@@ -554,6 +554,7 @@ VideoPreviewCard::~VideoPreviewCard()
 
 void VideoPreviewCard::startPlayback(const QString &filePath)
 {
+    m_playIntent = true;
     m_player->setSource(QUrl::fromLocalFile(filePath));
     QTimer::singleShot(0, this, [this] {
         if (m_player) {
@@ -676,7 +677,7 @@ void VideoPreviewCard::startHeadPreview(const QString &playlistPath)
 #endif
     m_prepare->setProgram(ffmpeg);
     m_prepare->setArguments(
-        remuxArguments(inputPlaylist, tempPath, kHeadPreviewDurationMs));
+        remuxArguments(inputPlaylist, tempPath, kHeadPreviewDurationMs, 0.0));
     m_prepare->start();
 }
 
@@ -685,7 +686,17 @@ void VideoPreviewCard::playHeadPreview(const QString &filePath)
     m_headPreviewActive = true;
     setStatus(QStringLiteral("已加载开头部分，完整预览准备中…"), false);
     startPlayback(filePath);
-    startFullPreview();
+    // 先让开头预览进入播放，再启动完整预览的后台转封装，避免首帧加载与
+    // 磁盘写入互相影响。
+    if (!m_fullPrepareScheduled) {
+        m_fullPrepareScheduled = true;
+        QTimer::singleShot(500, this, [this] {
+            m_fullPrepareScheduled = false;
+            if (m_headPreviewActive && !m_fullPrepare && !m_error) {
+                startFullPreview();
+            }
+        });
+    }
 }
 
 void VideoPreviewCard::startFullPreview()
@@ -779,8 +790,13 @@ void VideoPreviewCard::startFullPreview()
             args->flags |= CREATE_NO_WINDOW;
         });
 #endif
+    // 开头预览正在播放时，完整预览转封装限速进行，避免磁盘 I/O 抢占。
+    const double readRate = m_headPreviewActive
+        ? pacedRemuxRate(m_prepareDurationMs)
+        : 0.0;
     m_fullPrepare->setProgram(ffmpeg);
-    m_fullPrepare->setArguments(remuxArguments(inputPlaylist, tempPath, 0));
+    m_fullPrepare->setArguments(
+        remuxArguments(inputPlaylist, tempPath, 0, readRate));
     m_fullPrepare->start();
 }
 
@@ -793,80 +809,295 @@ void VideoPreviewCard::onFullPreviewReady()
         startPlayback(m_hlsFullCachePath);
         return;
     }
+    // 可以立即在后台加载完整预览；用户正在拖动时，加载完成后再延后交接。
+    preloadFullPreview();
+}
+
+// 完整预览生成后，用第二个播放器在后台加载；开头预览继续正常播放。
+void VideoPreviewCard::preloadFullPreview()
+{
+    if (m_preloadPlayer || !m_headPreviewActive) {
+        return;
+    }
+    const QFileInfo cached(m_hlsFullCachePath);
+    if (!cached.isFile() || cached.size() <= 0) {
+        setStatus(QStringLiteral("完整预览准备失败，当前可播放开头部分。"), false);
+        return;
+    }
+
+    m_preloadPlayer = new QMediaPlayer(this);
+    m_preloadAudio = new QAudioOutput(this);
+    // 追帧期间静音，交接完成后再恢复音量。
+    m_preloadAudio->setVolume(0.0);
+    m_preloadPlayer->setAudioOutput(m_preloadAudio);
+    // 隐藏的视频 sink 用于预热解码器，交接时画面能立即出现。
+    m_preloadSink = new QVideoSink(this);
+    m_preloadPlayer->setVideoOutput(m_preloadSink);
+    setupPlaybackConnections(m_preloadPlayer);
+
+    QMediaPlayer *preload = m_preloadPlayer;
+    connect(preload, &QMediaPlayer::mediaStatusChanged, this,
+            [this, preload](QMediaPlayer::MediaStatus status) {
+                if (m_player == preload) {
+                    return; // 已成为活动播放器，由通用处理逻辑接管
+                }
+                if (status == QMediaPlayer::LoadedMedia
+                    || status == QMediaPlayer::BufferedMedia) {
+                    m_preloadReady = true;
+                    if (m_seeking) {
+                        m_pendingFullSwitch = true;
+                        return;
+                    }
+                    beginFullPreviewHandoff();
+                } else if (status == QMediaPlayer::InvalidMedia) {
+                    discardPreloadPlayer();
+                    setStatus(
+                        QStringLiteral("完整预览加载失败，当前可播放开头部分。"),
+                        false);
+                }
+            });
+    connect(preload, &QMediaPlayer::errorOccurred, this,
+            [this, preload](QMediaPlayer::Error, const QString &) {
+                if (m_player == preload) {
+                    return;
+                }
+                discardPreloadPlayer();
+                if (m_headPreviewActive) {
+                    setStatus(
+                        QStringLiteral("完整预览加载失败，当前可播放开头部分。"),
+                        false);
+                }
+            });
+    preload->setSource(QUrl::fromLocalFile(m_hlsFullCachePath));
+}
+
+// 预加载完成后开始交接：开头预览继续播放，完整预览在后台加速追到相同
+// 时间点；对齐后只交换音频/视频输出，避免重新加载和定位造成的卡顿。
+void VideoPreviewCard::beginFullPreviewHandoff()
+{
+    if (!m_preloadPlayer || !m_preloadReady || !m_headPreviewActive
+        || m_handoffActive) {
+        return;
+    }
     if (m_seeking) {
-        // 用户正在拖动进度条，等松开后再切换到完整文件。
         m_pendingFullSwitch = true;
         return;
     }
-    switchToFullPreview();
-}
-
-void VideoPreviewCard::switchToFullPreview()
-{
-    m_pendingFullSwitch = false;
-    const QMediaPlayer::MediaStatus status = m_player->mediaStatus();
-    const bool headReady = status != QMediaPlayer::NoMedia
-        && status != QMediaPlayer::LoadingMedia
-        && status != QMediaPlayer::InvalidMedia;
-    // 刚拖动/点击过进度条时，播放器的位置可能还没跟上，优先使用用户目标位置；
-    // position() 偶发返回 0 时用最后已知位置兜底，确保切换不会跳回开头。
-    m_switchPositionMs = headReady
-        ? (m_seekTargetMs >= 0
-               ? m_seekTargetMs
-               : qMax(m_player->position(), m_lastKnownPositionMs))
-        : 0;
-    m_switchResume = headReady
-        ? m_player->playbackState() == QMediaPlayer::PlayingState
-        : true;
-    m_switchPositionGuardCancelled = true;
-    m_switchingToFull = true;
-    setStatus(QStringLiteral("正在加载完整视频…"), false);
-    // 先暂停开头预览，避免部分后端在 setSource 后自动从新文件 0 秒开始播放。
-    if (m_switchResume) {
-        m_player->pause();
-    }
-    m_player->setSource(QUrl::fromLocalFile(m_hlsFullCachePath));
-    // 兜底：个别后端不一定给出可用的 LoadedMedia 事件，超时后仍尝试恢复。
-    QTimer::singleShot(2000, this, [this] { restoreFullPreview(); });
-}
-
-void VideoPreviewCard::restoreFullPreview()
-{
-    if (!m_switchingToFull) {
+    const bool playing = m_player->playbackState() == QMediaPlayer::PlayingState;
+    const bool ended = m_player->mediaStatus() == QMediaPlayer::EndOfMedia;
+    if (!playing) {
+        // 用户暂停或开头预览已播完：直接切换，不需要追帧。
+        handoffToFullPreview(ended ? m_playIntent : false);
         return;
     }
-    m_switchingToFull = false;
-    m_headPreviewActive = false;
-    m_switchPositionGuardCancelled = false;
-    m_player->setPosition(m_switchPositionMs);
-    if (m_switchResume) {
-        m_player->play();
+
+    setStatus(QStringLiteral("正在切换完整预览…"), false);
+    // 拖动进度后 m_seekTargetMs 可能比实际位置更准确；否则用当前/最后位置兜底。
+    m_handoffTargetMs = m_seekTargetMs >= 0
+        ? m_seekTargetMs
+        : qMax(m_player->position(), m_lastKnownPositionMs);
+    m_preloadPlayer->setPosition(m_handoffTargetMs);
+    m_preloadPlayer->setPlaybackRate(2.0);
+    m_preloadPlayer->play();
+    m_handoffActive = true;
+    // 首次轮询稍晚一些，等后端完成定位并上报真实播放位置（seek 会落到关键帧）。
+    scheduleHandoffPoll(++m_handoffGeneration);
+}
+
+void VideoPreviewCard::scheduleHandoffPoll(int generation)
+{
+    QTimer::singleShot(40, this, [this, generation] {
+        if (generation != m_handoffGeneration || !m_handoffActive) {
+            return;
+        }
+        if (!m_preloadPlayer || !m_player) {
+            m_handoffActive = false;
+            return;
+        }
+        if (m_seeking) {
+            abortFullPreviewHandoff(true);
+            return;
+        }
+        if (m_player->playbackState() != QMediaPlayer::PlayingState) {
+            // 追帧期间用户暂停，或开头预览播放到结尾。
+            const bool ended =
+                m_player->mediaStatus() == QMediaPlayer::EndOfMedia;
+            abortFullPreviewHandoff(false);
+            handoffToFullPreview(ended ? m_playIntent : false);
+            return;
+        }
+        const qint64 headPosition = m_player->position();
+        const qint64 fullPosition = m_preloadPlayer->position();
+        // 后端刚调用 play() 时可能还上报请求位置，先等它真正越过定位点，
+        // 避免按错误位置提前交接。之后允许落后一帧多一点。
+        if (fullPosition > m_handoffTargetMs
+            && fullPosition + 30 >= headPosition) {
+            handoffToFullPreview(true);
+            return;
+        }
+        scheduleHandoffPoll(generation);
+    });
+}
+
+void VideoPreviewCard::handoffToFullPreview(bool resume)
+{
+    if (!m_preloadPlayer || !m_preloadReady) {
+        return;
     }
+    m_handoffActive = false;
+    ++m_handoffGeneration;
+
+    QMediaPlayer *full = m_preloadPlayer;
+    QMediaPlayer *old = m_player;
+    const qint64 target = m_seekTargetMs >= 0
+        ? m_seekTargetMs
+        : qMax(old->position(), m_lastKnownPositionMs);
+
+    full->setPlaybackRate(1.0);
+    if (!resume) {
+        full->pause();
+        full->setPosition(target);
+    } else if (full->playbackState() != QMediaPlayer::PlayingState) {
+        full->setPosition(target);
+        full->play();
+    }
+
+    m_switchPositionMs =
+        resume ? qMax<qint64>(0, full->position()) : target;
+    if (m_switchPositionMs <= 0) {
+        m_switchPositionMs = target;
+    }
+    m_switchPositionGuardCancelled = false;
+    m_seekTargetMs = -1;
+
+    // 交换播放器与输出：预加载播放器已在目标位置附近，画面通常一帧内出现。
+    old->pause();
+    m_player = full;
+    m_preloadPlayer = nullptr;
+    full->setVideoOutput(m_videoItem);
+    if (m_preloadSink) {
+        m_preloadSink->deleteLater();
+        m_preloadSink = nullptr;
+    }
+    // m_preloadAudio 交接后继续作为完整预览的音频输出。
+    m_preloadAudio->setVolume(0.8);
+    old->setAudioOutput(nullptr);
+    old->stop();
+    old->deleteLater();
+    if (m_audio) {
+        // 开头预览的音频输出已不再使用，及时释放音频设备。
+        m_audio->deleteLater();
+        m_audio = nullptr;
+    }
+
+    m_handoffActive = false;
+    m_pendingFullSwitch = false;
+    m_preloadReady = false;
+    m_headPreviewActive = false;
+    m_lastKnownPositionMs = m_switchPositionMs;
+
+    const qint64 duration = m_player->duration();
+    if (duration > 0) {
+        const int seconds = static_cast<int>(
+            qMin<qint64>(qMax<qint64>(0, duration / 1000), INT_MAX));
+        m_slider->setRange(0, seconds);
+        m_duration->setText(MediaUtils::formatDuration(duration));
+    }
+    const int seconds = static_cast<int>(
+        qMin<qint64>(qMax<qint64>(0, m_switchPositionMs / 1000), INT_MAX));
+    m_slider->setValue(seconds);
+    m_current->setText(MediaUtils::formatDuration(m_switchPositionMs));
+    m_playButton->setGlyph(resume ? Icons::Glyph::Pause : Icons::Glyph::Play);
     m_status->hide();
-    qInfo() << "Full preview switched; target position" << m_switchPositionMs;
-    verifyFullPreviewPosition(0);
+    qInfo() << "Full preview handoff; position" << m_switchPositionMs
+            << "resume" << resume;
+    if (resume) {
+        verifyFullPreviewPosition(0);
+        return;
+    }
+
+    // 暂停状态下刚接过来的播放器还没有可见帧：静音播放一小段渲染首帧后暂停。
+    m_holdPausedFrame = true;
+    m_preloadAudio->setVolume(0.0);
+    m_player->play();
+    QTimer::singleShot(120, this, [this] {
+        if (!m_player) {
+            return;
+        }
+        if (!m_playIntent) {
+            m_player->pause();
+        }
+        m_preloadAudio->setVolume(0.8);
+        m_holdPausedFrame = false;
+        m_lastKnownPositionMs = m_player->position();
+        m_playButton->setGlyph(m_player->playbackState()
+                                       == QMediaPlayer::PlayingState
+                                   ? Icons::Glyph::Pause
+                                   : Icons::Glyph::Play);
+    });
+}
+
+void VideoPreviewCard::abortFullPreviewHandoff(bool markPending)
+{
+    m_handoffActive = false;
+    ++m_handoffGeneration;
+    if (m_preloadPlayer) {
+        m_preloadPlayer->pause();
+        m_preloadPlayer->setPlaybackRate(1.0);
+    }
+    if (markPending) {
+        m_pendingFullSwitch = true;
+    }
+}
+
+void VideoPreviewCard::discardPreloadPlayer()
+{
+    m_handoffActive = false;
+    ++m_handoffGeneration;
+    m_preloadReady = false;
+    if (m_preloadPlayer) {
+        m_preloadPlayer->stop();
+        m_preloadPlayer->setVideoOutput(nullptr);
+        m_preloadPlayer->setAudioOutput(nullptr);
+        m_preloadPlayer->deleteLater();
+        m_preloadPlayer = nullptr;
+    }
+    if (m_preloadAudio) {
+        m_preloadAudio->deleteLater();
+        m_preloadAudio = nullptr;
+    }
+    if (m_preloadSink) {
+        m_preloadSink->deleteLater();
+        m_preloadSink = nullptr;
+    }
+    m_pendingFullSwitch = false;
 }
 
 void VideoPreviewCard::verifyFullPreviewPosition(int attempt)
 {
-    constexpr int kMaxAttempts = 6;
+    constexpr int kMaxAttempts = 24; // 约 6 秒
     if (attempt >= kMaxAttempts || m_switchPositionGuardCancelled
-        || m_switchPositionMs <= 1500) {
+        || m_seeking) {
         return;
     }
-    const qint64 target = m_switchPositionMs;
-    QTimer::singleShot(attempt == 0 ? 120 : 250, this, [this, target, attempt] {
+    QTimer::singleShot(attempt == 0 ? 120 : 250, this, [this, attempt] {
         if (m_switchPositionGuardCancelled || m_seeking) {
             return;
         }
-        if (m_player->position() < target - 1500) {
-            qWarning() << "Full preview position reset to" << m_player->position()
+        const qint64 target = m_switchPositionMs;
+        const qint64 position = m_player->position();
+        // 定位正常会落在前一个关键帧上（可能回退数秒）；只有被后端重置
+        // 回开头时才重新定位，避免大关键帧间隔的视频被反复 seek。
+        if (target >= 2000 && position < 1000) {
+            qWarning() << "Full preview position reset to" << position
                        << "retrying seek to" << target;
             m_player->setPosition(target);
-            if (m_switchResume
-                && m_player->playbackState() != QMediaPlayer::PlayingState) {
-                m_player->play();
-            }
+        }
+        if (m_playIntent
+            && m_player->mediaStatus() != QMediaPlayer::EndOfMedia
+            && m_player->playbackState() == QMediaPlayer::StoppedState) {
+            // 个别后端定位后会把播放状态重置为 stopped，确保继续播放。
+            m_player->play();
         }
         // 即使当前定位成功也继续观察一小段时间，兜住后端延迟重置位置的情况。
         verifyFullPreviewPosition(attempt + 1);
