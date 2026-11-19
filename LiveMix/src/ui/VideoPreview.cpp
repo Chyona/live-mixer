@@ -278,8 +278,10 @@ VideoPreviewCard::VideoPreviewCard(const QString &title, const QString &filePath
 
     m_status = Ui::label(QString(), 12, 400, Theme::Text2, this);
     m_status->setAlignment(Qt::AlignCenter);
+    // 提示区固定预留两行高度且始终保留：加载进度变化、错误信息换行或提示
+    // 消失时，弹窗高度保持不变，视频画面不会随之上下移动。
     m_status->setWordWrap(true);
-    m_status->setMinimumHeight(18);
+    m_status->setFixedHeight(qMax(36, m_status->fontMetrics().lineSpacing() * 2));
     contentLayout()->addWidget(m_status);
 
     m_player = new QMediaPlayer(this);
@@ -304,11 +306,14 @@ VideoPreviewCard::VideoPreviewCard(const QString &title, const QString &filePath
 
     m_current = Ui::label(QStringLiteral("00:00"), 11, 400, Theme::Text3, this);
     m_current->setFont(Theme::monoFont(11));
-    m_current->setFixedWidth(48);
     m_duration = Ui::label(QStringLiteral("00:00"), 11, 400, Theme::Text3, this);
     m_duration->setFont(Theme::monoFont(11));
-    m_duration->setFixedWidth(48);
     m_duration->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    // 预留 HH:MM:SS 的完整宽度，十几小时的直播录像时间不会被裁掉。
+    const int timeLabelWidth =
+        m_current->fontMetrics().horizontalAdvance(QStringLiteral("00:00:00")) + 8;
+    m_current->setFixedWidth(timeLabelWidth);
+    m_duration->setFixedWidth(timeLabelWidth);
 
     auto *seekSlider = new SeekSlider(this);
     m_slider = seekSlider;
@@ -442,7 +447,7 @@ void VideoPreviewCard::setupPlaybackConnections(QMediaPlayer *player)
                 }
                 if (state == QMediaPlayer::PlayingState && !m_error
                     && !m_headPreviewActive && !m_holdPausedFrame) {
-                    m_status->hide();
+                    m_status->clear();
                 }
             });
     connect(player, &QMediaPlayer::mediaStatusChanged, this,
@@ -469,7 +474,7 @@ void VideoPreviewCard::setupPlaybackConnections(QMediaPlayer *player)
                                 false);
                         }
                     } else {
-                        m_status->hide();
+                        m_status->clear();
                     }
                     break;
                 case QMediaPlayer::EndOfMedia:
@@ -1008,7 +1013,7 @@ void VideoPreviewCard::handoffToFullPreview(bool resume)
     m_slider->setValue(seconds);
     m_current->setText(MediaUtils::formatDuration(m_switchPositionMs));
     m_playButton->setGlyph(resume ? Icons::Glyph::Pause : Icons::Glyph::Play);
-    m_status->hide();
+    m_status->clear();
     qInfo() << "Full preview handoff; position" << m_switchPositionMs
             << "resume" << resume;
     if (resume) {
@@ -1107,14 +1112,10 @@ void VideoPreviewCard::verifyFullPreviewPosition(int attempt)
 void VideoPreviewCard::setStatus(const QString &text, bool error)
 {
     m_error = error;
-    if (text.isEmpty()) {
-        m_status->hide();
-        return;
-    }
+    // 不使用 show()/hide()：提示行始终占位，清空文字即可，避免弹窗高度变化。
     m_status->setText(text);
     m_status->setStyleSheet(error ? QStringLiteral("color:#FF7A7A;")
                                   : QStringLiteral("color:#9BA2B5;"));
-    m_status->show();
     if (error) {
         m_playButton->setEnabled(false);
         m_slider->setEnabled(false);
