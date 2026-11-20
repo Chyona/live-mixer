@@ -190,6 +190,34 @@ CapCutCaptionStyle randomCaptionStyle()
     return presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
 }
 
+// 中英文双字幕：英文轨放在中文轨下方。剪映小助手先把 transform_y 除以画布高度，
+// 草稿坐标再按半个画布高换算，净效果约为屏幕像素的一半；120 约向下 60 像素，
+// 保持紧凑但清晰可分的双语行距。
+constexpr double kEnglishCaptionTransformYGap = 120.0;
+
+bool containsCjkCharacter(const QString &text)
+{
+    for (const QChar ch : text) {
+        const ushort code = ch.unicode();
+        if ((code >= 0x3400 && code <= 0x4DBF)
+            || (code >= 0x4E00 && code <= 0x9FFF)
+            || (code >= 0xF900 && code <= 0xFAFF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 英文字幕沿用中文的颜色与描边，换成更清晰的无衬线字体、略小字号并下移一行。
+CapCutCaptionStyle englishCaptionStyle(const CapCutCaptionStyle &chineseStyle)
+{
+    CapCutCaptionStyle style = chineseStyle;
+    style.font = QStringLiteral("Inter-SemiBold");
+    style.fontSize = qMax(5, chineseStyle.fontSize - 2);
+    style.transformY = chineseStyle.transformY - kEnglishCaptionTransformYGap;
+    return style;
+}
+
 // 判断一句转写是否以句末标点结尾；允许句号后跟引号、括号等收尾符号。
 bool endsWithSentenceEnd(const QString &text)
 {
@@ -646,8 +674,8 @@ void LiveClipService::run()
         const double speed = m_request.speedAuto
             ? 1.0 + 0.05 * QRandomGenerator::global()->bounded(11)
             : qBound(0.5, m_request.fixedSpeed, 2.0);
-        if (!createDraftForProject(&repository, &capcut, draftInputPath, project, i,
-                                   speed, &error)) {
+        if (!createDraftForProject(&repository, &capcut, &llm, draftInputPath, project,
+                                   i, speed, &error)) {
             emit finished(false, QStringLiteral("第 %1 条草稿生成失败：%2")
                                       .arg(i + 1)
                                       .arg(error));
@@ -1032,7 +1060,7 @@ QString LiveClipService::resolveDraftInputPath(const MediaSource &source,
 }
 
 bool LiveClipService::createDraftForProject(MediaRepository *repository,
-                                            CapCutMateClient *capcut,
+                                            CapCutMateClient *capcut, LlmClient *llm,
                                             const QString &inputPath,
                                             const SelectedProject &project, int index,
                                             double speed, QString *error)
@@ -1241,10 +1269,99 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         emitFailure(4, QStringLiteral("添加字幕失败"));
         return false;
     }
-    emitStep(4, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("%1 条字幕 · %2")
-                 .arg(captions.size())
-                 .arg(captionStyle.font));
+
+    // 中英文双字幕：逐条翻译后追加一条英文轨，放在中文字幕下方。
+    // 翻译或英文轨写入失败都不阻断草稿生成，只回退为仅中文字幕。
+    int englishCount = 0;
+    QString englishNote;
+    if (m_request.bilingualSubtitles && !captions.isEmpty()) {
+        if (!llm) {
+            englishNote = QStringLiteral("翻译服务不可用");
+        } else {
+            QStringList pendingTexts;
+            QVector<int> pendingIndices;
+            for (int i = 0; i < captions.size(); ++i) {
+                if (containsCjkCharacter(captions.at(i).text)) {
+                    pendingIndices.append(i);
+                    pendingTexts.append(captions.at(i).text);
+                }
+            }
+            if (pendingTexts.isEmpty()) {
+                englishNote = QStringLiteral("没有需要翻译的中文字幕");
+            } else {
+                emitStep(4, PipelineUi::StepStatus::Running, 50,
+                         QStringLiteral("正在生成 %1 条英文译文")
+                             .arg(pendingTexts.size()));
+                LlmTranslationRequest translationRequest;
+                translationRequest.baseUrl = m_request.gatewayBaseUrl;
+                translationRequest.apiKey = m_request.apiKey;
+                translationRequest.texts = pendingTexts;
+
+                QStringList translations;
+                QString translationError;
+                const auto onTranslateStatus = [&emitStep](const QString &text) {
+                    emitStep(4, PipelineUi::StepStatus::Running, 60, text);
+                };
+                if (!llm->translateCaptions(translationRequest, &translations,
+                                            &translationError, onTranslateStatus)) {
+                    qWarning() << "Caption translation failed:" << translationError;
+                    englishNote = QStringLiteral("英文译文生成失败");
+                } else {
+                    QVector<CapCutCaption> englishCaptions;
+                    for (int i = 0; i < translations.size(); ++i) {
+                        const QString translated = translations.at(i).trimmed();
+                        // 漏译、回显中文或原样返回的条目直接跳过，避免英文轨重复中文。
+                        if (translated.isEmpty()
+                            || containsCjkCharacter(translated)
+                            || translated.compare(pendingTexts.at(i),
+                                                  Qt::CaseInsensitive) == 0) {
+                            continue;
+                        }
+                        const CapCutCaption &chinese = captions.at(pendingIndices.at(i));
+                        CapCutCaption english;
+                        english.startUs = chinese.startUs;
+                        english.endUs = chinese.endUs;
+                        english.text = translated;
+                        englishCaptions.append(english);
+                    }
+
+                    if (englishCaptions.isEmpty()) {
+                        englishNote = QStringLiteral("未得到有效英文译文");
+                    } else {
+                        emitStep(4, PipelineUi::StepStatus::Running, 80,
+                                 QStringLiteral("正在写入 %1 条英文译文")
+                                     .arg(englishCaptions.size()));
+                        QString englishError;
+                        if (capcut->addCaptions(draft.draftUrl, englishCaptions,
+                                                englishCaptionStyle(captionStyle),
+                                                &englishError)) {
+                            englishCount = englishCaptions.size();
+                        } else {
+                            qWarning() << "Add English captions failed:" << englishError;
+                            englishNote = QStringLiteral("英文轨写入失败");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    QString captionDetail;
+    if (englishCount > 0) {
+        captionDetail = QStringLiteral("%1 条中文字幕 · %2 条英文译文 · %3")
+                            .arg(captions.size())
+                            .arg(englishCount)
+                            .arg(captionStyle.font);
+    } else if (m_request.bilingualSubtitles && !englishNote.isEmpty()) {
+        captionDetail = QStringLiteral("%1 条中文字幕 · %2")
+                            .arg(captions.size())
+                            .arg(englishNote);
+    } else {
+        captionDetail = QStringLiteral("%1 条字幕 · %2")
+                            .arg(captions.size())
+                            .arg(captionStyle.font);
+    }
+    emitStep(4, PipelineUi::StepStatus::Done, 100, captionDetail);
 
     // 5. 只落库草稿信息；用户点击「打开草稿文件夹」时才下载草稿文件。
     stepClock.restart();

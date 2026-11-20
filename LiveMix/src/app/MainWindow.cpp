@@ -1882,6 +1882,7 @@ void MainWindow::startClipPipeline(qint64 sourceId, const QString &promptText,
     request.targetClipCount = targetClipCount;
     request.speedAuto = config.finish.speedAuto;
     request.fixedSpeed = config.finish.fixedSpeed;
+    request.bilingualSubtitles = config.finish.bilingualSubtitles;
     m_lastSourceId = sourceId;
     m_lastPromptText = promptText;
     m_lastPromptLabel = promptLabel;
