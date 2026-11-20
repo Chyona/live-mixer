@@ -415,6 +415,9 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
     }
 
     QJsonArray videoArray;
+    QJsonArray sceneArray;
+    // scene_timelines 必须与 video_infos 一一对应；任一段缺少变速信息时整体不提交。
+    bool hasSceneTimelines = true;
     for (const CapCutVideoInfo &video : videos) {
         QJsonObject videoInfo;
         videoInfo.insert(QStringLiteral("video_url"), video.url);
@@ -429,6 +432,15 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
                              video.transitionDurationUs);
         }
         videoArray.append(videoInfo);
+
+        if (video.sceneStartUs >= 0 && video.sceneEndUs > video.sceneStartUs) {
+            QJsonObject scene;
+            scene.insert(QStringLiteral("start"), video.sceneStartUs);
+            scene.insert(QStringLiteral("end"), video.sceneEndUs);
+            sceneArray.append(scene);
+        } else {
+            hasSceneTimelines = false;
+        }
     }
 
     QJsonObject payload;
@@ -436,6 +448,9 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
     payload.insert(QStringLiteral("video_infos"),
                    QString::fromUtf8(
                        QJsonDocument(videoArray).toJson(QJsonDocument::Compact)));
+    if (hasSceneTimelines) {
+        payload.insert(QStringLiteral("scene_timelines"), sceneArray);
+    }
 
     const HttpResponse response = m_http->postJson(
         ServiceEndpoints::capCutMateUrl(QStringLiteral("add_videos")), payload,

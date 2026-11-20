@@ -282,6 +282,15 @@ const QStringList &transitionTitles()
     return titles;
 }
 
+// 片段在成片播放轴上的时长（微秒）；有 scene 区间时以其为准。
+qint64 videoPlaybackDurationUs(const CapCutVideoInfo &video)
+{
+    if (video.sceneStartUs >= 0 && video.sceneEndUs > video.sceneStartUs) {
+        return video.sceneEndUs - video.sceneStartUs;
+    }
+    return video.endUs - video.startUs;
+}
+
 // 与 v3 模板一致：每个草稿只随机挑一对相邻切片、只用一种转场，时长 800ms。
 // 两段都需长于转场时长，避免转场吞掉过短的片段。
 constexpr qint64 kTransitionDurationUs = 800'000;
@@ -291,10 +300,10 @@ int pickTransitionPairIndex(const QVector<CapCutVideoInfo> &videos, qint64 minUs
 {
     QVector<int> candidates;
     for (int i = 0; i + 1 < videos.size(); ++i) {
-        if (videos.at(i).endUs - videos.at(i).startUs <= minUs) {
+        if (videoPlaybackDurationUs(videos.at(i)) <= minUs) {
             continue;
         }
-        if (videos.at(i + 1).endUs - videos.at(i + 1).startUs <= minUs) {
+        if (videoPlaybackDurationUs(videos.at(i + 1)) <= minUs) {
             continue;
         }
         candidates.append(i);
@@ -839,10 +848,13 @@ void LiveClipService::run()
                           .arg(projects.size())
                           .arg(displayTitle),
                       100 * i / projects.size());
-        // 成片倍速：自动模式下每条成片在 1.0×–1.5× 之间独立随机。
+        // 成片倍速：自动模式下每条成片在 1.0×–1.5× 内独立随机。
+        // 跳过 1.00×，避免抽到原速让「自动倍速」看起来没有生效。
         const double speed = m_request.speedAuto
-            ? 1.0 + 0.05 * QRandomGenerator::global()->bounded(11)
+            ? 1.05 + 0.01 * QRandomGenerator::global()->bounded(46)
             : qBound(0.5, m_request.fixedSpeed, 2.0);
+        qInfo() << "Draft" << i + 1 << "playback speed:" << speed
+                << "auto:" << m_request.speedAuto;
         if (!createDraftForProject(&repository, &capcut, &llm, draftInputPath, project,
                                    i, speed, &error)) {
             emit finished(false, QStringLiteral("第 %1 条草稿生成失败：%2")
@@ -1247,7 +1259,9 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     // 与 captions 一一对应的未折行文本，用于翻译（折行后的 \n 不适合放进提示词）。
     QStringList captionTexts;
     QStringList clipPaths;
-    QVector<qint64> actualDurations;
+    // 切片真实时长（原速，作为 add_videos 的素材时长）与成片播放轴时长（除以倍速）。
+    QVector<qint64> sourceDurations;
+    QVector<qint64> playbackDurations;
     int canvasWidth = kLandscapeCanvasWidth;
     int canvasHeight = kLandscapeCanvasHeight;
     bool hasCanvasSize = false;
@@ -1294,7 +1308,7 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                      .arg(rangeCount)
                      .arg(PipelineUi::formatRange(range.startMs, range.endMs)));
         if (!FfmpegUtils::cutClip(inputPath, range.startMs, range.endMs, clipPath,
-                                  error, boundedSpeed)) {
+                                  error)) {
             emitFailure(0, QStringLiteral("视频裁剪失败"));
             return false;
         }
@@ -1312,15 +1326,17 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             }
         }
 
-        // 用切片真实时长铺时间轴；变速后理论时长为原区间 / 倍速。
-        qint64 actualMs = 0;
-        const qint64 wantMs = qMax<qint64>(
-            1, qint64(range.durationMs() / boundedSpeed));
-        if (!FfmpegUtils::mediaDurationMs(clipPath, &actualMs) || actualMs <= 0
-            || qAbs(actualMs - wantMs) > 2500) {
-            actualMs = wantMs;
+        // 切片按原速裁剪；倍速在 add_videos 的 scene_timelines 中应用到草稿，
+        // 保证剪映里能看到片段速度，也避免重复转码损失画质。
+        qint64 sourceMs = 0;
+        const qint64 wantMs = qMax<qint64>(1, range.durationMs());
+        if (!FfmpegUtils::mediaDurationMs(clipPath, &sourceMs) || sourceMs <= 0
+            || qAbs(sourceMs - wantMs) > 2500) {
+            sourceMs = wantMs;
         }
-        actualDurations.append(actualMs);
+        sourceDurations.append(sourceMs);
+        playbackDurations.append(
+            qMax<qint64>(1, qRound64(sourceMs / boundedSpeed)));
 
         emitStep(0, PipelineUi::StepStatus::Running, 100 * (i + 1) / rangeCount,
                  QStringLiteral("已裁入第 %1/%2 段 · %3")
@@ -1352,10 +1368,16 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
 
         CapCutVideoInfo video;
         video.url = clipUrl;
+        // start/end 是草稿时间轴上的累计位置，scene 区间是变速后的播放范围；
+        // add_videos 用两者之比得到片段速度（1.0× 时不提交 scene_timelines）。
         video.startUs = offsetMs * 1000;
-        video.endUs = (offsetMs + actualDurations.at(i)) * 1000;
+        video.endUs = (offsetMs + sourceDurations.at(i)) * 1000;
+        if (qAbs(boundedSpeed - 1.0) > 0.001) {
+            video.sceneStartUs = offsetMs * 1000;
+            video.sceneEndUs = (offsetMs + playbackDurations.at(i)) * 1000;
+        }
         videos.append(video);
-        offsetMs += actualDurations.at(i);
+        offsetMs += playbackDurations.at(i);
 
         emitStep(1, PipelineUi::StepStatus::Running, 100 * (i + 1) / clipPaths.size(),
                  QStringLiteral("已上传第 %1/%2 个切片")
@@ -1369,12 +1391,13 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     //    合并区间内的未选中内容不会产生字幕。
     qint64 captionOffsetMs = 0;
     // 剪映小助手把字幕写进同一条轨道，时间一旦重叠会整批失败（2019）。
-    // 切片实际时长可能短于 ASR 区间（尤其是 HLS 分片 seek），上一段末尾字幕
-    // 会越过下一段起点，所以重叠保护必须跨区间累计，并截到当前切片实际结尾。
+    // 切片播放时长可能短于 ASR 区间（尤其是 HLS 分片 seek），上一段末尾字幕
+    // 会越过下一段起点，所以重叠保护必须跨区间累计，并截到当前切片播放结尾。
     qint64 previousCaptionEndUs = -1;
     for (int i = 0; i < rangeCount; ++i) {
         const ClipRange &range = project.ranges.at(i);
-        const qint64 rangeEndUs = (captionOffsetMs + actualDurations.at(i)) * 1000;
+        const qint64 rangeEndUs =
+            (captionOffsetMs + playbackDurations.at(i)) * 1000;
         for (const TimedCaption &timed : timedCaptions) {
             const qint64 captionStart = qMax(timed.startMs, range.startMs);
             const qint64 captionEnd = qMin(timed.endMs, range.endMs);
@@ -1384,11 +1407,11 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             }
             // 字幕随视频同步变速：原区间内的相对时间除以倍速。
             qint64 startUs = (captionOffsetMs
-                              + qint64((captionStart - range.startMs) / boundedSpeed))
+                              + qRound64((captionStart - range.startMs) / boundedSpeed))
                 * 1000;
             qint64 endUs = qMin(
                 (captionOffsetMs
-                 + qint64((captionEnd - range.startMs) / boundedSpeed))
+                 + qRound64((captionEnd - range.startMs) / boundedSpeed))
                     * 1000,
                 rangeEndUs);
             if (previousCaptionEndUs >= 0 && startUs < previousCaptionEndUs) {
@@ -1407,7 +1430,7 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             captionTexts.append(timed.text);
             previousCaptionEndUs = endUs;
         }
-        captionOffsetMs += actualDurations.at(i);
+        captionOffsetMs += playbackDurations.at(i);
     }
 
     // 4. 创建草稿，把所有裁剪片段依次添加到主视频轨。

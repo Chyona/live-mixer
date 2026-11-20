@@ -15,12 +15,17 @@
 class HttpClient;
 
 // 草稿时间轴上的一段视频；start/end 为拼接后的累计时间（微秒）。
+// sceneStartUs / sceneEndUs 为变速后的播放轴区间，与 start/end 一起提交为
+// add_videos 的 scene_timelines（speed = (end-start)/(sceneEnd-sceneStart)）。
+// 原速时不设置（保持 -1），接口按 1.0× 处理。
 // 转场挂在相邻两段中的前一段上，由 add_videos 在该片段与下一段之间渲染。
 struct CapCutVideoInfo
 {
     QString url;
     qint64 startUs = 0;
     qint64 endUs = 0;
+    qint64 sceneStartUs = -1;
+    qint64 sceneEndUs = -1;
     QString transition;
     qint64 transitionDurationUs = 0;
 };
@@ -110,7 +115,8 @@ public:
 
     bool createDraft(int width, int height, CapCutDraftInfo *draft, QString *error);
 
-    // 批量添加视频，多个切片按 start/end 顺序铺在同一条主视频轨上。
+    // 批量添加视频，多个切片按 start/end 顺序铺在同一条主视频轨上；
+    // 每段设置 sceneStart/End 时同时提交 scene_timelines 应用变速。
     bool addVideos(const QString &draftUrl, const QVector<CapCutVideoInfo> &videos,
                    QString *error);
 

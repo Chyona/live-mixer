@@ -183,7 +183,7 @@ bool FfmpegUtils::extractMp3(const QString &inputPath, const QString &outputPath
 }
 
 bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs,
-                          const QString &outputPath, QString *error, double speed)
+                          const QString &outputPath, QString *error)
 {
     if (endMs <= startMs) {
         if (error) {
@@ -212,7 +212,7 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
         QStringLiteral("error"),
         QStringLiteral("-ss"),
         QString::number(startSeconds, 'f', 3),
-        // -t 作为输入时限：变速后输出时长会相应缩短/延长，不能再按原时长截断。
+        // -t 作为输入时限，精确截取指定区间后再重新编码。
         QStringLiteral("-t"),
         QString::number(durationSeconds, 'f', 3),
         QStringLiteral("-i"),
@@ -235,36 +235,9 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
         QStringLiteral("128k"),
     };
 
-    const double boundedSpeed = qBound(0.5, speed, 2.0);
-    const bool applySpeed = qAbs(boundedSpeed - 1.0) > 0.001;
-    if (applySpeed) {
-        args << QStringLiteral("-vf")
-             << QStringLiteral("setpts=PTS/%1")
-                    .arg(boundedSpeed, 0, 'f', 3)
-             << QStringLiteral("-af")
-             << QStringLiteral("atempo=%1").arg(boundedSpeed, 0, 'f', 3);
-    }
     args << QStringLiteral("-movflags") << QStringLiteral("+faststart") << outputPath;
 
-    bool ok = runFfmpeg(args, 10 * 60 * 1000, error);
-    if (!ok && applySpeed) {
-        // 无音轨的视频不能使用 -af；去掉音频滤镜重试一次，视频倍速仍然生效。
-        const int afIndex = args.indexOf(QStringLiteral("-af"));
-        if (afIndex >= 0 && afIndex + 1 < args.size()) {
-            args.removeAt(afIndex + 1);
-            args.removeAt(afIndex);
-            QString retryError;
-            ok = runFfmpeg(args, 10 * 60 * 1000, &retryError);
-            if (ok) {
-                if (error) {
-                    error->clear();
-                }
-            } else if (error) {
-                *error = retryError;
-            }
-        }
-    }
-    if (!ok) {
+    if (!runFfmpeg(args, 10 * 60 * 1000, error)) {
         return false;
     }
 
