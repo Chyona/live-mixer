@@ -31,6 +31,9 @@ QString formatByteSize(qint64 bytes)
     constexpr double kKb = 1024.0;
     constexpr double kMb = kKb * 1024.0;
     constexpr double kGb = kMb * 1024.0;
+    if (bytes <= 0) {
+        return QStringLiteral("0 B");
+    }
     if (bytes >= kGb) {
         return QStringLiteral("%1 GB").arg(bytes / kGb, 0, 'f', 2);
     }

@@ -27,6 +27,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -104,10 +105,12 @@ QString makeAsrJobId()
     return QStringLiteral("job_asr_%1").arg(suffix.rightJustified(6, QLatin1Char('0')));
 }
 
-PipelineUi::Candidate candidateFromProject(const SelectedProject &project, int index)
+PipelineUi::Candidate candidateFromProject(const SelectedProject &project, int index,
+                                           int segmentIndex = 0)
 {
     PipelineUi::Candidate candidate;
     candidate.index = index;
+    candidate.segmentIndex = segmentIndex;
     candidate.title = project.title.isEmpty() ? QStringLiteral("直播切片") : project.title;
     candidate.description = project.description;
     candidate.topics = project.topics;
@@ -278,13 +281,19 @@ void LiveClipService::run()
 
     m_sourceDurationMs = qMax<qint64>(0, source.durationMs);
 
+    const int requestedClips = m_request.targetClipCount;
+    const int estimatedChunks = chunkCountForDuration(m_sourceDurationMs);
+
     PipelineUi::Event runStarted;
     runStarted.type = PipelineUi::EventType::RunStarted;
     runStarted.sourceTitle = source.title;
     runStarted.promptLabel = m_request.promptLabel;
     runStarted.durationMs = m_sourceDurationMs;
     // ASR 返回前先按源视频时长预判段数；ASR 完成后会按实际转写时长重算。
-    runStarted.count = chunkCountForDuration(m_sourceDurationMs);
+    runStarted.count = estimatedChunks;
+    runStarted.segmentCount = estimatedChunks;
+    runStarted.clipTarget = requestedClips > 0 ? requestedClips : -1;
+    runStarted.targetClipCount = requestedClips > 0 ? requestedClips : estimatedChunks;
     emit pipelineEvent(runStarted);
 
     // ---- 第零步：准备本地 MP4 ---------------------------------------------
@@ -317,182 +326,250 @@ void LiveClipService::run()
         return;
     }
 
+    const int chunkCount = chunks.size();
+    // 自动模式每段精选 1 条；指定数量时把目标条数均匀分配到各段。
+    QVector<int> allocation(chunkCount, 1);
+    int targetTotal = chunkCount;
+    if (requestedClips > 0) {
+        targetTotal = requestedClips;
+        allocation.fill(0);
+        const int base = requestedClips / chunkCount;
+        const int extra = requestedClips % chunkCount;
+        for (int i = 0; i < chunkCount; ++i) {
+            allocation[i] = base + (i < extra ? 1 : 0);
+        }
+    }
+
     // 先把分段方案交给过程页，候选卡片在 AI 开始前就能展示“等待评估”。
     PipelineUi::Event selectPlan;
     selectPlan.type = PipelineUi::EventType::SelectPlanned;
-    selectPlan.count = chunks.size();
+    selectPlan.count = targetTotal;
+    selectPlan.segmentCount = chunkCount;
+    selectPlan.clipTarget = requestedClips > 0 ? requestedClips : -1;
+    selectPlan.targetClipCount = targetTotal;
     selectPlan.sentenceCount = transcript.utterances.size();
     selectPlan.charCount = transcriptCharCount(transcript);
-    selectPlan.candidates.reserve(chunks.size());
-    for (int i = 0; i < chunks.size(); ++i) {
-        const TranscriptChunk &chunk = chunks.at(i);
-        PipelineUi::Candidate candidate;
-        candidate.index = i + 1;
-        candidate.startMs = chunk.startMs;
-        candidate.endMs = chunk.endMs;
-        candidate.durationMs = qMax<qint64>(0, chunk.endMs - chunk.startMs);
-        candidate.range = PipelineUi::formatRange(chunk.startMs, chunk.endMs);
-        candidate.sourceSentenceCount = chunk.segments.size();
-        // 尚未真正选出内容，已选句数保持 0，只把候选池句数放在 sourceSentenceCount。
-        candidate.captionCount = 0;
-        selectPlan.candidates.append(candidate);
+    selectPlan.candidates.reserve(targetTotal);
+    {
+        int ordinal = 0;
+        for (int i = 0; i < chunkCount; ++i) {
+            const TranscriptChunk &chunk = chunks.at(i);
+            for (int slot = 0; slot < allocation.at(i); ++slot) {
+                PipelineUi::Candidate candidate;
+                candidate.index = ++ordinal;
+                candidate.segmentIndex = i + 1;
+                candidate.startMs = chunk.startMs;
+                candidate.endMs = chunk.endMs;
+                candidate.durationMs = qMax<qint64>(0, chunk.endMs - chunk.startMs);
+                candidate.range = PipelineUi::formatRange(chunk.startMs, chunk.endMs);
+                candidate.sourceSentenceCount = chunk.segments.size();
+                // 尚未真正选出内容，已选句数保持 0，只把候选池句数放在
+                // sourceSentenceCount。
+                candidate.captionCount = 0;
+                selectPlan.candidates.append(candidate);
+            }
+        }
     }
     emit pipelineEvent(selectPlan);
 
     // ---- 第二步：逐段调用 LLM；每段不超过 30 分钟，长转写按总时长均衡切分 ----
     LlmClient llm(&http);
     QVector<SelectedProject> projects;
-    projects.reserve(chunks.size());
+    projects.reserve(targetTotal);
     qint64 totalCompletionTokens = 0;
-    for (int i = 0; i < chunks.size(); ++i) {
+    int candidateOrdinal = 0;
+    for (int i = 0; i < chunkCount; ++i) {
         const TranscriptChunk &chunk = chunks.at(i);
-        emit progress(1,
-                      QStringLiteral("正在分析第 %1/%2 段（%3 – %4）…")
-                          .arg(i + 1)
-                          .arg(chunks.size())
-                          .arg(formatSeconds(chunk.startMs), formatSeconds(chunk.endMs)),
-                      100 * i / chunks.size());
-
-        PipelineUi::Event batchStarted;
-        batchStarted.type = PipelineUi::EventType::SelectBatchStarted;
-        batchStarted.index = i + 1;
-        batchStarted.count = chunks.size();
-        batchStarted.startMs = chunk.startMs;
-        batchStarted.endMs = chunk.endMs;
-        batchStarted.sentenceCount = chunk.segments.size();
-        emit pipelineEvent(batchStarted);
-
-        LlmSelectionRequest request;
-        request.baseUrl = m_request.gatewayBaseUrl;
-        request.apiKey = m_request.apiKey;
-        request.systemPrompt = m_request.promptText;
-        request.segments = chunk.segments;
-
-        // 模型 reasoning_content 的增量实时写入过程页；状态提示用于等待/重试。
-        const int batchCount = chunks.size();
-        const auto onThought = [this, i, batchCount](const QString &text) {
-            PipelineUi::Event thought;
-            thought.type = PipelineUi::EventType::SelectThought;
-            thought.index = i + 1;
-            thought.count = batchCount;
-            thought.text = text;
-            emit pipelineEvent(thought);
-        };
-        const auto onStatus = [this, i, batchCount](const QString &text) {
-            PipelineUi::Event status;
-            status.type = PipelineUi::EventType::SelectStatus;
-            status.index = i + 1;
-            status.count = batchCount;
-            status.text = text;
-            emit pipelineEvent(status);
-        };
-
-        LlmSelectionResult result;
-        QString llmError;
-        bool selected = llm.selectProject(request, &result, &llmError, onThought,
-                                          onStatus);
-        if (!selected) {
-            // 只有模型输出无法解析时才用严格模式再试一次；网络/限流失败
-            // 已在 LlmClient 内部退避重试，不应再叠加一整轮等待。
-            const bool parseFailure =
-                llmError.contains(QStringLiteral("无法解析"))
-                || llmError.contains(QStringLiteral("返回内容为空"))
-                || llmError.contains(QStringLiteral("未返回最终选片结果"));
-            if (parseFailure) {
-                request.strictJson = true;
-                batchStarted.text =
-                    QStringLiteral("首次输出无法解析，正在用严格模式重试…");
-                emit pipelineEvent(batchStarted);
-                selected = llm.selectProject(request, &result, &llmError, onThought,
-                                             onStatus);
-            }
-        }
-        if (!selected) {
-            emit finished(false, QStringLiteral("第 %1 段选片失败：%2")
-                                      .arg(i + 1)
-                                      .arg(llmError));
-            return;
-        }
-
-        totalCompletionTokens += result.completionTokens;
-        if (result.indices.isEmpty()) {
-            qInfo() << "LLM returned no indices for chunk" << i;
-            PipelineUi::Event skipped;
-            skipped.type = PipelineUi::EventType::SelectBatchSkipped;
-            skipped.index = i + 1;
-            skipped.count = chunks.size();
-            skipped.startMs = chunk.startMs;
-            skipped.endMs = chunk.endMs;
-            skipped.sentenceCount = chunk.segments.size();
-            skipped.tokenCount = result.completionTokens;
-            skipped.text = QStringLiteral("该段没有符合提示词的片段");
-            emit pipelineEvent(skipped);
+        if (allocation.at(i) <= 0) {
             continue;
         }
+        QSet<int> chunkUsedIndices;
+        for (int slot = 0; slot < allocation.at(i); ++slot) {
+            ++candidateOrdinal;
+            emit progress(1,
+                          QStringLiteral("正在分析第 %1/%2 条成片（第 %3/%4 段 · "
+                                         "%5 – %6）…")
+                              .arg(candidateOrdinal)
+                              .arg(targetTotal)
+                              .arg(i + 1)
+                              .arg(chunkCount)
+                              .arg(formatSeconds(chunk.startMs),
+                                   formatSeconds(chunk.endMs)),
+                          100 * (candidateOrdinal - 1) / targetTotal);
 
-        // 按模型返回顺序把索引映射成时间区间；越界索引直接忽略。
-        // 模型偶尔会重复返回同一个索引，重复句段会生成时间完全相同的字幕，
-        // 剪映小助手按轨道写入时判定片段重叠并整批拒绝（2019 字幕添加失败），
-        // 因此这里先按索引去重。
-        QVector<ClipRange> ranges;
-        QVector<AsrUtterance> captions;
-        QSet<int> usedIndices;
-        for (int index : result.indices) {
-            if (index < 0 || index >= chunk.segments.size()
-                || usedIndices.contains(index)) {
+            PipelineUi::Event batchStarted;
+            batchStarted.type = PipelineUi::EventType::SelectBatchStarted;
+            batchStarted.index = candidateOrdinal;
+            batchStarted.count = targetTotal;
+            batchStarted.segmentIndex = i + 1;
+            batchStarted.segmentCount = chunkCount;
+            batchStarted.clipTarget = requestedClips > 0 ? requestedClips : -1;
+            batchStarted.targetClipCount = targetTotal;
+            batchStarted.startMs = chunk.startMs;
+            batchStarted.endMs = chunk.endMs;
+            batchStarted.sentenceCount = chunk.segments.size();
+            emit pipelineEvent(batchStarted);
+
+            LlmSelectionRequest request;
+            request.baseUrl = m_request.gatewayBaseUrl;
+            request.apiKey = m_request.apiKey;
+            request.systemPrompt = m_request.promptText;
+            request.segments = chunk.segments;
+            if (requestedClips > 0) {
+                request.extraInstruction =
+                    QStringLiteral(
+                        "本段共需要选出 %1 条成片，本次是第 %2 条。请只选出一条"
+                        "成片，并确保与同段其他成片选择的句段不重复。")
+                        .arg(allocation.at(i))
+                        .arg(slot + 1);
+                if (!chunkUsedIndices.isEmpty()) {
+                    QVector<int> excluded = chunkUsedIndices.values().toVector();
+                    std::sort(excluded.begin(), excluded.end());
+                    request.excludedIndices = excluded;
+                }
+            }
+
+            // 模型 reasoning_content 的增量实时写入过程页；状态提示用于等待/重试。
+            const auto onThought = [this, candidateOrdinal, targetTotal,
+                                    i](const QString &text) {
+                PipelineUi::Event thought;
+                thought.type = PipelineUi::EventType::SelectThought;
+                thought.index = candidateOrdinal;
+                thought.count = targetTotal;
+                thought.segmentIndex = i + 1;
+                thought.text = text;
+                emit pipelineEvent(thought);
+            };
+            const auto onStatus = [this, candidateOrdinal, targetTotal,
+                                   i](const QString &text) {
+                PipelineUi::Event status;
+                status.type = PipelineUi::EventType::SelectStatus;
+                status.index = candidateOrdinal;
+                status.count = targetTotal;
+                status.segmentIndex = i + 1;
+                status.text = text;
+                emit pipelineEvent(status);
+            };
+
+            LlmSelectionResult result;
+            QString llmError;
+            bool selected = llm.selectProject(request, &result, &llmError, onThought,
+                                              onStatus);
+            if (!selected) {
+                // 只有模型输出无法解析时才用严格模式再试一次；网络/限流失败
+                // 已在 LlmClient 内部退避重试，不应再叠加一整轮等待。
+                const bool parseFailure =
+                    llmError.contains(QStringLiteral("无法解析"))
+                    || llmError.contains(QStringLiteral("返回内容为空"))
+                    || llmError.contains(QStringLiteral("未返回最终选片结果"));
+                if (parseFailure) {
+                    request.strictJson = true;
+                    batchStarted.text =
+                        QStringLiteral("首次输出无法解析，正在用严格模式重试…");
+                    emit pipelineEvent(batchStarted);
+                    selected = llm.selectProject(request, &result, &llmError,
+                                                 onThought, onStatus);
+                }
+            }
+            if (!selected) {
+                emit finished(false,
+                              QStringLiteral("第 %1/%2 条成片选片失败（第 %3 段）：%4")
+                                  .arg(candidateOrdinal)
+                                  .arg(targetTotal)
+                                  .arg(i + 1)
+                                  .arg(llmError));
+                return;
+            }
+
+            totalCompletionTokens += result.completionTokens;
+            if (result.indices.isEmpty()) {
+                qInfo() << "LLM returned no indices for chunk" << i;
+                PipelineUi::Event skipped;
+                skipped.type = PipelineUi::EventType::SelectBatchSkipped;
+                skipped.index = candidateOrdinal;
+                skipped.count = targetTotal;
+                skipped.segmentIndex = i + 1;
+                skipped.segmentCount = chunkCount;
+                skipped.startMs = chunk.startMs;
+                skipped.endMs = chunk.endMs;
+                skipped.sentenceCount = chunk.segments.size();
+                skipped.tokenCount = result.completionTokens;
+                skipped.text = QStringLiteral("该段没有符合提示词的片段");
+                emit pipelineEvent(skipped);
                 continue;
             }
-            const AsrUtterance &seg = chunk.segments.at(index);
-            if (seg.endMs <= seg.startMs) {
+
+            // 按模型返回顺序把索引映射成时间区间；越界索引直接忽略。
+            // 模型偶尔会重复返回同一个索引，重复句段会生成时间完全相同的字幕，
+            // 剪映小助手按轨道写入时判定片段重叠并整批拒绝（2019 字幕添加失败），
+            // 因此这里先按索引去重。
+            QVector<ClipRange> ranges;
+            QVector<AsrUtterance> captions;
+            QSet<int> pickedIndices;
+            for (int index : result.indices) {
+                if (index < 0 || index >= chunk.segments.size()
+                    || pickedIndices.contains(index)
+                    || chunkUsedIndices.contains(index)) {
+                    continue;
+                }
+                const AsrUtterance &seg = chunk.segments.at(index);
+                if (seg.endMs <= seg.startMs) {
+                    continue;
+                }
+                pickedIndices.insert(index);
+                chunkUsedIndices.insert(index);
+                ranges.append({seg.startMs, seg.endMs});
+                captions.append(seg);
+            }
+            if (ranges.isEmpty()) {
+                PipelineUi::Event skipped;
+                skipped.type = PipelineUi::EventType::SelectBatchSkipped;
+                skipped.index = candidateOrdinal;
+                skipped.count = targetTotal;
+                skipped.segmentIndex = i + 1;
+                skipped.segmentCount = chunkCount;
+                skipped.startMs = chunk.startMs;
+                skipped.endMs = chunk.endMs;
+                skipped.sentenceCount = chunk.segments.size();
+                skipped.tokenCount = result.completionTokens;
+                skipped.text = QStringLiteral("该段没有有效的裁剪区间");
+                emit pipelineEvent(skipped);
                 continue;
             }
-            usedIndices.insert(index);
-            ranges.append({seg.startMs, seg.endMs});
-            captions.append(seg);
+            ranges = mergeRanges(ranges);
+
+            SelectedProject project;
+            project.ranges = ranges;
+            project.captions = captions;
+            project.title = sanitizeTitle(result.title);
+            project.description = sanitizeDescription(result.description);
+            project.topics = sanitizeTopics(result.topics);
+            projects.append(project);
+
+            PipelineUi::Event batchFinished;
+            batchFinished.type = PipelineUi::EventType::SelectBatchFinished;
+            batchFinished.index = candidateOrdinal;
+            batchFinished.count = targetTotal;
+            batchFinished.segmentIndex = i + 1;
+            batchFinished.segmentCount = chunkCount;
+            batchFinished.startMs = chunk.startMs;
+            batchFinished.endMs = chunk.endMs;
+            batchFinished.tokenCount = result.completionTokens;
+            batchFinished.candidates.append(
+                candidateFromProject(project, candidateOrdinal, i + 1));
+            emit pipelineEvent(batchFinished);
+
+            const QString displayTitle =
+                project.title.isEmpty() ? QStringLiteral("直播切片") : project.title;
+            emit progress(1,
+                          QStringLiteral("第 %1/%2 条成片已选出：%3（%4 段，共 %5）")
+                              .arg(candidateOrdinal)
+                              .arg(targetTotal)
+                              .arg(displayTitle)
+                              .arg(project.ranges.size())
+                              .arg(formatSeconds(totalDuration(project.ranges))),
+                          100 * candidateOrdinal / targetTotal);
         }
-        if (ranges.isEmpty()) {
-            PipelineUi::Event skipped;
-            skipped.type = PipelineUi::EventType::SelectBatchSkipped;
-            skipped.index = i + 1;
-            skipped.count = chunks.size();
-            skipped.startMs = chunk.startMs;
-            skipped.endMs = chunk.endMs;
-            skipped.sentenceCount = chunk.segments.size();
-            skipped.tokenCount = result.completionTokens;
-            skipped.text = QStringLiteral("该段没有有效的裁剪区间");
-            emit pipelineEvent(skipped);
-            continue;
-        }
-        ranges = mergeRanges(ranges);
-
-        SelectedProject project;
-        project.ranges = ranges;
-        project.captions = captions;
-        project.title = sanitizeTitle(result.title);
-        project.description = sanitizeDescription(result.description);
-        project.topics = sanitizeTopics(result.topics);
-        projects.append(project);
-
-        PipelineUi::Event batchFinished;
-        batchFinished.type = PipelineUi::EventType::SelectBatchFinished;
-        batchFinished.index = i + 1;
-        batchFinished.count = chunks.size();
-        batchFinished.startMs = chunk.startMs;
-        batchFinished.endMs = chunk.endMs;
-        batchFinished.tokenCount = result.completionTokens;
-        batchFinished.candidates.append(candidateFromProject(project, i + 1));
-        emit pipelineEvent(batchFinished);
-
-        const QString displayTitle =
-            project.title.isEmpty() ? QStringLiteral("直播切片") : project.title;
-        emit progress(1,
-                      QStringLiteral("第 %1/%2 段已选出：%3（%4 段，共 %5）")
-                          .arg(i + 1)
-                          .arg(chunks.size())
-                          .arg(displayTitle)
-                          .arg(project.ranges.size())
-                          .arg(formatSeconds(totalDuration(project.ranges))),
-                      100 * (i + 1) / chunks.size());
     }
 
     if (projects.isEmpty()) {
@@ -503,8 +580,11 @@ void LiveClipService::run()
     PipelineUi::Event selectFinished;
     selectFinished.type = PipelineUi::EventType::SelectFinished;
     selectFinished.count = projects.size();
+    selectFinished.segmentCount = chunkCount;
+    selectFinished.targetClipCount = targetTotal;
+    selectFinished.clipTarget = requestedClips > 0 ? requestedClips : -1;
     selectFinished.tokenCount = totalCompletionTokens;
-    selectFinished.sentenceCount = chunks.size();
+    selectFinished.sentenceCount = chunkCount;
     selectFinished.text = QStringLiteral("已锁定 %1 条切片").arg(projects.size());
     emit pipelineEvent(selectFinished);
 
@@ -536,8 +616,12 @@ void LiveClipService::run()
                           .arg(projects.size())
                           .arg(displayTitle),
                       100 * i / projects.size());
+        // 成片倍速：自动模式下每条成片在 1.0×–1.5× 之间独立随机。
+        const double speed = m_request.speedAuto
+            ? 1.0 + 0.05 * QRandomGenerator::global()->bounded(11)
+            : qBound(0.5, m_request.fixedSpeed, 2.0);
         if (!createDraftForProject(&repository, &capcut, draftInputPath, project, i,
-                                   &error)) {
+                                   speed, &error)) {
             emit finished(false, QStringLiteral("第 %1 条草稿生成失败：%2")
                                       .arg(i + 1)
                                       .arg(error));
@@ -925,8 +1009,9 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                                             CapCutMateClient *capcut,
                                             const QString &inputPath,
                                             const SelectedProject &project, int index,
-                                            QString *error)
+                                            double speed, QString *error)
 {
+    const double boundedSpeed = qBound(0.5, speed, 2.0);
     if (project.ranges.isEmpty()) {
         if (error) {
             *error = QStringLiteral("成片没有可用的视频片段。");
@@ -984,7 +1069,7 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                      .arg(rangeCount)
                      .arg(PipelineUi::formatRange(range.startMs, range.endMs)));
         if (!FfmpegUtils::cutClip(inputPath, range.startMs, range.endMs, clipPath,
-                                  error)) {
+                                  error, boundedSpeed)) {
             emitFailure(0, QStringLiteral("视频裁剪失败"));
             return false;
         }
@@ -1000,9 +1085,10 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             }
         }
 
-        // 用切片真实时长铺时间轴；偏差过大时回退理论时长（与后端一致）。
+        // 用切片真实时长铺时间轴；变速后理论时长为原区间 / 倍速。
         qint64 actualMs = 0;
-        const qint64 wantMs = range.durationMs();
+        const qint64 wantMs = qMax<qint64>(
+            1, qint64(range.durationMs() / boundedSpeed));
         if (!FfmpegUtils::mediaDurationMs(clipPath, &actualMs) || actualMs <= 0
             || qAbs(actualMs - wantMs) > 2500) {
             actualMs = wantMs;
@@ -1016,9 +1102,10 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                      .arg(PipelineUi::formatRange(range.startMs, range.endMs)));
     }
     emitStep(0, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("裁入 %1 段 · 共 %2")
+             QStringLiteral("裁入 %1 段 · 共 %2 · %3×")
                  .arg(rangeCount)
-                 .arg(formatSeconds(totalDuration(project.ranges))));
+                 .arg(formatSeconds(totalDuration(project.ranges)))
+                 .arg(boundedSpeed, 0, 'f', 2));
 
     // 2. 上传切片；剪映小助手所有素材都必须用 URL 表示。
     stepClock.restart();
@@ -1068,9 +1155,15 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             if (captionEnd - captionStart < 50) {
                 continue;
             }
-            qint64 startUs = (captionOffsetMs + (captionStart - range.startMs)) * 1000;
+            // 字幕随视频同步变速：原区间内的相对时间除以倍速。
+            qint64 startUs = (captionOffsetMs
+                              + qint64((captionStart - range.startMs) / boundedSpeed))
+                * 1000;
             qint64 endUs = qMin(
-                (captionOffsetMs + (captionEnd - range.startMs)) * 1000, rangeEndUs);
+                (captionOffsetMs
+                 + qint64((captionEnd - range.startMs) / boundedSpeed))
+                    * 1000,
+                rangeEndUs);
             if (previousCaptionEndUs >= 0 && startUs < previousCaptionEndUs) {
                 startUs = previousCaptionEndUs;
             }

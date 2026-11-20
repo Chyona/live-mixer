@@ -46,6 +46,15 @@ struct CapCutDraftInfo
     QString draftId;
 };
 
+// gen_video_status 的结果；status 为 pending / processing / completed / failed。
+struct CapCutVideoStatus
+{
+    QString status;
+    int progress = 0; // 远端 0–100
+    QString videoUrl;
+    QString errorMessage;
+};
+
 // 草稿下载过程中的细粒度事件：阶段切换、文件入队、单个文件进度/完成/失败。
 // 界面据此渲染「下载配置 → 下载素材 → 写入草稿目录」三步进度与文件列表。
 struct DraftDownloadEvent
@@ -86,6 +95,11 @@ public:
 
     bool addCaptions(const QString &draftUrl, const QVector<CapCutCaption> &captions,
                      const CapCutCaptionStyle &style, QString *error);
+
+    // 云端合成成片：提交 gen_video 后通过 gen_video_status 轮询。
+    bool genVideo(const QString &draftUrl, const QString &apiKey, QString *error);
+    bool genVideoStatus(const QString &draftUrl, CapCutVideoStatus *status,
+                        QString *error);
 
     // 查询草稿包含的文件列表（草稿生成后调用，或下载前校验）。
     bool fetchDraftFiles(const QString &draftId, QStringList *fileUrls, QString *error,

@@ -1055,8 +1055,24 @@ StatusBar::StatusBar(QWidget *parent)
     m_draftStatus->hide();
     layout->addWidget(m_draftStatus);
     connect(m_draftStatus, &QAbstractButton::clicked, this, [this] {
-        if (m_draftStatusDraftId >= 0) {
+        if (m_draftStatusDraftId == kBatchIndicator) {
+            emit draftBatchRequested();
+        } else if (m_draftStatusDraftId >= 0) {
             emit draftDownloadRequested(m_draftStatusDraftId);
+        }
+    });
+
+    m_videoStatus = new LinkLabel(QString(), this);
+    m_videoStatus->setPixelSize(11);
+    m_videoStatus->setMonoFont(true);
+    m_videoStatus->setTextColor(Theme::Primary);
+    m_videoStatus->setHoverColor(Theme::PrimaryHover);
+    m_videoStatus->setToolTip(QStringLiteral("查看成片导出进度"));
+    m_videoStatus->hide();
+    layout->addWidget(m_videoStatus);
+    connect(m_videoStatus, &QAbstractButton::clicked, this, [this] {
+        if (m_videoStatusDraftId != -1) {
+            emit videoExportRequested(m_videoStatusDraftId);
         }
     });
 
@@ -1093,6 +1109,50 @@ void StatusBar::clearDraftDownloadStatus()
     m_draftStatusDraftId = -1;
     m_draftStatus->hide();
     m_draftStatus->setText(QString());
+}
+
+void StatusBar::setDraftBatchStatus(const QString &text, bool error)
+{
+    if (!m_draftStatus) {
+        return;
+    }
+    m_draftStatusDraftId = kBatchIndicator;
+    m_draftStatus->setText(text);
+    m_draftStatus->setTextColor(error ? Theme::Danger : Theme::Primary);
+    m_draftStatus->setHoverColor(error ? Theme::Danger : Theme::PrimaryHover);
+    m_draftStatus->show();
+    m_draftStatus->updateGeometry();
+}
+
+void StatusBar::clearDraftBatchStatus()
+{
+    if (m_draftStatus && m_draftStatusDraftId == kBatchIndicator) {
+        clearDraftDownloadStatus();
+    }
+}
+
+void StatusBar::setVideoExportStatus(const QString &text, bool error,
+                                     qint64 draftRowId)
+{
+    if (!m_videoStatus) {
+        return;
+    }
+    m_videoStatusDraftId = draftRowId;
+    m_videoStatus->setText(text);
+    m_videoStatus->setTextColor(error ? Theme::Danger : Theme::Primary);
+    m_videoStatus->setHoverColor(error ? Theme::Danger : Theme::PrimaryHover);
+    m_videoStatus->show();
+    m_videoStatus->updateGeometry();
+}
+
+void StatusBar::clearVideoExportStatus()
+{
+    if (!m_videoStatus) {
+        return;
+    }
+    m_videoStatusDraftId = -1;
+    m_videoStatus->hide();
+    m_videoStatus->setText(QString());
 }
 
 void StatusBar::setServiceStatus(const QString &text, bool ok, const QString &tooltip)

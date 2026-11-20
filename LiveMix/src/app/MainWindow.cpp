@@ -15,6 +15,7 @@
 #include "../model/PromptCatalog.h"
 #include "../services/DraftDownloadManager.h"
 #include "../services/LiveClipService.h"
+#include "../services/VideoExportManager.h"
 #include "../pages/DashboardPage.h"
 #include "../pages/MaterialPage.h"
 #include "../pages/PipelinePage.h"
@@ -23,9 +24,11 @@
 #include "../pages/SettingsPage.h"
 #include "../pages/SpecPage.h"
 #include "../pages/TasksPage.h"
+#include "../ui/BatchExportDialog.h"
 #include "../ui/Controls.h"
 #include "../ui/DraftDownloadDialog.h"
 #include "../ui/Icons.h"
+#include "../ui/VideoExportDialog.h"
 #include "../ui/Overlays.h"
 #include "../ui/VideoPreview.h"
 #include "../ui/WindowChrome.h"
@@ -966,7 +969,13 @@ void MainWindow::wireSignals()
                     m_results->setDownloadJob(job);
                 }
                 updateDraftStatusBar();
+                // 批量任务由批量弹窗与汇总 Toast 统一收尾，不逐条定位目录。
+                const bool inBatch = m_downloads && m_downloads->batchRunning()
+                    && m_downloads->isBatchJob(job.draftRowId);
                 if (job.status == DraftDownloadStatus::Done) {
+                    if (inBatch) {
+                        return;
+                    }
                     // 下载路径已落库，刷新卡片徽标与视频库入口。
                     refreshResults();
                     refreshMaterialLibrary();
@@ -981,7 +990,7 @@ void MainWindow::wireSignals()
                             QStringLiteral("「%1」草稿已下载完成，已定位到草稿文件夹")
                                 .arg(job.title));
                     }
-                } else {
+                } else if (!inBatch) {
                     const bool dialogOpen = m_downloadDialog
                         && m_downloadDialogDraftId == job.draftRowId
                         && m_downloadDialog->isVisible();
@@ -993,8 +1002,145 @@ void MainWindow::wireSignals()
             });
     connect(m_downloads, &DraftDownloadManager::toastRequested, this,
             &MainWindow::showToast);
+    connect(m_downloads, &DraftDownloadManager::batchChanged, this,
+            [this](const DraftBatchSnapshot &batch) {
+                if (m_results) {
+                    m_results->setDraftBatch(batch);
+                }
+                updateDraftStatusBar();
+                if (m_batchDialog && m_batchDialog->isVisible()
+                    && m_batchDialog->mode() == BatchExportDialog::Mode::Draft) {
+                    m_batchDialog->setDraftBatch(batch);
+                }
+            });
+    connect(m_downloads, &DraftDownloadManager::batchFinished, this,
+            [this](const DraftBatchSnapshot &batch) {
+                if (m_results) {
+                    m_results->setDraftBatch(batch);
+                }
+                refreshResults();
+                refreshMaterialLibrary();
+                updateDraftStatusBar();
+                const bool dialogOpen = m_batchDialog && m_batchDialog->isVisible()
+                    && m_batchDialog->mode() == BatchExportDialog::Mode::Draft;
+                if (!dialogOpen) {
+                    showToast(batch.failedCount > 0
+                                  ? QStringLiteral("批量导出完成：%1 条成功，%2 条失败")
+                                        .arg(batch.doneCount)
+                                        .arg(batch.failedCount)
+                                  : QStringLiteral("批量导出完成：%1 个草稿已写入剪映")
+                                        .arg(batch.doneCount));
+                }
+            });
+    connect(m_downloads, &DraftDownloadManager::batchCleared, this, [this] {
+        if (m_results) {
+            m_results->clearDraftBatch();
+        }
+        updateDraftStatusBar();
+        if (m_batchDialog && m_batchDialog->isVisible()
+            && m_batchDialog->mode() == BatchExportDialog::Mode::Draft && m_modalOverlay) {
+            m_modalOverlay->closeModal();
+        }
+    });
     connect(m_shell->statusBar(), &StatusBar::draftDownloadRequested, this,
             &MainWindow::showDraftDownloadDialog);
+    connect(m_shell->statusBar(), &StatusBar::draftBatchRequested, this,
+            &MainWindow::showDraftBatchDialog);
+
+    // 成片导出任务管理器：结果页、导出弹窗与状态栏共享同一份任务状态。
+    m_videos = new VideoExportManager(this);
+    connect(m_videos, &VideoExportManager::jobChanged, this,
+            [this](const VideoExportJob &job) {
+                if (m_results) {
+                    m_results->setVideoJob(job);
+                }
+                updateDraftStatusBar();
+                if (m_videoDialog && m_videoDialogDraftId == job.draftRowId) {
+                    m_videoDialog->setJob(job);
+                }
+            });
+    connect(m_videos, &VideoExportManager::jobRemoved, this,
+            [this](qint64 draftRowId) {
+                if (m_results) {
+                    m_results->removeVideoJob(draftRowId);
+                }
+                updateDraftStatusBar();
+                if (m_videoDialog && m_videoDialogDraftId == draftRowId
+                    && m_videoDialog->isVisible() && m_modalOverlay) {
+                    m_modalOverlay->closeModal();
+                }
+            });
+    connect(m_videos, &VideoExportManager::jobFinished, this,
+            [this](const VideoExportJob &job) {
+                if (m_results) {
+                    m_results->setVideoJob(job);
+                }
+                updateDraftStatusBar();
+                const bool inBatch = m_videos && m_videos->batchRunning()
+                    && m_videos->isBatchJob(job.draftRowId);
+                if (inBatch) {
+                    return;
+                }
+                const bool dialogOpen = m_videoDialog
+                    && m_videoDialogDraftId == job.draftRowId
+                    && m_videoDialog->isVisible();
+                if (!dialogOpen) {
+                    if (job.status == VideoExportStatus::Done) {
+                        showToast(QStringLiteral("「%1」成片已导出到本地")
+                                      .arg(job.title));
+                    } else if (job.status == VideoExportStatus::Error) {
+                        showToast(QStringLiteral("成片导出失败，可在结果卡片上重试"));
+                    }
+                }
+            });
+    connect(m_videos, &VideoExportManager::toastRequested, this,
+            &MainWindow::showToast);
+    connect(m_videos, &VideoExportManager::batchChanged, this,
+            [this](const VideoBatchSnapshot &batch) {
+                if (m_results) {
+                    m_results->setVideoBatch(batch);
+                }
+                updateDraftStatusBar();
+                if (m_batchDialog && m_batchDialog->isVisible()
+                    && m_batchDialog->mode() == BatchExportDialog::Mode::Video) {
+                    m_batchDialog->setVideoBatch(batch);
+                }
+            });
+    connect(m_videos, &VideoExportManager::batchFinished, this,
+            [this](const VideoBatchSnapshot &batch) {
+                if (m_results) {
+                    m_results->setVideoBatch(batch);
+                }
+                updateDraftStatusBar();
+                const bool dialogOpen = m_batchDialog && m_batchDialog->isVisible()
+                    && m_batchDialog->mode() == BatchExportDialog::Mode::Video;
+                if (!dialogOpen) {
+                    showToast(batch.failedCount > 0
+                                  ? QStringLiteral("批量导出完成：%1 条成功，%2 条失败")
+                                        .arg(batch.doneCount)
+                                        .arg(batch.failedCount)
+                                  : QStringLiteral("批量导出完成：%1 条成片已保存到本地")
+                                        .arg(batch.doneCount));
+                }
+            });
+    connect(m_videos, &VideoExportManager::batchCleared, this, [this] {
+        if (m_results) {
+            m_results->clearVideoBatch();
+        }
+        updateDraftStatusBar();
+        if (m_batchDialog && m_batchDialog->isVisible()
+            && m_batchDialog->mode() == BatchExportDialog::Mode::Video && m_modalOverlay) {
+            m_modalOverlay->closeModal();
+        }
+    });
+    connect(m_shell->statusBar(), &StatusBar::videoExportRequested, this,
+            [this](qint64 draftRowId) {
+                if (draftRowId == StatusBar::kBatchIndicator) {
+                    showVideoBatchDialog();
+                } else {
+                    showVideoExportDialog(draftRowId);
+                }
+            });
 
     connect(m_dashboard, &DashboardPage::navigateRequested, this,
             [this](const QString &pageId) {
@@ -1113,6 +1259,16 @@ void MainWindow::wireSignals()
     });
     connect(m_results, &ResultsPage::openDraftRequested, this,
             &MainWindow::requestDraftDownload);
+    connect(m_results, &ResultsPage::videoExportRequested, this,
+            &MainWindow::requestVideoExport);
+    connect(m_results, &ResultsPage::openDraftBatchRequested, this,
+            &MainWindow::showDraftBatchDialog);
+    connect(m_results, &ResultsPage::openVideoBatchRequested, this,
+            &MainWindow::showVideoBatchDialog);
+    connect(m_results, &ResultsPage::batchDraftRequested, this,
+            &MainWindow::requestDraftBatch);
+    connect(m_results, &ResultsPage::batchVideoRequested, this,
+            &MainWindow::requestVideoBatch);
     connect(m_results, &ResultsPage::toastRequested, this, &MainWindow::showToast);
 
     connect(m_pipeline, &PipelinePage::toastRequested, this, &MainWindow::showToast);
@@ -1129,7 +1285,8 @@ void MainWindow::wireSignals()
             openStartPipeline(m_lastSourceId);
             return;
         }
-        startClipPipeline(m_lastSourceId, m_lastPromptText, m_lastPromptLabel);
+        startClipPipeline(m_lastSourceId, m_lastPromptText, m_lastPromptLabel,
+                          m_lastClipTarget);
     });
     connect(m_pipeline, &PipelinePage::startRunRequested, this,
             [this] { openStartPipeline(); });
@@ -1309,6 +1466,11 @@ void MainWindow::showModalForPreview(const QString &modalId)
         openPromptViewer(1);
     } else if (modalId.startsWith(QLatin1String("download"))) {
         showDraftDownloadPreview(modalId);
+    } else if (modalId.startsWith(QLatin1String("export-video"))) {
+        showVideoExportPreview(modalId);
+    } else if (modalId.startsWith(QLatin1String("batch-draft"))
+               || modalId.startsWith(QLatin1String("batch-video"))) {
+        showBatchExportPreview(modalId);
     }
 }
 
@@ -1663,7 +1825,7 @@ void MainWindow::retryTask(qint64 taskId)
 }
 
 void MainWindow::startClipPipeline(qint64 sourceId, const QString &promptText,
-                                   const QString &promptLabel)
+                                   const QString &promptLabel, int targetClipCount)
 {
     if (m_clipThread) {
         showToast(QStringLiteral("已有一键成片任务在运行，请等待完成。"));
@@ -1705,9 +1867,13 @@ void MainWindow::startClipPipeline(qint64 sourceId, const QString &promptText,
     request.promptText = promptText;
     request.promptLabel = promptLabel;
     request.cacheDir = config.storage.cacheDir;
+    request.targetClipCount = targetClipCount;
+    request.speedAuto = config.finish.speedAuto;
+    request.fixedSpeed = config.finish.fixedSpeed;
     m_lastSourceId = sourceId;
     m_lastPromptText = promptText;
     m_lastPromptLabel = promptLabel;
+    m_lastClipTarget = targetClipCount > 0 ? targetClipCount : -1;
     // 任务完成后的结果页只展示这次成片的草稿。
     m_resultsSourceId = sourceId;
     qRegisterMetaType<PipelineUi::Event>("PipelineUi::Event");
@@ -1873,6 +2039,232 @@ void MainWindow::showDraftDownloadDialog(qint64 draftRowId)
     m_modalOverlay->showModal(dialog);
 }
 
+void MainWindow::requestDraftBatch(const QVector<qint64> &draftRowIds)
+{
+    if (!m_repository || !m_repository->isOpen() || !m_downloads) {
+        showToast(QStringLiteral("本地数据库不可用，无法批量导出草稿。"));
+        return;
+    }
+    if (m_videos && m_videos->batchRunning()) {
+        showToast(QStringLiteral("已有批量导出成片正在进行，请等待完成或先停止"));
+        return;
+    }
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    const QString draftDir = config.storage.draftDir.trimmed();
+    if (draftDir.isEmpty()) {
+        showToast(QStringLiteral("尚未配置剪映草稿目录，请到「设置 → 存储与输出」填写。"));
+        return;
+    }
+
+    QVector<ClipDraft> drafts;
+    drafts.reserve(draftRowIds.size());
+    for (qint64 draftRowId : draftRowIds) {
+        QString error;
+        const ClipDraft draft = m_repository->clipDraft(draftRowId, &error);
+        if (draft.id >= 0) {
+            drafts.append(draft);
+        }
+    }
+    if (drafts.isEmpty()) {
+        showToast(QStringLiteral("没有可导出的草稿。"));
+        return;
+    }
+
+    m_downloads->startBatch(drafts, m_repository->databasePath(), draftDir);
+    showDraftBatchDialog();
+}
+
+void MainWindow::showDraftBatchDialog()
+{
+    if (!m_downloads || !m_modalOverlay) {
+        return;
+    }
+    const DraftBatchSnapshot batch = m_downloads->batch();
+    if (batch.id == 0 || batch.items.isEmpty()) {
+        return;
+    }
+
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    auto *dialog = new BatchExportDialog(BatchExportDialog::Mode::Draft,
+                                         config.storage.draftDir);
+    dialog->setDraftBatch(batch);
+    connect(dialog, &BatchExportDialog::cancelRequested, m_downloads,
+            &DraftDownloadManager::cancelBatch);
+    connect(dialog, &BatchExportDialog::retryFailedRequested, m_downloads,
+            &DraftDownloadManager::retryBatchFailed);
+    connect(dialog, &BatchExportDialog::openFolderRequested, this,
+            &MainWindow::openDraftFolder);
+    connect(dialog, &BatchExportDialog::toastRequested, this,
+            &MainWindow::showToast);
+    connect(dialog, &BatchExportDialog::layoutChanged, this, [this] {
+        if (m_modalOverlay) {
+            m_modalOverlay->relayout();
+        }
+    });
+
+    m_batchDialog = dialog;
+    m_modalOverlay->showModal(dialog);
+}
+
+void MainWindow::requestVideoExport(qint64 draftRowId)
+{
+    if (!m_repository || !m_repository->isOpen() || !m_videos) {
+        showToast(QStringLiteral("本地数据库不可用，无法导出成片。"));
+        return;
+    }
+
+    QString error;
+    const ClipDraft draft = m_repository->clipDraft(draftRowId, &error);
+    if (draft.id < 0) {
+        showToast(error);
+        return;
+    }
+
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    const QString apiKey = config.service.apiKey.trimmed();
+    const QString exportDir = config.storage.exportDir.trimmed();
+    if (apiKey.isEmpty()) {
+        showToast(QStringLiteral("尚未配置 API 密钥，请到「设置 → 服务连接」填写。"));
+        return;
+    }
+    if (exportDir.isEmpty()) {
+        showToast(QStringLiteral("尚未配置成片导出目录，请到「设置 → 存储与输出」填写。"));
+        return;
+    }
+    if (draft.draftUrl.trimmed().isEmpty()) {
+        showToast(QStringLiteral("该草稿缺少云端地址，无法导出成片。"));
+        return;
+    }
+
+    if (m_videos->hasJob(draftRowId)) {
+        const VideoExportJob job = m_videos->job(draftRowId);
+        if (job.status == VideoExportStatus::Done) {
+            if (QFileInfo::exists(job.outputPath)) {
+                revealExportedFile(job.outputPath, draft.title);
+                return;
+            }
+            // 成片已被移动或删除：重新导出。
+            m_videos->restart(draft, apiKey, exportDir);
+            showVideoExportDialog(draftRowId);
+            return;
+        }
+        if (job.status == VideoExportStatus::Error) {
+            m_videos->retry(draftRowId);
+        }
+        showVideoExportDialog(draftRowId);
+        return;
+    }
+
+    m_videos->start(draft, apiKey, exportDir);
+    showVideoExportDialog(draftRowId);
+}
+
+void MainWindow::showVideoExportDialog(qint64 draftRowId)
+{
+    if (!m_videos || !m_modalOverlay) {
+        return;
+    }
+    const VideoExportJob job = m_videos->job(draftRowId);
+    if (job.draftRowId < 0) {
+        return;
+    }
+
+    auto *dialog = new VideoExportDialog;
+    dialog->setJob(job);
+    connect(dialog, &VideoExportDialog::cancelRequested, m_videos,
+            &VideoExportManager::cancel);
+    connect(dialog, &VideoExportDialog::retryRequested, m_videos,
+            &VideoExportManager::retry);
+    connect(dialog, &VideoExportDialog::revealRequested, this,
+            [this](const QString &path) {
+                revealExportedFile(path, QFileInfo(path).completeBaseName());
+            });
+    connect(dialog, &VideoExportDialog::toastRequested, this,
+            &MainWindow::showToast);
+    connect(dialog, &VideoExportDialog::layoutChanged, this, [this] {
+        if (m_modalOverlay) {
+            m_modalOverlay->relayout();
+        }
+    });
+
+    m_videoDialog = dialog;
+    m_videoDialogDraftId = draftRowId;
+    m_modalOverlay->showModal(dialog);
+}
+
+void MainWindow::requestVideoBatch(const QVector<qint64> &draftRowIds)
+{
+    if (!m_repository || !m_repository->isOpen() || !m_videos) {
+        showToast(QStringLiteral("本地数据库不可用，无法批量导出成片。"));
+        return;
+    }
+    if (m_downloads && m_downloads->batchRunning()) {
+        showToast(QStringLiteral("已有批量导出草稿正在进行，请等待完成或先停止"));
+        return;
+    }
+
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    const QString apiKey = config.service.apiKey.trimmed();
+    const QString exportDir = config.storage.exportDir.trimmed();
+    if (apiKey.isEmpty()) {
+        showToast(QStringLiteral("尚未配置 API 密钥，请到「设置 → 服务连接」填写。"));
+        return;
+    }
+    if (exportDir.isEmpty()) {
+        showToast(QStringLiteral("尚未配置成片导出目录，请到「设置 → 存储与输出」填写。"));
+        return;
+    }
+
+    QVector<ClipDraft> drafts;
+    drafts.reserve(draftRowIds.size());
+    for (qint64 draftRowId : draftRowIds) {
+        QString error;
+        const ClipDraft draft = m_repository->clipDraft(draftRowId, &error);
+        if (draft.id >= 0 && !draft.draftUrl.trimmed().isEmpty()) {
+            drafts.append(draft);
+        }
+    }
+    if (drafts.isEmpty()) {
+        showToast(QStringLiteral("所选草稿缺少云端地址，无法导出成片。"));
+        return;
+    }
+
+    m_videos->startBatch(drafts, apiKey, exportDir);
+    showVideoBatchDialog();
+}
+
+void MainWindow::showVideoBatchDialog()
+{
+    if (!m_videos || !m_modalOverlay) {
+        return;
+    }
+    const VideoBatchSnapshot batch = m_videos->batch();
+    if (batch.id == 0 || batch.items.isEmpty()) {
+        return;
+    }
+
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    auto *dialog = new BatchExportDialog(BatchExportDialog::Mode::Video,
+                                         config.storage.exportDir);
+    dialog->setVideoBatch(batch);
+    connect(dialog, &BatchExportDialog::cancelRequested, m_videos,
+            &VideoExportManager::cancelBatch);
+    connect(dialog, &BatchExportDialog::retryFailedRequested, m_videos,
+            &VideoExportManager::retryBatchFailed);
+    connect(dialog, &BatchExportDialog::openFolderRequested, this,
+            &MainWindow::openExportFolder);
+    connect(dialog, &BatchExportDialog::toastRequested, this,
+            &MainWindow::showToast);
+    connect(dialog, &BatchExportDialog::layoutChanged, this, [this] {
+        if (m_modalOverlay) {
+            m_modalOverlay->relayout();
+        }
+    });
+
+    m_batchDialog = dialog;
+    m_modalOverlay->showModal(dialog);
+}
+
 void MainWindow::openDraftFolder(const QString &path)
 {
     if (path.isEmpty() || !QFileInfo(path).isDir()) {
@@ -1882,6 +2274,251 @@ void MainWindow::openDraftFolder(const QString &path)
     if (!FileManager::revealDraftFolder(path)) {
         showToast(QStringLiteral("无法打开草稿目录：%1").arg(path));
     }
+}
+
+void MainWindow::openExportFolder(const QString &path)
+{
+    if (path.isEmpty()) {
+        showToast(QStringLiteral("尚未配置成片导出目录。"));
+        return;
+    }
+    if (!QDir().mkpath(path)) {
+        showToast(QStringLiteral("无法创建成片导出目录：%1").arg(path));
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
+        showToast(QStringLiteral("无法打开成片导出目录：%1").arg(path));
+    }
+}
+
+void MainWindow::revealExportedFile(const QString &path, const QString &title)
+{
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        showToast(QStringLiteral("成片文件不存在：%1").arg(path));
+        return;
+    }
+    if (!FileManager::revealPath(path)) {
+        showToast(QStringLiteral("无法在文件管理器中显示：%1").arg(path));
+        return;
+    }
+#ifdef Q_OS_MACOS
+    showToast(QStringLiteral("已在访达中显示「%1.mp4」").arg(title));
+#else
+    showToast(QStringLiteral("已在资源管理器中显示「%1.mp4」").arg(title));
+#endif
+}
+
+void MainWindow::showVideoExportPreview(const QString &state)
+{
+    if (!m_modalOverlay) {
+        return;
+    }
+    const bool done = state.endsWith(QLatin1String("done"));
+    const bool failed = state.endsWith(QLatin1String("error"));
+
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    VideoExportJob job;
+    job.draftRowId = -1;
+    job.title = QStringLiteral("面霜机制讲解 + 价格锚点");
+    job.draftName = QStringLiteral("202610221509505958369c");
+    job.rangeText = QStringLiteral("00:12:04");
+    job.durationText = QStringLiteral("61s");
+    job.outputPath =
+        QDir(config.storage.exportDir).filePath(QStringLiteral("面霜机制讲解 + 价格锚点.mp4"));
+    job.expectedMs = 150000;
+    job.elapsedMs = done ? 148000 : 61000;
+    job.fileSizeBytes = qint64(61 * 0.42 * 1024 * 1024);
+    job.framesTotal = 61 * 30;
+    job.segmentsTotal = 3;
+    job.framesDone = done ? job.framesTotal : job.framesTotal * 62 / 100;
+    job.segmentsDone = done ? 3 : 1;
+    job.progress = done ? 100.0 : 47.0;
+    job.stage = done ? VideoExportStage::Done : VideoExportStage::Compose;
+    job.etaSeconds = done ? -1 : 92;
+    job.status = done ? VideoExportStatus::Done
+                      : (failed ? VideoExportStatus::Error
+                                : VideoExportStatus::Running);
+    if (failed) {
+        job.stage = VideoExportStage::Encode;
+        job.segmentsDone = 2;
+        job.progress = 68.0;
+        job.etaSeconds = -1;
+        job.error = QStringLiteral("云端合成超时（HTTP 504）");
+    }
+
+    auto *dialog = new VideoExportDialog;
+    dialog->setJob(job);
+    connect(dialog, &VideoExportDialog::toastRequested, this,
+            &MainWindow::showToast);
+    connect(dialog, &VideoExportDialog::layoutChanged, this, [this] {
+        if (m_modalOverlay) {
+            m_modalOverlay->relayout();
+        }
+    });
+    m_modalOverlay->showModal(dialog);
+}
+
+void MainWindow::showBatchExportPreview(const QString &state)
+{
+    if (!m_modalOverlay) {
+        return;
+    }
+    const bool draft = state.startsWith(QLatin1String("batch-draft"));
+    const bool failed = state.contains(QLatin1String("error"));
+    const bool done = state.contains(QLatin1String("done")) || failed;
+
+    const QStringList titles = {
+        QStringLiteral("面霜机制讲解 + 价格锚点"),
+        QStringLiteral("质地现场展示，推开即吸收"),
+        QStringLiteral("敏感肌适用说明 + 检测报告"),
+        QStringLiteral("返场加单话术 + 库存紧迫感"),
+        QStringLiteral("空瓶真实反馈，推荐回购"),
+        QStringLiteral("主播答疑：色号与肤质选择"),
+    };
+    const QStringList durations = {QStringLiteral("61s"), QStringLiteral("58s"),
+                                   QStringLiteral("63s"), QStringLiteral("59s"),
+                                   QStringLiteral("62s"), QStringLiteral("57s")};
+
+    const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    const QString folder = draft ? config.storage.draftDir : config.storage.exportDir;
+
+    if (draft) {
+        DraftBatchSnapshot batch;
+        batch.id = 1;
+        batch.running = !done;
+        for (int i = 0; i < titles.size(); ++i) {
+            DraftBatchItem item;
+            item.draftRowId = i + 1;
+            item.title = titles.at(i);
+            item.durationText = durations.at(i);
+            item.totalBytes = qint64(60 * 0.9 * 1024 * 1024);
+            if (done) {
+                if (failed && i == titles.size() - 1) {
+                    item.status = DraftBatchItemStatus::Error;
+                    item.progress = 12.0;
+                    item.loadedBytes = item.totalBytes * 12 / 100;
+                    item.error = QStringLiteral("网络连接中断（HTTP 504）");
+                    ++batch.failedCount;
+                } else {
+                    item.status = DraftBatchItemStatus::Done;
+                    item.progress = 100.0;
+                    item.loadedBytes = item.totalBytes;
+                    ++batch.doneCount;
+                }
+            } else if (i < 2) {
+                item.status = DraftBatchItemStatus::Done;
+                item.progress = 100.0;
+                item.loadedBytes = item.totalBytes;
+                ++batch.doneCount;
+            } else if (i == 2) {
+                item.status = DraftBatchItemStatus::Downloading;
+                item.progress = 42.0;
+                item.loadedBytes = item.totalBytes * 42 / 100;
+                ++batch.activeCount;
+            } else if (i == 3) {
+                item.status = DraftBatchItemStatus::Writing;
+                item.progress = 100.0;
+                item.loadedBytes = item.totalBytes;
+                ++batch.activeCount;
+            } else {
+                item.status = DraftBatchItemStatus::Queued;
+                ++batch.queuedCount;
+            }
+            batch.loadedBytes += item.loadedBytes;
+            batch.totalBytes += item.totalBytes;
+            batch.items.append(item);
+        }
+        batch.progress = done ? 100.0 : 51.0;
+        batch.elapsedMs = done ? 96000 : 43000;
+        batch.etaSeconds = done ? -1 : 24;
+
+        auto *dialog = new BatchExportDialog(BatchExportDialog::Mode::Draft, folder);
+        dialog->setDraftBatch(batch);
+        connect(dialog, &BatchExportDialog::toastRequested, this,
+                &MainWindow::showToast);
+        connect(dialog, &BatchExportDialog::layoutChanged, this, [this] {
+            if (m_modalOverlay) {
+                m_modalOverlay->relayout();
+            }
+        });
+        m_modalOverlay->showModal(dialog);
+        return;
+    }
+
+    VideoBatchSnapshot batch;
+    batch.id = 1;
+    batch.running = !done;
+    for (int i = 0; i < titles.size(); ++i) {
+        VideoBatchItem item;
+        item.draftRowId = i + 1;
+        item.title = titles.at(i);
+        item.durationText = durations.at(i);
+        item.fileSizeBytes = qint64(60 * 0.42 * 1024 * 1024);
+        item.expectedMs = 128000 + i * 9000;
+        if (done) {
+            if (failed && i == titles.size() - 1) {
+                item.status = VideoBatchItemStatus::Error;
+                item.progress = 58.0;
+                item.stage = VideoExportStage::Encode;
+                item.hasStage = true;
+                item.downloadedBytes = 0;
+                item.elapsedMs = 82000;
+                item.error = QStringLiteral("云端合成超时（HTTP 504）");
+                ++batch.failedCount;
+            } else {
+                item.status = VideoBatchItemStatus::Done;
+                item.progress = 100.0;
+                item.stage = VideoExportStage::Done;
+                item.hasStage = true;
+                item.downloadedBytes = item.fileSizeBytes;
+                item.elapsedMs = item.expectedMs;
+                ++batch.doneCount;
+            }
+        } else if (i < 2) {
+            item.status = VideoBatchItemStatus::Done;
+            item.progress = 100.0;
+            item.stage = VideoExportStage::Done;
+            item.hasStage = true;
+            item.downloadedBytes = item.fileSizeBytes;
+            item.elapsedMs = item.expectedMs;
+            ++batch.doneCount;
+        } else if (i == 2) {
+            item.status = VideoBatchItemStatus::Running;
+            item.progress = 35.0;
+            item.stage = VideoExportStage::Compose;
+            item.hasStage = true;
+            item.elapsedMs = 42000;
+            ++batch.activeCount;
+        } else if (i == 3) {
+            item.status = VideoBatchItemStatus::Running;
+            item.progress = 78.0;
+            item.stage = VideoExportStage::Download;
+            item.hasStage = true;
+            item.downloadedBytes = item.fileSizeBytes * 20 / 100;
+            item.elapsedMs = 104000;
+            ++batch.activeCount;
+        } else {
+            item.status = VideoBatchItemStatus::Queued;
+            ++batch.queuedCount;
+        }
+        batch.totalBytes += item.fileSizeBytes;
+        batch.downloadedBytes += item.downloadedBytes;
+        batch.items.append(item);
+    }
+    batch.progress = done ? 100.0 : 47.0;
+    batch.elapsedMs = done ? 178000 : 56000;
+    batch.etaSeconds = done ? -1 : 86;
+
+    auto *dialog = new BatchExportDialog(BatchExportDialog::Mode::Video, folder);
+    dialog->setVideoBatch(batch);
+    connect(dialog, &BatchExportDialog::toastRequested, this,
+            &MainWindow::showToast);
+    connect(dialog, &BatchExportDialog::layoutChanged, this, [this] {
+        if (m_modalOverlay) {
+            m_modalOverlay->relayout();
+        }
+    });
+    m_modalOverlay->showModal(dialog);
 }
 
 void MainWindow::showDraftDownloadPreview(const QString &state)
@@ -2013,39 +2650,92 @@ void MainWindow::updateDraftStatusBar()
     if (!m_shell) {
         return;
     }
-    const QVector<DraftDownloadJob> jobs =
-        m_downloads ? m_downloads->jobs() : QVector<DraftDownloadJob>();
 
-    int activeIndex = -1;
-    int failedIndex = -1;
-    for (int i = 0; i < jobs.size(); ++i) {
-        if (activeIndex < 0 && jobs.at(i).isRunning()) {
-            activeIndex = i;
-        } else if (failedIndex < 0
-                   && jobs.at(i).status == DraftDownloadStatus::Error) {
-            failedIndex = i;
+    StatusBar *bar = m_shell->statusBar();
+
+    // 草稿：批量任务优先于单条下载。
+    if (m_downloads && m_downloads->batchRunning()) {
+        const DraftBatchSnapshot batch = m_downloads->batch();
+        const int processed = batch.doneCount + batch.failedCount;
+        bar->setDraftBatchStatus(
+            QStringLiteral("● 批量导出草稿 %1/%2 · %3%")
+                .arg(processed)
+                .arg(batch.items.size())
+                .arg(qMin(99, int(batch.progress))),
+            false);
+    } else {
+        bar->clearDraftBatchStatus();
+        const QVector<DraftDownloadJob> jobs =
+            m_downloads ? m_downloads->jobs() : QVector<DraftDownloadJob>();
+
+        int activeIndex = -1;
+        int failedIndex = -1;
+        for (int i = 0; i < jobs.size(); ++i) {
+            if (activeIndex < 0 && jobs.at(i).isRunning()) {
+                activeIndex = i;
+            } else if (failedIndex < 0
+                       && jobs.at(i).status == DraftDownloadStatus::Error) {
+                failedIndex = i;
+            }
+        }
+
+        const int index = activeIndex >= 0 ? activeIndex : failedIndex;
+        if (index < 0) {
+            bar->clearDraftDownloadStatus();
+        } else {
+            const DraftDownloadJob &job = jobs.at(index);
+            QString text;
+            if (job.status == DraftDownloadStatus::Error) {
+                text = QStringLiteral("● 剪映草稿下载失败");
+            } else if (job.status == DraftDownloadStatus::Writing) {
+                text = QStringLiteral("● 剪映草稿写入中 %1%")
+                           .arg(qMin(99, int(job.progress)));
+            } else {
+                text = QStringLiteral("● 剪映草稿下载中 %1%")
+                           .arg(qMin(99, int(job.progress)));
+            }
+            bar->setDraftDownloadStatus(
+                text, job.status == DraftDownloadStatus::Error, job.draftRowId);
         }
     }
 
-    const int index = activeIndex >= 0 ? activeIndex : failedIndex;
-    if (index < 0) {
-        m_shell->statusBar()->clearDraftDownloadStatus();
+    // 成片：批量任务优先于单条导出。
+    if (m_videos && m_videos->batchRunning()) {
+        const VideoBatchSnapshot batch = m_videos->batch();
+        const int processed = batch.doneCount + batch.failedCount;
+        bar->setVideoExportStatus(
+            QStringLiteral("● 批量导出成片 %1/%2 · %3%")
+                .arg(processed)
+                .arg(batch.items.size())
+                .arg(qMin(99, int(batch.progress))),
+            false, StatusBar::kBatchIndicator);
         return;
     }
 
-    const DraftDownloadJob &job = jobs.at(index);
-    QString text;
-    if (job.status == DraftDownloadStatus::Error) {
-        text = QStringLiteral("● 剪映草稿下载失败");
-    } else if (job.status == DraftDownloadStatus::Writing) {
-        text = QStringLiteral("● 剪映草稿写入中 %1%")
-                   .arg(qMin(99, int(job.progress)));
-    } else {
-        text = QStringLiteral("● 剪映草稿下载中 %1%")
-                   .arg(qMin(99, int(job.progress)));
+    const QVector<VideoExportJob> jobs =
+        m_videos ? m_videos->jobs() : QVector<VideoExportJob>();
+    const VideoExportJob *active = nullptr;
+    const VideoExportJob *failed = nullptr;
+    for (const VideoExportJob &job : jobs) {
+        if (!active && job.status == VideoExportStatus::Running) {
+            active = &job;
+        } else if (!failed && job.status == VideoExportStatus::Error) {
+            failed = &job;
+        }
     }
-    m_shell->statusBar()->setDraftDownloadStatus(
-        text, job.status == DraftDownloadStatus::Error, job.draftRowId);
+    const VideoExportJob *indicator = active ? active : failed;
+    if (!indicator) {
+        bar->clearVideoExportStatus();
+        return;
+    }
+    const QString text =
+        indicator->status == VideoExportStatus::Error
+        ? QStringLiteral("● 成片导出失败")
+        : QStringLiteral("● 成片导出中 %1%")
+              .arg(qMin(99, int(indicator->progress)));
+    bar->setVideoExportStatus(text,
+                              indicator->status == VideoExportStatus::Error,
+                              indicator->draftRowId);
 }
 
 void MainWindow::deleteSource(qint64 sourceId)
@@ -2183,6 +2873,61 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     promptLayout->addWidget(hintRow);
     card->contentLayout()->addWidget(promptGroup);
 
+    // 成片数量：自动（每段精选 1 条）或指定 1–100 条。
+    auto *countGroup = new QWidget(card);
+    auto *countLayout = new QVBoxLayout(countGroup);
+    countLayout->setContentsMargins(0, 0, 0, 0);
+    countLayout->setSpacing(6);
+
+    auto *countLabelRow = new QWidget(countGroup);
+    auto *countLabelLayout = new QHBoxLayout(countLabelRow);
+    countLabelLayout->setContentsMargins(0, 0, 0, 0);
+    countLabelLayout->setSpacing(6);
+    countLabelLayout->addWidget(
+        Ui::label(QStringLiteral("成片数量"), 12, 400, Theme::Text2, countLabelRow));
+    countLabelLayout->addStretch(1);
+    auto *countRange =
+        Ui::label(QStringLiteral("1–100"), 10, 400, Theme::Text3, countLabelRow);
+    countRange->setFont(Theme::monoFont(10));
+    countLabelLayout->addWidget(countRange);
+    countLayout->addWidget(countLabelRow);
+
+    auto *countModeRow = new QWidget(countGroup);
+    auto *countModeLayout = new QHBoxLayout(countModeRow);
+    countModeLayout->setContentsMargins(0, 0, 0, 0);
+    countModeLayout->setSpacing(6);
+    auto *countAutoButton = new ChoiceButton(QStringLiteral("自动"), countModeRow);
+    auto *countFixedButton =
+        new ChoiceButton(QStringLiteral("指定数量"), countModeRow);
+    countModeLayout->addWidget(countAutoButton);
+    countModeLayout->addWidget(countFixedButton);
+    countModeLayout->addStretch(1);
+    countLayout->addWidget(countModeRow);
+
+    auto *countInputRow = new QWidget(countGroup);
+    auto *countInputLayout = new QHBoxLayout(countInputRow);
+    countInputLayout->setContentsMargins(0, 0, 0, 0);
+    countInputLayout->setSpacing(8);
+    auto *countInput = new InputField(countInputRow);
+    countInput->setFixedWidth(84);
+    countInput->setText(QStringLiteral("6"));
+    countInput->setPlaceholder(QStringLiteral("6"));
+    if (countInput->lineEdit()) {
+        countInput->lineEdit()->setValidator(new QIntValidator(0, 1000, countInput));
+        countInput->lineEdit()->setAlignment(Qt::AlignCenter);
+    }
+    countInputLayout->addWidget(countInput);
+    countInputLayout->addWidget(
+        Ui::label(QStringLiteral("条"), 12, 400, Theme::Text2, countInputRow));
+    countInputLayout->addStretch(1);
+    countInputRow->hide();
+    countLayout->addWidget(countInputRow);
+
+    auto *countHint = Ui::label(QString(), 11, 400, Theme::Text3, countGroup);
+    countHint->setWordWrap(true);
+    countLayout->addWidget(countHint);
+    card->contentLayout()->addWidget(countGroup);
+
     card->contentLayout()->addWidget(makeNotice(
         QStringLiteral("流程：提取 MP3 → ASR 转写（缓存到本地）→ 按转写时长均衡切成"
                        "每段不超过 30 分钟的多段，由 AI 按提示词选出若干片段并合并成成片"
@@ -2193,17 +2938,83 @@ void MainWindow::openStartPipeline(qint64 sourceId)
 
     auto *cancel = new Button(QStringLiteral("取消"), Button::Default, card);
     auto *start = new Button(QStringLiteral("开始"), Button::Primary, card);
+
+    auto applyCountUi =
+        [countAutoButton, countFixedButton, countInputRow, countHint, countInput,
+         start](bool focusInput) {
+            const bool automatic = countAutoButton->isSelected();
+            countFixedButton->setSelected(!automatic);
+            countInputRow->setVisible(!automatic);
+
+            bool ok = false;
+            const int value = countInput->text().trimmed().toInt(&ok);
+            const bool valid =
+                automatic || (ok && value >= 1 && value <= 100);
+            start->setEnabled(valid);
+
+            if (automatic) {
+                countHint->setText(
+                    QStringLiteral("自动：按转写内容与直播时长决定，每段精选 1 条。"));
+                countHint->setStyleSheet(QStringLiteral(
+                    "color:#62697E;background:transparent;"));
+            } else if (valid) {
+                countHint->setText(
+                    QStringLiteral("AI 会按目标条数精选，数量越多生成越久。"));
+                countHint->setStyleSheet(QStringLiteral(
+                    "color:#62697E;background:transparent;"));
+            } else {
+                countHint->setText(QStringLiteral("请输入 1–100 之间的整数。"));
+                countHint->setStyleSheet(QStringLiteral(
+                    "color:#F6465D;background:transparent;"));
+            }
+
+            if (focusInput && !automatic && countInput->lineEdit()) {
+                countInput->lineEdit()->setFocus();
+                countInput->lineEdit()->selectAll();
+            }
+        };
+
+    connect(countAutoButton, &QAbstractButton::clicked, this,
+            [countAutoButton, countFixedButton, applyCountUi] {
+                countAutoButton->setSelected(true);
+                countFixedButton->setSelected(false);
+                applyCountUi(false);
+            });
+    connect(countFixedButton, &QAbstractButton::clicked, this,
+            [countAutoButton, countFixedButton, applyCountUi] {
+                countAutoButton->setSelected(false);
+                countFixedButton->setSelected(true);
+                applyCountUi(true);
+            });
+    if (countInput->lineEdit()) {
+        connect(countInput->lineEdit(), &QLineEdit::textChanged, this,
+                [applyCountUi](const QString &) { applyCountUi(false); });
+    }
+    countAutoButton->setSelected(true);
+    applyCountUi(false);
+
     connect(cancel, &QAbstractButton::clicked, this, [this] { m_modalOverlay->closeModal(); });
-    connect(start, &QAbstractButton::clicked, this, [this, source, select] {
-        QString promptText;
-        const int index = select->currentIndex();
-        if (index >= 0 && index < m_prompts.size()) {
-            promptText = m_prompts.at(index).content;
-        }
-        const QString promptLabel = select->currentText();
-        m_modalOverlay->closeModal();
-        startClipPipeline(source.id, promptText, promptLabel);
-    });
+    connect(start, &QAbstractButton::clicked, this,
+            [this, source, select, countAutoButton, countInput] {
+                int targetClipCount = -1;
+                if (!countAutoButton->isSelected()) {
+                    bool ok = false;
+                    const int value = countInput->text().trimmed().toInt(&ok);
+                    if (!ok || value < 1 || value > 100) {
+                        return;
+                    }
+                    targetClipCount = value;
+                }
+                QString promptText;
+                const int index = select->currentIndex();
+                if (index >= 0 && index < m_prompts.size()) {
+                    promptText = m_prompts.at(index).content;
+                }
+                const QString promptLabel = select->currentText();
+                m_modalOverlay->closeModal();
+                startClipPipeline(source.id, promptText, promptLabel,
+                                  targetClipCount);
+            });
     card->addFooterButton(cancel);
     card->addFooterButton(start);
 

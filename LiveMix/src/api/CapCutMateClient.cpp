@@ -310,6 +310,69 @@ bool CapCutMateClient::uploadFile(const QString &filePath, const QString &apiKey
     return true;
 }
 
+bool CapCutMateClient::genVideo(const QString &draftUrl, const QString &apiKey,
+                                QString *error)
+{
+    if (draftUrl.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("草稿地址为空，无法导出成片。");
+        }
+        return false;
+    }
+    if (apiKey.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("尚未配置 API 密钥，无法导出成片。");
+        }
+        return false;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("apiKey"), apiKey.trimmed());
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("gen_video")), payload,
+        QByteArray(), 60000);
+    QJsonObject json;
+    return checkEnvelope(response, &json, error);
+}
+
+bool CapCutMateClient::genVideoStatus(const QString &draftUrl,
+                                      CapCutVideoStatus *status, QString *error)
+{
+    if (draftUrl.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("草稿地址为空，无法查询成片状态。");
+        }
+        return false;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("gen_video_status")), payload,
+        QByteArray(), 60000);
+    QJsonObject json;
+    if (!checkEnvelope(response, &json, error)) {
+        return false;
+    }
+
+    if (status) {
+        status->status =
+            json.value(QStringLiteral("status")).toString().trimmed().toLower();
+        status->progress = qBound(0, json.value(QStringLiteral("progress")).toInt(), 100);
+        status->videoUrl = json.value(QStringLiteral("video_url")).toString().trimmed();
+        status->errorMessage =
+            json.value(QStringLiteral("error_message")).toString().trimmed();
+        if (status->errorMessage.isEmpty()) {
+            status->errorMessage =
+                json.value(QStringLiteral("message")).toString().trimmed();
+        }
+    }
+    return true;
+}
+
 bool CapCutMateClient::createDraft(int width, int height, CapCutDraftInfo *draft,
                                    QString *error)
 {

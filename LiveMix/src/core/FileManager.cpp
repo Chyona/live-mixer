@@ -1,6 +1,8 @@
 #include "FileManager.h"
 
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QProcess>
 #include <QUrl>
 
@@ -17,12 +19,47 @@ bool FileManager::revealDraftFolder(const QString &path)
 #endif
 }
 
+bool FileManager::revealPath(const QString &path)
+{
+#ifdef Q_OS_MACOS
+    return QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+                                   {QStringLiteral("-R"), path});
+#else
+    const QFileInfo info(path);
+    // Windows 对文件使用 /select 才能在资源管理器中选中它。
+    if (info.isFile()) {
+        return QProcess::startDetached(
+            QStringLiteral("explorer.exe"),
+            {QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+#endif
+}
+
 QString FileManager::revealLabel()
 {
 #ifdef Q_OS_MACOS
     return QStringLiteral("在 Finder 中显示");
 #else
     return QStringLiteral("打开草稿文件夹");
+#endif
+}
+
+QString FileManager::revealPathLabel()
+{
+#ifdef Q_OS_MACOS
+    return QStringLiteral("在访达中显示");
+#else
+    return QStringLiteral("在资源管理器中显示");
+#endif
+}
+
+QString FileManager::openFolderLabel()
+{
+#ifdef Q_OS_MACOS
+    return QStringLiteral("在访达中打开");
+#else
+    return QStringLiteral("在资源管理器中打开");
 #endif
 }
 

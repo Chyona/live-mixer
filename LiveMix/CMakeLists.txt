@@ -138,6 +138,11 @@ qt_add_executable(LiveMixStudio
     src/services/LiveClipService.cpp
     src/services/CaptionTiming.h
     src/services/CaptionTiming.cpp
+    src/services/VideoExportJob.h
+    src/services/VideoExporter.h
+    src/services/VideoExporter.cpp
+    src/services/VideoExportManager.h
+    src/services/VideoExportManager.cpp
 
     src/model/DefaultPrompts.h
     src/model/GarmentPrompts.h
@@ -150,6 +155,10 @@ qt_add_executable(LiveMixStudio
     src/ui/Controls.cpp
     src/ui/DraftDownloadDialog.h
     src/ui/DraftDownloadDialog.cpp
+    src/ui/VideoExportDialog.h
+    src/ui/VideoExportDialog.cpp
+    src/ui/BatchExportDialog.h
+    src/ui/BatchExportDialog.cpp
     src/ui/WindowChrome.h
     src/ui/WindowChrome.cpp
     src/ui/Overlays.h

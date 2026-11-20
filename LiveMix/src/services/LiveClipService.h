@@ -25,6 +25,11 @@ struct LiveClipRequest
     QString promptText;     // 选片系统提示词（内置提示词由后端导入）
     QString promptLabel;    // 过程页展示的提示词名称
     QString cacheDir;
+    // 目标成片数量；<= 0 表示自动（每段精选 1 条）。
+    int targetClipCount = -1;
+    // 成片设置：每条成片 1.0×–1.5× 随机取速，或固定为 fixedSpeed。
+    bool speedAuto = true;
+    double fixedSpeed = 1.0;
 };
 
 class HttpClient;
@@ -76,7 +81,7 @@ private:
     bool createDraftForProject(MediaRepository *repository, CapCutMateClient *capcut,
                                const QString &inputPath,
                                const SelectedProject &project, int index,
-                               QString *error);
+                               double speed, QString *error);
 
     // 裁剪统一使用本地 MP4：HLS 录像优先复用已有 MP4，必要时无损转封装。
     QString resolveDraftInputPath(const MediaSource &source, QString *error);

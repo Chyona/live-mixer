@@ -9,6 +9,7 @@
 
 #include <memory>
 
+class BatchExportDialog;
 class Button;
 class ConfigStore;
 class DashboardPage;
@@ -34,6 +35,8 @@ class Sidebar;
 class SpecPage;
 class TasksPage;
 class Toast;
+class VideoExportDialog;
+class VideoExportManager;
 class WindowShell;
 
 class MainWindow : public QWidget
@@ -90,14 +93,26 @@ private:
     void quitFromTray();
     void openStartPipeline(qint64 sourceId = -1);
     void startClipPipeline(qint64 sourceId, const QString &promptText,
-                           const QString &promptLabel);
+                           const QString &promptLabel,
+                           int targetClipCount = -1);
     void openVideoPreview(qint64 sourceId);
     void requestDraftDownload(qint64 draftRowId);
     void showDraftDownloadDialog(qint64 draftRowId);
+    void requestDraftBatch(const QVector<qint64> &draftRowIds);
+    void showDraftBatchDialog();
+    void requestVideoExport(qint64 draftRowId);
+    void showVideoExportDialog(qint64 draftRowId);
+    void requestVideoBatch(const QVector<qint64> &draftRowIds);
+    void showVideoBatchDialog();
     void openDraftFolder(const QString &path);
+    void openExportFolder(const QString &path);
+    void revealExportedFile(const QString &path, const QString &title);
     void updateDraftStatusBar();
     // 开发预览：用示例数据展示下载弹窗的各状态。
     void showDraftDownloadPreview(const QString &state);
+    // 开发预览：用示例数据展示成片导出与批量导出弹窗。
+    void showVideoExportPreview(const QString &state);
+    void showBatchExportPreview(const QString &state);
     void refreshPrompts();
     void openPromptEditor(int index);
     void openPromptViewer(int index);
@@ -133,8 +148,13 @@ private:
     LiveClipService *m_clipService = nullptr;
     // 草稿下载任务注册表；下载弹窗关闭后任务继续运行。
     DraftDownloadManager *m_downloads = nullptr;
+    // 成片导出任务注册表；导出弹窗关闭后任务继续运行。
+    VideoExportManager *m_videos = nullptr;
     QPointer<DraftDownloadDialog> m_downloadDialog;
+    QPointer<VideoExportDialog> m_videoDialog;
+    QPointer<BatchExportDialog> m_batchDialog;
     qint64 m_downloadDialogDraftId = -1;
+    qint64 m_videoDialogDraftId = -1;
     qint64 m_lastSourceId = -1;
     // 结果页当前展示的源视频；-1 表示展示全部草稿（如从首页进入）。
     qint64 m_resultsSourceId = -1;
@@ -143,6 +163,8 @@ private:
     // 最近一次一键成片的源视频与提示词，用于过程页的「再跑一次」。
     QString m_lastPromptText;
     QString m_lastPromptLabel;
+    // 最近一次一键成片的成片数量设置；-1 表示自动。
+    int m_lastClipTarget = -1;
     // 当前提示词列表（内置 + 用户），以及全屏编辑器正在编辑的数据库记录。
     QVector<PromptEntry> m_prompts;
     qint64 m_editingPromptId = -1;

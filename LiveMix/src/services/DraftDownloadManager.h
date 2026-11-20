@@ -9,6 +9,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QVector>
 
 class DraftDownloader;
@@ -33,11 +34,26 @@ public:
     DraftDownloadJob job(qint64 draftRowId) const;
     QVector<DraftDownloadJob> jobs() const;
 
+    // ---------------------------------------------------------------------
+    // 批量导出到剪映：固定 3 路并发，其余按顺序排队。
+    // 单条失败只影响当前草稿，队列继续；已完成的草稿立即就绪。
+    // ---------------------------------------------------------------------
+    void startBatch(const QVector<ClipDraft> &drafts, const QString &databasePath,
+                    const QString &draftRoot);
+    void cancelBatch();
+    void retryBatchFailed();
+    bool batchRunning() const { return m_batchRunning; }
+    bool isBatchJob(qint64 draftRowId) const;
+    DraftBatchSnapshot batch() const { return m_batch; }
+
 signals:
     void jobChanged(const DraftDownloadJob &job);
     void jobRemoved(qint64 draftRowId);
     void jobFinished(const DraftDownloadJob &job);
     void toastRequested(const QString &message);
+    void batchChanged(const DraftBatchSnapshot &batch);
+    void batchFinished(const DraftBatchSnapshot &batch);
+    void batchCleared();
 
 private:
     struct Runtime
@@ -49,6 +65,8 @@ private:
         DraftDownloader *downloader = nullptr;
     };
 
+    static constexpr int kBatchConcurrency = 3;
+
     Runtime *findRuntime(qint64 draftRowId) const;
     void launch(Runtime *runtime);
     void onJobChanged(qint64 draftRowId, const DraftDownloadJob &job);
@@ -56,5 +74,25 @@ private:
                     const QString &localPath);
     void onCancelled(qint64 draftRowId);
 
+    // 批量任务内部状态。
+    void launchBatchItem(qint64 draftRowId);
+    void launchQueuedBatchItems();
+    void updateBatchFromJob(const DraftDownloadJob &job);
+    void recomputeBatch();
+    void finishBatchIfIdle();
+    DraftBatchItem *batchItem(qint64 draftRowId);
+
     QHash<qint64, Runtime *> m_runtimes;
+    DraftBatchSnapshot m_batch;
+    QHash<qint64, ClipDraft> m_batchDrafts;
+    QVector<qint64> m_batchQueue;
+    QSet<qint64> m_batchActive;
+    QSet<qint64> m_batchFinishedItems;
+    QString m_batchDatabasePath;
+    QString m_batchDraftRoot;
+    bool m_batchRunning = false;
+    bool m_batchCancelling = false;
+    QSet<qint64> m_batchCancelIds;
+    int m_batchCounter = 0;
+    class QElapsedTimer *m_batchClock = nullptr;
 };

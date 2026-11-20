@@ -12,17 +12,20 @@
 #include <QMargins>
 #include <QSize>
 #include <QStringList>
+#include <QVector>
 #include <QWidget>
 
 class QBoxLayout;
 class QGraphicsOpacityEffect;
 class QHBoxLayout;
+class QKeyEvent;
 class QLabel;
 class QLineEdit;
 class QPropertyAnimation;
 class QResizeEvent;
 class QTimer;
 class QVBoxLayout;
+class QWheelEvent;
 
 namespace Ui {
 
@@ -99,9 +102,12 @@ public:
     void setLeadingGlyph(Icons::Glyph glyph);
     void setCompact(bool compact);
     void setVariant(Variant variant);
+    Variant variant() const { return m_variant; }
     void setCornerRadius(int radius);
     // 在按钮左侧按百分比铺一层进度底色（0–100，负数表示不显示）。
     void setProgressPercent(int percent);
+    // 覆盖文字与图标颜色（如成片已导出时的成功色）；无效颜色表示跟随变体。
+    void setTextColor(const QColor &color);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -123,6 +129,7 @@ private:
     int m_padding = 13;
     int m_radius = 7;
     int m_progressPercent = -1;
+    QColor m_textColor;
 };
 
 class GlyphButton : public QAbstractButton
@@ -217,7 +224,7 @@ class MediaThumbnail : public QWidget
 
 public:
     enum Mode { Cool, Recording };
-    enum BadgeTone { BadgeOk, BadgeRun, BadgeError };
+    enum BadgeTone { BadgeOk, BadgeRun, BadgeError, BadgeNeutral };
 
     explicit MediaThumbnail(Mode mode = Cool, QWidget *parent = nullptr);
 
@@ -376,6 +383,107 @@ private:
     int m_current = 0;
     int m_pixelSize = 12;
     int m_hovered = -1;
+};
+
+// 单选胶囊按钮：设置页的倍速方式、一键成片弹窗的成片数量都使用它。
+class ChoiceButton : public QAbstractButton
+{
+    Q_OBJECT
+
+public:
+    explicit ChoiceButton(const QString &text, QWidget *parent = nullptr);
+
+    void setSelected(bool selected);
+    bool isSelected() const { return m_selected; }
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+
+private:
+    bool m_selected = false;
+    bool m_hovered = false;
+};
+
+// 成片设置里的开关。勾选状态由 QAbstractButton 的 checked 管理。
+class Switch : public QAbstractButton
+{
+    Q_OBJECT
+    Q_PROPERTY(qreal knob READ knob WRITE setKnob)
+
+public:
+    explicit Switch(QWidget *parent = nullptr);
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+    qreal knob() const { return m_knob; }
+    void setKnob(qreal knob);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    qreal m_knob = 0.0;
+    class QVariantAnimation *m_animation = nullptr;
+};
+
+// 视频倍速滑杆：0.5×–2.0×，支持拖动、方向键与 Home/End。
+class SliderControl : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit SliderControl(QWidget *parent = nullptr);
+
+    void setRange(double minimum, double maximum, double step);
+    double value() const { return m_value; }
+    void setValue(double value);
+    QSize sizeHint() const override;
+
+signals:
+    void valueChanged(double value);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+
+private:
+    void setValueFromX(qreal x);
+    QRectF trackRect() const;
+    qreal ratio() const;
+
+    double m_minimum = 0.5;
+    double m_maximum = 2.0;
+    double m_step = 0.05;
+    double m_value = 1.0;
+    bool m_dragging = false;
+};
+
+// 长任务的三段式阶段指示器（导出草稿 / 导出成片共用同样式）。
+class StageStepper : public QWidget
+{
+    Q_OBJECT
+
+public:
+    enum State { Waiting, Active, Done, Error };
+
+    explicit StageStepper(const QStringList &labels, QWidget *parent = nullptr);
+
+    void setStates(const QVector<int> &states);
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QStringList m_labels;
+    QVector<int> m_states;
 };
 
 class FormField : public QWidget

@@ -1490,6 +1490,13 @@ public:
         hide();
     }
 
+    void setClipMode(bool clip)
+    {
+        m_clipMode = clip;
+    }
+
+    QString unit() const { return m_clipMode ? QStringLiteral("条") : QStringLiteral("段"); }
+
     void showPlan(int count)
     {
         m_index = 0;
@@ -1499,8 +1506,8 @@ public:
         m_rateStarted = false;
         setTone(Theme::Ai);
         setHeader(QStringLiteral("准备开始分段分析"),
-                  QStringLiteral("共 %1 段").arg(count), StatusMark::Mode::Spinner,
-                  Theme::Ai);
+                  QStringLiteral("共 %1 %2").arg(count).arg(unit()),
+                  StatusMark::Mode::Spinner, Theme::Ai);
         m_body->setTextColor(Theme::Text2);
         m_body->setMessage(
             QStringLiteral("模型将逐段读取转写、评估切片并锁定高价值片段。"));
@@ -1516,13 +1523,14 @@ public:
         m_rateStarted = false;
         setTone(Theme::Ai);
         setHeader(QStringLiteral("等待模型响应…"),
-                  QStringLiteral("第 %1/%2 段").arg(index).arg(count),
+                  QStringLiteral("第 %1/%2 %3").arg(index).arg(count).arg(unit()),
                   StatusMark::Mode::Spinner, Theme::Ai);
         m_body->setTextColor(Theme::Text2);
         m_body->setMessage(
-            QStringLiteral("已提交第 %1/%2 段转写，等待模型开始思考…")
+            QStringLiteral("已提交第 %1/%2 %3转写，等待模型开始思考…")
                 .arg(index)
-                .arg(count));
+                .arg(count)
+                .arg(unit()));
         show();
     }
 
@@ -1545,7 +1553,11 @@ public:
             meta += QStringLiteral(" · %1 字/s").arg(rate);
         }
         if (m_count > 0) {
-            meta = QStringLiteral("第 %1/%2 段 · ").arg(m_index).arg(m_count) + meta;
+            meta = QStringLiteral("第 %1/%2 %3 · ")
+                       .arg(m_index)
+                       .arg(m_count)
+                       .arg(unit())
+                + meta;
         }
         setHeader(QStringLiteral("模型思考中"), meta, StatusMark::Mode::Spinner,
                   Theme::Ai);
@@ -1566,10 +1578,11 @@ public:
                   Theme::Ai);
         m_body->setTextColor(Theme::Text2);
         setOutlineBody(
-            QStringLiteral("已提交第 %1/%2 段转写，等待模型返回思考内容。\n"
+            QStringLiteral("已提交第 %1/%2 %3转写，等待模型返回思考内容。\n"
                            "连接保持中，任务仍在后台运行，可切到其他页面。")
                 .arg(m_index)
-                .arg(m_count));
+                .arg(m_count)
+                .arg(unit()));
         show();
     }
 
@@ -1579,7 +1592,10 @@ public:
         setTone(Theme::Ai);
         setHeader(QStringLiteral("正在生成选片结果…"),
                   m_count > 0
-                      ? QStringLiteral("第 %1/%2 段").arg(m_index).arg(m_count)
+                      ? QStringLiteral("第 %1/%2 %3")
+                            .arg(m_index)
+                            .arg(m_count)
+                            .arg(unit())
                       : QString(),
                   StatusMark::Mode::Spinner, Theme::Ai);
         m_body->setTextColor(Theme::Text2);
@@ -1597,15 +1613,19 @@ public:
         setTone(tone);
         setHeader(text,
                   m_count > 0
-                      ? QStringLiteral("第 %1/%2 段").arg(m_index).arg(m_count)
+                      ? QStringLiteral("第 %1/%2 %3")
+                            .arg(m_index)
+                            .arg(m_count)
+                            .arg(unit())
                       : QString(),
                   StatusMark::Mode::Spinner, tone);
         m_body->setTextColor(Theme::Text2);
         setOutlineBody(
-            QStringLiteral("已保留第 %1/%2 段的转写与提示词，重试会继续当前候选。\n"
+            QStringLiteral("已保留第 %1/%2 %3的转写与提示词，重试会继续当前候选。\n"
                            "通常几秒内自动恢复，无需手动操作。")
                 .arg(m_index)
-                .arg(m_count));
+                .arg(m_count)
+                .arg(unit()));
         show();
     }
 
@@ -1615,18 +1635,24 @@ public:
         m_count = count;
         if (picked) {
             setTone(Theme::Success);
-            setHeader(QStringLiteral("第 %1 段选片完成").arg(index),
-                      QStringLiteral("第 %1/%2 段").arg(index).arg(count),
+            setHeader(QStringLiteral("第 %1 %2选片完成").arg(index).arg(unit()),
+                      QStringLiteral("第 %1/%2 %3")
+                          .arg(index)
+                          .arg(count)
+                          .arg(unit()),
                       StatusMark::Mode::Check, Theme::Success);
             m_body->setTextColor(Theme::Text2);
         } else {
             setTone(Theme::Text3);
-            setHeader(QStringLiteral("第 %1 段未选出切片").arg(index),
-                      QStringLiteral("第 %1/%2 段").arg(index).arg(count),
+            setHeader(QStringLiteral("第 %1 %2未选出切片").arg(index).arg(unit()),
+                      QStringLiteral("第 %1/%2 %3")
+                          .arg(index)
+                          .arg(count)
+                          .arg(unit()),
                       StatusMark::Mode::Cross, Theme::Text3, Theme::Text2);
             m_body->setTextColor(Theme::Text3);
         }
-        setOutlineBody(QStringLiteral("该段已完成分析。"));
+        setOutlineBody(QStringLiteral("该候选已完成分析。"));
         show();
     }
 
@@ -1700,6 +1726,7 @@ private:
     int m_index = 0;
     int m_count = 0;
     int m_totalChars = 0;
+    bool m_clipMode = false;
     ReasoningOutline m_outline;
     QElapsedTimer m_rateClock;
     bool m_rateStarted = false;
@@ -1714,9 +1741,10 @@ class CandidateCard : public QWidget
 public:
     enum class State { Queued, Analyzing, Picked, Skipped };
 
-    explicit CandidateCard(int index, QWidget *parent = nullptr)
+    CandidateCard(int index, int segmentIndex, QWidget *parent = nullptr)
         : QWidget(parent)
         , m_index(index)
+        , m_segmentIndex(segmentIndex > 0 ? segmentIndex : index)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         auto *root = new QVBoxLayout(this);
@@ -1767,7 +1795,9 @@ public:
     void setQueued(const QString &range, int sentences)
     {
         setState(State::Queued);
-        m_title->setText(QStringLiteral("第 %1 段 · 候选窗口").arg(m_index));
+        m_title->setText(QStringLiteral("第 %1 段 · 候选 %2")
+                             .arg(m_segmentIndex)
+                             .arg(m_index));
         m_title->setTextColor(Theme::Text2);
         m_badge->setText(QStringLiteral("等待评估"));
         m_badge->setStyle(Theme::Text3, Qt::transparent, Theme::Border);
@@ -1782,7 +1812,9 @@ public:
     void setAnalyzing(const QString &range, int sentences)
     {
         setState(State::Analyzing);
-        m_title->setText(QStringLiteral("第 %1 段 · 正在评估").arg(m_index));
+        m_title->setText(QStringLiteral("第 %1 段 · 候选 %2")
+                             .arg(m_segmentIndex)
+                             .arg(m_index));
         m_title->setTextColor(Theme::Text2);
         m_badge->hide();
         m_spinner->show();
@@ -1831,7 +1863,7 @@ public:
     void setSkipped(const QString &reason)
     {
         setState(State::Skipped);
-        m_title->setText(QStringLiteral("第 %1 段 · 未选出切片").arg(m_index));
+        m_title->setText(QStringLiteral("第 %1 段 · 未选出切片").arg(m_segmentIndex));
         m_title->setTextColor(Theme::Text3);
         m_badge->hide();
         m_spinner->hide();
@@ -1889,6 +1921,7 @@ private:
     }
 
     int m_index = 0;
+    int m_segmentIndex = 0;
     State m_state = State::Queued;
     QLabel *m_order = nullptr;
     ElidedLabel *m_title = nullptr;
@@ -4289,6 +4322,7 @@ public:
     void reset()
     {
         m_batchCount = 0;
+        m_targetCount = 0;
         m_batchDone = 0;
         m_activeBatch = 0;
         m_picked = 0;
@@ -4328,40 +4362,52 @@ public:
     }
 
     void setPlanned(const QVector<PipelineUi::Candidate> &batches, int sentenceCount,
-                    int charCount)
+                    int charCount, int segmentCount, int clipTarget)
     {
         m_batches = batches;
-        m_batchCount = batches.size();
+        m_targetCount = batches.size();
+        m_batchCount = qMax(1, segmentCount > 0 ? segmentCount : batches.size());
+        const QString targetHint =
+            clipTarget > 0 ? QStringLiteral("目标 %1 条").arg(m_targetCount)
+                           : QStringLiteral("自动 %1 条").arg(m_targetCount);
         m_scanInfo->setText(m_batchCount <= 1
-                                ? QStringLiteral("整段扫描 · 无需切分")
-                                : QStringLiteral("分 %1 段扫描 · 均衡切分")
-                                      .arg(m_batchCount));
-        m_candidateCount->setText(QStringLiteral("候选 %1").arg(m_batchCount));
-        m_scanFooter->setText(QStringLiteral("扫描 0/%1 段").arg(m_batchCount));
-        m_pickedTag->setText(QStringLiteral("已锁定 0/%1").arg(m_batchCount));
+                                ? QStringLiteral("整段扫描 · %1").arg(targetHint)
+                                : QStringLiteral("分 %1 段扫描 · %2")
+                                      .arg(m_batchCount)
+                                      .arg(targetHint));
+        m_candidateCount->setText(QStringLiteral("候选 %1").arg(m_targetCount));
+        m_scanFooter->setText(QStringLiteral("已评估 0/%1").arg(m_targetCount));
+        m_pickedTag->setText(QStringLiteral("已锁定 0/%1").arg(m_targetCount));
         clearCandidates();
         for (const PipelineUi::Candidate &batch : batches) {
-            auto *card = new CandidateCard(batch.index, m_candidateScroll->widget());
+            auto *card = new CandidateCard(batch.index, batch.segmentIndex,
+                                           m_candidateScroll->widget());
             card->setQueued(batch.range, batch.sourceSentenceCount);
             m_candidatesLayout->insertWidget(m_candidatesLayout->count() - 1, card);
             m_candidates.append(card);
         }
         m_bodyStack->setCurrentWidget(m_scroll);
         m_thinkingHost->show();
+        m_thinkingPanel->setClipMode(m_targetCount != m_batchCount);
         m_thinkingPanel->showPlan(m_batchCount);
         addThought(QStringLiteral("规划"), Theme::Ai,
-                   QStringLiteral("读取 %1 句转写稿（%2 字），按提示词「%3」分 %4 段扫描。")
+                   QStringLiteral("读取 %1 句转写稿（%2 字），按提示词「%3」分 %4 段扫描，"
+                                  "目标 %5 条成片。")
                        .arg(formatNumber(sentenceCount))
                        .arg(formatNumber(charCount))
                        .arg(m_promptText.isEmpty() ? QStringLiteral("默认") : m_promptText)
-                       .arg(m_batchCount),
+                       .arg(m_batchCount)
+                       .arg(m_targetCount),
                    QStringLiteral("规划"));
     }
 
     void startBatch(int index, int count, qint64 startMs, qint64 endMs, int sentences,
-                    const QString &note)
+                    const QString &note, int segmentIndex = 0, int segmentCount = 0)
     {
-        m_batchCount = qMax(m_batchCount, count);
+        m_targetCount = qMax(m_targetCount, count);
+        if (segmentCount > 0) {
+            m_batchCount = qMax(m_batchCount, segmentCount);
+        }
         m_activeBatch = index;
         m_running = true;
         m_started = true;
@@ -4372,12 +4418,14 @@ public:
         m_headerMark->setColor(Theme::Ai);
         m_bodyStack->setCurrentWidget(m_scroll);
         m_thinkingHost->show();
-        m_thinkingPanel->beginBatch(index, m_batchCount);
+        m_thinkingPanel->beginBatch(index, m_targetCount);
         const QString text =
             note.isEmpty()
-                ? QStringLiteral("读取第 %1/%2 段（%3）· %4 句转写，按提示词评估。")
+                ? QStringLiteral("读取第 %1/%2 条成片（第 %3 段）· %4 · %5 句转写，"
+                                 "按提示词评估。")
                       .arg(index)
-                      .arg(m_batchCount)
+                      .arg(m_targetCount)
+                      .arg(qMax(1, segmentIndex))
                       .arg(PipelineUi::formatRange(startMs, endMs))
                       .arg(sentences)
                 : note;
@@ -4397,16 +4445,16 @@ public:
 
     void skipBatch(int index, int count, const QString &reason, qint64 tokens)
     {
-        m_batchCount = qMax(m_batchCount, count);
+        m_targetCount = qMax(m_targetCount, count);
         m_batchDone = qMax(m_batchDone, index);
         m_running = false;
         m_tokens += tokens;
         m_thinkingHost->show();
-        m_thinkingPanel->finishBatch(index, m_batchCount, false);
+        m_thinkingPanel->finishBatch(index, m_targetCount, false);
         addThought(QStringLiteral("排除"), Theme::Danger,
-                   QStringLiteral("第 %1/%2 段未选出切片：%3")
+                   QStringLiteral("第 %1/%2 条成片未选出切片：%3")
                        .arg(index)
-                       .arg(m_batchCount)
+                       .arg(qMax(m_targetCount, index))
                        .arg(reason),
                    QStringLiteral("skip"));
         if (index >= 1 && index <= m_candidates.size()) {
@@ -4422,11 +4470,11 @@ public:
         ++m_picked;
         m_tokens += tokens;
         m_thinkingHost->show();
-        m_thinkingPanel->finishBatch(candidate.index, m_batchCount, true);
+        m_thinkingPanel->finishBatch(candidate.index, m_targetCount, true);
         addThought(QStringLiteral("选入"), Theme::Success,
-                   QStringLiteral("第 %1/%2 段选出「%3」｜ %4 段 · %5 ｜ %6 条字幕")
+                   QStringLiteral("第 %1/%2 条成片选出「%3」｜ %4 段 · %5 ｜ %6 条字幕")
                        .arg(candidate.index)
-                       .arg(qMax(m_batchCount, candidate.index))
+                       .arg(qMax(m_targetCount, candidate.index))
                        .arg(candidate.title)
                        .arg(qMax(1, candidate.rangeCount))
                        .arg(PipelineUi::formatSpan(candidate.durationMs))
@@ -4448,7 +4496,7 @@ public:
         m_rate = 0;
         m_picked = qMax(m_picked, pickedCount);
         m_batchCount = qMax(m_batchCount, batchCount);
-        m_batchDone = m_batchCount;
+        m_batchDone = m_targetCount > 0 ? m_targetCount : m_batchCount;
         if (tokens > 0) {
             m_tokens = tokens;
         }
@@ -4494,7 +4542,7 @@ public:
         if (text.isEmpty()) {
             return;
         }
-        m_batchCount = qMax(m_batchCount, count);
+        m_targetCount = qMax(m_targetCount, count);
         m_bodyStack->setCurrentWidget(m_scroll);
         m_thinkingHost->show();
         m_thinkingPanel->appendThought(index, count, text);
@@ -4532,11 +4580,12 @@ public:
         if (m_finished) {
             return 100;
         }
-        if (m_batchCount <= 0) {
+        const int total = m_targetCount > 0 ? m_targetCount : m_batchCount;
+        if (total <= 0) {
             return 0;
         }
         const int processed = m_batchDone * 100 + (m_running ? 50 : 0);
-        return qBound(0, processed / m_batchCount, 99);
+        return qBound(0, processed / total, 99);
     }
 
 private:
@@ -4581,11 +4630,11 @@ private:
                                         .arg(formatNumber(m_tokens))
                                         .arg(m_rate)
                                   : QStringLiteral("%1 tokens").arg(formatNumber(m_tokens)));
-        m_pickedTag->setText(QStringLiteral("已锁定 %1/%2").arg(m_picked).arg(m_batchCount));
-        m_candidateCount->setText(QStringLiteral("候选 %1").arg(m_batchCount));
-        const int scanned = m_finished ? m_batchCount : m_batchDone;
+        m_pickedTag->setText(QStringLiteral("已锁定 %1/%2").arg(m_picked).arg(m_targetCount));
+        m_candidateCount->setText(QStringLiteral("候选 %1").arg(m_targetCount));
+        const int scanned = m_finished ? m_targetCount : m_batchDone;
         m_scanFooter->setText(
-            QStringLiteral("扫描 %1/%2 段").arg(scanned).arg(m_batchCount));
+            QStringLiteral("已评估 %1/%2").arg(scanned).arg(m_targetCount));
         int selectedSentences = 0;
         for (const PipelineUi::Candidate &batch : m_batches) {
             selectedSentences += batch.captionCount;
@@ -4616,7 +4665,8 @@ private:
         }
     }
 
-    int m_batchCount = 0;
+    int m_batchCount = 0;   // ASR 分段数（扫描进度）
+    int m_targetCount = 0;  // 目标成片条数（候选卡片数）
     int m_batchDone = 0;
     int m_activeBatch = 0;
     int m_picked = 0;
@@ -5374,6 +5424,10 @@ void PipelinePage::buildRunPage()
             Ui::label(QStringLiteral("·"), 11, 400, Theme::BorderStrong, header));
     };
     addDot();
+    m_targetTextLabel = Ui::label(QStringLiteral("成片数量：—"), 11, 400,
+                                  Theme::Text3, header);
+    metaRow->addWidget(m_targetTextLabel);
+    addDot();
     metaRow->addWidget(Ui::label(QStringLiteral("已用时"), 11, 400, Theme::Text3,
                                  header));
     m_elapsedValue = monoLabel(QStringLiteral("00:00"), 11, Theme::Text2, header);
@@ -5502,6 +5556,8 @@ void PipelinePage::resetRun()
     m_stageStatus[0] = PipelineUi::StageStatus::Running;
     m_sourceTitle = QStringLiteral("正在准备一键成片…");
     m_promptLabel.clear();
+    m_clipTarget = -1;
+    m_targetClipCount = 0;
     m_errorMessage.clear();
     m_sourceDurationMs = 0;
     m_finalElapsedMs = 0;
@@ -5521,6 +5577,7 @@ void PipelinePage::resetRun()
     m_title->setMinimumWidth(qMin(460, m_title->sizeHint().width() + 8));
     m_titleMeta->setText(QStringLiteral("—"));
     m_promptTextLabel->setText(QStringLiteral("提示词：—"));
+    m_targetTextLabel->setText(QStringLiteral("成片数量：—"));
     m_titleChip->setText(QStringLiteral("一键成片中"));
     m_titleChip->setTone(Chip::Run);
     m_overallValue->setText(QStringLiteral("0"));
@@ -5546,6 +5603,9 @@ void PipelinePage::handleEvent(const PipelineUi::Event &event)
         m_promptLabel = event.promptLabel;
         m_sourceDurationMs = event.durationMs;
         m_batchCount = event.count;
+        m_clipTarget = event.clipTarget;
+        m_targetClipCount = event.targetClipCount > 0 ? event.targetClipCount
+                                                      : event.count;
         m_title->setText(m_sourceTitle.isEmpty()
                              ? QStringLiteral("一键成片")
                              : m_sourceTitle);
@@ -5554,6 +5614,10 @@ void PipelinePage::handleEvent(const PipelineUi::Event &event)
                                        .arg(m_promptLabel.isEmpty()
                                                 ? QStringLiteral("—")
                                                 : m_promptLabel));
+        m_targetTextLabel->setText(
+            m_clipTarget > 0
+                ? QStringLiteral("成片数量：%1 条").arg(m_targetClipCount)
+                : QStringLiteral("成片数量：自动（%1 条）").arg(m_targetClipCount));
         m_stageStatus[0] = PipelineUi::StageStatus::Running;
         setStage(PipelineUi::StageKey::Asr);
         updateSummary();
@@ -5600,10 +5664,24 @@ void PipelinePage::handleEvent(const PipelineUi::Event &event)
         break;
 
     case PipelineUi::EventType::SelectPlanned:
-        m_batchCount = qMax(1, event.count);
+        m_batchCount = qMax(1, event.segmentCount > 0 ? event.segmentCount
+                                                      : event.count);
+        m_clipTarget = event.clipTarget;
+        m_targetClipCount = event.targetClipCount > 0 ? event.targetClipCount
+                                                      : event.count;
         m_selectPanel->setPrompt(m_promptLabel);
         m_selectPanel->setPlanned(event.candidates, event.sentenceCount,
-                                  event.charCount);
+                                  event.charCount,
+                                  event.segmentCount > 0 ? event.segmentCount
+                                                         : event.count,
+                                  event.clipTarget);
+        if (m_targetTextLabel) {
+            m_targetTextLabel->setText(
+                m_clipTarget > 0
+                    ? QStringLiteral("成片数量：%1 条").arg(m_targetClipCount)
+                    : QStringLiteral("成片数量：自动（%1 条）")
+                          .arg(m_targetClipCount));
+        }
         m_stageStatus[1] = PipelineUi::StageStatus::Waiting;
         updateSummary();
         break;
@@ -5619,7 +5697,8 @@ void PipelinePage::handleEvent(const PipelineUi::Event &event)
             m_selectClockStarted = true;
         }
         m_selectPanel->startBatch(event.index, event.count, event.startMs, event.endMs,
-                                  event.sentenceCount, event.text);
+                                  event.sentenceCount, event.text, event.segmentIndex,
+                                  event.segmentCount);
         updateSummary();
         break;
 
@@ -5656,8 +5735,13 @@ void PipelinePage::handleEvent(const PipelineUi::Event &event)
         m_selectPanel->finish(event.count, qMax(1, event.sentenceCount),
                               event.tokenCount);
         m_stageStatus[1] = PipelineUi::StageStatus::Done;
-        if (event.count > 0) {
-            m_batchCount = event.count;
+        if (event.targetClipCount > 0) {
+            m_targetClipCount = event.targetClipCount;
+        } else if (event.count > 0) {
+            m_targetClipCount = event.count;
+        }
+        if (event.segmentCount > 0) {
+            m_batchCount = event.segmentCount;
         }
         m_tokens = m_selectPanel->tokens();
         updateSummary();
@@ -5895,7 +5979,13 @@ void PipelinePage::updateSummary()
     if (m_sourceDurationMs > 0) {
         durationText = MediaUtils::formatDuration(m_sourceDurationMs);
     }
-    if (m_batchCount > 0) {
+    if (m_targetClipCount > 0) {
+        const QString mode = m_clipTarget > 0 ? QStringLiteral("指定")
+                                              : QStringLiteral("自动");
+        m_titleMeta->setText(QStringLiteral("%1 · %2 %3 条成片")
+                                 .arg(durationText, mode)
+                                 .arg(m_targetClipCount));
+    } else if (m_batchCount > 0) {
         m_titleMeta->setText(QStringLiteral("%1 · %2 条切片")
                                  .arg(durationText)
                                  .arg(m_batchCount));
