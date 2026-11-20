@@ -76,6 +76,7 @@ private:
     Chip *m_titleChip = nullptr;
     QLabel *m_titleMeta = nullptr;
     QLabel *m_promptTextLabel = nullptr;
+    QLabel *m_targetTextLabel = nullptr;
     QLabel *m_elapsedValue = nullptr;
     QLabel *m_etaDot = nullptr;
     QLabel *m_etaPrefix = nullptr;
@@ -122,6 +123,9 @@ private:
     qint64 m_finalElapsedMs = 0;
     qint64 m_clockOffsetMs = 0;
     int m_batchCount = 0;
+    // 成片数量设置：m_clipTarget < 0 表示自动；m_targetClipCount 为目标条数。
+    int m_clipTarget = -1;
+    int m_targetClipCount = 0;
     int m_finishedDrafts = 0;
     int m_savedDrafts = 0;
     qint64 m_tokens = 0;

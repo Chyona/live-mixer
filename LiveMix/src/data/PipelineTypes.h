@@ -57,7 +57,8 @@ enum class EventType {
 // 一条候选切片：AI 选出的成片方案。
 struct Candidate
 {
-    int index = 0;
+    int index = 0;        // 本次运行中的第几条成片（1-based）
+    int segmentIndex = 0; // 来源 ASR 分段（1-based）
     QString title;
     QString description;
     QStringList topics;
@@ -76,6 +77,12 @@ struct Event
     EventType type = EventType::TaskSummary;
     int index = 0;      // 1-based：分段/草稿序号
     int count = 0;      // 总数：分段数/草稿数
+    // 成片数量设置：clipTarget < 0 表示自动；targetClipCount 为本次目标条数。
+    int clipTarget = -1;
+    int targetClipCount = 0;
+    // 单个候选所属的 ASR 分段与总段数（指定数量时 index/count 是成片条数）。
+    int segmentIndex = 0;
+    int segmentCount = 0;
     int step = 0;       // 任务步骤或草稿步骤（0-based）
     int status = 0;     // StepStatus
     int percent = 0;

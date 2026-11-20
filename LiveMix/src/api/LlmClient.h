@@ -21,6 +21,9 @@ struct LlmSelectionRequest
     QString systemPrompt;  // 选片提示词（内置提示词由后端导入）
     QVector<AsrUtterance> segments; // 本段待分析 ASR 句段，索引从 0 开始
     bool strictJson = false; // 解析失败重试时使用更严格的指令
+    // 指定成片数量时，同段需要多次调用；这里说明本次是第几条，并排除已选句段。
+    QString extraInstruction;
+    QVector<int> excludedIndices;
 };
 
 class LlmClient

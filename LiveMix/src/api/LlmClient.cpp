@@ -73,6 +73,26 @@ QString buildUserPrompt(const LlmSelectionRequest &request)
         prompt += QLatin1Char('\n');
     }
     prompt += QLatin1Char('\n');
+
+    if (!request.extraInstruction.trimmed().isEmpty()
+        || !request.excludedIndices.isEmpty()) {
+        prompt += QStringLiteral("## 本次选片要求\n");
+        if (!request.extraInstruction.trimmed().isEmpty()) {
+            prompt += request.extraInstruction.trimmed();
+            prompt += QLatin1Char('\n');
+        }
+        if (!request.excludedIndices.isEmpty()) {
+            QStringList excluded;
+            excluded.reserve(request.excludedIndices.size());
+            for (int index : request.excludedIndices) {
+                excluded.append(QString::number(index));
+            }
+            prompt += QStringLiteral("- 不要选择以下已经用于其他成片的句段索引：%1\n")
+                          .arg(excluded.join(QStringLiteral(", ")));
+        }
+        prompt += QLatin1Char('\n');
+    }
+
     prompt += outputFormat();
     return prompt;
 }

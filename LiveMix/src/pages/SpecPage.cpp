@@ -1,6 +1,5 @@
 #include "SpecPage.h"
 
-#include "../core/FileManager.h"
 #include "../ui/Controls.h"
 
 #include <QGridLayout>
@@ -371,10 +370,10 @@ SpecPage::SpecPage(QWidget *parent)
     flowLayout->addWidget(paragraph(
         QStringLiteral(
             "<b style=\"color:#E9ECF4\">主路径：</b> 录制直播（或导入本地视频）→ "
-            "视频库中点「一键成片」→ ASR 转写 → AI 按提示词选出多个句段并合并成一条成片 → "
-            "生成剪映草稿 → 结果页点「%1」后将草稿与素材下载到本地剪映目录，"
-            "并自动定位到草稿文件夹继续后期。")
-            .arg(FileManager::revealLabel()),
+            "视频库中点「一键成片」→ 选择提示词与成片数量（自动，或指定 1–100 条）→ "
+            "ASR 转写 → AI 按提示词选出句段并合并成成片 → 生成剪映草稿 → "
+            "结果页点「导出到剪映」将草稿与素材下载到本地剪映目录，"
+            "或点「导出成片」云端合成 MP4 并下载到本地；也可批量选择一次导出多条。"),
         flow));
     flowLayout->addSpacing(10);
     flowLayout->addWidget(paragraph(

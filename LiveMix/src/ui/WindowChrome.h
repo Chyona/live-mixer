@@ -155,14 +155,24 @@ public:
     // 草稿下载进度入口；点击后打开对应草稿的下载弹窗。
     void setDraftDownloadStatus(const QString &text, bool error, qint64 draftRowId);
     void clearDraftDownloadStatus();
+    // 批量导出草稿的进度入口；点击后打开批量导出弹窗。
+    void setDraftBatchStatus(const QString &text, bool error);
+    void clearDraftBatchStatus();
+    // 成片导出进度入口；draftRowId < 0 表示批量任务。
+    void setVideoExportStatus(const QString &text, bool error, qint64 draftRowId);
+    void clearVideoExportStatus();
     // 真实的运行状态；未配置/未找到时明确展示，而不是固定假数据。
     void setServiceStatus(const QString &text, bool ok, const QString &tooltip = QString());
     void setQueueCount(int count);
     void setDraftCount(int count);
     void setFfmpegAvailable(bool available);
 
+static constexpr qint64 kBatchIndicator = -2;
+
 signals:
     void draftDownloadRequested(qint64 draftRowId);
+    void draftBatchRequested();
+    void videoExportRequested(qint64 draftRowId);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -175,7 +185,9 @@ private:
     QLabel *m_draftCountLabel = nullptr;
     QLabel *m_ffmpegLabel = nullptr;
     LinkLabel *m_draftStatus = nullptr;
+    LinkLabel *m_videoStatus = nullptr;
     qint64 m_draftStatusDraftId = -1;
+    qint64 m_videoStatusDraftId = -1;
 };
 
 class WindowShell : public QWidget

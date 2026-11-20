@@ -75,6 +75,12 @@ const char *sourceFor(Glyph glyph)
         return R"(<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>)";
     case Glyph::Video:
         return R"(<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M10 9l5 3-5 3z" fill="COLOR" stroke="none"/>)";
+    case Glyph::Film:
+        return R"(<rect x="2.5" y="4.5" width="19" height="15" rx="2"/><path d="M7 4.5v15M17 4.5v15M2.5 9h4.5M2.5 15h4.5M17 9h4.5M17 15h4.5"/>)";
+    case Glyph::Batch:
+        return R"(<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 9l2 2 4-4M8 16h8"/>)";
+    case Glyph::Reset:
+        return R"(<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 00-6.74 2.74L3 8"/><path d="M3 3v5h5"/>)";
     }
     return "";
 }

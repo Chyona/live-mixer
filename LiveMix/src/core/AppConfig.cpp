@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr int kConfigVersion = 2;
+constexpr int kConfigVersion = 3;
 
 // 旧版本的默认缓存上限；升级到 v2 时把仍为该值的配置迁移到新的 100GB 默认。
 constexpr int kLegacyCacheLimitGb = 10;
@@ -74,6 +74,12 @@ bool boolValue(const QJsonObject &object, const QString &key, bool fallback)
     return value.isBool() ? value.toBool() : fallback;
 }
 
+double doubleValue(const QJsonObject &object, const QString &key, double fallback)
+{
+    const QJsonValue value = object.value(key);
+    return value.isDouble() ? value.toDouble(fallback) : fallback;
+}
+
 QJsonObject toJson(const AppConfig &config)
 {
     QJsonObject service;
@@ -101,6 +107,15 @@ QJsonObject toJson(const AppConfig &config)
     ai.insert(QStringLiteral("defaultPrompt"), config.ai.defaultPrompt);
     ai.insert(QStringLiteral("exportSrt"), config.ai.exportSrt);
 
+    QJsonObject finish;
+    finish.insert(QStringLiteral("transitions"), config.finish.transitions);
+    finish.insert(QStringLiteral("effects"), config.finish.effects);
+    finish.insert(QStringLiteral("filters"), config.finish.filters);
+    finish.insert(QStringLiteral("bgm"), config.finish.bgm);
+    finish.insert(QStringLiteral("sfx"), config.finish.sfx);
+    finish.insert(QStringLiteral("speedAuto"), config.finish.speedAuto);
+    finish.insert(QStringLiteral("fixedSpeed"), config.finish.fixedSpeed);
+
     QJsonObject general;
     general.insert(QStringLiteral("theme"), config.general.theme);
     general.insert(QStringLiteral("launchAtLogin"), config.general.launchAtLogin);
@@ -116,6 +131,7 @@ QJsonObject toJson(const AppConfig &config)
     root.insert(QStringLiteral("storage"), storage);
     root.insert(QStringLiteral("recording"), recording);
     root.insert(QStringLiteral("ai"), ai);
+    root.insert(QStringLiteral("finish"), finish);
     root.insert(QStringLiteral("general"), general);
     return root;
 }
@@ -193,6 +209,8 @@ AppConfig ConfigStore::normalized(const AppConfig &config)
         result.ai.defaultPrompt = fallback.ai.defaultPrompt;
     }
 
+    result.finish.fixedSpeed = qBound(0.5, result.finish.fixedSpeed, 2.0);
+
     if (result.general.theme != QLatin1String("system")) {
         result.general.theme = QStringLiteral("dark");
     }
@@ -238,6 +256,7 @@ bool ConfigStore::load(QString *error)
     const QJsonObject storage = root.value(QStringLiteral("storage")).toObject();
     const QJsonObject recording = root.value(QStringLiteral("recording")).toObject();
     const QJsonObject ai = root.value(QStringLiteral("ai")).toObject();
+    const QJsonObject finish = root.value(QStringLiteral("finish")).toObject();
     const QJsonObject general = root.value(QStringLiteral("general")).toObject();
 
     AppConfig loaded = defaults();
@@ -282,6 +301,19 @@ bool ConfigStore::load(QString *error)
         stringValue(ai, QStringLiteral("defaultPrompt"), loaded.ai.defaultPrompt);
     loaded.ai.exportSrt =
         boolValue(ai, QStringLiteral("exportSrt"), loaded.ai.exportSrt);
+
+    loaded.finish.transitions =
+        boolValue(finish, QStringLiteral("transitions"), loaded.finish.transitions);
+    loaded.finish.effects =
+        boolValue(finish, QStringLiteral("effects"), loaded.finish.effects);
+    loaded.finish.filters =
+        boolValue(finish, QStringLiteral("filters"), loaded.finish.filters);
+    loaded.finish.bgm = boolValue(finish, QStringLiteral("bgm"), loaded.finish.bgm);
+    loaded.finish.sfx = boolValue(finish, QStringLiteral("sfx"), loaded.finish.sfx);
+    loaded.finish.speedAuto =
+        boolValue(finish, QStringLiteral("speedAuto"), loaded.finish.speedAuto);
+    loaded.finish.fixedSpeed =
+        doubleValue(finish, QStringLiteral("fixedSpeed"), loaded.finish.fixedSpeed);
 
     loaded.general.theme =
         stringValue(general, QStringLiteral("theme"), loaded.general.theme);

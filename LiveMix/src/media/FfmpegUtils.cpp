@@ -183,7 +183,7 @@ bool FfmpegUtils::extractMp3(const QString &inputPath, const QString &outputPath
 }
 
 bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs,
-                          const QString &outputPath, QString *error)
+                          const QString &outputPath, QString *error, double speed)
 {
     if (endMs <= startMs) {
         if (error) {
@@ -204,7 +204,7 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
 
     // -ss 放在 -i 之前可快速定位；配合重新编码，现代 ffmpeg 会丢弃关键帧之前的
     // 内容，得到准确的起止时间。重新编码为 H.264/AAC 以兼容剪映。
-    const QStringList args = {
+    QStringList args = {
         QStringLiteral("-y"),
         QStringLiteral("-nostdin"),
         QStringLiteral("-hide_banner"),
@@ -212,10 +212,11 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
         QStringLiteral("error"),
         QStringLiteral("-ss"),
         QString::number(startSeconds, 'f', 3),
-        QStringLiteral("-i"),
-        inputPath,
+        // -t 作为输入时限：变速后输出时长会相应缩短/延长，不能再按原时长截断。
         QStringLiteral("-t"),
         QString::number(durationSeconds, 'f', 3),
+        QStringLiteral("-i"),
+        inputPath,
         QStringLiteral("-map"),
         QStringLiteral("0:v:0"),
         QStringLiteral("-map"),
@@ -232,11 +233,38 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
         QStringLiteral("aac"),
         QStringLiteral("-b:a"),
         QStringLiteral("128k"),
-        QStringLiteral("-movflags"),
-        QStringLiteral("+faststart"),
-        outputPath,
     };
-    if (!runFfmpeg(args, 10 * 60 * 1000, error)) {
+
+    const double boundedSpeed = qBound(0.5, speed, 2.0);
+    const bool applySpeed = qAbs(boundedSpeed - 1.0) > 0.001;
+    if (applySpeed) {
+        args << QStringLiteral("-vf")
+             << QStringLiteral("setpts=PTS/%1")
+                    .arg(boundedSpeed, 0, 'f', 3)
+             << QStringLiteral("-af")
+             << QStringLiteral("atempo=%1").arg(boundedSpeed, 0, 'f', 3);
+    }
+    args << QStringLiteral("-movflags") << QStringLiteral("+faststart") << outputPath;
+
+    bool ok = runFfmpeg(args, 10 * 60 * 1000, error);
+    if (!ok && applySpeed) {
+        // 无音轨的视频不能使用 -af；去掉音频滤镜重试一次，视频倍速仍然生效。
+        const int afIndex = args.indexOf(QStringLiteral("-af"));
+        if (afIndex >= 0 && afIndex + 1 < args.size()) {
+            args.removeAt(afIndex + 1);
+            args.removeAt(afIndex);
+            QString retryError;
+            ok = runFfmpeg(args, 10 * 60 * 1000, &retryError);
+            if (ok) {
+                if (error) {
+                    error->clear();
+                }
+            } else if (error) {
+                *error = retryError;
+            }
+        }
+    }
+    if (!ok) {
         return false;
     }
 

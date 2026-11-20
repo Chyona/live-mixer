@@ -7,12 +7,20 @@
 #include "../ui/Icons.h"
 
 #include <QClipboard>
+#include <QFileInfo>
+#include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
+#include <QPainter>
+#include <QPixmap>
+#include <QResizeEvent>
 #include <QScrollArea>
+#include <QShortcut>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <functional>
@@ -109,28 +117,164 @@ QLabel *tagLabel(const QString &text, QWidget *parent)
     return tag;
 }
 
+void setButtonState(Button *button, const QString &text, Button::Variant variant,
+                    Icons::Glyph glyph, int progress, const QColor &textColor)
+{
+    if (!button) {
+        return;
+    }
+    if (button->text() != text) {
+        button->setText(text);
+    }
+    button->setVariant(variant);
+    button->setLeadingGlyph(glyph);
+    button->setProgressPercent(progress);
+    button->setTextColor(textColor);
+}
+
+// 批量选择模式下覆盖整张卡片的透明层：负责圆点、选中底色与点击切换。
+class CardSelectOverlay : public QWidget
+{
+public:
+    explicit CardSelectOverlay(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setCursor(Qt::PointingHandCursor);
+        setAttribute(Qt::WA_Hover, true);
+        m_timer = new QTimer(this);
+        m_timer->setInterval(60);
+        connect(m_timer, &QTimer::timeout, this, [this] {
+            m_angle = (m_angle + 30) % 360;
+            update();
+        });
+        hide();
+    }
+
+    void setState(bool eligible, bool selected, bool anyRunning, bool bothDone)
+    {
+        m_eligible = eligible;
+        m_selected = selected;
+        m_anyRunning = anyRunning;
+        m_bothDone = bothDone;
+        setCursor(eligible ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        if (anyRunning) {
+            m_timer->start();
+        } else {
+            m_timer->stop();
+        }
+        update();
+    }
+
+    std::function<void()> onClicked;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (m_selected) {
+            painter.fillRect(rect(), Theme::alpha(Theme::Primary, 0.12));
+        }
+
+        const qreal side = 20.0;
+        const QRectF circle(width() - 8.0 - side, 8.0, side, side);
+        if (m_eligible && m_selected) {
+            painter.setPen(QPen(Theme::Primary, 1.0));
+            painter.setBrush(Theme::Primary);
+            painter.drawEllipse(circle);
+            Icons::paint(&painter, circle.adjusted(4, 4, -4, -4), Icons::Glyph::Check,
+                         Theme::OnAccent, 2.2);
+            return;
+        }
+        if (m_eligible) {
+            painter.setPen(QPen(Theme::alpha(Qt::white, 0.55), 1.0));
+            painter.setBrush(Theme::alpha(Qt::black, 0.40));
+            painter.drawEllipse(circle);
+            return;
+        }
+
+        painter.setPen(QPen(Theme::BorderStrong, 1.0));
+        painter.setBrush(Theme::alpha(Qt::black, 0.40));
+        painter.drawEllipse(circle);
+        if (m_anyRunning) {
+            const qreal inner = 11.0;
+            const QRectF box(circle.center().x() - inner / 2.0,
+                             circle.center().y() - inner / 2.0, inner, inner);
+            painter.setPen(QPen(Theme::alpha(Theme::Primary, 0.25), 1.5));
+            painter.drawEllipse(box);
+            painter.setPen(QPen(Theme::Primary, 1.5, Qt::SolidLine, Qt::RoundCap));
+            painter.drawArc(box, int((90 - m_angle) * 16), 100 * 16);
+        } else if (m_bothDone) {
+            Icons::paint(&painter, circle.adjusted(5, 5, -5, -5), Icons::Glyph::Check,
+                         Theme::Success, 2.0);
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (m_eligible && event->button() == Qt::LeftButton && onClicked) {
+            onClicked();
+            event->accept();
+            return;
+        }
+        event->accept();
+    }
+
+private:
+    bool m_eligible = true;
+    bool m_selected = false;
+    bool m_anyRunning = false;
+    bool m_bothDone = false;
+    QTimer *m_timer = nullptr;
+    int m_angle = 0;
+};
+
 } // namespace
+
+// -----------------------------------------------------------------------------
+// DraftCard
+// -----------------------------------------------------------------------------
 
 class DraftCard : public Card
 {
 public:
     using CopyCallback = std::function<void(const QString &text, const QString &label)>;
     using OpenCallback = std::function<void(qint64 draftId)>;
+    using VideoCallback = std::function<void(qint64 draftId)>;
+    using ToggleCallback = std::function<void(qint64 draftId)>;
+
+    struct State
+    {
+        const DraftDownloadJob *draftJob = nullptr;
+        const VideoExportJob *videoJob = nullptr;
+        const DraftBatchItem *draftBatch = nullptr;
+        const VideoBatchItem *videoBatch = nullptr;
+        bool selecting = false;
+        bool selected = false;
+        bool selectable = true;
+        bool anyRunning = false;
+        bool bothDone = false;
+        bool anyError = false;
+        bool draftEligible = true;
+        bool videoEligible = true;
+        bool draftDownloaded = false;
+    };
 
     DraftCard(const ClipDraft &draft, int index, QWidget *parent, CopyCallback copy,
-              OpenCallback open)
+              OpenCallback open, VideoCallback video, ToggleCallback toggle)
         : Card(Theme::Surface1, Theme::Border, 10, parent)
-        , m_downloaded(!draft.downloadedPath.isEmpty())
+        , m_draft(draft)
+        , m_open(std::move(open))
+        , m_video(std::move(video))
+        , m_toggle(std::move(toggle))
     {
-        setHoverColors(Theme::Surface1, Theme::BorderStrong);
         setHoverEnabled(true);
+        setHoverColors(Theme::Surface1, Theme::BorderStrong);
         contentLayout()->setContentsMargins(1, 1, 1, 1);
         contentLayout()->setSpacing(0);
 
         m_thumb = new MediaThumbnail(MediaThumbnail::Cool, this);
         m_thumb->setTopRadius(9);
-        m_thumb->setReadyBadge(m_downloaded ? QStringLiteral("已下载到本地")
-                                            : QStringLiteral("草稿已就绪"));
         m_thumb->setDuration(MediaUtils::formatDuration(draft.durationMs));
         contentLayout()->addWidget(m_thumb);
 
@@ -209,80 +353,298 @@ public:
         range->setFont(Theme::monoFont(11));
         addRow(QStringLiteral("区间"), range, rangeText, QStringLiteral("时间点"), 8);
 
-        m_openButton = new Button(FileManager::revealLabel(), Button::Primary, body);
-        connect(m_openButton, &QAbstractButton::clicked, this, [open, id = draft.id] {
-            open(id);
+        m_buttonRow = new QWidget(body);
+        auto *buttonLayout = new QHBoxLayout(m_buttonRow);
+        buttonLayout->setContentsMargins(0, 0, 0, 0);
+        buttonLayout->setSpacing(6);
+        m_draftButton = new Button(QStringLiteral("导出到剪映"), Button::Primary,
+                                   m_buttonRow);
+        m_draftButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_videoButton = new Button(QStringLiteral("导出成片"), Button::Default,
+                                   m_buttonRow);
+        m_videoButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        buttonLayout->addWidget(m_draftButton, 1);
+        buttonLayout->addWidget(m_videoButton, 1);
+        layout->addWidget(m_buttonRow);
+
+        m_selectionStatus = new ElidedLabel(QString(), body);
+        m_selectionStatus->setPixelSize(11);
+        m_selectionStatus->setTextColor(Theme::Text3);
+        m_selectionStatus->setFixedHeight(32);
+        m_selectionStatus->hide();
+        layout->addWidget(m_selectionStatus);
+
+        connect(m_draftButton, &QAbstractButton::clicked, this, [this] {
+            if (m_state.draftBatch
+                && m_state.draftBatch->status != DraftBatchItemStatus::Done) {
+                if (m_openDraftBatch) {
+                    m_openDraftBatch();
+                }
+                return;
+            }
+            if (m_open) {
+                m_open(m_draft.id);
+            }
         });
-        layout->addWidget(m_openButton);
+        connect(m_videoButton, &QAbstractButton::clicked, this, [this] {
+            if (m_state.videoBatch
+                && m_state.videoBatch->status != VideoBatchItemStatus::Done) {
+                if (m_openVideoBatch) {
+                    m_openVideoBatch();
+                }
+                return;
+            }
+            if (m_video) {
+                m_video(m_draft.id);
+            }
+        });
 
         contentLayout()->addWidget(body);
-        setDownloadState(nullptr);
+
+        m_overlay = new CardSelectOverlay(this);
+        m_overlay->onClicked = [this] { m_toggle(m_draft.id); };
+        m_overlay->hide();
+
+        setState(State());
     }
 
-    // 根据下载任务快照刷新徽标与按钮：准备中/写入草稿带进度，失败可重试。
-    void setDownloadState(const DraftDownloadJob *job)
+    void setOpenBatchCallbacks(std::function<void()> draftBatch,
+                               std::function<void()> videoBatch)
     {
-        if (!m_openButton || !m_thumb) {
-            return;
+        m_openDraftBatch = std::move(draftBatch);
+        m_openVideoBatch = std::move(videoBatch);
+    }
+
+    void setState(const State &state)
+    {
+        m_state = state;
+        const DraftDownloadJob *draftJob = state.draftJob;
+        const VideoExportJob *videoJob = state.videoJob;
+
+        // 缩略图徽标：先报错，再报进行中，最后按完成情况显示。
+        QString badge = QStringLiteral("待导出");
+        MediaThumbnail::BadgeTone tone = MediaThumbnail::BadgeNeutral;
+        if (state.anyError) {
+            badge = QStringLiteral("导出失败");
+            tone = MediaThumbnail::BadgeError;
+        } else if (videoJob && videoJob->status == VideoExportStatus::Running) {
+            badge = QStringLiteral("成片导出中");
+            tone = MediaThumbnail::BadgeRun;
+        } else if (draftJob && draftJob->isRunning()) {
+            badge = QStringLiteral("导出草稿中");
+            tone = MediaThumbnail::BadgeRun;
+        } else if (videoJob && videoJob->status == VideoExportStatus::Done
+                   && draftJob && draftJob->status == DraftDownloadStatus::Done) {
+            badge = QStringLiteral("已导出");
+            tone = MediaThumbnail::BadgeOk;
+        } else if (videoJob && videoJob->status == VideoExportStatus::Done) {
+            badge = QStringLiteral("成片已导出");
+            tone = MediaThumbnail::BadgeOk;
+        } else if (draftJob && draftJob->status == DraftDownloadStatus::Done) {
+            badge = QStringLiteral("已下载到本地");
+            tone = MediaThumbnail::BadgeOk;
+        } else if (state.draftDownloaded) {
+            badge = QStringLiteral("已下载到本地");
+            tone = MediaThumbnail::BadgeOk;
+        } else if (state.draftBatch
+                   && state.draftBatch->status == DraftBatchItemStatus::Queued) {
+            badge = QStringLiteral("草稿排队中");
+            tone = MediaThumbnail::BadgeRun;
+        } else if (state.videoBatch
+                   && state.videoBatch->status == VideoBatchItemStatus::Queued) {
+            badge = QStringLiteral("成片排队中");
+            tone = MediaThumbnail::BadgeRun;
         }
-
-        QString badge;
-        MediaThumbnail::BadgeTone tone = MediaThumbnail::BadgeOk;
-        const int shown = job ? qMin(99, int(qBound(0.0, job->progress, 100.0))) : 0;
-
-        if (!job) {
-            badge = m_downloaded ? QStringLiteral("已下载到本地")
-                                 : QStringLiteral("草稿已就绪");
-            m_openButton->setText(FileManager::revealLabel());
-            m_openButton->setVariant(Button::Primary);
-            m_openButton->setProgressPercent(-1);
-        } else {
-            switch (job->status) {
-            case DraftDownloadStatus::Downloading:
-                badge = QStringLiteral("准备中");
-                tone = MediaThumbnail::BadgeRun;
-                m_openButton->setText(QStringLiteral("准备中 %1%").arg(shown));
-                m_openButton->setVariant(Button::Primary);
-                m_openButton->setProgressPercent(shown);
-                break;
-            case DraftDownloadStatus::Writing:
-                badge = QStringLiteral("正在写入草稿");
-                tone = MediaThumbnail::BadgeRun;
-                m_openButton->setText(QStringLiteral("写入草稿 %1%").arg(shown));
-                m_openButton->setVariant(Button::Primary);
-                m_openButton->setProgressPercent(shown);
-                break;
-            case DraftDownloadStatus::Done:
-                badge = QStringLiteral("已下载到本地");
-                m_openButton->setText(FileManager::revealLabel());
-                m_openButton->setVariant(Button::Primary);
-                m_openButton->setProgressPercent(-1);
-                break;
-            case DraftDownloadStatus::Error:
-                badge = QStringLiteral("下载失败");
-                tone = MediaThumbnail::BadgeError;
-                m_openButton->setText(QStringLiteral("下载失败 · 重试"));
-                m_openButton->setVariant(Button::Danger);
-                m_openButton->setProgressPercent(-1);
-                break;
-            }
-        }
-
         m_thumb->setReadyBadge(badge);
         m_thumb->setReadyBadgeTone(tone);
+
+        // 两个动作按钮。
+        updateDraftButton();
+        updateVideoButton();
+
+        m_buttonRow->setVisible(!state.selecting);
+        m_selectionStatus->setVisible(state.selecting);
+        if (state.selecting) {
+            updateSelectionStatus();
+        }
+
+        m_overlay->setVisible(state.selecting);
+        m_overlay->setState(state.selectable, state.selected, state.anyRunning,
+                            state.bothDone);
+        m_overlay->setCursor(state.selectable ? Qt::PointingHandCursor
+                                              : Qt::ArrowCursor);
+        if (state.selecting) {
+            m_overlay->raise();
+        }
+
+        if (state.selecting && state.selected && state.selectable) {
+            setCardColors(Theme::Surface1, Theme::alpha(Theme::Primary, 0.70));
+            setHoverColors(Theme::Surface1, Theme::alpha(Theme::Primary, 0.70));
+        } else {
+            setCardColors(Theme::Surface1, Theme::Border);
+            setHoverColors(Theme::Surface1,
+                           state.selecting && state.selectable
+                               ? Theme::alpha(Theme::Primary, 0.45)
+                               : Theme::BorderStrong);
+        }
+        setHoverEnabled(!state.selecting || state.selectable);
     }
 
-    // 宽度交给网格的三等分列均分；若沿用内容 sizeHint，标签多的卡片会撑宽整列。
     QSize sizeHint() const override
     {
         return QSize(0, QWidget::sizeHint().height());
     }
 
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        Card::resizeEvent(event);
+        if (m_overlay) {
+            m_overlay->setGeometry(rect());
+        }
+    }
+
 private:
+    void updateDraftButton()
+    {
+        const DraftDownloadJob *job = m_state.draftJob;
+        const DraftBatchItem *batchItem = m_state.draftBatch;
+        const int percent =
+            job ? qMin(99, int(qBound(0.0, job->progress, 100.0))) : 0;
+
+        if (batchItem && batchItem->status == DraftBatchItemStatus::Queued) {
+            setButtonState(m_draftButton, QStringLiteral("批量排队中"), Button::Primary,
+                           Icons::Glyph::Clock, -1, QColor());
+            return;
+        }
+        if (batchItem && batchItem->status == DraftBatchItemStatus::Error) {
+            setButtonState(m_draftButton, QStringLiteral("批量中失败"), Button::Danger,
+                           Icons::Glyph::Alert, -1, QColor());
+            return;
+        }
+        if (job && job->status == DraftDownloadStatus::Downloading) {
+            setButtonState(m_draftButton,
+                           QStringLiteral("准备中 %1%").arg(percent), Button::Primary,
+                           Icons::Glyph::Download, percent, QColor());
+            return;
+        }
+        if (job && job->status == DraftDownloadStatus::Writing) {
+            setButtonState(m_draftButton,
+                           QStringLiteral("写入草稿 %1%").arg(percent), Button::Primary,
+                           Icons::Glyph::Download, percent, QColor());
+            return;
+        }
+        if (job && job->status == DraftDownloadStatus::Error) {
+            setButtonState(m_draftButton, QStringLiteral("下载失败 · 重试"),
+                           Button::Danger, Icons::Glyph::Alert, -1, QColor());
+            return;
+        }
+        if ((job && job->status == DraftDownloadStatus::Done)
+            || m_state.draftDownloaded) {
+            setButtonState(m_draftButton, QStringLiteral("在剪映中打开"), Button::Primary,
+                           Icons::Glyph::Check, -1, QColor());
+            return;
+        }
+        setButtonState(m_draftButton, QStringLiteral("导出到剪映"), Button::Primary,
+                       Icons::Glyph::Download, -1, QColor());
+    }
+
+    void updateVideoButton()
+    {
+        const VideoExportJob *job = m_state.videoJob;
+        const VideoBatchItem *batchItem = m_state.videoBatch;
+        const int percent =
+            job ? qMin(99, int(qBound(0.0, job->progress, 100.0))) : 0;
+
+        if (batchItem && batchItem->status == VideoBatchItemStatus::Queued) {
+            setButtonState(m_videoButton, QStringLiteral("批量排队中"), Button::Default,
+                           Icons::Glyph::Clock, -1, QColor());
+            return;
+        }
+        if (batchItem && batchItem->status == VideoBatchItemStatus::Error) {
+            setButtonState(m_videoButton, QStringLiteral("批量中失败"), Button::Danger,
+                           Icons::Glyph::Alert, -1, QColor());
+            return;
+        }
+        if (job && job->status == VideoExportStatus::Running) {
+            setButtonState(m_videoButton,
+                           QStringLiteral("导出中 %1%").arg(percent), Button::Default,
+                           Icons::Glyph::Film, percent, Theme::Primary);
+            return;
+        }
+        if (job && job->status == VideoExportStatus::Error) {
+            setButtonState(m_videoButton, QStringLiteral("导出失败 · 重试"),
+                           Button::Danger, Icons::Glyph::Alert, -1, QColor());
+            return;
+        }
+        if (job && job->status == VideoExportStatus::Done) {
+            setButtonState(m_videoButton, FileManager::revealPathLabel(),
+                           Button::Default, Icons::Glyph::Check, -1, Theme::Success);
+            return;
+        }
+        setButtonState(m_videoButton, QStringLiteral("导出成片"), Button::Default,
+                       Icons::Glyph::Film, -1, QColor());
+    }
+
+    void updateSelectionStatus()
+    {
+        const State &state = m_state;
+        QString text;
+        QColor color = Theme::Text3;
+
+        if (!state.selectable) {
+            if (state.anyRunning) {
+                text = QStringLiteral("正在导出，完成后可再次选择");
+                color = Theme::Primary;
+            } else if (state.bothDone) {
+                text = QStringLiteral("草稿与成片均已导出");
+                color = Theme::Success;
+            } else {
+                text = QStringLiteral("暂不可选");
+            }
+        } else if (state.selected) {
+            text = QStringLiteral("已选择 · 将加入批量导出");
+            color = Theme::Primary;
+        } else if (state.anyError) {
+            text = QStringLiteral("上次导出失败 · 可重试");
+            color = Theme::Danger;
+        } else {
+            const QString hint = state.draftEligible && state.videoEligible
+                ? QStringLiteral("可导出到剪映 / 成片")
+                : (state.draftEligible ? QStringLiteral("仅可导出到剪映")
+                                       : QStringLiteral("仅可导出成片"));
+            text = QStringLiteral("点击卡片选择 · %1").arg(hint);
+        }
+        if (m_selectionStatus->text() != text) {
+            m_selectionStatus->setText(text);
+            m_selectionStatus->setToolTip(text);
+        }
+        if (m_selectionColor != color) {
+            m_selectionColor = color;
+            m_selectionStatus->setTextColor(color);
+        }
+    }
+
+    ClipDraft m_draft;
+    State m_state;
+    OpenCallback m_open;
+    VideoCallback m_video;
+    ToggleCallback m_toggle;
+    std::function<void()> m_openDraftBatch;
+    std::function<void()> m_openVideoBatch;
+
     MediaThumbnail *m_thumb = nullptr;
-    Button *m_openButton = nullptr;
-    bool m_downloaded = false;
+    QWidget *m_buttonRow = nullptr;
+    Button *m_draftButton = nullptr;
+    Button *m_videoButton = nullptr;
+    ElidedLabel *m_selectionStatus = nullptr;
+    QColor m_selectionColor;
+    CardSelectOverlay *m_overlay = nullptr;
 };
+
+// -----------------------------------------------------------------------------
+// ResultsPage
+// -----------------------------------------------------------------------------
 
 ResultsPage::ResultsPage(QWidget *parent)
     : Page(parent)
@@ -290,6 +652,27 @@ ResultsPage::ResultsPage(QWidget *parent)
     m_header = new PageHeader(
         QStringLiteral("AI 成片结果"),
         QStringLiteral("完成一键成片后，每条切片会在这里显示为一条剪映草稿。"), this);
+
+    m_batchButton = new Button(QStringLiteral("批量选择"), Button::Default, this);
+    m_batchButton->setLeadingGlyph(Icons::Glyph::Batch);
+    m_batchButton->setToolTip(
+        QStringLiteral("选择多个草稿一次导入剪映或导出成片"));
+    connect(m_batchButton, &QAbstractButton::clicked, this, [this] {
+        if (m_selecting) {
+            exitSelection();
+            return;
+        }
+        if (m_hasDraftBatch && m_draftBatch.running) {
+            emit openDraftBatchRequested();
+            return;
+        }
+        if (m_hasVideoBatch && m_videoBatch.running) {
+            emit openVideoBatchRequested();
+            return;
+        }
+        enterSelection();
+    });
+    m_header->addAction(m_batchButton);
 
     auto *back = new Button(QStringLiteral("← 返回视频库"), Button::Default, this);
     connect(back, &QAbstractButton::clicked, this, &ResultsPage::backRequested);
@@ -300,7 +683,7 @@ ResultsPage::ResultsPage(QWidget *parent)
     connect(restart, &QAbstractButton::clicked, this, &ResultsPage::restartRequested);
     m_header->addAction(restart);
 
-    // 标题与「重新一键成片」固定，不随下方草稿卡片一起滚动。
+    // 标题与操作固定，不随下方草稿卡片一起滚动。
     setFixedHeader(m_header);
 
     auto *emptyCard = new Card(Theme::Surface1, Theme::Border, 10, this);
@@ -332,11 +715,61 @@ ResultsPage::ResultsPage(QWidget *parent)
     m_gridHost->setVisible(false);
     bodyLayout()->addWidget(m_gridHost);
     bodyLayout()->addStretch(1);
+
+    buildSelectionBar();
+
+    // 批量选择态：Esc 退出，⌘/Ctrl + A 全选。
+    auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escape->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(escape, &QShortcut::activated, this, [this] {
+        if (m_selecting) {
+            exitSelection();
+        }
+    });
+    auto *selectAllShortcut = new QShortcut(QKeySequence::SelectAll, this);
+    selectAllShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(selectAllShortcut, &QShortcut::activated, this, [this] {
+        if (m_selecting) {
+            selectAll();
+        }
+    });
+
+    updateHeader();
 }
 
 void ResultsPage::setDrafts(const QVector<ClipDraft> &drafts)
 {
+    m_drafts = drafts;
     m_cards.clear();
+    m_draftDownloaded.clear();
+    for (const ClipDraft &draft : drafts) {
+        m_draftDownloaded.insert(
+            draft.id,
+            !draft.downloadedPath.isEmpty()
+                && QFileInfo(draft.downloadedPath).isDir());
+    }
+    // 重新读取草稿（如后台下载完成）时，保留仍在列表中的选择，避免打断批量选择。
+    if (!m_selecting) {
+        m_selected.clear();
+    } else {
+        QSet<qint64> available;
+        for (const ClipDraft &draft : drafts) {
+            available.insert(draft.id);
+        }
+        for (auto it = m_selected.begin(); it != m_selected.end();) {
+            if (!available.contains(*it)) {
+                it = m_selected.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (drafts.isEmpty()) {
+            m_selecting = false;
+            if (m_selectionBar) {
+                m_selectionBar->hide();
+            }
+        }
+    }
     while (QLayoutItem *item = m_grid->takeAt(0)) {
         if (QWidget *widget = item->widget()) {
             widget->hide();
@@ -355,14 +788,15 @@ void ResultsPage::setDrafts(const QVector<ClipDraft> &drafts)
                 QGuiApplication::clipboard()->setText(text);
                 emit toastRequested(QStringLiteral("已复制%1").arg(label));
             },
-            [this](qint64 draftId) { emit openDraftRequested(draftId); });
+            [this](qint64 draftId) { emit openDraftRequested(draftId); },
+            [this](qint64 draftId) { emit videoExportRequested(draftId); },
+            [this](qint64 draftId) { toggleSelected(draftId); });
+        card->setOpenBatchCallbacks(
+            [this] { emit openDraftBatchRequested(); },
+            [this] { emit openVideoBatchRequested(); });
         m_grid->addWidget(card, i / 3, i % 3);
         cards.append(card);
         m_cards.insert(draft.id, card);
-        // 重新进入结果页时恢复仍在进行或已失败的下载状态。
-        if (m_jobs.contains(draft.id)) {
-            card->setDownloadState(&m_jobs[draft.id]);
-        }
     }
 
     // 卡片忽略内容宽度，三列拉伸因子相同，窗口变宽变窄时始终保持等宽三等分。
@@ -377,27 +811,513 @@ void ResultsPage::setDrafts(const QVector<ClipDraft> &drafts)
 
     m_emptyState->setVisible(drafts.isEmpty());
     m_gridHost->setVisible(!drafts.isEmpty());
-    if (m_header) {
-        m_header->setDescription(
-            drafts.isEmpty()
-                ? QStringLiteral("完成一键成片后，每条切片会在这里显示为一条剪映草稿。")
-                : QStringLiteral("已生成 %1 条剪映草稿，打开时自动下载到本地剪映草稿目录。")
-                      .arg(drafts.size()));
-    }
+    refreshAllCards();
+    updateHeader();
+    updateSelectionBar();
 }
 
 void ResultsPage::setDownloadJob(const DraftDownloadJob &job)
 {
     m_jobs.insert(job.draftRowId, job);
-    if (DraftCard *card = m_cards.value(job.draftRowId, nullptr)) {
-        card->setDownloadState(&job);
-    }
+    refreshCard(job.draftRowId);
+    updateSelectionBar();
 }
 
 void ResultsPage::removeDownloadJob(qint64 draftRowId)
 {
     m_jobs.remove(draftRowId);
-    if (DraftCard *card = m_cards.value(draftRowId, nullptr)) {
-        card->setDownloadState(nullptr);
+    refreshCard(draftRowId);
+    updateSelectionBar();
+}
+
+void ResultsPage::setVideoJob(const VideoExportJob &job)
+{
+    m_videoJobs.insert(job.draftRowId, job);
+    refreshCard(job.draftRowId);
+    updateSelectionBar();
+}
+
+void ResultsPage::removeVideoJob(qint64 draftRowId)
+{
+    m_videoJobs.remove(draftRowId);
+    refreshCard(draftRowId);
+    updateSelectionBar();
+}
+
+void ResultsPage::setDraftBatch(const DraftBatchSnapshot &batch)
+{
+    m_draftBatch = batch;
+    m_hasDraftBatch = true;
+    refreshAllCards();
+    updateHeader();
+    updateSelectionBar();
+}
+
+void ResultsPage::clearDraftBatch()
+{
+    m_hasDraftBatch = false;
+    m_draftBatch = DraftBatchSnapshot();
+    refreshAllCards();
+    updateHeader();
+    updateSelectionBar();
+}
+
+void ResultsPage::setVideoBatch(const VideoBatchSnapshot &batch)
+{
+    m_videoBatch = batch;
+    m_hasVideoBatch = true;
+    refreshAllCards();
+    updateHeader();
+    updateSelectionBar();
+}
+
+void ResultsPage::clearVideoBatch()
+{
+    m_hasVideoBatch = false;
+    m_videoBatch = VideoBatchSnapshot();
+    refreshAllCards();
+    updateHeader();
+    updateSelectionBar();
+}
+
+bool ResultsPage::draftEligible(qint64 draftRowId) const
+{
+    if (m_jobs.contains(draftRowId)) {
+        return m_jobs.value(draftRowId).status == DraftDownloadStatus::Error;
     }
+    // 已经下载到本地的草稿不再参与批量导入，避免重复写入剪映目录。
+    return !m_draftDownloaded.value(draftRowId, false);
+}
+
+bool ResultsPage::videoEligible(qint64 draftRowId) const
+{
+    if (!m_videoJobs.contains(draftRowId)) {
+        return true;
+    }
+    return m_videoJobs.value(draftRowId).status == VideoExportStatus::Error;
+}
+
+bool ResultsPage::anyEligible(qint64 draftRowId) const
+{
+    return draftEligible(draftRowId) || videoEligible(draftRowId);
+}
+
+QVector<qint64> ResultsPage::eligibleFor(bool draftAction) const
+{
+    QVector<qint64> ids;
+    for (const ClipDraft &draft : m_drafts) {
+        if (draftAction ? draftEligible(draft.id) : videoEligible(draft.id)) {
+            ids.append(draft.id);
+        }
+    }
+    return ids;
+}
+
+QVector<qint64> ResultsPage::selectableIds() const
+{
+    QVector<qint64> ids;
+    for (const ClipDraft &draft : m_drafts) {
+        if (anyEligible(draft.id)) {
+            ids.append(draft.id);
+        }
+    }
+    return ids;
+}
+
+const DraftBatchItem *ResultsPage::draftBatchItem(qint64 draftRowId) const
+{
+    if (!m_hasDraftBatch || !m_draftBatch.running) {
+        return nullptr;
+    }
+    for (const DraftBatchItem &item : m_draftBatch.items) {
+        if (item.draftRowId == draftRowId) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+const VideoBatchItem *ResultsPage::videoBatchItem(qint64 draftRowId) const
+{
+    if (!m_hasVideoBatch || !m_videoBatch.running) {
+        return nullptr;
+    }
+    for (const VideoBatchItem &item : m_videoBatch.items) {
+        if (item.draftRowId == draftRowId) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+void ResultsPage::refreshCard(qint64 draftRowId)
+{
+    DraftCard *card = m_cards.value(draftRowId, nullptr);
+    if (!card) {
+        return;
+    }
+
+    DraftCard::State state;
+    state.draftJob = m_jobs.contains(draftRowId) ? &m_jobs[draftRowId] : nullptr;
+    state.videoJob =
+        m_videoJobs.contains(draftRowId) ? &m_videoJobs[draftRowId] : nullptr;
+    state.draftBatch = draftBatchItem(draftRowId);
+    state.videoBatch = videoBatchItem(draftRowId);
+    state.selecting = m_selecting;
+    state.selected = m_selected.contains(draftRowId);
+    state.draftEligible = draftEligible(draftRowId);
+    state.videoEligible = videoEligible(draftRowId);
+    state.selectable = state.draftEligible || state.videoEligible;
+    state.draftDownloaded = m_draftDownloaded.value(draftRowId, false);
+    state.anyRunning =
+        (state.draftJob && state.draftJob->isRunning())
+        || (state.videoJob && state.videoJob->status == VideoExportStatus::Running);
+    const bool draftDone =
+        state.draftDownloaded
+        || (state.draftJob
+            && state.draftJob->status == DraftDownloadStatus::Done);
+    state.bothDone = draftDone && state.videoJob
+        && state.videoJob->status == VideoExportStatus::Done;
+    state.anyError =
+        (state.draftJob && state.draftJob->status == DraftDownloadStatus::Error)
+        || (state.videoJob && state.videoJob->status == VideoExportStatus::Error);
+    card->setState(state);
+
+    if (m_selecting && m_selected.contains(draftRowId) && !state.selectable) {
+        m_selected.remove(draftRowId);
+    }
+}
+
+void ResultsPage::refreshAllCards()
+{
+    for (const ClipDraft &draft : m_drafts) {
+        refreshCard(draft.id);
+    }
+    pruneSelection();
+}
+
+void ResultsPage::pruneSelection()
+{
+    if (!m_selecting || m_selected.isEmpty()) {
+        return;
+    }
+    for (auto it = m_selected.begin(); it != m_selected.end();) {
+        if (!anyEligible(*it)) {
+            it = m_selected.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void ResultsPage::updateHeader()
+{
+    if (!m_header) {
+        return;
+    }
+
+    m_header->setDescription(
+        m_drafts.isEmpty()
+            ? QStringLiteral("完成一键成片后，每条切片会在这里显示为一条剪映草稿。")
+            : QStringLiteral("已生成 %1 条剪映草稿；可批量导入剪映或批量导出成片，"
+                             "单条导出约需 2–3 分钟。")
+                  .arg(m_drafts.size()));
+
+    if (!m_batchButton) {
+        return;
+    }
+
+    if (m_selecting) {
+        m_batchButton->setText(QStringLiteral("退出批量"));
+        m_batchButton->setEnabled(true);
+        m_batchButton->setToolTip(QStringLiteral("退出批量选择"));
+    } else if (m_hasDraftBatch && m_draftBatch.running) {
+        m_batchButton->setText(
+            QStringLiteral("批量导出草稿 %1%")
+                .arg(qMin(99, int(m_draftBatch.progress))));
+        m_batchButton->setEnabled(true);
+        m_batchButton->setToolTip(QStringLiteral("打开批量导出草稿进度"));
+    } else if (m_hasVideoBatch && m_videoBatch.running) {
+        m_batchButton->setText(
+            QStringLiteral("批量导出成片 %1%")
+                .arg(qMin(99, int(m_videoBatch.progress))));
+        m_batchButton->setEnabled(true);
+        m_batchButton->setToolTip(QStringLiteral("打开批量导出成片进度"));
+    } else {
+        m_batchButton->setText(QStringLiteral("批量选择"));
+        const bool canSelect = !selectableIds().isEmpty();
+        m_batchButton->setEnabled(canSelect);
+        m_batchButton->setToolTip(
+            canSelect ? QStringLiteral("选择多个草稿一次导入剪映或导出成片")
+                      : QStringLiteral("所有草稿与成片均已完成或正在导出"));
+    }
+}
+
+void ResultsPage::enterSelection()
+{
+    if (m_selecting) {
+        return;
+    }
+    m_selecting = true;
+    m_selected.clear();
+    refreshAllCards();
+    updateHeader();
+    m_selectionBar->show();
+    m_selectionBar->raise();
+    positionSelectionBar();
+    updateSelectionBar();
+}
+
+void ResultsPage::exitSelection()
+{
+    if (!m_selecting) {
+        return;
+    }
+    m_selecting = false;
+    m_selected.clear();
+    if (m_selectionBar) {
+        m_selectionBar->hide();
+    }
+    refreshAllCards();
+    updateHeader();
+}
+
+void ResultsPage::toggleSelected(qint64 draftRowId)
+{
+    if (!m_selecting || !anyEligible(draftRowId)) {
+        return;
+    }
+    if (m_selected.contains(draftRowId)) {
+        m_selected.remove(draftRowId);
+    } else {
+        m_selected.insert(draftRowId);
+    }
+    refreshCard(draftRowId);
+    updateSelectionBar();
+}
+
+void ResultsPage::selectAll()
+{
+    if (!m_selecting) {
+        return;
+    }
+    m_selected.clear();
+    for (qint64 id : selectableIds()) {
+        m_selected.insert(id);
+    }
+    refreshAllCards();
+    updateSelectionBar();
+}
+
+void ResultsPage::clearSelection()
+{
+    if (!m_selecting) {
+        return;
+    }
+    m_selected.clear();
+    refreshAllCards();
+    updateSelectionBar();
+}
+
+void ResultsPage::startDraftBatch()
+{
+    if (!m_selecting) {
+        return;
+    }
+    QVector<qint64> ids;
+    for (qint64 id : m_selected) {
+        if (draftEligible(id)) {
+            ids.append(id);
+        }
+    }
+    if (ids.isEmpty()) {
+        return;
+    }
+    exitSelection();
+    emit batchDraftRequested(ids);
+}
+
+void ResultsPage::startVideoBatch()
+{
+    if (!m_selecting) {
+        return;
+    }
+    QVector<qint64> ids;
+    for (qint64 id : m_selected) {
+        if (videoEligible(id)) {
+            ids.append(id);
+        }
+    }
+    if (ids.isEmpty()) {
+        return;
+    }
+    exitSelection();
+    emit batchVideoRequested(ids);
+}
+
+void ResultsPage::buildSelectionBar()
+{
+    auto *bar = new Card(Theme::Surface2, Theme::BorderStrong, 10, this);
+    bar->setObjectName(QStringLiteral("selectionBar"));
+    bar->setFixedWidth(900);
+    bar->contentLayout()->setContentsMargins(14, 10, 14, 10);
+    auto *barLayout = new QHBoxLayout;
+    barLayout->setContentsMargins(0, 0, 0, 0);
+    barLayout->setSpacing(12);
+    bar->contentLayout()->addLayout(barLayout);
+
+    auto *iconHost = new QWidget(bar);
+    iconHost->setFixedSize(30, 30);
+    iconHost->setStyleSheet(QStringLiteral(
+        "background:rgba(110,139,255,0.14);border:1px solid rgba(110,139,255,0.25);"
+        "border-radius:7px;"));
+    auto *iconLayout = new QVBoxLayout(iconHost);
+    iconLayout->setContentsMargins(0, 0, 0, 0);
+    QPixmap batchPixmap(14, 14);
+    batchPixmap.fill(Qt::transparent);
+    {
+        QPainter painter(&batchPixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        Icons::paint(&painter, QRectF(0, 0, 14, 14), Icons::Glyph::Batch,
+                     Theme::Primary, 2.0);
+    }
+    auto *iconLabel = new QLabel(iconHost);
+    iconLabel->setPixmap(batchPixmap);
+    iconLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    iconLayout->addWidget(iconLabel, 0, Qt::AlignCenter);
+    barLayout->addWidget(iconHost, 0, Qt::AlignVCenter);
+
+    auto *textColumn = new QWidget(bar);
+    auto *textLayout = new QVBoxLayout(textColumn);
+    textLayout->setContentsMargins(0, 0, 0, 0);
+    textLayout->setSpacing(1);
+    m_selectionTitle = Ui::label(QStringLiteral("选择要批量导出的草稿"), 12, 500,
+                                 Theme::Text1, textColumn);
+    textLayout->addWidget(m_selectionTitle);
+    m_selectionMeta = Ui::label(QString(), 10, 400, Theme::Text3, textColumn);
+    m_selectionMeta->setFont(Theme::monoFont(10));
+    textLayout->addWidget(m_selectionMeta);
+    barLayout->addWidget(textColumn, 1);
+
+    auto *selectAllLink = new LinkLabel(QStringLiteral("全选"), bar);
+    selectAllLink->setPixelSize(11);
+    selectAllLink->setTextColor(Theme::Text2);
+    selectAllLink->setHoverColor(Theme::Text1);
+    connect(selectAllLink, &QAbstractButton::clicked, this, &ResultsPage::selectAll);
+    barLayout->addWidget(selectAllLink, 0, Qt::AlignVCenter);
+
+    auto *clearLink = new LinkLabel(QStringLiteral("清空"), bar);
+    clearLink->setPixelSize(11);
+    clearLink->setTextColor(Theme::Text2);
+    clearLink->setHoverColor(Theme::Text1);
+    connect(clearLink, &QAbstractButton::clicked, this, &ResultsPage::clearSelection);
+    barLayout->addWidget(clearLink, 0, Qt::AlignVCenter);
+
+    auto *separator = Ui::separator(true, bar);
+    separator->setFixedHeight(16);
+    barLayout->addWidget(separator, 0, Qt::AlignVCenter);
+
+    auto *cancel = new Button(QStringLiteral("取消"), Button::Ghost, bar);
+    cancel->setCompact(true);
+    connect(cancel, &QAbstractButton::clicked, this, &ResultsPage::exitSelection);
+    barLayout->addWidget(cancel, 0, Qt::AlignVCenter);
+
+    m_exportVideoButton = new Button(QStringLiteral("导出成片"), Button::Default, bar);
+    m_exportVideoButton->setCompact(true);
+    m_exportVideoButton->setLeadingGlyph(Icons::Glyph::Film);
+    connect(m_exportVideoButton, &QAbstractButton::clicked, this,
+            &ResultsPage::startVideoBatch);
+    barLayout->addWidget(m_exportVideoButton, 0, Qt::AlignVCenter);
+
+    m_exportDraftButton = new Button(QStringLiteral("导出到剪映"), Button::Primary, bar);
+    m_exportDraftButton->setCompact(true);
+    m_exportDraftButton->setLeadingGlyph(Icons::Glyph::Download);
+    connect(m_exportDraftButton, &QAbstractButton::clicked, this,
+            &ResultsPage::startDraftBatch);
+    barLayout->addWidget(m_exportDraftButton, 0, Qt::AlignVCenter);
+
+    auto *shadow = new QGraphicsDropShadowEffect(bar);
+    shadow->setBlurRadius(48);
+    shadow->setOffset(0, 18);
+    shadow->setColor(QColor(0, 0, 0, 140));
+    bar->setGraphicsEffect(shadow);
+
+    bar->hide();
+    m_selectionBar = bar;
+}
+
+void ResultsPage::positionSelectionBar()
+{
+    if (!m_selectionBar) {
+        return;
+    }
+    const int barWidth = qMin(900, qMax(320, width() - 44));
+    m_selectionBar->setFixedWidth(barWidth);
+    const int barHeight = m_selectionBar->sizeHint().height();
+    m_selectionBar->setGeometry((width() - barWidth) / 2,
+                                height() - barHeight - 10, barWidth, barHeight);
+}
+
+void ResultsPage::updateSelectionBar()
+{
+    pruneSelection();
+
+    const int total = m_drafts.size();
+    const int selectable = selectableIds().size();
+    const int nonSelectable = total - selectable;
+    const int selectedCount = m_selected.size();
+
+    int selectedDraftCount = 0;
+    int selectedVideoCount = 0;
+    for (qint64 id : m_selected) {
+        if (draftEligible(id)) {
+            ++selectedDraftCount;
+        }
+        if (videoEligible(id)) {
+            ++selectedVideoCount;
+        }
+    }
+
+    if (m_selectionTitle) {
+        m_selectionTitle->setText(
+            selectedCount > 0
+                ? QStringLiteral("已选 %1 个草稿").arg(selectedCount)
+                : QStringLiteral("选择要批量导出的草稿"));
+    }
+    if (m_selectionMeta) {
+        QString meta = QStringLiteral("共 %1 个草稿").arg(total);
+        meta += nonSelectable > 0
+            ? QStringLiteral(" · %1 个可批量导出 · %2 个已完成或导出中")
+                  .arg(selectable)
+                  .arg(nonSelectable)
+            : QStringLiteral(" · 全部可批量导出");
+        meta += QStringLiteral(" · Esc 退出");
+        m_selectionMeta->setText(meta);
+        m_selectionMeta->setToolTip(meta);
+    }
+    if (m_exportDraftButton) {
+        m_exportDraftButton->setText(
+            selectedDraftCount > 0
+                ? QStringLiteral("导出到剪映（%1）").arg(selectedDraftCount)
+                : QStringLiteral("导出到剪映"));
+        m_exportDraftButton->setEnabled(selectedDraftCount > 0);
+    }
+    if (m_exportVideoButton) {
+        m_exportVideoButton->setText(
+            selectedVideoCount > 0
+                ? QStringLiteral("导出成片（%1）").arg(selectedVideoCount)
+                : QStringLiteral("导出成片"));
+        m_exportVideoButton->setEnabled(selectedVideoCount > 0);
+    }
+
+    if (m_selectionBar && m_selectionBar->isVisible()) {
+        positionSelectionBar();
+        m_selectionBar->raise();
+    }
+}
+
+void ResultsPage::resizeEvent(QResizeEvent *event)
+{
+    Page::resizeEvent(event);
+    positionSelectionBar();
 }

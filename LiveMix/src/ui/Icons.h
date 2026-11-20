@@ -39,6 +39,9 @@ enum class Glyph {
     Cloud,
     Clock,
     Video,
+    Film,
+    Batch,
+    Reset,
 };
 
 void paint(QPainter *painter, const QRectF &rect, Glyph glyph, const QColor &color,

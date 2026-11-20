@@ -76,4 +76,45 @@ struct DraftDownloadJob
     }
 };
 
+// -----------------------------------------------------------------------------
+// 批量导出到剪映
+// -----------------------------------------------------------------------------
+
+enum class DraftBatchItemStatus {
+    Queued,
+    Downloading,
+    Writing,
+    Done,
+    Error,
+};
+
+struct DraftBatchItem
+{
+    qint64 draftRowId = -1;
+    QString title;
+    QString durationText;
+    DraftBatchItemStatus status = DraftBatchItemStatus::Queued;
+    double progress = 0.0;
+    qint64 totalBytes = 0;
+    qint64 loadedBytes = 0;
+    QString error;
+};
+
+struct DraftBatchSnapshot
+{
+    int id = 0;
+    bool running = false;
+    QVector<DraftBatchItem> items;
+    int doneCount = 0;
+    int failedCount = 0;
+    int activeCount = 0;
+    int queuedCount = 0;
+    double progress = 0.0;
+    qint64 loadedBytes = 0;
+    qint64 totalBytes = 0;
+    qint64 elapsedMs = 0;
+    int etaSeconds = -1;
+};
+
 Q_DECLARE_METATYPE(DraftDownloadJob)
+Q_DECLARE_METATYPE(DraftBatchSnapshot)

@@ -11,10 +11,12 @@
 #include <QIntValidator>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
+#include <QPixmap>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QUrl>
@@ -195,6 +197,159 @@ QWidget *makePane(QWidget *parent)
     return pane;
 }
 
+// 成片设置的一行开关：整行可点，右侧是 Switch。
+class ToggleRow : public QWidget
+{
+public:
+    ToggleRow(const QString &title, const QString &description, bool checked,
+              QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAttribute(Qt::WA_Hover, true);
+        setCursor(Qt::PointingHandCursor);
+        setMinimumHeight(52);
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(14, 9, 14, 9);
+        layout->setSpacing(16);
+
+        auto *text = new QWidget(this);
+        auto *textLayout = new QVBoxLayout(text);
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(3);
+        textLayout->addWidget(Ui::label(title, 12, 500, Theme::Text1, text));
+        auto *hint = Ui::label(description, 11, 400, Theme::Text3, text);
+        hint->setWordWrap(true);
+        textLayout->addWidget(hint);
+        layout->addWidget(text, 1);
+
+        m_switch = new Switch(this);
+        m_switch->setChecked(checked);
+        m_switch->setAccessibleName(title);
+        layout->addWidget(m_switch, 0, Qt::AlignVCenter);
+    }
+
+    Switch *toggle() const { return m_switch; }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        if (m_hovered) {
+            painter.fillRect(rect(), Theme::alpha(Theme::Surface3, 0.40));
+        }
+    }
+
+    void enterEvent(QEnterEvent *event) override
+    {
+        m_hovered = true;
+        update();
+        QWidget::enterEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        m_hovered = false;
+        update();
+        QWidget::leaveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_switch->toggle();
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+private:
+    Switch *m_switch = nullptr;
+    bool m_hovered = false;
+};
+
+QWidget *makeToggleGroup(const QString &title, const QVector<ToggleRow *> &rows,
+                         QWidget *parent)
+{
+    auto *section = new QWidget(parent);
+    section->setFixedWidth(kFieldWidth);
+    auto *layout = new QVBoxLayout(section);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto *header = new QWidget(section);
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(0, 0, 0, 8);
+    headerLayout->setSpacing(8);
+    headerLayout->addWidget(Ui::label(title, 11, 500, Theme::Text3, header));
+    auto *line = new QFrame(header);
+    line->setFixedHeight(1);
+    line->setStyleSheet(QStringLiteral("QFrame { background:#242938; border:none; }"));
+    headerLayout->addWidget(line, 1, Qt::AlignVCenter);
+    layout->addWidget(header);
+
+    auto *card = new Card(Theme::alpha(Theme::Surface2, 0.50), Theme::Border, 8,
+                          section);
+    card->contentLayout()->setContentsMargins(0, 0, 0, 0);
+    for (int i = 0; i < rows.size(); ++i) {
+        rows.at(i)->setParent(card);
+        card->contentLayout()->addWidget(rows.at(i));
+        if (i < rows.size() - 1) {
+            card->contentLayout()->addWidget(Ui::separator(false, card));
+        }
+    }
+    layout->addWidget(card);
+    return section;
+}
+
+// 倍速刻度：0.5× / 1.0× / 1.5× / 2.0× 均匀铺在滑杆下方。
+class SpeedTicks : public QWidget
+{
+public:
+    explicit SpeedTicks(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setFixedHeight(14);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.setFont(Theme::monoFont(10));
+        painter.setPen(Theme::Text3);
+        const QStringList labels = {QStringLiteral("0.5×"), QStringLiteral("1.0×"),
+                                    QStringLiteral("1.5×"), QStringLiteral("2.0×")};
+        for (int i = 0; i < labels.size(); ++i) {
+            const qreal ratio = i / qreal(labels.size() - 1);
+            const qreal x = 8 + (width() - 16) * ratio;
+            QRectF rect;
+            int align = Qt::AlignHCenter;
+            if (i == 0) {
+                rect = QRectF(x, 0, 60, height());
+                align = Qt::AlignLeft;
+            } else if (i == labels.size() - 1) {
+                rect = QRectF(x - 60, 0, 60, height());
+                align = Qt::AlignRight;
+            } else {
+                rect = QRectF(x - 30, 0, 60, height());
+            }
+            painter.drawText(rect, align | Qt::AlignVCenter, labels.at(i));
+        }
+    }
+};
+
+QString formatSpeed(double value)
+{
+    const double scaled = value * 10.0;
+    const int tenths = qRound(scaled);
+    return qAbs(scaled - tenths) < 0.001
+        ? QStringLiteral("%1×").arg(tenths / 10.0, 0, 'f', 1)
+        : QStringLiteral("%1×").arg(value, 0, 'f', 2);
+}
+
 } // namespace
 
 SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
@@ -236,7 +391,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
 
     const QStringList paneLabels = {
         QStringLiteral("服务连接"), QStringLiteral("存储与输出"),
-        QStringLiteral("AI 与 ASR"), QStringLiteral("快捷键"), QStringLiteral("通用"),
+        QStringLiteral("成片设置"), QStringLiteral("AI 与 ASR"),
+        QStringLiteral("快捷键"), QStringLiteral("通用"),
     };
     QVector<PaneNavButton *> navButtons;
     for (const QString &label : paneLabels) {
@@ -426,6 +582,282 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     }
     stack->addWidget(storagePane);
 
+    // ---- 成片设置 ------------------------------------------------------------
+    auto *finishPane = makePane(stack);
+    auto *finishLayout = qobject_cast<QVBoxLayout *>(finishPane->layout());
+
+    auto *finishHeader = new QWidget(finishPane);
+    finishHeader->setFixedWidth(kFieldWidth);
+    auto *finishHeaderLayout = new QHBoxLayout(finishHeader);
+    finishHeaderLayout->setContentsMargins(0, 0, 0, 18);
+    finishHeaderLayout->setSpacing(12);
+    auto *sparkleHost = new QWidget(finishHeader);
+    sparkleHost->setFixedSize(26, 26);
+    sparkleHost->setStyleSheet(QStringLiteral(
+        "background:rgba(110,139,255,0.14);border:1px solid rgba(110,139,255,0.25);"
+        "border-radius:7px;"));
+    auto *sparkleLayout = new QVBoxLayout(sparkleHost);
+    sparkleLayout->setContentsMargins(0, 0, 0, 0);
+    QPixmap sparklePixmap(13, 13);
+    sparklePixmap.fill(Qt::transparent);
+    {
+        QPainter painter(&sparklePixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        Icons::paint(&painter, QRectF(0, 0, 13, 13), Icons::Glyph::Sparkle,
+                     Theme::Primary, 2.0);
+    }
+    auto *sparkleLabel = new QLabel(sparkleHost);
+    sparkleLabel->setPixmap(sparklePixmap);
+    sparkleLayout->addWidget(sparkleLabel, 0, Qt::AlignCenter);
+    finishHeaderLayout->addWidget(sparkleHost, 0, Qt::AlignTop);
+
+    auto *finishText = new QWidget(finishHeader);
+    auto *finishTextLayout = new QVBoxLayout(finishText);
+    finishTextLayout->setContentsMargins(0, 0, 0, 0);
+    finishTextLayout->setSpacing(2);
+    finishTextLayout->addWidget(
+        Ui::label(QStringLiteral("自动成片包装"), 12, 500, Theme::Text1, finishText));
+    auto *finishHint = Ui::label(
+        QStringLiteral("应用到每次一键成片；关闭的项不会添加，生成的草稿仍可在"
+                       "剪映中二次调整。"),
+        11, 400, Theme::Text3, finishText);
+    finishHint->setWordWrap(true);
+    finishTextLayout->addWidget(finishHint);
+    finishHeaderLayout->addWidget(finishText, 1);
+
+    QVector<Switch *> finishSwitches;
+
+    const QStringList toggleTitles = {
+        QStringLiteral("自动添加视频转场"), QStringLiteral("自动添加特效"),
+        QStringLiteral("自动添加滤镜"), QStringLiteral("自动添加 BGM"),
+        QStringLiteral("自动添加音效"),
+    };
+    const QStringList toggleHints = {
+        QStringLiteral("在片段衔接处加入自然转场，避免生硬跳切。"),
+        QStringLiteral("按画面内容叠加高光、强调等特效，突出重点动作。"),
+        QStringLiteral("根据场景与光线匹配滤镜，多条成片色调统一。"),
+        QStringLiteral("按内容情绪匹配背景音乐，人声段自动压低音量。"),
+        QStringLiteral("在转场与重点动作处补充音效，增强节奏感。"),
+    };
+    const bool toggleDefaults[5] = {
+        config.finish.transitions, config.finish.effects, config.finish.filters,
+        config.finish.bgm, config.finish.sfx,
+    };
+    QVector<ToggleRow *> visualRows;
+    QVector<ToggleRow *> audioRows;
+    QVector<Switch *> visualSwitches;
+    QVector<Switch *> audioSwitches;
+    for (int i = 0; i < 5; ++i) {
+        auto *row = new ToggleRow(toggleTitles.at(i), toggleHints.at(i),
+                                  toggleDefaults[i]);
+        Switch *sw = row->toggle();
+        finishSwitches.append(sw);
+        if (i < 3) {
+            visualRows.append(row);
+            visualSwitches.append(sw);
+        } else {
+            audioRows.append(row);
+            audioSwitches.append(sw);
+        }
+    }
+
+    finishLayout->addWidget(finishHeader);
+    finishLayout->addWidget(
+        makeToggleGroup(QStringLiteral("画面"), visualRows, finishPane));
+    finishLayout->addSpacing(20);
+    finishLayout->addWidget(
+        makeToggleGroup(QStringLiteral("声音"), audioRows, finishPane));
+    finishLayout->addSpacing(20);
+
+    auto *speedSection = new QWidget(finishPane);
+    speedSection->setFixedWidth(kFieldWidth);
+    auto *speedLayout = new QVBoxLayout(speedSection);
+    speedLayout->setContentsMargins(0, 0, 0, 0);
+    speedLayout->setSpacing(0);
+
+    auto *speedHeader = new QWidget(speedSection);
+    auto *speedHeaderLayout = new QHBoxLayout(speedHeader);
+    speedHeaderLayout->setContentsMargins(0, 0, 0, 8);
+    speedHeaderLayout->setSpacing(8);
+    speedHeaderLayout->addWidget(
+        Ui::label(QStringLiteral("视频倍速"), 11, 500, Theme::Text3, speedHeader));
+    auto *speedLine = new QFrame(speedHeader);
+    speedLine->setFixedHeight(1);
+    speedLine->setStyleSheet(QStringLiteral("QFrame { background:#242938; border:none; }"));
+    speedHeaderLayout->addWidget(speedLine, 1, Qt::AlignVCenter);
+    speedLayout->addWidget(speedHeader);
+
+    auto *speedCard = new QFrame(speedSection);
+    speedCard->setStyleSheet(QStringLiteral(
+        "QFrame { background:rgba(26,30,40,0.50); border:1px solid #242938;"
+        "border-radius:8px; }"));
+    auto *speedCardLayout = new QVBoxLayout(speedCard);
+    speedCardLayout->setContentsMargins(14, 14, 14, 14);
+    speedCardLayout->setSpacing(0);
+
+    auto *modeRow = new QWidget(speedCard);
+    auto *modeLayout = new QHBoxLayout(modeRow);
+    modeLayout->setContentsMargins(0, 0, 0, 0);
+    modeLayout->setSpacing(6);
+    auto *autoButton = new ChoiceButton(QStringLiteral("自动"), modeRow);
+    auto *fixedButton = new ChoiceButton(QStringLiteral("指定倍速"), modeRow);
+    modeLayout->addWidget(autoButton);
+    modeLayout->addWidget(fixedButton);
+    modeLayout->addStretch(1);
+    speedCardLayout->addWidget(modeRow);
+    speedCardLayout->addSpacing(12);
+
+    // 自动：每条成片独立取速。
+    auto *autoPanel = new QWidget(speedCard);
+    auto *autoLayout = new QVBoxLayout(autoPanel);
+    autoLayout->setContentsMargins(0, 0, 0, 0);
+    autoLayout->setSpacing(8);
+    auto *autoBox = new QFrame(autoPanel);
+    autoBox->setStyleSheet(QStringLiteral(
+        "QFrame { background:#14171F; border:1px solid #242938; border-radius:6px; }"));
+    auto *autoBoxLayout = new QHBoxLayout(autoBox);
+    autoBoxLayout->setContentsMargins(12, 8, 12, 8);
+    autoBoxLayout->setSpacing(8);
+    autoBoxLayout->addWidget(
+        Ui::label(QStringLiteral("每条成片独立随机取速"), 11, 400, Theme::Text2, autoBox));
+    autoBoxLayout->addStretch(1);
+    auto *rangeTag = Ui::label(QStringLiteral("1.0× – 1.5×"), 11, 400, Theme::Primary,
+                               autoBox);
+    rangeTag->setFont(Theme::monoFont(11));
+    rangeTag->setStyleSheet(QStringLiteral(
+        "color:#6E8BFF;background:rgba(110,139,255,0.14);border-radius:4px;"
+        "padding:1px 6px;"));
+    autoBoxLayout->addWidget(rangeTag, 0, Qt::AlignVCenter);
+    autoLayout->addWidget(autoBox);
+    auto *autoNote = Ui::label(
+        QStringLiteral("以 45 秒切片为例，成片约 30–45 秒，多条成片节奏各不相同。"),
+        11, 400, Theme::Text3, autoPanel);
+    autoNote->setWordWrap(true);
+    autoLayout->addWidget(autoNote);
+    speedCardLayout->addWidget(autoPanel);
+
+    // 指定倍速：固定滑杆。
+    auto *fixedPanel = new QWidget(speedCard);
+    auto *fixedLayout = new QVBoxLayout(fixedPanel);
+    fixedLayout->setContentsMargins(0, 0, 0, 0);
+    fixedLayout->setSpacing(8);
+    auto *fixedBox = new QFrame(fixedPanel);
+    fixedBox->setMinimumHeight(92);
+    fixedBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    fixedBox->setStyleSheet(QStringLiteral(
+        "QFrame { background:#14171F; border:1px solid #242938; border-radius:6px; }"));
+    auto *fixedBoxLayout = new QVBoxLayout(fixedBox);
+    fixedBoxLayout->setContentsMargins(12, 10, 12, 10);
+    fixedBoxLayout->setSpacing(0);
+    auto *fixedTop = new QWidget(fixedBox);
+    fixedTop->setFixedHeight(20);
+    auto *fixedTopLayout = new QHBoxLayout(fixedTop);
+    fixedTopLayout->setContentsMargins(0, 0, 0, 0);
+    fixedTopLayout->setSpacing(8);
+    fixedTopLayout->addWidget(
+        Ui::label(QStringLiteral("固定倍速"), 11, 400, Theme::Text2, fixedTop));
+    fixedTopLayout->addStretch(1);
+    auto *speedValue = Ui::label(QString(), 15, 500, Theme::Text1, fixedTop);
+    speedValue->setFont(Theme::monoFont(15, 500));
+    fixedTopLayout->addWidget(speedValue);
+    fixedBoxLayout->addWidget(fixedTop);
+    fixedBoxLayout->addSpacing(10);
+    auto *speedSlider = new SliderControl(fixedBox);
+    speedSlider->setRange(0.5, 2.0, 0.05);
+    speedSlider->setFixedHeight(20);
+    fixedBoxLayout->addWidget(speedSlider);
+    fixedBoxLayout->addSpacing(2);
+    fixedBoxLayout->addWidget(new SpeedTicks(fixedBox));
+    fixedLayout->addWidget(fixedBox);
+    fixedPanel->setMinimumHeight(124);
+    auto *fixedNote = Ui::label(QString(), 11, 400, Theme::Text3, fixedPanel);
+    fixedNote->setWordWrap(true);
+    fixedLayout->addWidget(fixedNote);
+    speedCardLayout->addWidget(fixedPanel);
+
+    speedLayout->addWidget(speedCard);
+    finishLayout->addWidget(speedSection);
+    finishLayout->addStretch(1);
+    stack->addWidget(finishPane);
+
+    auto updateSpeedText = [speedSlider, speedValue, fixedNote] {
+        const double value = speedSlider->value();
+        speedValue->setText(formatSpeed(value));
+        const int exampleSeconds = qMax(1, int(qRound(45.0 / value)));
+        fixedNote->setText(
+            QStringLiteral("以 45 秒切片为例，成片约 %1 秒，所有成片保持同一速度。")
+                .arg(exampleSeconds));
+    };
+    auto setSpeedMode = [autoButton, fixedButton, autoPanel, fixedPanel,
+                         updateSpeedText, stack, fitStack](bool automatic) {
+        autoButton->setSelected(automatic);
+        fixedButton->setSelected(!automatic);
+        autoPanel->setVisible(automatic);
+        fixedPanel->setVisible(!automatic);
+        if (!automatic) {
+            updateSpeedText();
+        }
+        // 两种模式高度不同，切换后同步设置卡片高度，避免内容被裁切。
+        fitStack();
+        if (stack->parentWidget()) {
+            stack->parentWidget()->updateGeometry();
+        }
+    };
+    autoButton->setSelected(config.finish.speedAuto);
+    fixedButton->setSelected(!config.finish.speedAuto);
+    autoPanel->setVisible(config.finish.speedAuto);
+    fixedPanel->setVisible(!config.finish.speedAuto);
+    speedSlider->setValue(config.finish.fixedSpeed);
+    updateSpeedText();
+
+    connect(autoButton, &QAbstractButton::clicked, this, [setSpeedMode] {
+        setSpeedMode(true);
+    });
+    connect(fixedButton, &QAbstractButton::clicked, this, [setSpeedMode] {
+        setSpeedMode(false);
+    });
+    connect(speedSlider, &SliderControl::valueChanged, this,
+            [updateSpeedText](double) { updateSpeedText(); });
+
+    auto *reset = new LinkLabel(QStringLiteral("恢复默认"), finishHeader);
+    reset->setPixelSize(11);
+    reset->setTextColor(Theme::Text3);
+    reset->setHoverColor(Theme::Text1);
+    finishHeaderLayout->addWidget(reset, 0, Qt::AlignVCenter);
+    auto updateResetEnabled = [reset, finishSwitches, autoButton, speedSlider] {
+        bool defaults = autoButton->isSelected();
+        for (Switch *sw : finishSwitches) {
+            defaults = defaults && sw->isChecked();
+        }
+        defaults = defaults && qAbs(speedSlider->value() - 1.0) < 0.001;
+        reset->setDisabledVisual(defaults);
+        reset->setEnabled(!defaults);
+    };
+    for (Switch *sw : finishSwitches) {
+        connect(sw, &QAbstractButton::toggled, this,
+                [updateResetEnabled](bool) { updateResetEnabled(); });
+    }
+    connect(speedSlider, &SliderControl::valueChanged, this,
+            [updateResetEnabled](double) { updateResetEnabled(); });
+    connect(autoButton, &QAbstractButton::clicked, this,
+            [updateResetEnabled] { updateResetEnabled(); });
+    connect(fixedButton, &QAbstractButton::clicked, this,
+            [updateResetEnabled] { updateResetEnabled(); });
+    updateResetEnabled();
+
+    connect(reset, &QAbstractButton::clicked, this,
+            [this, finishSwitches, setSpeedMode, speedSlider, autoButton,
+             updateResetEnabled] {
+                for (Switch *sw : finishSwitches) {
+                    sw->setChecked(true);
+                }
+                autoButton->setSelected(true);
+                setSpeedMode(true);
+                speedSlider->setValue(1.0);
+                updateResetEnabled();
+                emit toastRequested(QStringLiteral("已恢复默认成片设置"));
+            });
+
     // ---- AI & ASR -----------------------------------------------------------
     auto *aiPane = makePane(stack);
     auto *aiLayout = qobject_cast<QVBoxLayout *>(aiPane->layout());
@@ -528,7 +960,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
 
     auto persist = [this, apiInput, keyInput, draftInput, exportInput, cacheInput,
                     recordingInput, segmentInput, limitInput, autoClean,
-                    subtitleCheck, themeTabs, generalChecks,
+                    subtitleCheck, themeTabs, generalChecks, finishSwitches,
+                    autoButton, speedSlider,
                     cleanedPath, firstInteger](QString *error) -> bool {
         if (!m_config) {
             if (error) {
@@ -565,6 +998,16 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         updated.ai.defaultPrompt = m_promptSelect ? m_promptSelect->currentText()
                                                   : updated.ai.defaultPrompt;
         updated.ai.exportSrt = subtitleCheck->isChecked();
+
+        if (finishSwitches.size() == 5) {
+            updated.finish.transitions = finishSwitches[0]->isChecked();
+            updated.finish.effects = finishSwitches[1]->isChecked();
+            updated.finish.filters = finishSwitches[2]->isChecked();
+            updated.finish.bgm = finishSwitches[3]->isChecked();
+            updated.finish.sfx = finishSwitches[4]->isChecked();
+        }
+        updated.finish.speedAuto = autoButton->isSelected();
+        updated.finish.fixedSpeed = speedSlider->value();
 
         updated.general.theme = themeTabs->currentIndex() == 1
             ? QStringLiteral("system")

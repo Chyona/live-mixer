@@ -44,6 +44,19 @@ struct GeneralConfig
     bool systemNotifications = true;
 };
 
+// 成片设置：自动包装开关与视频倍速，应用到之后每次一键成片。
+struct FinishConfig
+{
+    bool transitions = true;
+    bool effects = true;
+    bool filters = true;
+    bool bgm = true;
+    bool sfx = true;
+    // true：每条成片在 1.0×–1.5× 之间独立随机取速；false：固定为 fixedSpeed。
+    bool speedAuto = true;
+    double fixedSpeed = 1.0; // 0.5–2.0
+};
+
 struct AppConfig
 {
     int version = 1;
@@ -51,6 +64,7 @@ struct AppConfig
     StorageConfig storage;
     RecordingConfig recording;
     AiConfig ai;
+    FinishConfig finish;
     GeneralConfig general;
 };
 

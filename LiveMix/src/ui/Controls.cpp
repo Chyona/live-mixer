@@ -7,6 +7,7 @@
 #include <QFontMetrics>
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLinearGradient>
@@ -18,7 +19,9 @@
 #include <QShowEvent>
 #include <QStyleOption>
 #include <QTimer>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 
@@ -178,6 +181,10 @@ Card::Card(const QColor &fill, const QColor &border, int radius, QWidget *parent
 
 void Card::setCardColors(const QColor &fill, const QColor &border)
 {
+    if (m_fill == fill && m_border == border && m_hoverFill == fill
+        && m_hoverBorder == border) {
+        return;
+    }
     m_fill = fill;
     m_border = border;
     m_hoverFill = fill;
@@ -193,6 +200,9 @@ void Card::setRadius(int radius)
 
 void Card::setHoverColors(const QColor &fill, const QColor &border)
 {
+    if (m_hoverFill == fill && m_hoverBorder == border) {
+        return;
+    }
     m_hoverFill = fill;
     m_hoverBorder = border;
     update();
@@ -209,6 +219,9 @@ void Card::setClickable(bool clickable)
 
 void Card::setHoverEnabled(bool enabled)
 {
+    if (m_hoverEnabled == enabled) {
+        return;
+    }
     m_hoverEnabled = enabled;
     setAttribute(Qt::WA_Hover, enabled);
     update();
@@ -305,6 +318,9 @@ Button::Button(const QString &text, Variant variant, QWidget *parent)
 
 void Button::setLeadingGlyph(Icons::Glyph glyph)
 {
+    if (m_hasGlyph && m_glyph == glyph) {
+        return;
+    }
     m_hasGlyph = true;
     m_glyph = glyph;
     updateGeometry();
@@ -323,7 +339,11 @@ void Button::setCompact(bool compact)
 
 void Button::setVariant(Variant variant)
 {
+    if (m_variant == variant) {
+        return;
+    }
     m_variant = variant;
+    updateGeometry();
     update();
 }
 
@@ -340,6 +360,15 @@ void Button::setProgressPercent(int percent)
 void Button::setCornerRadius(int radius)
 {
     m_radius = radius;
+    update();
+}
+
+void Button::setTextColor(const QColor &color)
+{
+    if (m_textColor == color) {
+        return;
+    }
+    m_textColor = color;
     update();
 }
 
@@ -406,6 +435,10 @@ void Button::paintEvent(QPaintEvent *)
         border = Theme::BorderStrong;
         textColor = Theme::Text1;
         break;
+    }
+
+    if (m_textColor.isValid()) {
+        textColor = m_textColor;
     }
 
     if (isDown()) {
@@ -812,12 +845,18 @@ MediaThumbnail::MediaThumbnail(Mode mode, QWidget *parent)
 
 void MediaThumbnail::setDuration(const QString &duration)
 {
+    if (m_duration == duration) {
+        return;
+    }
     m_duration = duration;
     update();
 }
 
 void MediaThumbnail::setReadyBadge(const QString &text)
 {
+    if (m_readyBadge == text) {
+        return;
+    }
     m_readyBadge = text;
     update();
 }
@@ -943,7 +982,9 @@ void MediaThumbnail::paintEvent(QPaintEvent *)
     if (!m_readyBadge.isEmpty()) {
         const QColor tone = m_readyBadgeTone == BadgeRun
             ? Theme::Primary
-            : (m_readyBadgeTone == BadgeError ? Theme::Danger : Theme::Success);
+            : (m_readyBadgeTone == BadgeError
+                   ? Theme::Danger
+                   : (m_readyBadgeTone == BadgeNeutral ? Theme::Text2 : Theme::Success));
         const QFontMetrics metrics(Theme::font(10));
         const int textWidth = metrics.horizontalAdvance(m_readyBadge);
         const QRectF pill(8, 8, textWidth + 16, 19);
@@ -1425,6 +1466,409 @@ void SegmentTabs::mousePressEvent(QMouseEvent *event)
         return;
     }
     QWidget::mousePressEvent(event);
+}
+
+// -----------------------------------------------------------------------------
+// ChoiceButton
+// -----------------------------------------------------------------------------
+
+ChoiceButton::ChoiceButton(const QString &text, QWidget *parent)
+    : QAbstractButton(parent)
+{
+    setText(text);
+    setCheckable(true);
+    setCursor(Qt::PointingHandCursor);
+    setAttribute(Qt::WA_Hover, true);
+    setFocusPolicy(Qt::StrongFocus);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setFixedHeight(27);
+}
+
+void ChoiceButton::setSelected(bool selected)
+{
+    if (m_selected == selected) {
+        return;
+    }
+    m_selected = selected;
+    setChecked(selected);
+    update();
+}
+
+QSize ChoiceButton::sizeHint() const
+{
+    const QFontMetrics metrics(Theme::font(12, m_selected ? 500 : 400));
+    return QSize(metrics.horizontalAdvance(text()) + 21, 27);
+}
+
+void ChoiceButton::enterEvent(QEnterEvent *event)
+{
+    m_hovered = true;
+    update();
+    QAbstractButton::enterEvent(event);
+}
+
+void ChoiceButton::leaveEvent(QEvent *event)
+{
+    m_hovered = false;
+    update();
+    QAbstractButton::leaveEvent(event);
+}
+
+void ChoiceButton::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (m_selected) {
+        painter.setBrush(Theme::alpha(Theme::Primary, 0.14));
+        painter.setPen(QPen(Theme::alpha(Theme::Primary, 0.60), 1.0));
+    } else {
+        painter.setBrush(m_hovered ? Theme::Surface3 : Theme::Surface2);
+        painter.setPen(QPen(m_hovered ? Theme::BorderStrong : Theme::Border, 1.0));
+    }
+    painter.drawRoundedRect(box, 6, 6);
+
+    painter.setFont(Theme::font(12, m_selected ? 500 : 400));
+    painter.setPen(m_selected ? Theme::Primary : (m_hovered ? Theme::Text1 : Theme::Text2));
+    painter.drawText(rect(), Qt::AlignCenter, text());
+}
+
+// -----------------------------------------------------------------------------
+// Switch
+// -----------------------------------------------------------------------------
+
+Switch::Switch(QWidget *parent)
+    : QAbstractButton(parent)
+{
+    setCheckable(true);
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_animation = new QVariantAnimation(this);
+    m_animation->setDuration(180);
+    m_animation->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_animation, &QVariantAnimation::valueChanged, this,
+            [this](const QVariant &value) {
+                m_knob = value.toReal();
+                update();
+            });
+    connect(this, &QAbstractButton::toggled, this, [this](bool checked) {
+        m_animation->stop();
+        m_animation->setStartValue(m_knob);
+        m_animation->setEndValue(checked ? 1.0 : 0.0);
+        m_animation->start();
+    });
+}
+
+QSize Switch::sizeHint() const
+{
+    return QSize(34, 20);
+}
+
+QSize Switch::minimumSizeHint() const
+{
+    return QSize(34, 20);
+}
+
+void Switch::setKnob(qreal knob)
+{
+    m_knob = knob;
+    update();
+}
+
+void Switch::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF track = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const bool checked = isChecked();
+    painter.setPen(QPen(checked ? Theme::Primary : Theme::BorderStrong, 1.0));
+    painter.setBrush(checked ? Theme::Primary : Theme::Surface3);
+    painter.drawRoundedRect(track, track.height() / 2.0, track.height() / 2.0);
+
+    const qreal knobSide = 14.0;
+    const qreal travel = track.width() - knobSide - 4.0;
+    const qreal x = track.left() + 2.0 + travel * qBound<qreal>(0.0, m_knob, 1.0);
+    const QRectF knob(x, track.top() + (track.height() - knobSide) / 2.0, knobSide,
+                      knobSide);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(checked ? Theme::OnAccent : Theme::Text2);
+    painter.drawEllipse(knob);
+}
+
+// -----------------------------------------------------------------------------
+// SliderControl
+// -----------------------------------------------------------------------------
+
+SliderControl::SliderControl(QWidget *parent)
+    : QWidget(parent)
+{
+    setFocusPolicy(Qt::StrongFocus);
+    setCursor(Qt::PointingHandCursor);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setFixedHeight(20);
+    setAccessibleName(QStringLiteral("固定倍速"));
+}
+
+void SliderControl::setRange(double minimum, double maximum, double step)
+{
+    m_minimum = minimum;
+    m_maximum = qMax(minimum, maximum);
+    m_step = qMax(0.001, step);
+    setValue(m_value);
+}
+
+void SliderControl::setValue(double value)
+{
+    const double snapped = m_minimum
+        + qRound((value - m_minimum) / m_step) * m_step;
+    const double next = qBound(m_minimum, snapped, m_maximum);
+    if (qAbs(next - m_value) < 0.0001) {
+        return;
+    }
+    m_value = next;
+    update();
+    emit valueChanged(m_value);
+}
+
+qreal SliderControl::ratio() const
+{
+    if (m_maximum <= m_minimum) {
+        return 0.0;
+    }
+    return (m_value - m_minimum) / (m_maximum - m_minimum);
+}
+
+QSize SliderControl::sizeHint() const
+{
+    return QSize(320, 20);
+}
+
+QRectF SliderControl::trackRect() const
+{
+    return QRectF(8, (height() - 4) / 2.0, qMax(1, width() - 16), 4);
+}
+
+void SliderControl::setValueFromX(qreal x)
+{
+    const QRectF track = trackRect();
+    const qreal ratio = qBound<qreal>(0.0, (x - track.left()) / track.width(), 1.0);
+    setValue(m_minimum + ratio * (m_maximum - m_minimum));
+}
+
+void SliderControl::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF track = trackRect();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(Theme::Surface3);
+    painter.drawRoundedRect(track, 2, 2);
+
+    const qreal r = qBound<qreal>(0.0, ratio(), 1.0);
+    QRectF fill = track;
+    fill.setWidth(track.width() * r);
+    painter.setBrush(Theme::Primary);
+    painter.drawRoundedRect(fill, 2, 2);
+
+    const qreal knobX = track.left() + track.width() * r;
+    const QRectF knob(knobX - 7.0, height() / 2.0 - 7.0, 14.0, 14.0);
+    if (hasFocus()) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Theme::alpha(Theme::Primary, 0.22));
+        painter.drawEllipse(knob.adjusted(-3, -3, 3, 3));
+    }
+    painter.setPen(QPen(Theme::Primary, 1.5));
+    painter.setBrush(Theme::Surface1);
+    painter.drawEllipse(knob.adjusted(0.75, 0.75, -0.75, -0.75));
+}
+
+void SliderControl::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        setFocus(Qt::MouseFocusReason);
+        setValueFromX(event->position().x());
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void SliderControl::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_dragging) {
+        setValueFromX(event->position().x());
+        event->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void SliderControl::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_dragging) {
+        m_dragging = false;
+        setValueFromX(event->position().x());
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void SliderControl::keyPressEvent(QKeyEvent *event)
+{
+    switch (event->key()) {
+    case Qt::Key_Left:
+    case Qt::Key_Down:
+        setValue(m_value - m_step);
+        event->accept();
+        return;
+    case Qt::Key_Right:
+    case Qt::Key_Up:
+        setValue(m_value + m_step);
+        event->accept();
+        return;
+    case Qt::Key_Home:
+        setValue(m_minimum);
+        event->accept();
+        return;
+    case Qt::Key_End:
+        setValue(m_maximum);
+        event->accept();
+        return;
+    default:
+        break;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void SliderControl::wheelEvent(QWheelEvent *event)
+{
+    if (event->angleDelta().y() > 0) {
+        setValue(m_value + m_step);
+    } else if (event->angleDelta().y() < 0) {
+        setValue(m_value - m_step);
+    }
+    event->accept();
+}
+
+// -----------------------------------------------------------------------------
+// StageStepper
+// -----------------------------------------------------------------------------
+
+StageStepper::StageStepper(const QStringList &labels, QWidget *parent)
+    : QWidget(parent)
+    , m_labels(labels)
+{
+    m_states = QVector<int>(labels.size(), Waiting);
+    setFixedHeight(24);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
+void StageStepper::setStates(const QVector<int> &states)
+{
+    if (m_states == states) {
+        return;
+    }
+    m_states = states;
+    update();
+}
+
+QSize StageStepper::sizeHint() const
+{
+    return QSize(420, 24);
+}
+
+void StageStepper::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+
+    const int count = m_labels.size();
+    if (count <= 0) {
+        return;
+    }
+    const int size = 18;
+    const int gap = 6;
+    const QFont labelFont = Theme::font(11);
+    const QFontMetrics metrics(labelFont);
+    QVector<int> labelWidths;
+    labelWidths.reserve(count);
+    int used = 0;
+    for (int i = 0; i < count; ++i) {
+        const int width = metrics.horizontalAdvance(m_labels.at(i));
+        labelWidths.append(width);
+        used += size + gap + width;
+    }
+    const int lineSpace = count > 1
+        ? qMax(14, (width() - used) / (count - 1))
+        : 0;
+
+    int x = 0;
+    for (int i = 0; i < count; ++i) {
+        const int state = m_states.value(i, Waiting);
+        QColor fill;
+        QColor border;
+        QColor textColor;
+        int weight = QFont::Normal;
+        switch (state) {
+        case Done:
+            fill = Theme::Success;
+            border = Theme::Success;
+            textColor = Theme::Text2;
+            break;
+        case Active:
+            fill = Theme::Primary;
+            border = Theme::Primary;
+            textColor = Theme::Text1;
+            weight = 650;
+            break;
+        case Error:
+            fill = Theme::alpha(Theme::Danger, 0.16);
+            border = Theme::Danger;
+            textColor = Theme::Danger;
+            break;
+        case Waiting:
+        default:
+            fill = Theme::Surface2;
+            border = Theme::BorderStrong;
+            textColor = Theme::Text3;
+            break;
+        }
+
+        const QRectF circle(x, (height() - size) / 2.0, size, size);
+        painter.setPen(QPen(border, 1.0));
+        painter.setBrush(fill);
+        painter.drawEllipse(circle.adjusted(0.5, 0.5, -0.5, -0.5));
+
+        if (state == Done) {
+            Icons::paint(&painter, circle.adjusted(5, 5, -5, -5), Icons::Glyph::Check,
+                         Theme::OnAccent, 2.0);
+        } else {
+            painter.setFont(Theme::monoFont(10));
+            painter.setPen(state == Error ? Theme::Danger : Theme::OnAccent);
+            painter.drawText(circle, Qt::AlignCenter,
+                             state == Error ? QStringLiteral("!")
+                                            : QString::number(i + 1));
+        }
+
+        painter.setFont(Theme::font(11, weight));
+        painter.setPen(textColor);
+        painter.drawText(QRectF(x + size + gap, 0, labelWidths.at(i), height()),
+                         Qt::AlignLeft | Qt::AlignVCenter, m_labels.at(i));
+
+        x += size + gap + labelWidths.at(i);
+        if (i < count - 1) {
+            const QColor lineColor =
+                state == Done ? Theme::alpha(Theme::Success, 0.6) : Theme::Border;
+            painter.setPen(QPen(lineColor, 1.0));
+            painter.drawLine(QPointF(x + 6, height() / 2.0),
+                             QPointF(x + lineSpace - 6, height() / 2.0));
+            x += lineSpace;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
