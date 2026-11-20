@@ -44,6 +44,9 @@ public:
 
     // 把页头移到滚动区域之外，固定在页面顶部；header 不要同时加进 bodyLayout。
     void setFixedHeader(QWidget *header);
+    // 关闭页面级滚动：内容区直接铺满页面剩余高度，由页面内部自行滚动
+    // （设置页的卡片填满窗口，只有右侧面板内容滚动）。
+    void disablePageScroll();
 
 protected:
     QWidget *contentWidget() const { return m_content; }

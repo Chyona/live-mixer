@@ -1,12 +1,15 @@
 #include "SpecPage.h"
 
+#include "../core/Brand.h"
 #include "../ui/Controls.h"
 
+#include <QDesktopServices>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace {
@@ -531,5 +534,59 @@ SpecPage::SpecPage(QWidget *parent)
                                       i == diffRows.size() - 1, differenceTable));
     }
     differenceLayout->addWidget(differenceTable);
+
+    // 页脚：产品、公司与开源仓库入口。
+    bodyLayout()->addSpacing(26);
+    bodyLayout()->addWidget(Ui::separator(false, this));
+    auto *footer = new QWidget(this);
+    auto *footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(0, 16, 0, 4);
+    footerLayout->setSpacing(8);
+    footerLayout->addWidget(
+        Ui::label(Brand::product(), 11, 500, Theme::Text2, footer), 0,
+        Qt::AlignVCenter);
+    footerLayout->addWidget(
+        Ui::label(QStringLiteral("·"), 11, 400, Theme::BorderStrong, footer), 0,
+        Qt::AlignVCenter);
+
+    auto *credit = new QWidget(footer);
+    auto *creditLayout = new QHBoxLayout(credit);
+    creditLayout->setContentsMargins(0, 0, 0, 0);
+    creditLayout->setSpacing(4);
+    creditLayout->addWidget(
+        Ui::label(QStringLiteral("由"), 11, 400, Theme::Text3, credit), 0,
+        Qt::AlignVCenter);
+    auto *company = new LinkLabel(Brand::company(), credit);
+    company->setPixelSize(11);
+    company->setTextColor(Theme::Text3);
+    company->setHoverColor(Theme::Text1);
+    company->setToolTip(QStringLiteral("在浏览器中打开公司官网"));
+    connect(company, &QAbstractButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(Brand::website()));
+    });
+    creditLayout->addWidget(company, 0, Qt::AlignVCenter);
+    creditLayout->addWidget(
+        Ui::label(QStringLiteral("开源发布"), 11, 400, Theme::Text3, credit), 0,
+        Qt::AlignVCenter);
+    footerLayout->addWidget(credit, 0, Qt::AlignVCenter);
+
+    footerLayout->addWidget(
+        Ui::label(QStringLiteral("·"), 11, 400, Theme::BorderStrong, footer), 0,
+        Qt::AlignVCenter);
+    auto *repo = new LinkLabel(QStringLiteral("GitHub 开源仓库"), footer);
+    repo->setPixelSize(11);
+    repo->setTextColor(Theme::Text3);
+    repo->setHoverColor(Theme::Text1);
+    repo->setLeadingGlyph(Icons::Glyph::Github, 12);
+    repo->setToolTip(QStringLiteral("在浏览器中打开 GitHub 开源仓库"));
+    connect(repo, &QAbstractButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(Brand::repo()));
+    });
+    footerLayout->addWidget(repo, 0, Qt::AlignVCenter);
+    footerLayout->addStretch(1);
+    auto *license = Ui::label(Brand::license(), 10, 400, Theme::Text3, footer);
+    license->setFont(Theme::monoFont(10));
+    footerLayout->addWidget(license, 0, Qt::AlignVCenter);
+    bodyLayout()->addWidget(footer);
     bodyLayout()->addStretch(1);
 }

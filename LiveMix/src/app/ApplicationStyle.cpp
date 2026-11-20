@@ -164,18 +164,20 @@ void apply(QApplication &app)
             padding: 5px 8px;
             font-size: 11px;
         }
+        /* 页面滚动条：细窄的浮动胶囊，与窗口外壳融为一体，而不是一条灰色宽轨。 */
         QScrollBar:vertical {
             background: transparent;
-            width: 9px;
-            margin: 2px 1px 2px 1px;
+            width: 10px;
+            margin: 0px;
         }
         QScrollBar::handle:vertical {
             background: #343B4E;
             min-height: 28px;
-            border-radius: 3px;
+            border-radius: 2px;
+            margin: 0px 3px;
         }
         QScrollBar::handle:vertical:hover {
-            background: #465069;
+            background: #4B5368;
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             height: 0px;
@@ -186,16 +188,17 @@ void apply(QApplication &app)
         }
         QScrollBar:horizontal {
             background: transparent;
-            height: 9px;
-            margin: 1px 2px 1px 2px;
+            height: 10px;
+            margin: 0px;
         }
         QScrollBar::handle:horizontal {
             background: #343B4E;
             min-width: 28px;
-            border-radius: 3px;
+            border-radius: 2px;
+            margin: 3px 0px;
         }
         QScrollBar::handle:horizontal:hover {
-            background: #465069;
+            background: #4B5368;
         }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             width: 0px;
