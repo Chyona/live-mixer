@@ -20,6 +20,8 @@
 #include <QPointer>
 #include <QProcess>
 #include <QResizeEvent>
+#include <QScrollArea>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -555,6 +557,48 @@ void MaterialPage::updateDownloadStatus(qint64 sourceId, const QString &text)
     if (auto *card = dynamic_cast<MaterialCard *>(widget)) {
         card->setDownloadStatus(text);
     }
+}
+
+void MaterialPage::revealSource(qint64 sourceId)
+{
+    // 搜索过滤可能把新素材藏起来；定位前清空过滤，确保目标卡片可见。
+    for (const MediaSource &source : m_sources) {
+        if (source.id != sourceId) {
+            continue;
+        }
+        if (!m_filter.isEmpty() && !matchesFilter(source, m_filter)) {
+            m_filter.clear();
+            if (m_searchEdit) {
+                QSignalBlocker blocker(m_searchEdit);
+                m_searchEdit->clear();
+            }
+            applyFilter();
+        }
+        break;
+    }
+
+    QWidget *widget = m_cards.value(sourceId, nullptr);
+    if (!widget) {
+        return;
+    }
+
+    QPointer<QWidget> card(widget);
+    // 卡片刚重建完成时布局尚未生效，等下一轮事件循环再滚动，避免按旧几何定位。
+    QTimer::singleShot(0, this, [this, card] {
+        QWidget *target = card.data();
+        if (!target || target->isHidden()) {
+            return;
+        }
+        if (QWidget *content = scrollArea()->widget()) {
+            if (QLayout *layout = content->layout()) {
+                layout->activate();
+            }
+        }
+        if (m_grid) {
+            m_grid->activate();
+        }
+        scrollArea()->ensureWidgetVisible(target, 0, 16);
+    });
 }
 
 void MaterialPage::rebuildCards()

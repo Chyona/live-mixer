@@ -1211,7 +1211,14 @@ void MainWindow::wireSignals()
     connect(m_material, &MaterialPage::toastRequested, this, &MainWindow::showToast);
 
     connect(m_recording.get(), &RecordingService::sourceAdded, this,
-            [this](qint64) { refreshMaterialLibrary(); });
+            [this](qint64 sourceId) {
+                refreshMaterialLibrary();
+                // 素材真正开始录制/下载后定位到对应卡片；用户已切走时不再打扰。
+                if (m_stack && m_material
+                    && m_stack->currentWidget() == m_material) {
+                    m_material->revealSource(sourceId);
+                }
+            });
     connect(m_recording.get(), &RecordingService::recordingProgress, this,
             [this](qint64 sourceId, qint64 durationMs) {
                 m_material->updateRecordingProgress(sourceId, durationMs);
@@ -1613,8 +1620,13 @@ bool MainWindow::startOnlineRecording(const QString &uri, const QString &title)
         showToast(QStringLiteral("无法开始录制：%1").arg(result.error));
         return false;
     }
+    // 确定后切回视频库并定位到新素材，方便用户查看录制状态。
+    // HTTP 链接要等探测/解析完成才创建素材，届时由 sourceAdded 完成定位。
+    navigateTo(QStringLiteral("material"));
+    if (result.sourceId >= 0) {
+        m_material->revealSource(result.sourceId);
+    }
     showToast(QStringLiteral("已开始获取视频，完成后保存到本地。"));
-    refreshMaterialLibrary();
     return true;
 }
 
