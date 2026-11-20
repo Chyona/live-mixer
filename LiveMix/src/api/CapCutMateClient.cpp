@@ -421,6 +421,13 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
         // 切片文件本身已经裁剪好，start/end 表示在草稿时间轴上的累计位置。
         videoInfo.insert(QStringLiteral("start"), video.startUs);
         videoInfo.insert(QStringLiteral("end"), video.endUs);
+        // 转场由 add_videos 挂在片段与下一段的衔接处；未设置时保持原样。
+        if (!video.transition.trimmed().isEmpty()
+            && video.transitionDurationUs > 0) {
+            videoInfo.insert(QStringLiteral("transition"), video.transition);
+            videoInfo.insert(QStringLiteral("transition_duration"),
+                             video.transitionDurationUs);
+        }
         videoArray.append(videoInfo);
     }
 

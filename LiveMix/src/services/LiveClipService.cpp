@@ -256,6 +256,56 @@ const QStringList &filterTitles()
     return titles;
 }
 
+// 自动成片包装：转场候选池，与 clipflow-ai v3 advanced 模板保持同一份名单。
+const QStringList &transitionTitles()
+{
+    static const QStringList titles = {
+        QStringLiteral("叠化"),     QStringLiteral("叠加"),
+        QStringLiteral("闪黑"),     QStringLiteral("闪白"),
+        QStringLiteral("相片切换"), QStringLiteral("翻页"),
+        QStringLiteral("左移"),     QStringLiteral("立体旋转"),
+        QStringLiteral("右移"),     QStringLiteral("卡片弹出"),
+        QStringLiteral("上下翻页"), QStringLiteral("上移"),
+        QStringLiteral("下移"),     QStringLiteral("旋转圆盘"),
+        QStringLiteral("立体翻转"), QStringLiteral("推近"),
+        QStringLiteral("拉远"),     QStringLiteral("向左"),
+        QStringLiteral("向右"),     QStringLiteral("抖动"),
+        QStringLiteral("吸入"),     QStringLiteral("放射"),
+        QStringLiteral("震动"),     QStringLiteral("向下"),
+        QStringLiteral("向上"),     QStringLiteral("顺时针旋转"),
+        QStringLiteral("逆时针旋转"), QStringLiteral("向右下"),
+        QStringLiteral("向左下"),   QStringLiteral("向下拖拽"),
+        QStringLiteral("向下抖动"), QStringLiteral("旋转震动"),
+        QStringLiteral("扭曲弹动"), QStringLiteral("眨眼"),
+        QStringLiteral("流光"),
+    };
+    return titles;
+}
+
+// 与 v3 模板一致：每个草稿只随机挑一对相邻切片、只用一种转场，时长 800ms。
+// 两段都需长于转场时长，避免转场吞掉过短的片段。
+constexpr qint64 kTransitionDurationUs = 800'000;
+
+// 返回可加转场的左段索引；所有相邻组合都不满足时长时返回 -1。
+int pickTransitionPairIndex(const QVector<CapCutVideoInfo> &videos, qint64 minUs)
+{
+    QVector<int> candidates;
+    for (int i = 0; i + 1 < videos.size(); ++i) {
+        if (videos.at(i).endUs - videos.at(i).startUs <= minUs) {
+            continue;
+        }
+        if (videos.at(i + 1).endUs - videos.at(i + 1).startUs <= minUs) {
+            continue;
+        }
+        candidates.append(i);
+    }
+    if (candidates.isEmpty()) {
+        return -1;
+    }
+    return candidates.at(
+        QRandomGenerator::global()->bounded(int(candidates.size())));
+}
+
 struct CaptionWindow
 {
     int startIndex = 0;
@@ -1374,6 +1424,28 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                  .arg(canvasWidth)
                  .arg(canvasHeight));
 
+    // 自动成片包装：转场与 v3 模板一致——每个草稿随机挑一对相邻切片，
+    // 只写一种转场；转场挂在左段上，随 add_videos 一次性写入主轨。
+    QStringList packagingDetails;
+    QString transitionTitle;
+    if (m_request.transitions) {
+        const int pairIndex =
+            pickTransitionPairIndex(videos, kTransitionDurationUs);
+        if (pairIndex >= 0) {
+            const QStringList &titles = transitionTitles();
+            transitionTitle = titles.at(
+                QRandomGenerator::global()->bounded(int(titles.size())));
+            CapCutVideoInfo &left = videos[pairIndex];
+            left.transition = transitionTitle;
+            left.transitionDurationUs = kTransitionDurationUs;
+            qInfo() << "Video transition:" << transitionTitle << "between clip"
+                    << pairIndex + 1 << "and" << pairIndex + 2;
+        } else {
+            qInfo() << "Video transition skipped: no adjacent clip pair longer than"
+                    << kTransitionDurationUs << "us";
+        }
+    }
+
     stepClock.restart();
     emitStep(3, PipelineUi::StepStatus::Running, 0,
              QStringLiteral("写入 %1 个视频片段").arg(videos.size()));
@@ -1381,11 +1453,14 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         emitFailure(3, QStringLiteral("添加切片资源失败"));
         return false;
     }
+    if (!transitionTitle.isEmpty()) {
+        packagingDetails.append(
+            QStringLiteral("转场「%1」").arg(transitionTitle));
+    }
 
     // 自动成片包装：按「成片设置」开关写特效/滤镜轨，手法与 v3 模板一致——
     // 特效贴着解说节奏选一段字幕窗口，滤镜以很低的强度覆盖整条时间轴。
     // 写入失败不阻断草稿（用户仍可在剪映中调整），只在步骤详情里提示。
-    QStringList packagingDetails;
     if (m_request.effects || m_request.filters) {
         emitStep(3, PipelineUi::StepStatus::Running, 85,
                  QStringLiteral("正在叠加自动包装"));

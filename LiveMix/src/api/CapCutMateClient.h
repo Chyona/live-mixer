@@ -1,7 +1,7 @@
 #pragma once
 
 // 文件作用：剪映小助手（capcut-mate）接口客户端。
-// 负责文件上传、创建草稿、添加视频 / 字幕 / 滤镜 / 特效，以及点击
+// 负责文件上传、创建草稿、添加视频（含转场）/ 字幕 / 滤镜 / 特效，以及点击
 // 「打开草稿文件夹」时的草稿下载。
 
 #include "../services/DraftDownloadJob.h"
@@ -15,11 +15,14 @@
 class HttpClient;
 
 // 草稿时间轴上的一段视频；start/end 为拼接后的累计时间（微秒）。
+// 转场挂在相邻两段中的前一段上，由 add_videos 在该片段与下一段之间渲染。
 struct CapCutVideoInfo
 {
     QString url;
     qint64 startUs = 0;
     qint64 endUs = 0;
+    QString transition;
+    qint64 transitionDurationUs = 0;
 };
 
 // 草稿时间轴上的一段视频特效；title 须为剪映支持的特效名称。
