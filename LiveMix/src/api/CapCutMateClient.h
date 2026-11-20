@@ -1,7 +1,8 @@
 #pragma once
 
 // 文件作用：剪映小助手（capcut-mate）接口客户端。
-// 负责文件上传、创建草稿、添加视频与字幕，以及点击「打开草稿文件夹」时的草稿下载。
+// 负责文件上传、创建草稿、添加视频 / 字幕 / 滤镜 / 特效，以及点击
+// 「打开草稿文件夹」时的草稿下载。
 
 #include "../services/DraftDownloadJob.h"
 
@@ -19,6 +20,23 @@ struct CapCutVideoInfo
     QString url;
     qint64 startUs = 0;
     qint64 endUs = 0;
+};
+
+// 草稿时间轴上的一段视频特效；title 须为剪映支持的特效名称。
+struct CapCutEffectInfo
+{
+    QString title;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+};
+
+// 覆盖一段时间的滤镜；intensity 为 0–100，越低越淡。
+struct CapCutFilterInfo
+{
+    QString title;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+    double intensity = 100.0;
 };
 
 struct CapCutCaption
@@ -95,6 +113,14 @@ public:
 
     bool addCaptions(const QString &draftUrl, const QVector<CapCutCaption> &captions,
                      const CapCutCaptionStyle &style, QString *error);
+
+    // 添加视频特效轨（add_effects）；每条特效覆盖自己的时间窗。
+    bool addEffects(const QString &draftUrl, const QVector<CapCutEffectInfo> &effects,
+                    QString *error);
+
+    // 添加滤镜轨（add_filters）；一条滤镜可覆盖整条成片时间轴。
+    bool addFilters(const QString &draftUrl, const QVector<CapCutFilterInfo> &filters,
+                    QString *error);
 
     // 云端合成成片：提交 gen_video 后通过 gen_video_status 轮询。
     bool genVideo(const QString &draftUrl, const QString &apiKey, QString *error);

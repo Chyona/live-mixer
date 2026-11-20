@@ -191,6 +191,107 @@ CapCutCaptionStyle randomCaptionStyle()
     return presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
 }
 
+// 自动成片包装：特效候选池（名称与剪映桌面端一致）及各自的时长约束。
+// 与 clipflow-ai v3 advanced 模板保持同一份名单。
+struct EffectPreset
+{
+    const char *title;
+    qint64 minUs = 3'000'000;
+    qint64 maxUs = 5'000'000;
+};
+
+const QVector<EffectPreset> &effectPresets()
+{
+    static const QVector<EffectPreset> presets = {
+        {"发光 II"},
+        {"ktv灯光"},
+        {"三格漫画"},
+        {"人鱼滤镜"},
+        {"仙女变身 II"},
+        {"夸夸弹幕"},
+        {"小花花"},
+        {"少女心"},
+        {"少女星闪"},
+        {"庆祝彩带"},
+        {"彩虹射线"},
+        {"抖动"},
+        {"撒星星"},
+        {"撒星星 II"},
+        {"撕纸涂鸦边框"},
+        {"星光"},
+        {"星光 II"},
+        {"星光绽放"},
+        {"星星闪烁"},
+        {"星雨"},
+        {"暗角"},
+        {"变清晰"},
+        {"镜像"},
+        {"录制边框 II"},
+        {"录制边框 III"},
+        {"录制边框 IIII"},
+        {"简约边框"},
+        {"手绘拍摄器"},
+        {"白色线框"},
+        {"秋日暖黄"},
+        {"渐渐放大"},
+        // 闪光类特效只停留一瞬，缩短时长避免盖住整句解说。
+        {"咔嚓", 100'000, 1'000'000},
+        {"温柔细闪"},
+        {"细闪 II"},
+        {"星夜"},
+    };
+    return presets;
+}
+
+// 自动成片包装：滤镜候选池，与 v3 模板一致。
+const QStringList &filterTitles()
+{
+    static const QStringList titles = {
+        QStringLiteral("画质高清"), QStringLiteral("清透感"),
+        QStringLiteral("电影镜头"), QStringLiteral("电影画质"),
+        QStringLiteral("电影柔光"), QStringLiteral("电影感增强"),
+        QStringLiteral("电影光感"), QStringLiteral("甜妹感"),
+        QStringLiteral("漫空"),     QStringLiteral("港风夜景"),
+    };
+    return titles;
+}
+
+struct CaptionWindow
+{
+    int startIndex = 0;
+    int endIndex = 0;
+};
+
+// 与 v3 的 select_random_effect_time_range_us 一致：在字幕时间轴上枚举所有
+// 时长落在 [minUs, maxUs] 的连续窗口并随机挑一段，让特效贴着解说节奏出现。
+// 没有满足条件的窗口时跳过本次特效。
+bool pickRandomEffectWindow(const QVector<CapCutCaption> &captions, qint64 minUs,
+                            qint64 maxUs, qint64 *startUs, qint64 *endUs)
+{
+    QVector<CaptionWindow> windows;
+    for (int start = 0; start < captions.size(); ++start) {
+        for (int end = start; end < captions.size(); ++end) {
+            const qint64 spanUs =
+                captions.at(end).endUs - captions.at(start).startUs;
+            if (spanUs < minUs) {
+                continue;
+            }
+            if (spanUs > maxUs) {
+                break;
+            }
+            windows.append({start, end});
+        }
+    }
+    if (windows.isEmpty()) {
+        return false;
+    }
+    const CaptionWindow window =
+        windows.at(QRandomGenerator::global()->bounded(int(windows.size())));
+    *startUs = captions.at(window.startIndex).startUs;
+    *endUs = captions.at(window.endIndex).endUs;
+    return true;
+}
+
 // 单行字幕最多 15 个字；英文译文跟随中文字幕，不预折行，
 // 过长时由剪映自动换行。
 constexpr int kCaptionMaxLineChars = 15;
@@ -1280,8 +1381,63 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         emitFailure(3, QStringLiteral("添加切片资源失败"));
         return false;
     }
-    emitStep(3, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("%1 个视频片段已写入主轨").arg(videos.size()));
+
+    // 自动成片包装：按「成片设置」开关写特效/滤镜轨，手法与 v3 模板一致——
+    // 特效贴着解说节奏选一段字幕窗口，滤镜以很低的强度覆盖整条时间轴。
+    // 写入失败不阻断草稿（用户仍可在剪映中调整），只在步骤详情里提示。
+    QStringList packagingDetails;
+    if (m_request.effects || m_request.filters) {
+        emitStep(3, PipelineUi::StepStatus::Running, 85,
+                 QStringLiteral("正在叠加自动包装"));
+    }
+    if (m_request.effects) {
+        const QVector<EffectPreset> &presets = effectPresets();
+        const EffectPreset preset =
+            presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
+        qint64 effectStartUs = 0;
+        qint64 effectEndUs = 0;
+        if (pickRandomEffectWindow(captions, preset.minUs, preset.maxUs,
+                                   &effectStartUs, &effectEndUs)) {
+            const QString title = QString::fromUtf8(preset.title);
+            QString effectError;
+            const QVector<CapCutEffectInfo> effects = {
+                {title, effectStartUs, effectEndUs},
+            };
+            if (capcut->addEffects(draft.draftUrl, effects, &effectError)) {
+                packagingDetails.append(QStringLiteral("特效「%1」").arg(title));
+            } else {
+                qWarning() << "Video effect skipped:" << effectError;
+                packagingDetails.append(QStringLiteral("特效未写入"));
+            }
+        } else {
+            qInfo() << "Video effect skipped: no caption window between"
+                    << preset.minUs << "and" << preset.maxUs << "us";
+        }
+    }
+    if (m_request.filters && offsetMs > 0) {
+        const QStringList &titles = filterTitles();
+        const QString title =
+            titles.at(QRandomGenerator::global()->bounded(int(titles.size())));
+        // 强度沿用 v3 模板的 1–30，给成片一层很淡的统一色调。
+        const double intensity = QRandomGenerator::global()->bounded(1, 31);
+        QString filterError;
+        const QVector<CapCutFilterInfo> filters = {
+            {title, 0, offsetMs * 1000, intensity},
+        };
+        if (capcut->addFilters(draft.draftUrl, filters, &filterError)) {
+            packagingDetails.append(QStringLiteral("滤镜「%1」").arg(title));
+        } else {
+            qWarning() << "Video filter skipped:" << filterError;
+            packagingDetails.append(QStringLiteral("滤镜未写入"));
+        }
+    }
+
+    QString videoDetail = QStringLiteral("%1 个视频片段已写入主轨").arg(videos.size());
+    if (!packagingDetails.isEmpty()) {
+        videoDetail += QStringLiteral(" · ")
+            + packagingDetails.join(QStringLiteral(" · "));
+    }
+    emitStep(3, PipelineUi::StepStatus::Done, 100, videoDetail);
 
     stepClock.restart();
     emitStep(4, PipelineUi::StepStatus::Running, 0,
