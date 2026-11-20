@@ -15,16 +15,20 @@ bool revealDraftFolder(const QString &path);
 // 在系统文件管理器中定位任意文件或目录（成片 MP4、导出目录等）。
 bool revealPath(const QString &path);
 
-// 动作文案：macOS「在 Finder 中显示」，Windows「打开草稿文件夹」。
-QString revealLabel();
+// 草稿导出完成后的动作文案与提示：
+// 统一写作「打开草稿文件夹」，避免被误解为直接打开剪映。
+QString openDraftFolderText();
+// 在访达 / 资源管理器中打开剪映草稿文件夹；
+// withDraftHint 为 true 时补充「可在剪映中打开该草稿继续编辑」。
+QString openDraftFolderHint(bool withDraftHint = false);
+// 打开草稿文件夹后的 Toast，例如：
+// 已在访达中打开剪映草稿文件夹，可在剪映中打开「2026...」继续编辑
+QString draftFolderOpenedMessage(const QString &draftName);
 
 // 成片动作文案：macOS「在访达中显示」，Windows「在资源管理器中显示」。
 QString revealPathLabel();
 
 // 打开目录的动作文案：macOS「在访达中打开」，Windows「在资源管理器中打开」。
 QString openFolderLabel();
-
-// 完成提示：与 revealDraftFolder 的实际行为保持一致。
-QString revealDoneMessage(const QString &draftTitle);
 
 } // namespace FileManager
