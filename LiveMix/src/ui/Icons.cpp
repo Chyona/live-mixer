@@ -67,6 +67,8 @@ const char *sourceFor(Glyph glyph)
         return R"(<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M20 4L8.5 15.5M20 20L8.5 8.5"/>)";
     case Glyph::Subtitles:
         return R"(<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h4M13 12h4M7 16h7"/>)";
+    case Glyph::Shield:
+        return R"(<path d="M12 3l7 3v5c0 4.6-3 8.1-7 10-4-1.9-7-5.4-7-10V6z"/><path d="M9 11.5l2 2 4-4"/>)";
     case Glyph::Sparkle:
         return R"(<path d="M12 2.5l2.05 6.45L20.5 11l-6.45 2.05L12 19.5l-2.05-6.45L3.5 11l6.45-2.05z" fill="COLOR" stroke="none"/>)";
     case Glyph::Cloud:

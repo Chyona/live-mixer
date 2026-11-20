@@ -825,7 +825,7 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         QStringLiteral("自动添加视频转场"), QStringLiteral("自动添加特效"),
         QStringLiteral("自动添加滤镜"),     QStringLiteral("自动添加贴纸"),
         QStringLiteral("自动添加 BGM"),      QStringLiteral("自动添加音效"),
-        QStringLiteral("中英文双字幕"),
+        QStringLiteral("中英文双字幕"),     QStringLiteral("平台去重"),
     };
     const QStringList toggleHints = {
         QStringLiteral("在片段衔接处加入自然转场，避免生硬跳切。"),
@@ -835,21 +835,26 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         QStringLiteral("按内容情绪匹配背景音乐，人声段自动压低音量。"),
         QStringLiteral("在转场与重点动作处补充音效，增强节奏感。"),
         QStringLiteral("在中文字幕下方同步展示英文译文，便于发布到海外平台。"),
+        QStringLiteral("以专业手法重新处理成片，降低与源素材的相似度，"
+                       "避免抖音等平台判重。"),
     };
     const QVector<bool> toggleValues = {
         config.finish.transitions, config.finish.effects,
         config.finish.filters,     config.finish.stickers,
         config.finish.bgm,         config.finish.sfx,
-        config.finish.bilingualSubtitles,
+        config.finish.bilingualSubtitles, config.finish.dedup,
     };
-    // 「恢复默认」与设计稿一致：六项自动包装默认开启，中英文双字幕默认关闭。
-    const QVector<bool> toggleDefaults = {true, true, true, true, true, true, false};
+    // 「恢复默认」与设计稿一致：除中英文双字幕默认关闭外，其余开关默认开启。
+    const QVector<bool> toggleDefaults = {true, true, true, true, true, true, false,
+                                          true};
     QVector<ToggleRow *> visualRows;
     QVector<ToggleRow *> audioRows;
     QVector<ToggleRow *> subtitleRows;
+    QVector<ToggleRow *> dedupeRows;
     QVector<Switch *> visualSwitches;
     QVector<Switch *> audioSwitches;
     QVector<Switch *> subtitleSwitches;
+    QVector<Switch *> dedupeSwitches;
     for (int i = 0; i < toggleTitles.size(); ++i) {
         auto *row = new ToggleRow(toggleTitles.at(i), toggleHints.at(i),
                                   toggleValues.at(i));
@@ -861,9 +866,12 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         } else if (i < 6) {
             audioRows.append(row);
             audioSwitches.append(sw);
-        } else {
+        } else if (i == 6) {
             subtitleRows.append(row);
             subtitleSwitches.append(sw);
+        } else {
+            dedupeRows.append(row);
+            dedupeSwitches.append(sw);
         }
     }
 
@@ -873,6 +881,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     audioMeta->setFont(Theme::monoFont(10));
     auto *subtitleMeta = Ui::label(QString(), 10, 400, Theme::Text3);
     subtitleMeta->setFont(Theme::monoFont(10));
+    auto *dedupeMeta = Ui::label(QString(), 10, 400, Theme::Text3);
+    dedupeMeta->setFont(Theme::monoFont(10));
 
     auto *visualGroup = new SettingsGroup(Icons::Glyph::Eye, QStringLiteral("画面"),
                                           visualMeta, 0, finishPane.content);
@@ -897,6 +907,15 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         subtitleGroup->bodyLayout()->addWidget(subtitleRows.at(i));
         if (i < subtitleRows.size() - 1) {
             subtitleGroup->bodyLayout()->addWidget(Ui::separator(false));
+        }
+    }
+    auto *dedupeGroup =
+        new SettingsGroup(Icons::Glyph::Shield, QStringLiteral("去重"), dedupeMeta, 0,
+                          finishPane.content);
+    for (int i = 0; i < dedupeRows.size(); ++i) {
+        dedupeGroup->bodyLayout()->addWidget(dedupeRows.at(i));
+        if (i < dedupeRows.size() - 1) {
+            dedupeGroup->bodyLayout()->addWidget(Ui::separator(false));
         }
     }
 
@@ -998,6 +1017,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     finishLayout->addSpacing(12);
     finishLayout->addWidget(speedGroup);
     finishLayout->addSpacing(12);
+    finishLayout->addWidget(dedupeGroup);
+    finishLayout->addSpacing(12);
     finishLayout->addWidget(durationGroup);
     finishLayout->addStretch(1);
     stack->addWidget(finishPane.scroll);
@@ -1031,8 +1052,9 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         }
         return count;
     };
-    auto updateGroupMeta = [visualMeta, audioMeta, subtitleMeta, visualSwitches,
-                            audioSwitches, subtitleSwitches, countEnabled] {
+    auto updateGroupMeta = [visualMeta, audioMeta, subtitleMeta, dedupeMeta,
+                            visualSwitches, audioSwitches, subtitleSwitches,
+                            dedupeSwitches, countEnabled] {
         const int visualCount = countEnabled(visualSwitches);
         const int audioCount = countEnabled(audioSwitches);
         const int subtitleCount = countEnabled(subtitleSwitches);
@@ -1060,6 +1082,13 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
                 .arg((subtitleCount == subtitleSwitches.size() ? Theme::Success
                                                                : Theme::Text3)
                          .name()));
+        const bool dedupeOn =
+            !dedupeSwitches.isEmpty() && dedupeSwitches.first()->isChecked();
+        dedupeMeta->setText(dedupeOn ? QStringLiteral("已开启")
+                                     : QStringLiteral("已关闭"));
+        dedupeMeta->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;")
+                .arg((dedupeOn ? Theme::Success : Theme::Text3).name()));
     };
 
     // 「恢复默认」：与分组卡片同宽的小号幽灵按钮。
@@ -1361,7 +1390,7 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
                                                   : updated.ai.defaultPrompt;
         updated.ai.exportSrt = subtitleCheck->isChecked();
 
-        if (finishSwitches.size() == 7) {
+        if (finishSwitches.size() == 8) {
             updated.finish.transitions = finishSwitches[0]->isChecked();
             updated.finish.effects = finishSwitches[1]->isChecked();
             updated.finish.filters = finishSwitches[2]->isChecked();
@@ -1369,6 +1398,7 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
             updated.finish.bgm = finishSwitches[4]->isChecked();
             updated.finish.sfx = finishSwitches[5]->isChecked();
             updated.finish.bilingualSubtitles = finishSwitches[6]->isChecked();
+            updated.finish.dedup = finishSwitches[7]->isChecked();
         }
         updated.finish.speedAuto = autoButton->isSelected();
         updated.finish.fixedSpeed = speedSlider->value();

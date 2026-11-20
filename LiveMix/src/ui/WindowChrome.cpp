@@ -639,11 +639,16 @@ PageHeader::PageHeader(const QString &title, const QString &descriptionHtml, QWi
 
     m_title = Ui::label(title, 17, 650, Theme::Text1);
     m_title->setMinimumHeight(26);
+    m_titleRow = new QHBoxLayout;
+    m_titleRow->setContentsMargins(0, 0, 0, 0);
+    m_titleRow->setSpacing(10);
+    m_titleRow->addWidget(m_title, 0, Qt::AlignVCenter);
+    m_titleRow->addStretch(1);
     m_description = Ui::richLabel(descriptionHtml, 12, Theme::Text2);
     m_description->setMinimumHeight(19);
     m_description->setWordWrap(true);
     m_description->setVisible(!descriptionHtml.isEmpty());
-    titles->addWidget(m_title);
+    titles->addLayout(m_titleRow);
     titles->addWidget(m_description);
 
     root->addLayout(titles, 1);
@@ -659,6 +664,15 @@ PageHeader::PageHeader(const QString &title, const QString &descriptionHtml, QWi
 void PageHeader::setTitle(const QString &title)
 {
     m_title->setText(title);
+}
+
+void PageHeader::setTitleMeta(QWidget *widget)
+{
+    if (!m_titleRow || !widget) {
+        return;
+    }
+    // 放在标题与末尾的弹性空白之间，紧贴标题。
+    m_titleRow->insertWidget(1, widget, 0, Qt::AlignVCenter);
 }
 
 void PageHeader::setDescription(const QString &descriptionHtml)

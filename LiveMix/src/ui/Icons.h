@@ -35,6 +35,7 @@ enum class Glyph {
     Doc,
     Scissors,
     Subtitles,
+    Shield,
     Sparkle,
     Cloud,
     Clock,

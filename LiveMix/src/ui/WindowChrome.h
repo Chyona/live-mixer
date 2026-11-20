@@ -67,12 +67,15 @@ public:
                QWidget *parent = nullptr);
 
     void setTitle(const QString &title);
+    // 标题右侧的小标记（如成片生成时间）；传入的对象归页头所有。
+    void setTitleMeta(QWidget *widget);
     void setDescription(const QString &descriptionHtml);
     QHBoxLayout *actionsLayout() const { return m_actionsLayout; }
     void addAction(QWidget *widget);
 
 private:
     QLabel *m_title = nullptr;
+    QHBoxLayout *m_titleRow = nullptr;
     QLabel *m_description = nullptr;
     QHBoxLayout *m_actionsLayout = nullptr;
 };

@@ -7,6 +7,7 @@
 #include "../ui/Icons.h"
 
 #include <QClipboard>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
@@ -115,6 +116,95 @@ QLabel *tagLabel(const QString &text, QWidget *parent)
     tag->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     tag->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     return tag;
+}
+
+// 小尺寸矢量图标标签，用于生成时间标记。
+QLabel *glyphLabel(Icons::Glyph glyph, int size, const QColor &color, QWidget *parent)
+{
+    constexpr qreal kPixelRatio = 2.0;
+    QPixmap pixmap(qRound(size * kPixelRatio), qRound(size * kPixelRatio));
+    pixmap.setDevicePixelRatio(kPixelRatio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    Icons::paint(&painter, QRectF(0, 0, size, size), glyph, color, 2.0);
+    painter.end();
+
+    auto *label = new QLabel(parent);
+    label->setPixmap(pixmap);
+    label->setFixedSize(size, size);
+    label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    return label;
+}
+
+constexpr qint64 kGenerationMinuteMs = 60 * 1000;
+
+QString generationClock(const QDateTime &date)
+{
+    return date.toString(QStringLiteral("HH:mm:ss"));
+}
+
+// 成片生成时间：精确到秒，越近越详细（刚刚 → 今天 → 昨天 → 前天 → N 天前 →
+// 月日 → 年月日），与设计稿的页头 / 卡片共用同一套文案。
+QString formatGenerationTime(qint64 timestampMs)
+{
+    if (timestampMs <= 0) {
+        return QString();
+    }
+    const QDateTime date = QDateTime::fromMSecsSinceEpoch(timestampMs);
+    const QDateTime now = QDateTime::currentDateTime();
+    const QString clock = generationClock(date);
+    const qint64 elapsed = now.toMSecsSinceEpoch() - timestampMs;
+
+    if (elapsed >= 0 && elapsed < kGenerationMinuteMs) {
+        return QStringLiteral("刚刚 · %1").arg(clock);
+    }
+
+    const int dayDiff = date.date().daysTo(now.date());
+    if (dayDiff <= 0) {
+        return QStringLiteral("今天 %1").arg(clock);
+    }
+    if (dayDiff == 1) {
+        return QStringLiteral("昨天 %1").arg(clock);
+    }
+    if (dayDiff == 2) {
+        return QStringLiteral("前天 %1").arg(clock);
+    }
+    if (dayDiff < 7) {
+        return QStringLiteral("%1 天前 %2").arg(dayDiff).arg(clock);
+    }
+    if (date.date().year() == now.date().year()) {
+        return QStringLiteral("%1月%2日 %3")
+            .arg(date.date().month())
+            .arg(date.date().day())
+            .arg(clock);
+    }
+    return QStringLiteral("%1年%2月%3日 %4")
+        .arg(date.date().year())
+        .arg(date.date().month())
+        .arg(date.date().day())
+        .arg(clock);
+}
+
+QString formatGenerationFullTime(qint64 timestampMs)
+{
+    const QDateTime date = QDateTime::fromMSecsSinceEpoch(timestampMs);
+    return QStringLiteral("%1年%2月%3日 %4")
+        .arg(date.date().year())
+        .arg(date.date().month())
+        .arg(date.date().day())
+        .arg(generationClock(date));
+}
+
+bool isFreshGeneration(const QString &label)
+{
+    return label.startsWith(QStringLiteral("刚刚"));
+}
+
+QString generationValueStyle(const QString &label)
+{
+    return QStringLiteral("color:%1;background:transparent;")
+        .arg((isFreshGeneration(label) ? Theme::Success : Theme::Text1).name());
 }
 
 void setButtonState(Button *button, const QString &text, Button::Variant variant,
@@ -306,6 +396,41 @@ public:
             }
         };
 
+        // 生成时间标记：信息区顶部整行，精确到秒，悬停查看完整时间。
+        m_generatedAtBar = new QWidget(body);
+        m_generatedAtBar->setObjectName(QStringLiteral("generationTimeBar"));
+        m_generatedAtBar->setAttribute(Qt::WA_StyledBackground, true);
+        m_generatedAtBar->setStyleSheet(
+            QStringLiteral("#generationTimeBar{background:%1;border-radius:5px;}")
+                .arg(Theme::Surface2.name()));
+        m_generatedAtBar->setFixedHeight(20);
+        m_generatedAtBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto *generationLayout = new QHBoxLayout(m_generatedAtBar);
+        generationLayout->setContentsMargins(8, 1, 8, 1);
+        generationLayout->setSpacing(6);
+        generationLayout->addWidget(
+            glyphLabel(Icons::Glyph::Clock, 12, Theme::Text3, m_generatedAtBar), 0,
+            Qt::AlignVCenter);
+        generationLayout->addWidget(
+            Ui::label(QStringLiteral("生成时间"), 11, 400, Theme::Text3,
+                      m_generatedAtBar),
+            0, Qt::AlignVCenter);
+        m_generatedAtValue = new ElidedLabel(QString(), m_generatedAtBar);
+        m_generatedAtValue->setPixelSize(11);
+        m_generatedAtValue->setFontWeight(QFont::Medium);
+        m_generatedAtValue->setMonoFont(true);
+        m_generatedAtValue->setTextColor(Theme::Text1);
+        generationLayout->addWidget(m_generatedAtValue, 1, Qt::AlignVCenter);
+        // 外层承载条与下间距，隐藏时整块收起，不留下空白。
+        m_generatedAtHost = new QWidget(body);
+        auto *generationHostLayout = new QVBoxLayout(m_generatedAtHost);
+        generationHostLayout->setContentsMargins(0, 0, 0, 0);
+        generationHostLayout->setSpacing(0);
+        generationHostLayout->addWidget(m_generatedAtBar);
+        generationHostLayout->addSpacing(8);
+        m_generatedAtHost->hide();
+        layout->addWidget(m_generatedAtHost);
+
         const QString themeText =
             QStringLiteral("%1 · %2")
                 .arg(index + 1, 2, 10, QLatin1Char('0'))
@@ -413,6 +538,18 @@ public:
     {
         m_openDraftBatch = std::move(draftBatch);
         m_openVideoBatch = std::move(videoBatch);
+    }
+
+    // 同一批成片共享页头的批次时间；时间戳为 0 时隐藏标记。
+    void setGeneratedAt(qint64 timestampMs)
+    {
+        const QString label = formatGenerationTime(timestampMs);
+        m_generatedAtValue->setText(label);
+        m_generatedAtValue->setTextColor(isFreshGeneration(label) ? Theme::Success
+                                                                 : Theme::Text1);
+        m_generatedAtBar->setToolTip(
+            QStringLiteral("生成时间：%1").arg(formatGenerationFullTime(timestampMs)));
+        m_generatedAtHost->setVisible(!label.isEmpty());
     }
 
     void setState(const State &state)
@@ -647,6 +784,9 @@ private:
     std::function<void()> m_openVideoBatch;
 
     MediaThumbnail *m_thumb = nullptr;
+    QWidget *m_generatedAtHost = nullptr;
+    QWidget *m_generatedAtBar = nullptr;
+    ElidedLabel *m_generatedAtValue = nullptr;
     QWidget *m_buttonRow = nullptr;
     Button *m_draftButton = nullptr;
     Button *m_videoButton = nullptr;
@@ -665,6 +805,32 @@ ResultsPage::ResultsPage(QWidget *parent)
     m_header = new PageHeader(
         QStringLiteral("AI 成片结果"),
         QStringLiteral("完成一键成片后，每条切片会在这里显示为一条剪映草稿。"), this);
+
+    // 标题旁的生成时间标记：与卡片信息区顶部共用批次时间与文案。
+    m_generationBadge = new QWidget(this);
+    m_generationBadge->setObjectName(QStringLiteral("generationTimeBadge"));
+    m_generationBadge->setAttribute(Qt::WA_StyledBackground, true);
+    m_generationBadge->setStyleSheet(
+        QStringLiteral("#generationTimeBadge{background:%1;border:1px solid %2;"
+                       "border-radius:6px;}")
+            .arg(Theme::Surface2.name(), Theme::Border.name()));
+    m_generationBadge->setFixedHeight(22);
+    m_generationBadge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto *generationLayout = new QHBoxLayout(m_generationBadge);
+    generationLayout->setContentsMargins(8, 0, 8, 0);
+    generationLayout->setSpacing(6);
+    generationLayout->addWidget(
+        glyphLabel(Icons::Glyph::Clock, 12, Theme::Text3, m_generationBadge), 0,
+        Qt::AlignVCenter);
+    generationLayout->addWidget(
+        Ui::label(QStringLiteral("生成时间"), 11, 400, Theme::Text2,
+                  m_generationBadge),
+        0, Qt::AlignVCenter);
+    m_generationValue = Ui::label(QString(), 11, 400, Theme::Text1, m_generationBadge);
+    m_generationValue->setFont(Theme::monoFont(11, QFont::Medium));
+    generationLayout->addWidget(m_generationValue, 0, Qt::AlignVCenter);
+    m_generationBadge->hide();
+    m_header->setTitleMeta(m_generationBadge);
 
     m_batchButton = new Button(QStringLiteral("批量选择"), Button::Default, this);
     m_batchButton->setLeadingGlyph(Icons::Glyph::Batch);
@@ -747,6 +913,13 @@ ResultsPage::ResultsPage(QWidget *parent)
         }
     });
 
+    // 「刚刚」会过期、跨天文案会变化，相对标签每 10 秒刷新一次。
+    auto *generationTimer = new QTimer(this);
+    generationTimer->setInterval(10000);
+    connect(generationTimer, &QTimer::timeout, this,
+            &ResultsPage::updateGenerationTimes);
+    generationTimer->start();
+
     updateHeader();
 }
 
@@ -826,6 +999,7 @@ void ResultsPage::setDrafts(const QVector<ClipDraft> &drafts)
     m_gridHost->setVisible(!drafts.isEmpty());
     refreshAllCards();
     updateHeader();
+    updateGenerationTimes();
     updateSelectionBar();
 }
 
@@ -1063,6 +1237,28 @@ void ResultsPage::updateHeader()
         m_batchButton->setToolTip(
             canSelect ? QStringLiteral("选择多个草稿一次导入剪映或导出成片")
                       : QStringLiteral("所有草稿与成片均已完成或正在导出"));
+    }
+}
+
+void ResultsPage::updateGenerationTimes()
+{
+    // 最新一条草稿的创建时刻即本批成片的生成时间。
+    qint64 generatedAtMs = 0;
+    for (const ClipDraft &draft : m_drafts) {
+        generatedAtMs = qMax(generatedAtMs, draft.createdAtMs);
+    }
+
+    if (m_generationBadge && m_generationValue) {
+        const QString label = formatGenerationTime(generatedAtMs);
+        m_generationValue->setText(label);
+        m_generationValue->setStyleSheet(generationValueStyle(label));
+        m_generationBadge->setToolTip(
+            QStringLiteral("生成时间：%1").arg(formatGenerationFullTime(generatedAtMs)));
+        m_generationBadge->setVisible(!label.isEmpty());
+    }
+
+    for (DraftCard *card : m_cards) {
+        card->setGeneratedAt(generatedAtMs);
     }
 }
 

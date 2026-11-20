@@ -70,6 +70,8 @@ private:
     void refreshCard(qint64 draftRowId);
     void refreshAllCards();
     void updateHeader();
+    // 页头与全部卡片共用一个批次生成时间；相对标签每 10 秒刷新。
+    void updateGenerationTimes();
     void pruneSelection();
     void updateSelectionBar();
 
@@ -85,6 +87,8 @@ private:
     void positionSelectionBar();
 
     PageHeader *m_header = nullptr;
+    QWidget *m_generationBadge = nullptr;
+    QLabel *m_generationValue = nullptr;
     Button *m_batchButton = nullptr;
     QWidget *m_gridHost = nullptr;
     QGridLayout *m_grid = nullptr;
