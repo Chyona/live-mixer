@@ -674,6 +674,15 @@ void LinkLabel::setLeadingGlyph(Icons::Glyph glyph, int size)
     update();
 }
 
+void LinkLabel::setTrailingGlyph(Icons::Glyph glyph, int size)
+{
+    m_hasTrailingGlyph = true;
+    m_trailingGlyph = glyph;
+    m_trailingGlyphSize = qMax(1, size);
+    updateGeometry();
+    update();
+}
+
 void LinkLabel::setUnderlineOnHover(bool underline)
 {
     m_underlineOnHover = underline;
@@ -685,8 +694,12 @@ QSize LinkLabel::sizeHint() const
     const QFontMetrics metrics(m_mono ? Theme::monoFont(m_pixelSize)
                                       : Theme::font(m_pixelSize));
     const int glyphPart = m_hasGlyph ? m_glyphSize + 4 : 0;
-    return QSize(metrics.horizontalAdvance(text()) + glyphPart + 2,
-                 qMax(metrics.height(), m_hasGlyph ? m_glyphSize : 0) + 3);
+    const int trailingPart = m_hasTrailingGlyph ? m_trailingGlyphSize + 4 : 2;
+    return QSize(metrics.horizontalAdvance(text()) + glyphPart + trailingPart,
+                 qMax(metrics.height(),
+                      qMax(m_hasGlyph ? m_glyphSize : 0,
+                           m_hasTrailingGlyph ? m_trailingGlyphSize : 0))
+                     + 3);
 }
 
 void LinkLabel::paintEvent(QPaintEvent *)
@@ -704,9 +717,17 @@ void LinkLabel::paintEvent(QPaintEvent *)
                      QRectF(0, (height() - m_glyphSize) / 2.0, m_glyphSize, m_glyphSize),
                      m_glyph, color, 2.0);
     }
+    const int trailingPart = m_hasTrailingGlyph ? m_trailingGlyphSize + 4 : 0;
+    if (m_hasTrailingGlyph) {
+        Icons::paint(&painter,
+                     QRectF(width() - m_trailingGlyphSize,
+                            (height() - m_trailingGlyphSize) / 2.0,
+                            m_trailingGlyphSize, m_trailingGlyphSize),
+                     m_trailingGlyph, color, 2.0);
+    }
     painter.setFont(f);
     painter.setPen(color);
-    painter.drawText(QRect(glyphPart, 0, width() - glyphPart, height()),
+    painter.drawText(QRect(glyphPart, 0, width() - glyphPart - trailingPart, height()),
                      Qt::AlignLeft | Qt::AlignVCenter, text());
 }
 
@@ -1912,15 +1933,16 @@ FormField::FormField(const QString &labelText, QWidget *content, const QString &
     root->setSpacing(0);
 
     auto *labelRow = new QWidget(this);
-    auto *labelLayout = new QHBoxLayout(labelRow);
-    labelLayout->setContentsMargins(0, 0, 0, 8);
-    labelLayout->setSpacing(3);
-    labelLayout->addWidget(Ui::label(labelText, 12, 400, Theme::Text2, labelRow));
+    m_labelLayout = new QHBoxLayout(labelRow);
+    m_labelLayout->setContentsMargins(0, 0, 0, 8);
+    m_labelLayout->setSpacing(3);
+    m_labelLayout->addWidget(Ui::label(labelText, 12, 400, Theme::Text2, labelRow));
     if (required) {
-        labelLayout->addWidget(Ui::label(QStringLiteral("*"), 12, 400, Theme::Danger, labelRow),
-                               0, Qt::AlignTop);
+        m_labelLayout->addWidget(
+            Ui::label(QStringLiteral("*"), 12, 400, Theme::Danger, labelRow), 0,
+            Qt::AlignTop);
     }
-    labelLayout->addStretch(1);
+    m_labelLayout->addStretch(1);
     root->addWidget(labelRow);
 
     if (content) {
@@ -1949,6 +1971,17 @@ void FormField::setHintRichText(bool enabled)
     m_hint->setOpenExternalLinks(enabled);
     // 富文本换行后高度会变化，需要让父级布局重新计算尺寸。
     m_hint->updateGeometry();
+    updateGeometry();
+}
+
+void FormField::setLabelExtra(QWidget *widget)
+{
+    if (!widget || !m_labelLayout) {
+        return;
+    }
+    // 放在末尾的 stretch 之前，与设计稿的 ml-auto 一致：靠右对齐。
+    m_labelLayout->insertWidget(m_labelLayout->count() - 1, widget, 0,
+                                Qt::AlignVCenter);
     updateGeometry();
 }
 

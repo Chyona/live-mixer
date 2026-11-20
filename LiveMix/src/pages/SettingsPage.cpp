@@ -641,14 +641,21 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     keyInput->setText(config.service.apiKey);
     auto *keyField = makeField(
         QStringLiteral("API 密钥"), keyInput,
-        QStringLiteral("密钥仅存本机，用于 LLM 网关、豆包 ASR 及剪映小助手；"
-                       "未配置则「一键成片」不可用，<br>"
-                       "前往：<a href=\"https://jcaigc.cn\" "
-                       "style=\"color:%1;text-decoration:none;\">"
-                       "https://jcaigc.cn</a> 获取 API Key")
-            .arg(Theme::Primary.name()),
+        QStringLiteral("密钥仅保存在本机，用于 LLM 网关、豆包 ASR 及剪映小助手；"
+                       "未配置则「一键成片」不可用。还没有密钥？"
+                       "通过「获取密钥」登录后即可查看密钥。"),
         true, servicePane.content);
-    keyField->setHintRichText(true);
+    auto *getKeyLink = new LinkLabel(QStringLiteral("获取密钥"), keyField);
+    getKeyLink->setPixelSize(11);
+    getKeyLink->setTextColor(Theme::Primary);
+    getKeyLink->setHoverColor(Theme::PrimaryHover);
+    getKeyLink->setTrailingGlyph(Icons::Glyph::ExternalLink, 10);
+    getKeyLink->setToolTip(
+        QStringLiteral("前往 jcaigc.cn 登录后查看 API 密钥"));
+    connect(getKeyLink, &QAbstractButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://jcaigc.cn")));
+    });
+    keyField->setLabelExtra(getKeyLink);
     // 不使用 AlignLeft：否则布局按单行 sizeHint 分配高度，换行后的提示会被裁掉。
     serviceLayout->addWidget(keyField, 0);
     serviceLayout->addSpacing(16);
@@ -816,8 +823,9 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
 
     const QStringList toggleTitles = {
         QStringLiteral("自动添加视频转场"), QStringLiteral("自动添加特效"),
-        QStringLiteral("自动添加滤镜"), QStringLiteral("自动添加贴纸"),
-        QStringLiteral("自动添加 BGM"), QStringLiteral("自动添加音效"),
+        QStringLiteral("自动添加滤镜"),     QStringLiteral("自动添加贴纸"),
+        QStringLiteral("自动添加 BGM"),      QStringLiteral("自动添加音效"),
+        QStringLiteral("中英文双字幕"),
     };
     const QStringList toggleHints = {
         QStringLiteral("在片段衔接处加入自然转场，避免生硬跳切。"),
@@ -826,26 +834,36 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         QStringLiteral("按讲解节奏叠加价格、箭头等贴纸，重点信息更醒目。"),
         QStringLiteral("按内容情绪匹配背景音乐，人声段自动压低音量。"),
         QStringLiteral("在转场与重点动作处补充音效，增强节奏感。"),
+        QStringLiteral("在中文字幕下方同步展示英文译文，便于发布到海外平台。"),
     };
-    const bool toggleDefaults[6] = {
-        config.finish.transitions, config.finish.effects, config.finish.filters,
-        config.finish.stickers,   config.finish.bgm,      config.finish.sfx,
+    const QVector<bool> toggleValues = {
+        config.finish.transitions, config.finish.effects,
+        config.finish.filters,     config.finish.stickers,
+        config.finish.bgm,         config.finish.sfx,
+        config.finish.bilingualSubtitles,
     };
+    // 「恢复默认」与设计稿一致：六项自动包装默认开启，中英文双字幕默认关闭。
+    const QVector<bool> toggleDefaults = {true, true, true, true, true, true, false};
     QVector<ToggleRow *> visualRows;
     QVector<ToggleRow *> audioRows;
+    QVector<ToggleRow *> subtitleRows;
     QVector<Switch *> visualSwitches;
     QVector<Switch *> audioSwitches;
-    for (int i = 0; i < 6; ++i) {
+    QVector<Switch *> subtitleSwitches;
+    for (int i = 0; i < toggleTitles.size(); ++i) {
         auto *row = new ToggleRow(toggleTitles.at(i), toggleHints.at(i),
-                                  toggleDefaults[i]);
+                                  toggleValues.at(i));
         Switch *sw = row->toggle();
         finishSwitches.append(sw);
         if (i < 4) {
             visualRows.append(row);
             visualSwitches.append(sw);
-        } else {
+        } else if (i < 6) {
             audioRows.append(row);
             audioSwitches.append(sw);
+        } else {
+            subtitleRows.append(row);
+            subtitleSwitches.append(sw);
         }
     }
 
@@ -853,6 +871,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     visualMeta->setFont(Theme::monoFont(10));
     auto *audioMeta = Ui::label(QString(), 10, 400, Theme::Text3);
     audioMeta->setFont(Theme::monoFont(10));
+    auto *subtitleMeta = Ui::label(QString(), 10, 400, Theme::Text3);
+    subtitleMeta->setFont(Theme::monoFont(10));
 
     auto *visualGroup = new SettingsGroup(Icons::Glyph::Eye, QStringLiteral("画面"),
                                           visualMeta, 0, finishPane.content);
@@ -868,6 +888,15 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         audioGroup->bodyLayout()->addWidget(audioRows.at(i));
         if (i < audioRows.size() - 1) {
             audioGroup->bodyLayout()->addWidget(Ui::separator(false));
+        }
+    }
+    auto *subtitleGroup =
+        new SettingsGroup(Icons::Glyph::Subtitles, QStringLiteral("字幕"),
+                          subtitleMeta, 0, finishPane.content);
+    for (int i = 0; i < subtitleRows.size(); ++i) {
+        subtitleGroup->bodyLayout()->addWidget(subtitleRows.at(i));
+        if (i < subtitleRows.size() - 1) {
+            subtitleGroup->bodyLayout()->addWidget(Ui::separator(false));
         }
     }
 
@@ -965,6 +994,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     finishLayout->addSpacing(12);
     finishLayout->addWidget(audioGroup);
     finishLayout->addSpacing(12);
+    finishLayout->addWidget(subtitleGroup);
+    finishLayout->addSpacing(12);
     finishLayout->addWidget(speedGroup);
     finishLayout->addSpacing(12);
     finishLayout->addWidget(durationGroup);
@@ -993,16 +1024,18 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     speedSlider->setValue(config.finish.fixedSpeed);
     updateSpeedText();
 
-    auto updateGroupMeta = [visualMeta, audioMeta, visualSwitches,
-                            audioSwitches] {
-        int visualCount = 0;
-        for (Switch *sw : visualSwitches) {
-            visualCount += sw->isChecked() ? 1 : 0;
+    auto countEnabled = [](const QVector<Switch *> &switches) {
+        int count = 0;
+        for (Switch *sw : switches) {
+            count += sw->isChecked() ? 1 : 0;
         }
-        int audioCount = 0;
-        for (Switch *sw : audioSwitches) {
-            audioCount += sw->isChecked() ? 1 : 0;
-        }
+        return count;
+    };
+    auto updateGroupMeta = [visualMeta, audioMeta, subtitleMeta, visualSwitches,
+                            audioSwitches, subtitleSwitches, countEnabled] {
+        const int visualCount = countEnabled(visualSwitches);
+        const int audioCount = countEnabled(audioSwitches);
+        const int subtitleCount = countEnabled(subtitleSwitches);
         visualMeta->setText(QStringLiteral("已开启 %1 / %2")
                                 .arg(visualCount)
                                 .arg(visualSwitches.size()));
@@ -1019,6 +1052,14 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
                 .arg((audioCount == audioSwitches.size() ? Theme::Success
                                                          : Theme::Text3)
                          .name()));
+        subtitleMeta->setText(QStringLiteral("已开启 %1 / %2")
+                                  .arg(subtitleCount)
+                                  .arg(subtitleSwitches.size()));
+        subtitleMeta->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;")
+                .arg((subtitleCount == subtitleSwitches.size() ? Theme::Success
+                                                               : Theme::Text3)
+                         .name()));
     };
 
     // 「恢复默认」：与分组卡片同宽的小号幽灵按钮。
@@ -1028,11 +1069,12 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     finishHeaderLayout->addWidget(reset, 0, Qt::AlignVCenter);
 
     auto *durationSlider = durationSetting->slider();
-    auto updateResetEnabled = [reset, finishSwitches, autoButton, speedSlider,
-                               durationSlider] {
+    auto updateResetEnabled = [reset, finishSwitches, toggleDefaults, autoButton,
+                               speedSlider, durationSlider] {
         bool defaults = autoButton->isSelected();
-        for (Switch *sw : finishSwitches) {
-            defaults = defaults && sw->isChecked();
+        for (int i = 0; i < finishSwitches.size(); ++i) {
+            defaults =
+                defaults && finishSwitches.at(i)->isChecked() == toggleDefaults.at(i);
         }
         defaults = defaults && qAbs(speedSlider->value() - 1.0) < 0.001;
         defaults = defaults && qAbs(durationSlider->value() - 60.0) < 0.001;
@@ -1075,10 +1117,10 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     updateResetEnabled();
 
     connect(reset, &QAbstractButton::clicked, this,
-            [this, finishSwitches, setSpeedMode, speedSlider, autoButton,
-             durationSetting, updateResetEnabled] {
-                for (Switch *sw : finishSwitches) {
-                    sw->setChecked(true);
+            [this, finishSwitches, toggleDefaults, setSpeedMode, speedSlider,
+             autoButton, durationSetting, updateResetEnabled] {
+                for (int i = 0; i < finishSwitches.size(); ++i) {
+                    finishSwitches.at(i)->setChecked(toggleDefaults.at(i));
                 }
                 autoButton->setSelected(true);
                 setSpeedMode(true);
@@ -1319,13 +1361,14 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
                                                   : updated.ai.defaultPrompt;
         updated.ai.exportSrt = subtitleCheck->isChecked();
 
-        if (finishSwitches.size() == 6) {
+        if (finishSwitches.size() == 7) {
             updated.finish.transitions = finishSwitches[0]->isChecked();
             updated.finish.effects = finishSwitches[1]->isChecked();
             updated.finish.filters = finishSwitches[2]->isChecked();
             updated.finish.stickers = finishSwitches[3]->isChecked();
             updated.finish.bgm = finishSwitches[4]->isChecked();
             updated.finish.sfx = finishSwitches[5]->isChecked();
+            updated.finish.bilingualSubtitles = finishSwitches[6]->isChecked();
         }
         updated.finish.speedAuto = autoButton->isSelected();
         updated.finish.fixedSpeed = speedSlider->value();

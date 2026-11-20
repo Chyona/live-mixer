@@ -114,6 +114,8 @@ QJsonObject toJson(const AppConfig &config)
     finish.insert(QStringLiteral("stickers"), config.finish.stickers);
     finish.insert(QStringLiteral("bgm"), config.finish.bgm);
     finish.insert(QStringLiteral("sfx"), config.finish.sfx);
+    finish.insert(QStringLiteral("bilingualSubtitles"),
+                  config.finish.bilingualSubtitles);
     finish.insert(QStringLiteral("speedAuto"), config.finish.speedAuto);
     finish.insert(QStringLiteral("fixedSpeed"), config.finish.fixedSpeed);
     finish.insert(QStringLiteral("clipDuration"), config.finish.clipDuration);
@@ -315,6 +317,9 @@ bool ConfigStore::load(QString *error)
         boolValue(finish, QStringLiteral("stickers"), loaded.finish.stickers);
     loaded.finish.bgm = boolValue(finish, QStringLiteral("bgm"), loaded.finish.bgm);
     loaded.finish.sfx = boolValue(finish, QStringLiteral("sfx"), loaded.finish.sfx);
+    loaded.finish.bilingualSubtitles =
+        boolValue(finish, QStringLiteral("bilingualSubtitles"),
+                  loaded.finish.bilingualSubtitles);
     loaded.finish.speedAuto =
         boolValue(finish, QStringLiteral("speedAuto"), loaded.finish.speedAuto);
     loaded.finish.fixedSpeed =
