@@ -494,7 +494,8 @@ MaterialPage::MaterialPage(QWidget *parent)
             [this] { emit addSourceRequested(QStringLiteral("local")); });
     header->addAction(import);
 
-    bodyLayout()->addWidget(header);
+    // 标题与操作固定，不随下方素材卡片一起滚动。
+    setFixedHeader(header);
 
     auto *emptyCard = new Card(Theme::Surface1, Theme::Border, 10, this);
     m_emptyState = emptyCard;

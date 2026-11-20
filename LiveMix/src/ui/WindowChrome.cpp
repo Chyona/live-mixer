@@ -1,9 +1,12 @@
 #include "WindowChrome.h"
 
+#include "../core/Brand.h"
+
 #include <QAction>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QCursor>
+#include <QDesktopServices>
 #include <QEnterEvent>
 #include <QEvent>
 #include <QFontMetrics>
@@ -17,6 +20,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QVariantAnimation>
 
@@ -593,6 +597,31 @@ void Page::setFixedHeader(QWidget *header)
     m_bodyLayout->setContentsMargins(22, 0, 22, 18);
 }
 
+void Page::disablePageScroll()
+{
+    if (!m_scrollArea || !m_content || !m_rootLayout) {
+        return;
+    }
+
+    QWidget *content = m_scrollArea->takeWidget();
+    m_rootLayout->removeWidget(m_scrollArea);
+    m_scrollArea->deleteLater();
+    m_scrollArea = nullptr;
+
+    content->setParent(this);
+    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // 内容层离开滚动容器后不再有 viewport 承接父级背景；如果继续保留透明属性，
+    // 页面四周的留白会透出桌面。这里显式填充窗口底色，卡片之外仍是实心的页面背景。
+    content->setAttribute(Qt::WA_TranslucentBackground, false);
+    content->setAttribute(Qt::WA_NoSystemBackground, false);
+    content->setAutoFillBackground(true);
+    QPalette contentPalette = content->palette();
+    contentPalette.setColor(QPalette::Window, Theme::Window);
+    content->setPalette(contentPalette);
+    m_content = content;
+    m_rootLayout->addWidget(m_content, 1);
+}
+
 // -----------------------------------------------------------------------------
 // PageHeader
 // -----------------------------------------------------------------------------
@@ -968,6 +997,43 @@ Sidebar::Sidebar(QWidget *parent)
     version->setContentsMargins(2, 3, 2, 3);
     footLayout->addWidget(connected);
     footLayout->addWidget(version);
+
+    // 公司与开源仓库入口：与设计稿一致，用一条分隔线与运行状态隔开。
+    auto *ruleWrap = new QWidget(foot);
+    auto *ruleLayout = new QVBoxLayout(ruleWrap);
+    ruleLayout->setContentsMargins(2, 6, 2, 0);
+    ruleLayout->setSpacing(0);
+    ruleLayout->addWidget(Ui::separator(false, ruleWrap));
+    footLayout->addWidget(ruleWrap);
+
+    auto *links = new QWidget(foot);
+    auto *linksLayout = new QVBoxLayout(links);
+    linksLayout->setContentsMargins(2, 8, 2, 0);
+    linksLayout->setSpacing(1);
+
+    auto *company = new LinkLabel(QStringLiteral("© ") + Brand::company(), links);
+    company->setPixelSize(10);
+    company->setTextColor(Theme::Text3);
+    company->setHoverColor(Theme::Text1);
+    company->setUnderlineOnHover(false);
+    company->setToolTip(QStringLiteral("%1 · 公司官网").arg(Brand::company()));
+    connect(company, &QAbstractButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(Brand::website()));
+    });
+    linksLayout->addWidget(company, 0, Qt::AlignLeft);
+
+    auto *repo = new LinkLabel(QStringLiteral("开源仓库"), links);
+    repo->setPixelSize(10);
+    repo->setTextColor(Theme::Text3);
+    repo->setHoverColor(Theme::Text1);
+    repo->setLeadingGlyph(Icons::Glyph::Github, 10);
+    repo->setToolTip(QStringLiteral("在浏览器中打开 GitHub 开源仓库"));
+    connect(repo, &QAbstractButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(Brand::repo()));
+    });
+    linksLayout->addWidget(repo, 0, Qt::AlignLeft);
+
+    footLayout->addWidget(links);
     root->addWidget(foot);
 
     setActivePage(QStringLiteral("dash"));

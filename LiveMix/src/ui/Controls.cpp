@@ -665,22 +665,49 @@ void LinkLabel::setDisabledVisual(bool disabled)
     update();
 }
 
+void LinkLabel::setLeadingGlyph(Icons::Glyph glyph, int size)
+{
+    m_hasGlyph = true;
+    m_glyph = glyph;
+    m_glyphSize = qMax(1, size);
+    updateGeometry();
+    update();
+}
+
+void LinkLabel::setUnderlineOnHover(bool underline)
+{
+    m_underlineOnHover = underline;
+    update();
+}
+
 QSize LinkLabel::sizeHint() const
 {
     const QFontMetrics metrics(m_mono ? Theme::monoFont(m_pixelSize)
                                       : Theme::font(m_pixelSize));
-    return QSize(metrics.horizontalAdvance(text()) + 2, metrics.height() + 3);
+    const int glyphPart = m_hasGlyph ? m_glyphSize + 4 : 0;
+    return QSize(metrics.horizontalAdvance(text()) + glyphPart + 2,
+                 qMax(metrics.height(), m_hasGlyph ? m_glyphSize : 0) + 3);
 }
 
 void LinkLabel::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setRenderHint(QPainter::Antialiasing, true);
     QFont f = m_mono ? Theme::monoFont(m_pixelSize) : Theme::font(m_pixelSize);
-    f.setUnderline(m_hovered && !m_disabled);
+    f.setUnderline(m_hovered && !m_disabled && m_underlineOnHover);
+    const QColor color =
+        m_disabled ? Theme::Text3 : (m_hovered ? m_hoverColor : m_color);
+    const int glyphPart = m_hasGlyph ? m_glyphSize + 4 : 0;
+    if (m_hasGlyph) {
+        Icons::paint(&painter,
+                     QRectF(0, (height() - m_glyphSize) / 2.0, m_glyphSize, m_glyphSize),
+                     m_glyph, color, 2.0);
+    }
     painter.setFont(f);
-    painter.setPen(m_disabled ? Theme::Text3 : (m_hovered ? m_hoverColor : m_color));
-    painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, text());
+    painter.setPen(color);
+    painter.drawText(QRect(glyphPart, 0, width() - glyphPart, height()),
+                     Qt::AlignLeft | Qt::AlignVCenter, text());
 }
 
 void LinkLabel::enterEvent(QEnterEvent *event)

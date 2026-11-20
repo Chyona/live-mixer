@@ -90,6 +90,7 @@ qt_add_executable(LiveMixStudio
 
     src/core/AppConfig.h
     src/core/AppConfig.cpp
+    src/core/Brand.h
     src/core/AutoStart.h
     src/core/AutoStart.cpp
     src/core/CacheCleaner.h

@@ -42,6 +42,9 @@ enum class Glyph {
     Film,
     Batch,
     Reset,
+    Music,
+    ExternalLink,
+    Github,
 };
 
 void paint(QPainter *painter, const QRectF &rect, Glyph glyph, const QColor &color,

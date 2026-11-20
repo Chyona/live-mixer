@@ -111,10 +111,12 @@ QJsonObject toJson(const AppConfig &config)
     finish.insert(QStringLiteral("transitions"), config.finish.transitions);
     finish.insert(QStringLiteral("effects"), config.finish.effects);
     finish.insert(QStringLiteral("filters"), config.finish.filters);
+    finish.insert(QStringLiteral("stickers"), config.finish.stickers);
     finish.insert(QStringLiteral("bgm"), config.finish.bgm);
     finish.insert(QStringLiteral("sfx"), config.finish.sfx);
     finish.insert(QStringLiteral("speedAuto"), config.finish.speedAuto);
     finish.insert(QStringLiteral("fixedSpeed"), config.finish.fixedSpeed);
+    finish.insert(QStringLiteral("clipDuration"), config.finish.clipDuration);
 
     QJsonObject general;
     general.insert(QStringLiteral("theme"), config.general.theme);
@@ -210,6 +212,7 @@ AppConfig ConfigStore::normalized(const AppConfig &config)
     }
 
     result.finish.fixedSpeed = qBound(0.5, result.finish.fixedSpeed, 2.0);
+    result.finish.clipDuration = qBound(30, result.finish.clipDuration, 600);
 
     if (result.general.theme != QLatin1String("system")) {
         result.general.theme = QStringLiteral("dark");
@@ -308,12 +311,16 @@ bool ConfigStore::load(QString *error)
         boolValue(finish, QStringLiteral("effects"), loaded.finish.effects);
     loaded.finish.filters =
         boolValue(finish, QStringLiteral("filters"), loaded.finish.filters);
+    loaded.finish.stickers =
+        boolValue(finish, QStringLiteral("stickers"), loaded.finish.stickers);
     loaded.finish.bgm = boolValue(finish, QStringLiteral("bgm"), loaded.finish.bgm);
     loaded.finish.sfx = boolValue(finish, QStringLiteral("sfx"), loaded.finish.sfx);
     loaded.finish.speedAuto =
         boolValue(finish, QStringLiteral("speedAuto"), loaded.finish.speedAuto);
     loaded.finish.fixedSpeed =
         doubleValue(finish, QStringLiteral("fixedSpeed"), loaded.finish.fixedSpeed);
+    loaded.finish.clipDuration =
+        intValue(finish, QStringLiteral("clipDuration"), loaded.finish.clipDuration);
 
     loaded.general.theme =
         stringValue(general, QStringLiteral("theme"), loaded.general.theme);

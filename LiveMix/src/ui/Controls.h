@@ -175,6 +175,9 @@ public:
     void setHoverColor(const QColor &color);
     void setDisabledVisual(bool disabled);
     void setMonoFont(bool mono);
+    // 在文字左侧绘制图标（如 GitHub 开源仓库入口）。
+    void setLeadingGlyph(Icons::Glyph glyph, int size = 10);
+    void setUnderlineOnHover(bool underline);
     QSize sizeHint() const override;
 
 protected:
@@ -189,6 +192,10 @@ private:
     bool m_disabled = false;
     bool m_hovered = false;
     bool m_mono = false;
+    bool m_hasGlyph = false;
+    Icons::Glyph m_glyph = Icons::Glyph::Github;
+    int m_glyphSize = 10;
+    bool m_underlineOnHover = true;
 };
 
 class Chip : public QWidget
