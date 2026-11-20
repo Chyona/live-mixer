@@ -23,6 +23,7 @@
 #include <QFileInfo>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QSize>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -44,6 +45,31 @@ constexpr qint64 kRangeMergeGapMs = 500;
 // 整片识别返回后，至少让“解析结果”阶段可见约 900ms，
 // 与过程页的解析动画保持一致；期间完成 SQLite 缓存写入。
 constexpr int kAsrResultMinDisplayMs = 900;
+
+// 草稿画布固定为横屏 / 竖屏两档，按源视频宽高比选择最接近的一档。
+constexpr int kLandscapeCanvasWidth = 1920;
+constexpr int kLandscapeCanvasHeight = 1080;
+constexpr int kPortraitCanvasWidth = 1080;
+constexpr int kPortraitCanvasHeight = 1920;
+
+QSize nearestDraftCanvasSize(int sourceWidth, int sourceHeight)
+{
+    // 探测不到源尺寸时沿用横屏保底，与旧行为一致。
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return QSize(kLandscapeCanvasWidth, kLandscapeCanvasHeight);
+    }
+
+    constexpr double landscapeRatio =
+        double(kLandscapeCanvasWidth) / double(kLandscapeCanvasHeight);
+    constexpr double portraitRatio =
+        double(kPortraitCanvasWidth) / double(kPortraitCanvasHeight);
+    const double sourceRatio = double(sourceWidth) / double(sourceHeight);
+    if (std::abs(sourceRatio - portraitRatio)
+        < std::abs(sourceRatio - landscapeRatio)) {
+        return QSize(kPortraitCanvasWidth, kPortraitCanvasHeight);
+    }
+    return QSize(kLandscapeCanvasWidth, kLandscapeCanvasHeight);
+}
 
 // 工作目录在任务结束（无论成功或失败）后自动清理。
 class WorkDirCleanup
@@ -1023,8 +1049,8 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     QVector<CapCutCaption> captions;
     QStringList clipPaths;
     QVector<qint64> actualDurations;
-    int canvasWidth = 1920;
-    int canvasHeight = 1080;
+    int canvasWidth = kLandscapeCanvasWidth;
+    int canvasHeight = kLandscapeCanvasHeight;
     bool hasCanvasSize = false;
 
     // 草稿生成的过程页按真实执行顺序拆成 6 步；每步开始/结束时上报，
@@ -1075,12 +1101,14 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         }
         clipPaths.append(clipPath);
 
+        // 切片保持源分辨率，按源画幅在 1920×1080 / 1080×1920 中选择最接近的一档。
         if (!hasCanvasSize) {
             int width = 0;
             int height = 0;
             if (FfmpegUtils::videoSize(clipPath, &width, &height)) {
-                canvasWidth = width;
-                canvasHeight = height;
+                const QSize canvas = nearestDraftCanvasSize(width, height);
+                canvasWidth = canvas.width();
+                canvasHeight = canvas.height();
                 hasCanvasSize = true;
             }
         }
@@ -1190,7 +1218,7 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         return false;
     }
     emitStep(2, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("新建 %1×%2 工程 · 保持源画幅")
+             QStringLiteral("新建 %1×%2 工程 · 按源画幅匹配")
                  .arg(canvasWidth)
                  .arg(canvasHeight));
 
