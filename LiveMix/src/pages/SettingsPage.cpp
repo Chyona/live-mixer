@@ -641,8 +641,8 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     keyInput->setText(config.service.apiKey);
     auto *keyField = makeField(
         QStringLiteral("API 密钥"), keyInput,
-        QStringLiteral("密钥仅保存在本机，用于 LLM 网关、豆包 ASR 及剪映小助手；"
-                       "未配置则「一键成片」不可用。还没有密钥？"
+        QStringLiteral("密钥仅保存在本机，用于鉴权调用网关；"
+                       "未配置前一键成片相关功能不可用。还没有密钥？"
                        "通过「获取密钥」登录后即可查看密钥。"),
         true, servicePane.content);
     auto *getKeyLink = new LinkLabel(QStringLiteral("获取密钥"), keyField);

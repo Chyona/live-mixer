@@ -512,7 +512,13 @@ public:
     // 标题行右侧的附加控件，如 API 密钥字段的「获取密钥」外链。
     void setLabelExtra(QWidget *widget);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
+    // 富文本行高会超出 QLabel 自带的 wordWrap 高度计算，按文档实际高度补足。
+    void adjustHintHeight();
+
     QWidget *m_content = nullptr;
     QLabel *m_hint = nullptr;
     QHBoxLayout *m_labelLayout = nullptr;
@@ -553,13 +559,10 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
-    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     QLineEdit *m_edit = nullptr;
     QHBoxLayout *m_layout = nullptr;
-    bool m_focused = false;
-    bool m_readOnly = false;
 };
 
 class Toast : public QWidget

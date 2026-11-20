@@ -18,10 +18,12 @@
 #include <QRadialGradient>
 #include <QShowEvent>
 #include <QStyleOption>
+#include <QTextDocument>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <QtMath>
 
 #include <algorithm>
 
@@ -1934,7 +1936,7 @@ FormField::FormField(const QString &labelText, QWidget *content, const QString &
 
     auto *labelRow = new QWidget(this);
     m_labelLayout = new QHBoxLayout(labelRow);
-    m_labelLayout->setContentsMargins(0, 0, 0, 8);
+    m_labelLayout->setContentsMargins(0, 0, 0, 6);
     m_labelLayout->setSpacing(3);
     m_labelLayout->addWidget(Ui::label(labelText, 12, 400, Theme::Text2, labelRow));
     if (required) {
@@ -1951,10 +1953,42 @@ FormField::FormField(const QString &labelText, QWidget *content, const QString &
     }
 
     if (!hint.isEmpty()) {
-        m_hint = Ui::label(hint, 11, 400, Theme::Text3, this);
+        // 富文本用于复刻设计稿 1.55 倍行高；普通 QLabel 的行距偏紧。
+        m_hint = Ui::richLabel(
+            QStringLiteral("<div style=\"line-height:155%%;\">%1</div>")
+                .arg(hint.toHtmlEscaped()),
+            11, Theme::Text3, this);
         m_hint->setWordWrap(true);
-        m_hint->setContentsMargins(0, 7, 0, 0);
+        m_hint->setContentsMargins(0, 2, 0, 0);
+        m_hint->installEventFilter(this);
         root->addWidget(m_hint);
+    }
+}
+
+bool FormField::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_hint && event->type() == QEvent::Resize) {
+        adjustHintHeight();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void FormField::adjustHintHeight()
+{
+    if (!m_hint || m_hint->width() <= 0) {
+        return;
+    }
+    QTextDocument doc;
+    doc.setDefaultFont(m_hint->font());
+    doc.setHtml(m_hint->text());
+    doc.setTextWidth(m_hint->width());
+    // 去掉文档底部留白，只保留设计稿的 5px 提示间距。
+    const int target = qCeil(doc.size().height() - doc.documentMargin())
+        + m_hint->contentsMargins().top() + m_hint->contentsMargins().bottom();
+    if (target > 0 && m_hint->height() != target) {
+        m_hint->setFixedHeight(target);
+        m_hint->updateGeometry();
+        updateGeometry();
     }
 }
 
@@ -1963,9 +1997,8 @@ void FormField::setHintRichText(bool enabled)
     if (!m_hint) {
         return;
     }
-    // Ui::label 默认让标签对鼠标透明，富文本链接需要重新接收鼠标事件。
+    // Ui::richLabel 默认让标签对鼠标透明，富文本链接需要重新接收鼠标事件。
     m_hint->setAttribute(Qt::WA_TransparentForMouseEvents, !enabled);
-    m_hint->setTextFormat(enabled ? Qt::RichText : Qt::PlainText);
     m_hint->setTextInteractionFlags(enabled ? Qt::TextBrowserInteraction
                                             : Qt::NoTextInteraction);
     m_hint->setOpenExternalLinks(enabled);
@@ -1979,9 +2012,8 @@ void FormField::setLabelExtra(QWidget *widget)
     if (!widget || !m_labelLayout) {
         return;
     }
-    // 放在末尾的 stretch 之前，与设计稿的 ml-auto 一致：靠右对齐。
-    m_labelLayout->insertWidget(m_labelLayout->count() - 1, widget, 0,
-                                Qt::AlignVCenter);
+    // 放在末尾的 stretch 之后，与设计稿的 ml-auto 一致：靠右对齐。
+    m_labelLayout->addWidget(widget, 0, Qt::AlignVCenter);
     updateGeometry();
 }
 
@@ -2065,11 +2097,11 @@ void SelectBox::mousePressEvent(QMouseEvent *event)
 InputField::InputField(QWidget *parent)
     : QWidget(parent)
 {
-    setFixedHeight(35);
+    setFixedHeight(31);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFont(Theme::font(12));
     m_layout = new QHBoxLayout(this);
-    m_layout->setContentsMargins(10, 1, 10, 1);
+    m_layout->setContentsMargins(11, 1, 11, 1);
     m_layout->setSpacing(8);
     m_edit = new QLineEdit(this);
     m_edit->setFont(Theme::monoFont(12));
@@ -2077,7 +2109,6 @@ InputField::InputField(QWidget *parent)
         "QLineEdit { background: transparent; border: none; padding: 0; color: #E9ECF4;"
         " selection-background-color: #4A63BC; selection-color: #FFFFFF; }"));
     m_edit->setAttribute(Qt::WA_MacShowFocusRect, false);
-    m_edit->installEventFilter(this);
     m_layout->addWidget(m_edit, 1);
 }
 
@@ -2103,7 +2134,6 @@ void InputField::setPassword(bool password)
 
 void InputField::setReadOnly(bool readOnly)
 {
-    m_readOnly = readOnly;
     m_edit->setReadOnly(readOnly);
     m_edit->setCursorPosition(0);
     if (readOnly) {
@@ -2122,23 +2152,9 @@ void InputField::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setBrush(m_readOnly ? Theme::Surface2 : Theme::Surface2);
-    painter.setPen(QPen(m_focused ? Theme::Primary : Theme::Border, 1.0));
+    painter.setBrush(Theme::Surface2);
+    painter.setPen(QPen(Theme::Border, 1.0));
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7);
-}
-
-bool InputField::eventFilter(QObject *watched, QEvent *event)
-{
-    if (watched == m_edit) {
-        if (event->type() == QEvent::FocusIn) {
-            m_focused = true;
-            update();
-        } else if (event->type() == QEvent::FocusOut) {
-            m_focused = false;
-            update();
-        }
-    }
-    return QWidget::eventFilter(watched, event);
 }
 
 // -----------------------------------------------------------------------------
