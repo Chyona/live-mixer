@@ -540,7 +540,7 @@ public:
         m_openVideoBatch = std::move(videoBatch);
     }
 
-    // 同一批成片共享页头的批次时间；时间戳为 0 时隐藏标记。
+    // 每条草稿展示自己的生成时间；时间戳为 0 时隐藏标记。
     void setGeneratedAt(qint64 timestampMs)
     {
         const QString label = formatGenerationTime(timestampMs);
@@ -806,7 +806,7 @@ ResultsPage::ResultsPage(QWidget *parent)
         QStringLiteral("AI 成片结果"),
         QStringLiteral("完成一键成片后，每条切片会在这里显示为一条剪映草稿。"), this);
 
-    // 标题旁的生成时间标记：与卡片信息区顶部共用批次时间与文案。
+    // 标题旁的最近生成时间标记：展示本页最新一条草稿的生成时间。
     m_generationBadge = new QWidget(this);
     m_generationBadge->setObjectName(QStringLiteral("generationTimeBadge"));
     m_generationBadge->setAttribute(Qt::WA_StyledBackground, true);
@@ -823,7 +823,7 @@ ResultsPage::ResultsPage(QWidget *parent)
         glyphLabel(Icons::Glyph::Clock, 12, Theme::Text3, m_generationBadge), 0,
         Qt::AlignVCenter);
     generationLayout->addWidget(
-        Ui::label(QStringLiteral("生成时间"), 11, 400, Theme::Text2,
+        Ui::label(QStringLiteral("最近生成"), 11, 400, Theme::Text2,
                   m_generationBadge),
         0, Qt::AlignVCenter);
     m_generationValue = Ui::label(QString(), 11, 400, Theme::Text1, m_generationBadge);
@@ -1242,23 +1242,22 @@ void ResultsPage::updateHeader()
 
 void ResultsPage::updateGenerationTimes()
 {
-    // 最新一条草稿的创建时刻即本批成片的生成时间。
-    qint64 generatedAtMs = 0;
+    // 卡片各用所属草稿的生成时间；页头标记展示最近一条的生成时间。
+    qint64 latestMs = 0;
     for (const ClipDraft &draft : m_drafts) {
-        generatedAtMs = qMax(generatedAtMs, draft.createdAtMs);
+        latestMs = qMax(latestMs, draft.createdAtMs);
+        if (DraftCard *card = m_cards.value(draft.id, nullptr)) {
+            card->setGeneratedAt(draft.createdAtMs);
+        }
     }
 
     if (m_generationBadge && m_generationValue) {
-        const QString label = formatGenerationTime(generatedAtMs);
+        const QString label = formatGenerationTime(latestMs);
         m_generationValue->setText(label);
         m_generationValue->setStyleSheet(generationValueStyle(label));
         m_generationBadge->setToolTip(
-            QStringLiteral("生成时间：%1").arg(formatGenerationFullTime(generatedAtMs)));
+            QStringLiteral("最近生成时间：%1").arg(formatGenerationFullTime(latestMs)));
         m_generationBadge->setVisible(!label.isEmpty());
-    }
-
-    for (DraftCard *card : m_cards) {
-        card->setGeneratedAt(generatedAtMs);
     }
 }
 

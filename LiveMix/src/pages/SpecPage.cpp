@@ -394,7 +394,8 @@ SpecPage::SpecPage(QWidget *parent)
     auto *generationLayout = qobject_cast<QVBoxLayout *>(generation->layout());
     generationLayout->addWidget(paragraph(
         QStringLiteral(
-            "结果页标题与每张成片卡片共用一套时间表达：精确到秒，越近越详细，"
+            "结果页标题与每张成片卡片使用同一套时间表达：每张卡片显示该草稿自己的"
+            "生成时间，标题旁显示最近一条的生成时间；精确到秒，越近越详细，"
             "越久越简短。悬停任意时间可查看完整日期与时间；相对标签每 10 秒刷新，"
             "窗口跨天也不会残留昨天的文案。"),
         generation));
@@ -475,9 +476,10 @@ SpecPage::SpecPage(QWidget *parent)
     generationLayout->addWidget(generationTable);
     generationLayout->addSpacing(10);
     generationLayout->addWidget(
-        wrappedText(QStringLiteral("同一批成片共享一个批次生成时间；重新一键成片完成后，"
-                                   "页头与全部卡片一起刷新为「刚刚 · HH:mm:ss」，"
-                                   "随后自然过渡到「今天 HH:mm:ss」。"),
+        wrappedText(QStringLiteral("每条草稿保存记录时写入自己的生成时间：卡片各自显示"
+                                   "对应时间，页头显示最近一条；新草稿完成后对应卡片"
+                                   "为「刚刚 · HH:mm:ss」，随后自然过渡到"
+                                   "「今天 HH:mm:ss」。"),
                     false, 11, Theme::Text3, 820, generation));
     bodyLayout()->addSpacing(26);
 

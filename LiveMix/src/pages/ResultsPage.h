@@ -70,7 +70,7 @@ private:
     void refreshCard(qint64 draftRowId);
     void refreshAllCards();
     void updateHeader();
-    // 页头与全部卡片共用一个批次生成时间；相对标签每 10 秒刷新。
+    // 卡片各用自己的草稿生成时间，页头展示最近一条；相对标签每 10 秒刷新。
     void updateGenerationTimes();
     void pruneSelection();
     void updateSelectionBar();
