@@ -511,6 +511,20 @@ private:
         const DraftBatchItem *batchItem = m_state.draftBatch;
         const int percent =
             job ? qMin(99, int(qBound(0.0, job->progress, 100.0))) : 0;
+        const bool done = (job && job->status == DraftDownloadStatus::Done)
+            || m_state.draftDownloaded;
+
+        QString tooltip;
+        if (batchItem && batchItem->status != DraftBatchItemStatus::Done) {
+            tooltip = QStringLiteral("查看批量导出进度");
+        } else if (done) {
+            tooltip = FileManager::openDraftFolderHint(true);
+        } else {
+            tooltip = QStringLiteral("下载草稿与素材到剪映草稿目录，可继续二次编辑");
+        }
+        if (m_draftButton->toolTip() != tooltip) {
+            m_draftButton->setToolTip(tooltip);
+        }
 
         if (batchItem && batchItem->status == DraftBatchItemStatus::Queued) {
             setButtonState(m_draftButton, QStringLiteral("批量排队中"), Button::Primary,
@@ -539,10 +553,9 @@ private:
                            Button::Danger, Icons::Glyph::Alert, -1, QColor());
             return;
         }
-        if ((job && job->status == DraftDownloadStatus::Done)
-            || m_state.draftDownloaded) {
-            setButtonState(m_draftButton, QStringLiteral("在剪映中打开"), Button::Primary,
-                           Icons::Glyph::Check, -1, QColor());
+        if (done) {
+            setButtonState(m_draftButton, FileManager::openDraftFolderText(),
+                           Button::Primary, Icons::Glyph::Check, -1, QColor());
             return;
         }
         setButtonState(m_draftButton, QStringLiteral("导出到剪映"), Button::Primary,

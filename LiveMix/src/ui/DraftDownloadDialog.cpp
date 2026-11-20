@@ -351,7 +351,7 @@ private:
 // -----------------------------------------------------------------------------
 
 DraftDownloadDialog::DraftDownloadDialog(QWidget *parent)
-    : ModalCard(FileManager::revealLabel(), 680, parent)
+    : ModalCard(QStringLiteral("导出到剪映"), 680, parent)
 {
     setContentSpacing(0);
 }
@@ -534,7 +534,7 @@ void DraftDownloadDialog::rebuildContent()
             // 单行省略标签：避免自动换行导致弹窗高度估算偏小、内容互相重叠。
             auto *hint = new ElidedLabel(
                 QStringLiteral("打开前需把草稿与素材下载到本地剪映目录，视网络情况约需 "
-                               "1 分钟；完成后自动定位到草稿文件夹。"),
+                               "1 分钟；完成后自动打开草稿文件夹。"),
                 root);
             hint->setPixelSize(11);
             hint->setTextColor(Theme::Text3);
@@ -602,7 +602,7 @@ void DraftDownloadDialog::rebuildContent()
         layout->addWidget(buildFileList(root));
         layout->addSpacing(10);
         auto *hint = new ElidedLabel(
-            QStringLiteral("已自动定位到草稿文件夹，在剪映草稿列表中打开该草稿即可继续编辑。"),
+            QStringLiteral("已自动打开草稿文件夹，在剪映中打开该草稿即可继续编辑。"),
             root);
         hint->setPixelSize(11);
         hint->setTextColor(Theme::Text3);
@@ -948,8 +948,10 @@ void DraftDownloadDialog::rebuildFooter()
         auto *close = new Button(QStringLiteral("关闭"), Button::Default, this);
         connect(close, &QAbstractButton::clicked, this, [this] { emit closeRequested(); });
 
-        auto *open = new Button(FileManager::revealLabel(), Button::Primary, this);
+        auto *open = new Button(FileManager::openDraftFolderText(), Button::Primary,
+                                this);
         open->setLeadingGlyph(Icons::Glyph::Folder);
+        open->setToolTip(FileManager::openDraftFolderHint());
         connect(open, &QAbstractButton::clicked, this, [this] {
             emit openFolderRequested(m_job.localPath);
         });

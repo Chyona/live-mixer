@@ -36,21 +36,40 @@ bool FileManager::revealPath(const QString &path)
 #endif
 }
 
-QString FileManager::revealLabel()
-{
-#ifdef Q_OS_MACOS
-    return QStringLiteral("在 Finder 中显示");
-#else
-    return QStringLiteral("打开草稿文件夹");
-#endif
-}
-
 QString FileManager::revealPathLabel()
 {
 #ifdef Q_OS_MACOS
     return QStringLiteral("在访达中显示");
 #else
     return QStringLiteral("在资源管理器中显示");
+#endif
+}
+
+QString FileManager::openDraftFolderText()
+{
+    return QStringLiteral("打开草稿文件夹");
+}
+
+QString FileManager::openDraftFolderHint(bool withDraftHint)
+{
+#ifdef Q_OS_MACOS
+    const QString base = QStringLiteral("在访达中打开剪映草稿文件夹");
+#else
+    const QString base = QStringLiteral("在资源管理器中打开剪映草稿文件夹");
+#endif
+    return withDraftHint ? base + QStringLiteral("，可在剪映中打开该草稿继续编辑")
+                         : base;
+}
+
+QString FileManager::draftFolderOpenedMessage(const QString &draftName)
+{
+#ifdef Q_OS_MACOS
+    return QStringLiteral("已在访达中打开剪映草稿文件夹，可在剪映中打开「%1」继续编辑")
+        .arg(draftName);
+#else
+    return QStringLiteral(
+               "已在资源管理器中打开剪映草稿文件夹，可在剪映中打开「%1」继续编辑")
+        .arg(draftName);
 #endif
 }
 
@@ -63,11 +82,3 @@ QString FileManager::openFolderLabel()
 #endif
 }
 
-QString FileManager::revealDoneMessage(const QString &draftTitle)
-{
-#ifdef Q_OS_MACOS
-    return QStringLiteral("已在 Finder 中显示草稿 %1").arg(draftTitle);
-#else
-    return QStringLiteral("已打开草稿 %1 所在文件夹").arg(draftTitle);
-#endif
-}

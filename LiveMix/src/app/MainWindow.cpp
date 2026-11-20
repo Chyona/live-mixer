@@ -987,7 +987,7 @@ void MainWindow::wireSignals()
                         && m_downloadDialog->isVisible();
                     if (!dialogOpen) {
                         showToast(
-                            QStringLiteral("「%1」草稿已下载完成，已定位到草稿文件夹")
+                            QStringLiteral("「%1」草稿已导出，已打开剪映草稿文件夹")
                                 .arg(job.title));
                     }
                 } else if (!inBatch) {
@@ -1985,7 +1985,8 @@ void MainWindow::requestDraftDownload(qint64 draftRowId)
         if (job.status == DraftDownloadStatus::Done) {
             if (QFileInfo(job.localPath).isDir()) {
                 openDraftFolder(job.localPath);
-                showToast(FileManager::revealDoneMessage(draft.title));
+                showToast(FileManager::draftFolderOpenedMessage(
+                    job.draftName.isEmpty() ? draft.draftId : job.draftName));
                 return;
             }
             // 草稿目录已被删除：继续往下重新下载。
@@ -2000,7 +2001,7 @@ void MainWindow::requestDraftDownload(qint64 draftRowId)
         && MediaUtils::isWithinDirectory(draftDir, draft.downloadedPath)
         && QFileInfo(draft.downloadedPath).isDir()) {
         openDraftFolder(draft.downloadedPath);
-        showToast(FileManager::revealDoneMessage(draft.title));
+        showToast(FileManager::draftFolderOpenedMessage(draft.draftId));
         return;
     }
 
@@ -2025,7 +2026,17 @@ void MainWindow::showDraftDownloadDialog(qint64 draftRowId)
     connect(dialog, &DraftDownloadDialog::retryRequested, m_downloads,
             &DraftDownloadManager::retry);
     connect(dialog, &DraftDownloadDialog::openFolderRequested, this,
-            [this](const QString &path) { openDraftFolder(path); });
+            [this](const QString &path) {
+                const bool exists = !path.isEmpty() && QFileInfo(path).isDir();
+                openDraftFolder(path);
+                if (exists) {
+#ifdef Q_OS_MACOS
+                    showToast(QStringLiteral("已在访达中打开剪映草稿文件夹"));
+#else
+                    showToast(QStringLiteral("已在资源管理器中打开剪映草稿文件夹"));
+#endif
+                }
+            });
     connect(dialog, &DraftDownloadDialog::toastRequested, this,
             &MainWindow::showToast);
     connect(dialog, &DraftDownloadDialog::layoutChanged, this, [this] {
@@ -2932,8 +2943,7 @@ void MainWindow::openStartPipeline(qint64 sourceId)
         QStringLiteral("流程：提取 MP3 → ASR 转写（缓存到本地）→ 按转写时长均衡切成"
                        "每段不超过 30 分钟的多段，由 AI 按提示词选出若干片段并合并成成片"
                        " → 裁剪并生成剪映草稿。"
-                       "草稿只在点击「%1」时下载。")
-            .arg(FileManager::revealLabel()),
+                       "草稿只在点击「导出到剪映」时下载。"),
         card));
 
     auto *cancel = new Button(QStringLiteral("取消"), Button::Default, card);
