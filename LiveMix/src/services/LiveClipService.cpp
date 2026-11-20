@@ -21,6 +21,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QRandomGenerator>
 #include <QSet>
 #include <QSize>
@@ -190,10 +191,9 @@ CapCutCaptionStyle randomCaptionStyle()
     return presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
 }
 
-// 中英文双字幕：英文轨放在中文轨下方。剪映小助手先把 transform_y 除以画布高度，
-// 草稿坐标再按半个画布高换算，净效果约为屏幕像素的一半；120 约向下 60 像素，
-// 保持紧凑但清晰可分的双语行距。
-constexpr double kEnglishCaptionTransformYGap = 120.0;
+// 单行字幕最多 15 个字；英文译文跟随中文字幕，不预折行，
+// 过长时由剪映自动换行。
+constexpr int kCaptionMaxLineChars = 15;
 
 bool containsCjkCharacter(const QString &text)
 {
@@ -208,14 +208,32 @@ bool containsCjkCharacter(const QString &text)
     return false;
 }
 
-// 英文字幕沿用中文的颜色与描边，换成更清晰的无衬线字体、略小字号并下移一行。
+// 英文字幕沿用中文的颜色与描边，换成更清晰的无衬线字体与略小字号。
 CapCutCaptionStyle englishCaptionStyle(const CapCutCaptionStyle &chineseStyle)
 {
     CapCutCaptionStyle style = chineseStyle;
     style.font = QStringLiteral("Inter-SemiBold");
     style.fontSize = qMax(5, chineseStyle.fontSize - 2);
-    style.transformY = chineseStyle.transformY - kEnglishCaptionTransformYGap;
     return style;
+}
+
+// 英文轨跟随中文字幕：按中文折行后的行数估算位置。行高按字号 ×5 像素，
+// 双语行间留白 25px；英文不预折行，按单行估算高度。剪映小助手的
+// transform_y 数值约为屏幕像素的 2 倍，单行中文 + 单行英文时结果为 -920，
+// 与手工调好的间距一致。
+double englishCaptionTransformY(const CapCutCaptionStyle &chineseStyle,
+                                int englishFontSize, int chineseLines,
+                                int canvasHeight)
+{
+    const double chineseLinePx = chineseStyle.fontSize * 5.0;
+    const double englishLinePx = englishFontSize * 5.0;
+    const double chineseCenterPx = -chineseStyle.transformY / 2.0;
+    double englishCenterPx = chineseCenterPx
+        + chineseLinePx * chineseLines / 2.0 + 25.0 + englishLinePx / 2.0;
+    // 英文底部至少留 10px，避免字幕跑出画布。
+    const double maxCenterPx = canvasHeight / 2.0 - 10.0 - englishLinePx / 2.0;
+    englishCenterPx = qMin(englishCenterPx, maxCenterPx);
+    return -2.0 * englishCenterPx;
 }
 
 // 判断一句转写是否以句末标点结尾；允许句号后跟引号、括号等收尾符号。
@@ -1075,6 +1093,8 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
 
     QVector<CapCutVideoInfo> videos;
     QVector<CapCutCaption> captions;
+    // 与 captions 一一对应的未折行文本，用于翻译（折行后的 \n 不适合放进提示词）。
+    QStringList captionTexts;
     QStringList clipPaths;
     QVector<qint64> actualDurations;
     int canvasWidth = kLandscapeCanvasWidth;
@@ -1229,8 +1249,11 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             CapCutCaption caption;
             caption.startUs = startUs;
             caption.endUs = endUs;
-            caption.text = timed.text;
+            // 超过 15 个字时均衡折成多行；翻译仍使用未折行的原文。
+            caption.text =
+                CaptionTiming::wrapCaptionText(timed.text, kCaptionMaxLineChars);
             captions.append(caption);
+            captionTexts.append(timed.text);
             previousCaptionEndUs = endUs;
         }
         captionOffsetMs += actualDurations.at(i);
@@ -1280,10 +1303,10 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         } else {
             QStringList pendingTexts;
             QVector<int> pendingIndices;
-            for (int i = 0; i < captions.size(); ++i) {
-                if (containsCjkCharacter(captions.at(i).text)) {
+            for (int i = 0; i < captionTexts.size(); ++i) {
+                if (containsCjkCharacter(captionTexts.at(i))) {
                     pendingIndices.append(i);
-                    pendingTexts.append(captions.at(i).text);
+                    pendingTexts.append(captionTexts.at(i));
                 }
             }
             if (pendingTexts.isEmpty()) {
@@ -1307,7 +1330,11 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                     qWarning() << "Caption translation failed:" << translationError;
                     englishNote = QStringLiteral("英文译文生成失败");
                 } else {
-                    QVector<CapCutCaption> englishCaptions;
+                    // 不同中文行数需要不同的英文轨位置，而 capcut-mate 每批字幕
+                    // 只能共用一套样式，因此按 transform_y 分组分别写入。
+                    const CapCutCaptionStyle englishBaseStyle =
+                        englishCaptionStyle(captionStyle);
+                    QMap<int, QVector<CapCutCaption>> englishGroups;
                     for (int i = 0; i < translations.size(); ++i) {
                         const QString translated = translations.at(i).trimmed();
                         // 漏译、回显中文或原样返回的条目直接跳过，避免英文轨重复中文。
@@ -1317,28 +1344,52 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                                                   Qt::CaseInsensitive) == 0) {
                             continue;
                         }
-                        const CapCutCaption &chinese = captions.at(pendingIndices.at(i));
+                        const int chineseIndex = pendingIndices.at(i);
+                        const CapCutCaption &chinese = captions.at(chineseIndex);
                         CapCutCaption english;
                         english.startUs = chinese.startUs;
                         english.endUs = chinese.endUs;
+                        // 英文跟随中文字幕，不预折行；过长时由剪映自动换行。
                         english.text = translated;
-                        englishCaptions.append(english);
+
+                        const int chineseLines =
+                            captions.at(chineseIndex).text.count(QLatin1Char('\n')) + 1;
+                        const int transformY = qRound(englishCaptionTransformY(
+                            captionStyle, englishBaseStyle.fontSize, chineseLines,
+                            canvasHeight));
+                        englishGroups[transformY].append(english);
                     }
 
-                    if (englishCaptions.isEmpty()) {
+                    if (englishGroups.isEmpty()) {
                         englishNote = QStringLiteral("未得到有效英文译文");
                     } else {
-                        emitStep(4, PipelineUi::StepStatus::Running, 80,
-                                 QStringLiteral("正在写入 %1 条英文译文")
-                                     .arg(englishCaptions.size()));
-                        QString englishError;
-                        if (capcut->addCaptions(draft.draftUrl, englishCaptions,
-                                                englishCaptionStyle(captionStyle),
-                                                &englishError)) {
-                            englishCount = englishCaptions.size();
-                        } else {
-                            qWarning() << "Add English captions failed:" << englishError;
-                            englishNote = QStringLiteral("英文轨写入失败");
+                        int writtenGroups = 0;
+                        int failedGroups = 0;
+                        for (auto it = englishGroups.constBegin();
+                             it != englishGroups.constEnd(); ++it) {
+                            emitStep(4, PipelineUi::StepStatus::Running,
+                                     80 + 20 * writtenGroups
+                                         / qMax(1, englishGroups.size()),
+                                     QStringLiteral("正在写入 %1 条英文译文")
+                                         .arg(it.value().size()));
+                            CapCutCaptionStyle groupStyle = englishBaseStyle;
+                            groupStyle.transformY = it.key();
+                            QString englishError;
+                            if (capcut->addCaptions(draft.draftUrl, it.value(),
+                                                    groupStyle, &englishError)) {
+                                englishCount += it.value().size();
+                            } else {
+                                ++failedGroups;
+                                qWarning() << "Add English captions failed:"
+                                           << englishError;
+                            }
+                            ++writtenGroups;
+                        }
+                        if (failedGroups > 0) {
+                            englishNote =
+                                englishCount > 0
+                                    ? QStringLiteral("部分英文轨写入失败")
+                                    : QStringLiteral("英文轨写入失败");
                         }
                     }
                 }
@@ -1351,7 +1402,8 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         captionDetail = QStringLiteral("%1 条中文字幕 · %2 条英文译文 · %3")
                             .arg(captions.size())
                             .arg(englishCount)
-                            .arg(captionStyle.font);
+                            .arg(englishNote.isEmpty() ? captionStyle.font
+                                                       : englishNote);
     } else if (m_request.bilingualSubtitles && !englishNote.isEmpty()) {
         captionDetail = QStringLiteral("%1 条中文字幕 · %2")
                             .arg(captions.size())
