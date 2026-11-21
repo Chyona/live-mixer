@@ -44,7 +44,7 @@ struct GeneralConfig
     bool systemNotifications = true;
 };
 
-// 成片设置：自动包装开关（含中英文双字幕与平台去重）、视频倍速与单条成片时长，
+// 成片设置：自动包装开关（含中英文双字幕与平台去重）与视频倍速，
 // 应用到之后每次一键成片。
 struct FinishConfig
 {
@@ -61,7 +61,6 @@ struct FinishConfig
     // true：每条成片在 1.0×–1.5× 之间独立随机取速；false：固定为 fixedSpeed。
     bool speedAuto = true;
     double fixedSpeed = 1.0; // 0.5–2.0
-    int clipDuration = 60;   // 单条成片目标时长（秒），30–600
 };
 
 struct AppConfig

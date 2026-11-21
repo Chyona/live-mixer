@@ -5,7 +5,6 @@
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
 
-#include <QBoxLayout>
 #include <QDesktopServices>
 #include <QDir>
 #include <QEnterEvent>
@@ -22,7 +21,6 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
-#include <QResizeEvent>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QTimer>
@@ -35,10 +33,6 @@ namespace {
 
 constexpr int kFieldWidth = 560;
 constexpr int kFinishGroupWidth = 820;
-constexpr int kMinClipDuration = 30;
-constexpr int kMaxClipDuration = 600;
-constexpr int kClipDurationStep = 5;
-constexpr int kClipDurationJitter = 20;
 
 class PaneNavButton : public QAbstractButton
 {
@@ -423,127 +417,6 @@ QString formatSpeed(double value)
         ? QStringLiteral("%1×").arg(tenths / 10.0, 0, 'f', 1)
         : QStringLiteral("%1×").arg(value, 0, 'f', 2);
 }
-
-// 区间滑杆的两端刻度（单条成片时长：30 秒 / 600 秒）。
-class EdgeTicks : public QWidget
-{
-public:
-    EdgeTicks(const QString &left, const QString &right, QWidget *parent = nullptr)
-        : QWidget(parent)
-        , m_left(left)
-        , m_right(right)
-    {
-        setFixedHeight(14);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::TextAntialiasing, true);
-        painter.setFont(Theme::monoFont(10));
-        painter.setPen(Theme::Text3);
-        painter.drawText(QRect(8, 0, width() - 16, height()),
-                         Qt::AlignLeft | Qt::AlignVCenter, m_left);
-        painter.drawText(QRect(8, 0, width() - 16, height()),
-                         Qt::AlignRight | Qt::AlignVCenter, m_right);
-    }
-
-private:
-    QString m_left;
-    QString m_right;
-};
-
-// 单条成片时长：宽屏时说明在左、滑杆在右；窄窗口自动堆叠。
-class DurationSetting : public QWidget
-{
-public:
-    explicit DurationSetting(QWidget *parent = nullptr)
-        : QWidget(parent)
-    {
-        m_layout = new QBoxLayout(QBoxLayout::LeftToRight, this);
-        m_layout->setContentsMargins(0, 0, 0, 0);
-        m_layout->setSpacing(12);
-
-        m_text = Ui::richLabel(QString(), 11, Theme::Text3, this);
-        m_text->setWordWrap(true);
-        m_text->setTextFormat(Qt::RichText);
-        QSizePolicy textPolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-        textPolicy.setHeightForWidth(true);
-        m_text->setSizePolicy(textPolicy);
-        m_layout->addWidget(m_text, 1);
-
-        m_sliderHost = new QWidget(this);
-        auto *sliderLayout = new QVBoxLayout(m_sliderHost);
-        sliderLayout->setContentsMargins(0, 0, 0, 0);
-        sliderLayout->setSpacing(2);
-        m_slider = new SliderControl(m_sliderHost);
-        m_slider->setRange(kMinClipDuration, kMaxClipDuration, kClipDurationStep);
-        m_slider->setAccessibleName(QStringLiteral("单条成片时长"));
-        sliderLayout->addWidget(m_slider);
-        sliderLayout->addWidget(new EdgeTicks(
-            QStringLiteral("%1 秒").arg(kMinClipDuration),
-            QStringLiteral("%1 秒").arg(kMaxClipDuration), m_sliderHost));
-        m_layout->addWidget(m_sliderHost, 0);
-
-        setDuration(60);
-        applyResponsiveLayout();
-    }
-
-    SliderControl *slider() const { return m_slider; }
-
-    void setDuration(int seconds)
-    {
-        m_slider->setValue(seconds);
-        updateText();
-    }
-
-    int duration() const { return qRound(m_slider->value()); }
-
-private:
-    void updateText()
-    {
-        const QString accent = Theme::Text2.name();
-        m_text->setText(
-            QStringLiteral("AI 生成的成片在 <span style=\"color:%1;font-weight:500;\">"
-                           "%2 秒</span>左右，实际成片时长会有 "
-                           "<span style=\"color:%1;font-weight:500;\">±%3 秒浮动</span>。")
-                .arg(accent, QString::number(duration()),
-                     QString::number(kClipDurationJitter)));
-    }
-
-    void applyResponsiveLayout()
-    {
-        const bool horizontal = width() >= 700;
-        m_horizontal = horizontal;
-        m_layout->setDirection(horizontal ? QBoxLayout::LeftToRight
-                                          : QBoxLayout::TopToBottom);
-        m_layout->setSpacing(horizontal ? 32 : 12);
-        m_layout->setAlignment(m_text, horizontal ? Qt::AlignVCenter : Qt::AlignTop);
-        if (horizontal) {
-            m_sliderHost->setMinimumWidth(400);
-            m_sliderHost->setMaximumWidth(400);
-        } else {
-            m_sliderHost->setMinimumWidth(0);
-            m_sliderHost->setMaximumWidth(QWIDGETSIZE_MAX);
-        }
-    }
-
-    void resizeEvent(QResizeEvent *event) override
-    {
-        QWidget::resizeEvent(event);
-        if ((width() >= 700) != m_horizontal) {
-            applyResponsiveLayout();
-        }
-    }
-
-    QBoxLayout *m_layout = nullptr;
-    QLabel *m_text = nullptr;
-    QWidget *m_sliderHost = nullptr;
-    SliderControl *m_slider = nullptr;
-    bool m_horizontal = true;
-};
 
 } // namespace
 
@@ -996,18 +869,6 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     speedLayout->addSpacing(12);
     speedLayout->addWidget(fixedPanel);
 
-    // 单条成片时长分组。
-    auto *durationChip = Ui::label(QString(), 11, 400, Theme::Primary);
-    durationChip->setFont(Theme::monoFont(11));
-    durationChip->setStyleSheet(QStringLiteral(
-        "color:#6E8BFF;background:rgba(110,139,255,0.14);border-radius:4px;"
-        "padding:1px 6px;"));
-    auto *durationGroup =
-        new SettingsGroup(Icons::Glyph::Clock, QStringLiteral("单条成片时长"),
-                          durationChip, 14, finishPane.content);
-    auto *durationSetting = new DurationSetting(durationGroup);
-    durationGroup->bodyLayout()->addWidget(durationSetting);
-
     finishLayout->addWidget(finishHeader);
     finishLayout->addWidget(visualGroup);
     finishLayout->addSpacing(12);
@@ -1018,8 +879,6 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     finishLayout->addWidget(speedGroup);
     finishLayout->addSpacing(12);
     finishLayout->addWidget(dedupeGroup);
-    finishLayout->addSpacing(12);
-    finishLayout->addWidget(durationGroup);
     finishLayout->addStretch(1);
     stack->addWidget(finishPane.scroll);
 
@@ -1097,21 +956,16 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     reset->setLeadingGlyph(Icons::Glyph::Reset);
     finishHeaderLayout->addWidget(reset, 0, Qt::AlignVCenter);
 
-    auto *durationSlider = durationSetting->slider();
     auto updateResetEnabled = [reset, finishSwitches, toggleDefaults, autoButton,
-                               speedSlider, durationSlider] {
+                               speedSlider] {
         bool defaults = autoButton->isSelected();
         for (int i = 0; i < finishSwitches.size(); ++i) {
             defaults =
                 defaults && finishSwitches.at(i)->isChecked() == toggleDefaults.at(i);
         }
         defaults = defaults && qAbs(speedSlider->value() - 1.0) < 0.001;
-        defaults = defaults && qAbs(durationSlider->value() - 60.0) < 0.001;
         reset->setEnabled(!defaults);
     };
-
-    durationSetting->setDuration(config.finish.clipDuration);
-    durationChip->setText(QStringLiteral("%1 秒").arg(durationSetting->duration()));
 
     connect(autoButton, &QAbstractButton::clicked, this, [setSpeedMode] {
         setSpeedMode(true);
@@ -1121,11 +975,6 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     });
     connect(speedSlider, &SliderControl::valueChanged, this,
             [updateSpeedText](double) { updateSpeedText(); });
-    connect(durationSlider, &SliderControl::valueChanged, this,
-            [durationChip](double value) {
-                durationChip->setText(
-                    QStringLiteral("%1 秒").arg(qRound(value)));
-            });
 
     for (Switch *sw : finishSwitches) {
         connect(sw, &QAbstractButton::toggled, this,
@@ -1136,8 +985,6 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     }
     connect(speedSlider, &SliderControl::valueChanged, this,
             [updateResetEnabled](double) { updateResetEnabled(); });
-    connect(durationSlider, &SliderControl::valueChanged, this,
-            [updateResetEnabled](double) { updateResetEnabled(); });
     connect(autoButton, &QAbstractButton::clicked, this,
             [updateResetEnabled] { updateResetEnabled(); });
     connect(fixedButton, &QAbstractButton::clicked, this,
@@ -1147,14 +994,13 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
 
     connect(reset, &QAbstractButton::clicked, this,
             [this, finishSwitches, toggleDefaults, setSpeedMode, speedSlider,
-             autoButton, durationSetting, updateResetEnabled] {
+             autoButton, updateResetEnabled] {
                 for (int i = 0; i < finishSwitches.size(); ++i) {
                     finishSwitches.at(i)->setChecked(toggleDefaults.at(i));
                 }
                 autoButton->setSelected(true);
                 setSpeedMode(true);
                 speedSlider->setValue(1.0);
-                durationSetting->setDuration(60);
                 updateResetEnabled();
                 emit toastRequested(QStringLiteral("已恢复默认成片设置"));
             });
@@ -1352,7 +1198,7 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
     auto persist = [this, apiInput, keyInput, draftInput, exportInput, cacheInput,
                     recordingInput, segmentInput, limitInput, autoClean,
                     subtitleCheck, themeTabs, generalChecks, finishSwitches,
-                    autoButton, speedSlider, durationSetting,
+                    autoButton, speedSlider,
                     cleanedPath, firstInteger](QString *error) -> bool {
         if (!m_config) {
             if (error) {
@@ -1402,7 +1248,6 @@ SettingsPage::SettingsPage(ConfigStore *configStore, QWidget *parent)
         }
         updated.finish.speedAuto = autoButton->isSelected();
         updated.finish.fixedSpeed = speedSlider->value();
-        updated.finish.clipDuration = durationSetting->duration();
 
         updated.general.theme = themeTabs->currentIndex() == 1
             ? QStringLiteral("system")
