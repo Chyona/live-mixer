@@ -550,9 +550,10 @@ bool pickRandomEffectWindow(const QVector<CapCutCaption> &captions, qint64 minUs
     return true;
 }
 
-// 单行字幕最多 15 个字；英文译文跟随中文字幕，不预折行，
+// 单条字幕最多 15 个字；超长 ASR 句段在拆分阶段切成多条独立字幕，
+// 不再用换行写进同一条字幕。英文译文跟随中文字幕，不预折行，
 // 过长时由剪映自动换行。
-constexpr int kCaptionMaxLineChars = 15;
+constexpr int kCaptionMaxChars = 15;
 
 bool containsCjkCharacter(const QString &text)
 {
@@ -1505,7 +1506,8 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     // 字幕先按标点断句，并优先用 ASR 词级时间线得到每条字幕的绝对时间。
     QVector<TimedCaption> timedCaptions;
     for (const AsrUtterance &utterance : project.captions) {
-        timedCaptions += CaptionTiming::splitUtterance(utterance);
+        timedCaptions +=
+            CaptionTiming::splitUtterance(utterance, kCaptionMaxChars);
     }
 
     // 1. 按时间范围裁剪并重新编码为剪映兼容的 H.264/AAC MP4。
@@ -1639,9 +1641,8 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             CapCutCaption caption;
             caption.startUs = startUs;
             caption.endUs = endUs;
-            // 超过 15 个字时均衡折成多行；翻译仍使用未折行的原文。
-            caption.text =
-                CaptionTiming::wrapCaptionText(timed.text, kCaptionMaxLineChars);
+            // 超长句段已在拆分阶段切成多条独立字幕，这里直接使用单条文本。
+            caption.text = timed.text;
             captions.append(caption);
             captionTexts.append(timed.text);
             previousCaptionEndUs = endUs;
