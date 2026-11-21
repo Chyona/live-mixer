@@ -36,6 +36,8 @@ struct LiveClipRequest
     bool transitions = true;
     bool effects = true;
     bool filters = true;
+    // 自动贴纸：从内置贴纸池随机挑一张，贴在 3–10 秒的字幕窗口上。
+    bool stickers = true;
     // 自动 BGM：开启时从素材服务随机取一首背景音乐铺满成片。
     bool bgm = true;
     // 自动音效：开启时按内置音效目录，用大模型稀疏挑选字幕并写入音效轨。
