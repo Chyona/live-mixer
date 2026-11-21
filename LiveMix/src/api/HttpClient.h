@@ -41,6 +41,12 @@ public:
     HttpResponse get(const QUrl &url, int timeoutMs = 60000,
                      const std::function<bool()> &shouldAbort = {});
 
+    // 带自定义请求头的 GET；素材服务的 HMAC 签名头由调用方生成。
+    HttpResponse getWithHeaders(
+        const QUrl &url,
+        const QVector<QPair<QByteArray, QByteArray>> &headers,
+        int timeoutMs = 30000);
+
     HttpResponse postJson(const QUrl &url, const QJsonObject &payload,
                           const QByteArray &authorization = QByteArray(),
                           int timeoutMs = 120000);

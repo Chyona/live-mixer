@@ -36,6 +36,8 @@ struct LiveClipRequest
     bool transitions = true;
     bool effects = true;
     bool filters = true;
+    // 自动 BGM：开启时从素材服务随机取一首背景音乐铺满成片。
+    bool bgm = true;
 };
 
 class HttpClient;
@@ -86,8 +88,10 @@ private:
     QStringList sanitizeTopics(const QStringList &raw) const;
 
     // llm 用于「中英文双字幕」时按需翻译字幕，可为空（为空时跳过英文轨）。
+    // http 复用任务级连接，供素材服务随机 BGM 使用。
     bool createDraftForProject(MediaRepository *repository, CapCutMateClient *capcut,
-                               LlmClient *llm, const QString &inputPath,
+                               LlmClient *llm, HttpClient *http,
+                               const QString &inputPath,
                                const SelectedProject &project, int index,
                                double speed, QString *error);
 

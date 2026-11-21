@@ -545,6 +545,50 @@ bool CapCutMateClient::addFilters(const QString &draftUrl,
     return ok;
 }
 
+bool CapCutMateClient::addAudios(const QString &draftUrl,
+                                 const QVector<CapCutAudioInfo> &audios,
+                                 QString *error)
+{
+    if (audios.isEmpty()) {
+        return true;
+    }
+
+    QJsonArray audioArray;
+    for (const CapCutAudioInfo &audio : audios) {
+        if (audio.endUs <= audio.startUs || audio.url.trimmed().isEmpty()) {
+            continue;
+        }
+        QJsonObject audioInfo;
+        audioInfo.insert(QStringLiteral("audio_url"), audio.url);
+        audioInfo.insert(QStringLiteral("start"), audio.startUs);
+        audioInfo.insert(QStringLiteral("end"), audio.endUs);
+        audioInfo.insert(QStringLiteral("volume"), audio.volume);
+        audioArray.append(audioInfo);
+    }
+    if (audioArray.isEmpty()) {
+        return true;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+    // 接口要求 audio_infos 是 JSON 字符串，而不是嵌套数组。
+    payload.insert(QStringLiteral("audio_infos"),
+                   QString::fromUtf8(
+                       QJsonDocument(audioArray).toJson(QJsonDocument::Compact)));
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("add_audios")), payload,
+        QByteArray(), 120000);
+    const bool ok = checkEnvelope(response, nullptr, error);
+    if (!ok) {
+        qWarning() << "add_audios failed; audios:" << audioArray.size()
+                   << "httpStatus:" << response.httpStatus
+                   << "code:" << response.json.value(QStringLiteral("code")).toInt(-1)
+                   << "message:" << (error ? *error : QString());
+    }
+    return ok;
+}
+
 bool CapCutMateClient::addCaptions(const QString &draftUrl,
                                    const QVector<CapCutCaption> &captions,
                                    const CapCutCaptionStyle &style, QString *error)
