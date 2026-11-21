@@ -35,6 +35,28 @@ struct LlmTranslationRequest
     QStringList texts; // 按字幕顺序待翻译的中文文本
 };
 
+// 自动音效：待选点的字幕行与可选音效类别。
+struct LlmSfxSegment
+{
+    qint64 startMs = 0;
+    qint64 endMs = 0;
+    QString text;
+};
+
+struct LlmSfxCategory
+{
+    QString name;
+    QString usageHint;
+};
+
+struct LlmSfxRequest
+{
+    QString baseUrl;
+    QString apiKey;
+    QVector<LlmSfxSegment> segments;
+    QVector<LlmSfxCategory> categories;
+};
+
 class LlmClient
 {
 public:
@@ -53,6 +75,11 @@ public:
     bool translateCaptions(const LlmTranslationRequest &request,
                            QStringList *translations, QString *error,
                            const StreamCallback &onStatus = {});
+
+    // 自动音效：稀疏挑选需要加音效的字幕及类别。
+    // categories 与 request.segments 等长，-1 表示该字幕不加音效。
+    bool selectSfx(const LlmSfxRequest &request, QVector<int> *categories,
+                   QString *error, const StreamCallback &onStatus = {});
 
 private:
     HttpClient *m_http = nullptr;

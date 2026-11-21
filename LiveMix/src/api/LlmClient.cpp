@@ -443,6 +443,155 @@ int parseTranslations(const QString &rawContent, int count, QStringList *transla
     return 0;
 }
 
+QString sfxSystemPrompt(const QVector<LlmSfxCategory> &categories)
+{
+    QStringList ids;
+    QStringList lines;
+    ids.reserve(categories.size());
+    lines.reserve(categories.size());
+    for (int i = 0; i < categories.size(); ++i) {
+        ids.append(QString::number(i));
+        const LlmSfxCategory &category = categories.at(i);
+        lines.append(QStringLiteral("%1 - %2（示例音效：%3）")
+                         .arg(i)
+                         .arg(category.usageHint)
+                         .arg(category.name));
+    }
+    return QStringLiteral(
+               "你是短视频字幕包装策划。你的任务是从整片字幕中稀疏挑选少量值得加音效的字幕行，"
+               "而不是给每一行都配音效。\n\n"
+               "可选音效类别（category 只能取以下整数之一：%1）：\n%2\n\n"
+               "核心原则：\n"
+               "1. 宁少勿多：音效过多会干扰观感；通常 1 分钟成片约 5 处音效即可。\n"
+               "2. 只对值得提示的字幕加音效：如关键卖点、数字结论、场景氛围、互动号召等；"
+               "普通过渡、闲聊、重复叙述不要加。\n"
+               "3. 语义必须匹配 usage_hint：只有字幕内容与某类别的 usage_hint 高度契合时"
+               "才选用该 category；没有合适匹配时可以不加任何音效。\n"
+               "4. 不要凑数：若整片没有值得加音效的字幕，selections 返回空数组 []。\n\n"
+               "输出要求：\n"
+               "- 只返回 JSON：{\"selections\":[{\"index\":0,\"category\":2}]}\n"
+               "- selections 仅包含需要加音效的字幕；每条含 index（从 0 起）与 category\n"
+               "- 同一 index 不要重复出现\n"
+               "- 不要输出未在列表中的 category")
+        .arg(ids.join(QStringLiteral("、")))
+        .arg(lines.join(QLatin1Char('\n')));
+}
+
+// 与 v3 一致：约每 60 秒 5 处音效，单条成片最多 8 处。
+int recommendedSfxCount(qint64 timelineEndMs)
+{
+    if (timelineEndMs <= 0) {
+        return 0;
+    }
+    return qBound(0, qRound(double(timelineEndMs) / 60000.0 * 5.0), 8);
+}
+
+QString buildSfxUserPrompt(const LlmSfxRequest &request, bool strictJson)
+{
+    QString prompt;
+    if (strictJson) {
+        prompt += QStringLiteral(
+            "上一次输出不是合法 JSON。本次必须只输出一个 JSON 对象，"
+            "不要使用 Markdown 代码块，不要输出任何解释。\n\n");
+    }
+    prompt += QStringLiteral("## 字幕\n");
+    for (int i = 0; i < request.segments.size(); ++i) {
+        const LlmSfxSegment &segment = request.segments.at(i);
+        prompt += QStringLiteral("[%1] (%2s - %3s) %4\n")
+                      .arg(i)
+                      .arg(segment.startMs / 1000.0, 0, 'f', 2)
+                      .arg(segment.endMs / 1000.0, 0, 'f', 2)
+                      .arg(segment.text.trimmed());
+    }
+
+    const qint64 timelineEndMs =
+        request.segments.isEmpty() ? 0 : request.segments.last().endMs;
+    prompt += QStringLiteral(
+                  "\n## 本次要求\n"
+                  "- 本片字幕覆盖约 %1 秒，建议音效总数不超过 %2 处（可更少或为零）。\n"
+                  "- 只选择语义与音效类别高度匹配的字幕，宁少勿多。\n")
+                  .arg(timelineEndMs / 1000.0, 0, 'f', 1)
+                  .arg(recommendedSfxCount(timelineEndMs));
+    return prompt;
+}
+
+bool jsonIntValue(const QJsonValue &value, int *out)
+{
+    if (value.isDouble()) {
+        *out = static_cast<int>(value.toDouble());
+        return true;
+    }
+    if (value.isString()) {
+        bool ok = false;
+        const int parsed = value.toString().trimmed().toInt(&ok);
+        if (ok) {
+            *out = parsed;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool tryParseSfxObject(const QJsonObject &object, int segmentCount,
+                       int categoryCount, QVector<int> *categories)
+{
+    const QJsonValue selections = object.value(QStringLiteral("selections"));
+    if (!selections.isArray()) {
+        return false;
+    }
+    QVector<int> result(segmentCount, -1);
+    for (const QJsonValue &value : selections.toArray()) {
+        const QJsonObject item = value.toObject();
+        int index = -1;
+        int category = -1;
+        if (!jsonIntValue(item.value(QStringLiteral("index")), &index)
+            || !jsonIntValue(item.value(QStringLiteral("category")), &category)) {
+            continue;
+        }
+        if (index < 0 || index >= segmentCount
+            || category < 0 || category >= categoryCount) {
+            continue;
+        }
+        result[index] = category;
+    }
+    *categories = result;
+    return true;
+}
+
+bool parseSfxSelections(const QString &rawContent, int segmentCount,
+                        int categoryCount, QVector<int> *categories)
+{
+    const QString content = stripMarkdownFence(rawContent);
+    if (content.isEmpty()) {
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const auto tryDocument = [&](const QJsonDocument &document) {
+        return document.isObject()
+            && tryParseSfxObject(document.object(), segmentCount, categoryCount,
+                                 categories);
+    };
+
+    const QJsonDocument document =
+        QJsonDocument::fromJson(content.toUtf8(), &parseError);
+    if (parseError.error == QJsonParseError::NoError && tryDocument(document)) {
+        return true;
+    }
+
+    // 模型偶尔在 JSON 前后附带解释文字，截取第一个完整对象再试。
+    const QString objectText =
+        extractBalanced(content, QLatin1Char('{'), QLatin1Char('}'));
+    if (!objectText.isEmpty() && objectText != content) {
+        const QJsonDocument inner =
+            QJsonDocument::fromJson(objectText.toUtf8(), &parseError);
+        if (parseError.error == QJsonParseError::NoError && tryDocument(inner)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString requestErrorMessage(const HttpResponse &response)
 {
     const QJsonObject error = response.json.value(QStringLiteral("error")).toObject();
@@ -879,6 +1028,136 @@ bool LlmClient::translateCaptions(const LlmTranslationRequest &request,
                 QThread::msleep(static_cast<unsigned long>(waitSeconds) * 1000);
                 continue;
             }
+        }
+        break;
+    }
+
+    if (error) {
+        *error = lastError;
+    }
+    return false;
+}
+
+bool LlmClient::selectSfx(const LlmSfxRequest &request, QVector<int> *categories,
+                          QString *error, const StreamCallback &onStatus)
+{
+    if (!m_http || !categories) {
+        if (error) {
+            *error = QStringLiteral("LLM 客户端未初始化。");
+        }
+        return false;
+    }
+    if (request.apiKey.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("尚未配置 API 密钥。");
+        }
+        return false;
+    }
+
+    const int segmentCount = request.segments.size();
+    const int categoryCount = request.categories.size();
+    if (segmentCount <= 0) {
+        categories->clear();
+        return true;
+    }
+    if (categoryCount <= 0) {
+        categories->fill(-1, segmentCount);
+        return true;
+    }
+
+    const QUrl url = chatCompletionsUrl(request.baseUrl);
+    if (!url.isValid() || url.host().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("API 地址无效：%1").arg(request.baseUrl);
+        }
+        return false;
+    }
+
+    constexpr int kMaxAttempts = 2;
+    constexpr int kSfxTimeoutMs = 180000;
+    QString lastError;
+    bool strictJson = false;
+
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        QJsonArray messages;
+
+        QJsonObject systemMessage;
+        systemMessage.insert(QStringLiteral("role"), QStringLiteral("system"));
+        systemMessage.insert(QStringLiteral("content"),
+                             sfxSystemPrompt(request.categories));
+        messages.append(systemMessage);
+
+        QJsonObject userMessage;
+        userMessage.insert(QStringLiteral("role"), QStringLiteral("user"));
+        userMessage.insert(QStringLiteral("content"),
+                           buildSfxUserPrompt(request, strictJson));
+        messages.append(userMessage);
+
+        QJsonObject payload;
+        payload.insert(QStringLiteral("model"), QString::fromLatin1(kModel));
+        payload.insert(QStringLiteral("messages"), messages);
+        payload.insert(QStringLiteral("temperature"), 0.2);
+        // 推理模型会先消耗 reasoning token；与 v3 一致给足余量。
+        payload.insert(QStringLiteral("max_tokens"), 4000);
+        payload.insert(QStringLiteral("stream"), false);
+
+        if (onStatus) {
+            onStatus(attempt == 0 ? QStringLiteral("正在挑选字幕音效…")
+                                  : QStringLiteral("音效选点格式异常，正在重试…"));
+        }
+
+        const HttpResponse response = m_http->postJson(
+            url, payload, QByteArray("Bearer ") + request.apiKey.toUtf8(),
+            kSfxTimeoutMs);
+        if (response.isHttpOk()) {
+            QString content;
+            const QJsonArray choices =
+                response.json.value(QStringLiteral("choices")).toArray();
+            if (!choices.isEmpty()) {
+                const QJsonObject message = choices.first()
+                                                .toObject()
+                                                .value(QStringLiteral("message"))
+                                                .toObject();
+                content = contentText(message.value(QStringLiteral("content")));
+            }
+            if (content.trimmed().isEmpty()) {
+                lastError = QStringLiteral("LLM 未返回音效选点。");
+                strictJson = true;
+                continue;
+            }
+
+            QVector<int> parsed;
+            if (parseSfxSelections(content, segmentCount, categoryCount, &parsed)) {
+                int assigned = 0;
+                for (int category : parsed) {
+                    if (category >= 0) {
+                        ++assigned;
+                    }
+                }
+                qInfo() << "LLM SFX selections:" << assigned << "/" << segmentCount;
+                *categories = parsed;
+                return true;
+            }
+
+            lastError = QStringLiteral("无法解析 LLM 返回的音效 JSON：%1")
+                            .arg(content.left(256));
+            strictJson = true;
+            continue;
+        }
+
+        lastError = QStringLiteral("LLM 音效请求失败：%1")
+                        .arg(requestErrorMessage(response));
+        const bool overloaded =
+            response.httpStatus == 429
+            || (response.httpStatus >= 500 && response.httpStatus < 600);
+        const bool network = !response.networkOk;
+        if ((overloaded || network) && attempt + 1 < kMaxAttempts) {
+            if (onStatus) {
+                onStatus(overloaded ? QStringLiteral("模型服务繁忙，2 秒后重试…")
+                                    : QStringLiteral("请求未完成，2 秒后重试…"));
+            }
+            QThread::msleep(2000);
+            continue;
         }
         break;
     }

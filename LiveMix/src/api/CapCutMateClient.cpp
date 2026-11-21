@@ -563,6 +563,9 @@ bool CapCutMateClient::addAudios(const QString &draftUrl,
         audioInfo.insert(QStringLiteral("start"), audio.startUs);
         audioInfo.insert(QStringLiteral("end"), audio.endUs);
         audioInfo.insert(QStringLiteral("volume"), audio.volume);
+        if (audio.durationUs > 0) {
+            audioInfo.insert(QStringLiteral("duration"), audio.durationUs);
+        }
         audioArray.append(audioInfo);
     }
     if (audioArray.isEmpty()) {

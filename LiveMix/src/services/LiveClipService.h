@@ -38,6 +38,17 @@ struct LiveClipRequest
     bool filters = true;
     // 自动 BGM：开启时从素材服务随机取一首背景音乐铺满成片。
     bool bgm = true;
+    // 自动音效：开启时按 sfx.json 的音效池，用大模型稀疏挑选字幕并写入音效轨。
+    bool sfx = true;
+};
+
+// 自动音效：sfx.json 提供名称与顺序，音频地址与时长从素材服务获取。
+struct SfxCategory
+{
+    QString name;
+    QString url;
+    qint64 durationMs = 0;
+    QString usageHint;
 };
 
 class HttpClient;
@@ -93,7 +104,8 @@ private:
                                LlmClient *llm, HttpClient *http,
                                const QString &inputPath,
                                const SelectedProject &project, int index,
-                               double speed, QString *error);
+                               double speed, const QVector<SfxCategory> &sfxCategories,
+                               QString *error);
 
     // 裁剪统一使用本地 MP4：HLS 录像优先复用已有 MP4，必要时无损转封装。
     QString resolveDraftInputPath(const MediaSource &source, QString *error);

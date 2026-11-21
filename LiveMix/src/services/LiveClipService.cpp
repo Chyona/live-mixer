@@ -22,8 +22,14 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QMap>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSize>
 #include <QThread>
@@ -306,6 +312,173 @@ QVector<CapCutAudioInfo> buildBgmAudioInfos(qint64 videoDurationUs,
         positionUs = segmentEndUs;
     }
     return infos;
+}
+
+// 自动音效：音量沿用 clipflow-ai v3 advanced 模板的 0.1。
+constexpr double kSfxVolume = 0.1;
+
+// sfx.json 只有名称与资源 ID；选择语义沿用 v3 模板，按名称补齐 usage_hint。
+QString sfxUsageHintForName(const QString &name)
+{
+    static const QHash<QString, QString> hints = {
+        {QStringLiteral("一滴水滴声"),
+         QStringLiteral("口语闲聊轻氛围音：日常叙述、过渡、普通讲解")},
+        {QStringLiteral("字幕音效-嘭"),
+         QStringLiteral("重点强调重音音效：卖点、数字、结论、强强调")},
+        {QStringLiteral("悬疑咚声"),
+         QStringLiteral("场景描述氛围感音效：画面感、环境、情绪氛围描写")},
+        {QStringLiteral("诡异的滴水声"),
+         QStringLiteral("引流引导互动音效：引导关注、点赞、下单、互动号召")},
+        {QStringLiteral("读评论提示音"),
+         QStringLiteral("用于视频中朗读用户评论时的入场或切换提示")},
+        {QStringLiteral("服装分类别场景金币声"),
+         QStringLiteral("用于服装类视频的分类切换、商品展示或奖励提示")},
+        {QStringLiteral("呼转场音效"),
+         QStringLiteral("用于悬疑或惊悚类视频的转场，营造不稳定的过渡效果")},
+        {QStringLiteral("划重点拳击声"),
+         QStringLiteral("用于强调关键信息、划重点，增强冲击力和注意力吸引")},
+        {QStringLiteral("讲卖点"),
+         QStringLiteral("用于引出或强调产品卖点，区别于普通重音，带有引导性")},
+        {QStringLiteral("开篇提示水滴声"),
+         QStringLiteral("用于视频开头吸引注意、引入主题，或章节起始提示")},
+        {QStringLiteral("写字幕场景打字声"),
+         QStringLiteral("配合字幕逐字出现，模拟打字机效果，增强文字节奏感")},
+        {QStringLiteral("抓特写场景弹簧声"),
+         QStringLiteral("用于镜头拉近、特写切换或细节突出，增加弹性动感")},
+        {QStringLiteral("综艺卡通biu"),
+         QStringLiteral("综艺感强调、趣味转场或亮点提示")},
+    };
+    return hints.value(name,
+                       QStringLiteral("通用音效：仅在字幕语义明显匹配时使用"));
+}
+
+// sfx.json 的一项：素材服务资源 ID 与展示名称。
+struct SfxCatalogEntry
+{
+    QString resourceId;
+    QString name;
+};
+
+// 读取随应用打包的 sfx.json（保持文件中的顺序）。
+// QJsonDocument 的数字类型是 double，无法精确承载 64 位资源 ID；
+// 解析前先把 "id" 的数字值包成字符串，保证后续能按 ID 精确匹配。
+QVector<SfxCatalogEntry> loadSfxCatalog()
+{
+    QFile file(QStringLiteral(":/sfx.json"));
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "SFX catalog unavailable:" << file.errorString();
+        return {};
+    }
+
+    QString raw = QString::fromUtf8(file.readAll());
+    static const QRegularExpression idPattern(
+        QStringLiteral("\"id\"(\\s*:\\s*)(\\d+)"));
+    raw.replace(idPattern, QStringLiteral("\"id\"\\1\"\\2\""));
+
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(raw.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
+        qWarning() << "SFX catalog is invalid:" << parseError.errorString();
+        return {};
+    }
+
+    QVector<SfxCatalogEntry> entries;
+    for (const QJsonValue &value : document.array()) {
+        const QJsonObject object = value.toObject();
+        const QString resourceId =
+            object.value(QStringLiteral("id")).toString().trimmed();
+        const QString name =
+            object.value(QStringLiteral("name")).toString().trimmed();
+        if (!resourceId.isEmpty() && !name.isEmpty()) {
+            entries.append({resourceId, name});
+        }
+    }
+    return entries;
+}
+
+// 按 sfx.json 的资源 ID 匹配素材服务返回的地址与时长。
+QVector<SfxCategory> buildSfxCategories(const QVector<SfxAsset> &assets)
+{
+    QHash<QString, SfxAsset> byResourceId;
+    for (const SfxAsset &asset : assets) {
+        byResourceId.insert(asset.resourceId, asset);
+    }
+
+    QVector<SfxCategory> categories;
+    for (const SfxCatalogEntry &entry : loadSfxCatalog()) {
+        const auto it = byResourceId.constFind(entry.resourceId);
+        if (it == byResourceId.constEnd()) {
+            qWarning() << "SFX asset not found in assets service:" << entry.name
+                       << entry.resourceId;
+            continue;
+        }
+        categories.append({it->name, it->url, it->durationMs,
+                           sfxUsageHintForName(it->name)});
+    }
+    return categories;
+}
+
+bool audioRangesOverlap(const CapCutAudioInfo &left, const CapCutAudioInfo &right)
+{
+    return left.startUs < right.endUs && right.startUs < left.endUs;
+}
+
+// 与 v3 的 dedupe_same_sfx_non_overlapping 一致：同一 URL 在时间轴上重叠时
+// 只保留先出现的一条。
+QVector<CapCutAudioInfo> dedupeSfxInfos(QVector<CapCutAudioInfo> infos)
+{
+    std::sort(infos.begin(), infos.end(),
+              [](const CapCutAudioInfo &left, const CapCutAudioInfo &right) {
+                  return left.startUs < right.startUs;
+              });
+    QVector<CapCutAudioInfo> kept;
+    for (const CapCutAudioInfo &info : infos) {
+        bool overlap = false;
+        for (const CapCutAudioInfo &existing : kept) {
+            if (existing.url == info.url && audioRangesOverlap(info, existing)) {
+                overlap = true;
+                break;
+            }
+        }
+        if (!overlap) {
+            kept.append(info);
+        }
+    }
+    return kept;
+}
+
+// 与 v3 的 group_sfx_audio_infos_for_add_audios 一致：同一批内不得有时间线
+// 重叠，重叠条目分到不同批次逐次调用 add_audios。
+QVector<QVector<CapCutAudioInfo>> groupSfxBatches(QVector<CapCutAudioInfo> infos)
+{
+    std::sort(infos.begin(), infos.end(),
+              [](const CapCutAudioInfo &left, const CapCutAudioInfo &right) {
+                  return left.startUs < right.startUs;
+              });
+
+    QVector<QVector<CapCutAudioInfo>> batches;
+    for (const CapCutAudioInfo &info : infos) {
+        bool placed = false;
+        for (QVector<CapCutAudioInfo> &batch : batches) {
+            bool overlap = false;
+            for (const CapCutAudioInfo &existing : batch) {
+                if (audioRangesOverlap(info, existing)) {
+                    overlap = true;
+                    break;
+                }
+            }
+            if (!overlap) {
+                batch.append(info);
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) {
+            batches.append(QVector<CapCutAudioInfo>{info});
+        }
+    }
+    return batches;
 }
 
 // 片段在成片播放轴上的时长（微秒）；有 scene 区间时以其为准。
@@ -856,6 +1029,21 @@ void LiveClipService::run()
     }
     emit pipelineEvent(draftPlan);
 
+    // 自动音效：一次拉取素材服务音效目录，再按 sfx.json 的资源 ID 对齐。
+    // 目录不可用时只跳过音效，不阻断草稿生成。
+    QVector<SfxCategory> sfxCategories;
+    if (m_request.sfx) {
+        AssetsClient assets(&http);
+        QVector<SfxAsset> sfxAssets;
+        QString sfxError;
+        if (assets.listSfx(&sfxAssets, &sfxError)) {
+            sfxCategories = buildSfxCategories(sfxAssets);
+            qInfo() << "SFX catalog ready:" << sfxCategories.size();
+        } else {
+            qWarning() << "SFX catalog unavailable:" << sfxError;
+        }
+    }
+
     for (int i = 0; i < projects.size(); ++i) {
         const SelectedProject &project = projects.at(i);
         const QString displayTitle =
@@ -882,7 +1070,7 @@ void LiveClipService::run()
         qInfo() << "Draft" << i + 1 << "playback speed:" << speed
                 << "auto:" << m_request.speedAuto;
         if (!createDraftForProject(&repository, &capcut, &llm, &http, draftInputPath,
-                                   project, i, speed, &error)) {
+                                   project, i, speed, sfxCategories, &error)) {
             emit finished(false, QStringLiteral("第 %1 条草稿生成失败：%2")
                                       .arg(i + 1)
                                       .arg(error));
@@ -1270,7 +1458,9 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                                             CapCutMateClient *capcut, LlmClient *llm,
                                             HttpClient *http, const QString &inputPath,
                                             const SelectedProject &project, int index,
-                                            double speed, QString *error)
+                                            double speed,
+                                            const QVector<SfxCategory> &sfxCategories,
+                                            QString *error)
 {
     const double boundedSpeed = qBound(0.5, speed, 2.0);
     if (project.ranges.isEmpty()) {
@@ -1615,6 +1805,114 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         return false;
     }
 
+    // 自动音效：按 v3 模板用大模型稀疏挑选字幕，贴字幕起点写入 add_audios。
+    // 选点或写轨失败都不阻断草稿，只在「添加字幕」步骤详情提示。
+    int sfxCount = 0;
+    QString sfxNote;
+    if (m_request.sfx && !captions.isEmpty() && !sfxCategories.isEmpty()) {
+        if (!llm) {
+            sfxNote = QStringLiteral("音效服务不可用");
+        } else {
+            emitStep(4, PipelineUi::StepStatus::Running, 30,
+                     QStringLiteral("正在挑选字幕音效"));
+            LlmSfxRequest sfxRequest;
+            sfxRequest.baseUrl = m_request.gatewayBaseUrl;
+            sfxRequest.apiKey = m_request.apiKey;
+            sfxRequest.segments.reserve(captions.size());
+            for (int i = 0; i < captions.size(); ++i) {
+                sfxRequest.segments.append(
+                    {captions.at(i).startUs / 1000, captions.at(i).endUs / 1000,
+                     captionTexts.value(i)});
+            }
+            sfxRequest.categories.reserve(sfxCategories.size());
+            for (const SfxCategory &category : sfxCategories) {
+                sfxRequest.categories.append({category.name, category.usageHint});
+            }
+
+            QVector<int> selections;
+            QString sfxError;
+            const auto onSfxStatus = [&emitStep](const QString &text) {
+                emitStep(4, PipelineUi::StepStatus::Running, 35, text);
+            };
+            if (!llm->selectSfx(sfxRequest, &selections, &sfxError, onSfxStatus)) {
+                qWarning() << "SFX selection failed:" << sfxError;
+                sfxNote = QStringLiteral("音效未生成");
+            } else {
+                const qint64 timelineEndUs = offsetMs * 1000;
+                const qint64 captionEndMs =
+                    captions.isEmpty() ? 0 : captions.last().endUs / 1000;
+                // 与 v3 一致：约每 60 秒 5 处音效，单条成片最多 8 处。
+                const int budget = qBound(
+                    0, qRound(double(captionEndMs) / 60000.0 * 5.0), 8);
+                // 本地音效池与 v3 的分类语义不同，这里不再套用 v3 的类别优先级，
+                // 只按字幕时间顺序截断到大模型被允许的建议数量。
+                QVector<int> eligible;
+                eligible.reserve(selections.size());
+                for (int i = 0; i < selections.size() && i < captions.size(); ++i) {
+                    const int category = selections.at(i);
+                    if (category >= 0 && category < sfxCategories.size()) {
+                        eligible.append(i);
+                    }
+                }
+                const int take = qMin(budget, int(eligible.size()));
+                QVector<CapCutAudioInfo> sfxInfos;
+                sfxInfos.reserve(take);
+                for (int i = 0; i < take; ++i) {
+                    const int captionIndex = eligible.at(i);
+                    const SfxCategory &category =
+                        sfxCategories.at(selections.at(captionIndex));
+                    const qint64 startUs = captions.at(captionIndex).startUs;
+                    const qint64 durationUs = category.durationMs * 1000;
+                    const qint64 endUs = startUs + durationUs;
+                    // 与 v3 一致：结束时间超出成片时间轴的音效直接丢弃。
+                    if (startUs < 0 || endUs > timelineEndUs) {
+                        continue;
+                    }
+                    CapCutAudioInfo info;
+                    info.url = category.url;
+                    info.startUs = startUs;
+                    info.endUs = endUs;
+                    info.volume = kSfxVolume;
+                    info.durationUs = durationUs;
+                    sfxInfos.append(info);
+                }
+
+                const QVector<QVector<CapCutAudioInfo>> batches =
+                    groupSfxBatches(dedupeSfxInfos(sfxInfos));
+                int written = 0;
+                bool failed = false;
+                for (int batch = 0; batch < batches.size(); ++batch) {
+                    emitStep(4, PipelineUi::StepStatus::Running,
+                             40 + 10 * batch / qMax(1, int(batches.size())),
+                             QStringLiteral("正在写入 %1/%2 组音效")
+                                 .arg(batch + 1)
+                                 .arg(batches.size()));
+                    QString audioError;
+                    if (capcut->addAudios(draft.draftUrl, batches.at(batch),
+                                          &audioError)) {
+                        written += int(batches.at(batch).size());
+                    } else {
+                        failed = true;
+                        qWarning() << "SFX batch failed:" << audioError;
+                    }
+                }
+                sfxCount = written;
+                if (written > 0) {
+                    qInfo() << "SFX added:" << written
+                            << "batches:" << batches.size();
+                }
+                if (failed) {
+                    sfxNote = written > 0 ? QStringLiteral("部分音效未写入")
+                                          : QStringLiteral("音效未写入");
+                }
+            }
+        }
+    } else if (m_request.sfx && captions.isEmpty()) {
+        sfxNote = QStringLiteral("没有可配音效的字幕");
+    } else if (m_request.sfx && sfxCategories.isEmpty()) {
+        sfxNote = QStringLiteral("音效素材不可用");
+    }
+
     // 中英文双字幕：逐条翻译后追加一条英文轨，放在中文字幕下方。
     // 翻译或英文轨写入失败都不阻断草稿生成，只回退为仅中文字幕。
     int englishCount = 0;
@@ -1734,6 +2032,11 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         captionDetail = QStringLiteral("%1 条字幕 · %2")
                             .arg(captions.size())
                             .arg(captionStyle.font);
+    }
+    if (sfxCount > 0) {
+        captionDetail += QStringLiteral(" · 音效 %1 处").arg(sfxCount);
+    } else if (!sfxNote.isEmpty()) {
+        captionDetail += QStringLiteral(" · %1").arg(sfxNote);
     }
     emitStep(4, PipelineUi::StepStatus::Done, 100, captionDetail);
 
