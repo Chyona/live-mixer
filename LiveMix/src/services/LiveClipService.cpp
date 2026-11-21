@@ -1729,48 +1729,6 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         }
     }
 
-    // 自动 BGM：从素材服务随机取一首，短于成片时循环铺满；音量沿用 v3 的 0.1。
-    // 取曲或写轨失败都不阻断草稿，只在「添加视频」步骤详情里提示。
-    if (m_request.bgm && offsetMs > 0) {
-        emitStep(3, PipelineUi::StepStatus::Running, 95,
-                 QStringLiteral("正在随机匹配背景音乐"));
-        AssetsClient assets(http);
-        BgmTrack track;
-        QString bgmError;
-        if (assets.randomBgm(&track, &bgmError)) {
-            qint64 bgmMs = track.durationMs;
-            // 素材服务通常带 duration_ms；缺失时用 ffprobe 兜底探测签名 URL。
-            if (bgmMs <= 0 && !FfmpegUtils::mediaDurationMs(track.url, &bgmMs)) {
-                bgmMs = 0;
-            }
-            if (bgmMs > 0) {
-                const QVector<CapCutAudioInfo> audios =
-                    buildBgmAudioInfos(offsetMs * 1000, bgmMs * 1000, track.url);
-                QString audioError;
-                if (capcut->addAudios(draft.draftUrl, audios, &audioError)) {
-                    qInfo() << "BGM added:" << track.name << bgmMs << "ms, segments:"
-                            << audios.size();
-                    QString detail =
-                        QStringLiteral("背景音乐「%1」").arg(track.name);
-                    if (audios.size() > 1) {
-                        detail += QStringLiteral(" · 循环 %1 次").arg(audios.size());
-                    }
-                    packagingDetails.append(detail);
-                } else {
-                    qWarning() << "BGM skipped:" << audioError;
-                    packagingDetails.append(QStringLiteral("背景音乐未写入"));
-                }
-            } else {
-                qWarning() << "BGM skipped: cannot determine duration for"
-                           << track.name;
-                packagingDetails.append(QStringLiteral("背景音乐时长未知"));
-            }
-        } else {
-            qWarning() << "Random BGM failed:" << bgmError;
-            packagingDetails.append(QStringLiteral("背景音乐未获取"));
-        }
-    }
-
     QString videoDetail = QStringLiteral("%1 个视频片段已写入主轨").arg(videos.size());
     if (!packagingDetails.isEmpty()) {
         videoDetail += QStringLiteral(" · ")
@@ -1894,6 +1852,48 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         sfxNote = QStringLiteral("没有可配音效的字幕");
     } else if (m_request.sfx && sfxCategories.isEmpty()) {
         sfxNote = QStringLiteral("音效素材不可用");
+    }
+
+    // 自动 BGM：按「先音效、后 BGM」的顺序写入，保证音效轨在 BGM 轨之前。
+    // 从素材服务随机取一首，短于成片时循环铺满；音量沿用 v3 的 0.1。
+    // 取曲或写轨失败都不阻断草稿，只在「添加字幕」步骤详情里提示。
+    QString bgmNote;
+    if (m_request.bgm && offsetMs > 0) {
+        emitStep(4, PipelineUi::StepStatus::Running, 50,
+                 QStringLiteral("正在随机匹配背景音乐"));
+        AssetsClient assets(http);
+        BgmTrack track;
+        QString bgmError;
+        if (assets.randomBgm(&track, &bgmError)) {
+            qint64 bgmMs = track.durationMs;
+            // 素材服务通常带 duration_ms；缺失时用 ffprobe 兜底探测签名 URL。
+            if (bgmMs <= 0 && !FfmpegUtils::mediaDurationMs(track.url, &bgmMs)) {
+                bgmMs = 0;
+            }
+            if (bgmMs > 0) {
+                const QVector<CapCutAudioInfo> audios =
+                    buildBgmAudioInfos(offsetMs * 1000, bgmMs * 1000, track.url);
+                QString audioError;
+                if (capcut->addAudios(draft.draftUrl, audios, &audioError)) {
+                    qInfo() << "BGM added:" << track.name << bgmMs << "ms, segments:"
+                            << audios.size();
+                    bgmNote = QStringLiteral("背景音乐「%1」").arg(track.name);
+                    if (audios.size() > 1) {
+                        bgmNote += QStringLiteral(" · 循环 %1 次").arg(audios.size());
+                    }
+                } else {
+                    qWarning() << "BGM skipped:" << audioError;
+                    bgmNote = QStringLiteral("背景音乐未写入");
+                }
+            } else {
+                qWarning() << "BGM skipped: cannot determine duration for"
+                           << track.name;
+                bgmNote = QStringLiteral("背景音乐时长未知");
+            }
+        } else {
+            qWarning() << "Random BGM failed:" << bgmError;
+            bgmNote = QStringLiteral("背景音乐未获取");
+        }
     }
 
     // 中英文双字幕：逐条翻译后追加一条英文轨，放在中文字幕下方。
@@ -2020,6 +2020,9 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         captionDetail += QStringLiteral(" · 音效 %1 处").arg(sfxCount);
     } else if (!sfxNote.isEmpty()) {
         captionDetail += QStringLiteral(" · %1").arg(sfxNote);
+    }
+    if (!bgmNote.isEmpty()) {
+        captionDetail += QStringLiteral(" · ") + bgmNote;
     }
     emitStep(4, PipelineUi::StepStatus::Done, 100, captionDetail);
 
