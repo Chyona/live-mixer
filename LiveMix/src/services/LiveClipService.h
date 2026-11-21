@@ -16,6 +16,15 @@
 #include <QString>
 #include <QVector>
 
+// 成片数量规则：每条成片至少使用 5 分钟素材，避免切得过碎导致内容重复；
+// 最多使用 30 分钟素材，避免条数过少浪费素材。
+// 允许条数 = [ceil(素材总时长 / 30 分钟), floor(素材总时长 / 5 分钟)]。
+constexpr qint64 kMinClipMaterialMs = 5LL * 60 * 1000;
+constexpr qint64 kMaxClipMaterialMs = 30LL * 60 * 1000;
+
+int minClipCountForDuration(qint64 durationMs);
+int maxClipCountForDuration(qint64 durationMs);
+
 struct LiveClipRequest
 {
     qint64 sourceId = -1;
@@ -25,7 +34,8 @@ struct LiveClipRequest
     QString promptText;     // 选片系统提示词（内置提示词由后端导入）
     QString promptLabel;    // 过程页展示的提示词名称
     QString cacheDir;
-    // 目标成片数量；<= 0 表示自动（每段精选 1 条）。
+    // 目标成片数量；<= 0 表示自动（按每条最多 30 分钟素材取最少条数）。
+    // 指定时需落在 [minClipCountForDuration, maxClipCountForDuration] 内。
     int targetClipCount = -1;
     // 成片设置：每条成片 1.0×–1.5× 随机取速，或固定为 fixedSpeed。
     bool speedAuto = true;
@@ -92,7 +102,10 @@ private:
                           CapCutMateClient *capcut, const QString &mediaPath,
                           const QString &fingerprintPath, AsrTranscript *transcript,
                           QString *error);
-    QVector<TranscriptChunk> buildChunks(const AsrTranscript &transcript) const;
+    // 把转写按成片数量均分为等长时间窗；窗口数即目标成片数。
+    // 条数范围由 5–30 分钟/条的素材预算保证，因此窗口时长不超过 LLM 单次上限。
+    QVector<TranscriptChunk> buildChunks(const AsrTranscript &transcript,
+                                         int chunkCount) const;
 
     // 把 LLM 返回的句段索引转换为裁剪区间；相邻区间间隔 ≤ 500ms 时合并。
     QVector<ClipRange> mergeRanges(const QVector<ClipRange> &ranges) const;

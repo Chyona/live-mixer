@@ -1861,6 +1861,18 @@ void MainWindow::startClipPipeline(qint64 sourceId, const QString &promptText,
         showToast(taskError);
         return;
     }
+    // 「再跑一次」/任务重试可能绕过弹窗，这里按同一规则再校验一次。
+    if (targetClipCount > 0 && source.durationMs > 0) {
+        const int minAllowed = minClipCountForDuration(source.durationMs);
+        const int maxAllowed = maxClipCountForDuration(source.durationMs);
+        if (targetClipCount < minAllowed || targetClipCount > maxAllowed) {
+            showToast(QStringLiteral("素材时长 %1，成片数量需在 %2–%3 条之间。")
+                          .arg(MediaUtils::formatDuration(source.durationMs))
+                          .arg(minAllowed)
+                          .arg(maxAllowed));
+            return;
+        }
+    }
     const qint64 taskId =
         m_repository->createClipTask(sourceId, source.title, &taskError);
     if (taskId < 0) {
@@ -2864,9 +2876,10 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     videoInput->setReadOnly(true);
     auto *videoField = new FormField(
         QStringLiteral("视频"), videoInput,
-        QStringLiteral("先提取 MP3 并调用 ASR；单段转写不超过 30 分钟，更长时按总时长"
-                       "均衡切成多段（如 40 分钟 → 2 段、66 分钟 → 3 段），切点尽量"
-                       "落在句号上。"),
+        QStringLiteral("成片数量按素材时长限制：每 5 分钟素材最多生成 1 条"
+                       "（避免切片重复，可能被抖音等平台判违规），每条最多使用 "
+                       "30 分钟素材（避免浪费）。先提取 MP3 并调用 ASR，再按目标"
+                       "条数把素材均分为等长时间段，切点尽量落在句号上。"),
         false, card);
     card->contentLayout()->addWidget(videoField);
 
@@ -2904,7 +2917,14 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     promptLayout->addWidget(hintRow);
     card->contentLayout()->addWidget(promptGroup);
 
-    // 成片数量：自动（每段精选 1 条）或指定 1–100 条。
+    // 成片数量：自动，或按素材时长指定条数。
+    // 每 5 分钟素材最多 1 条，避免过度切片导致内容重复；每条最多使用 30 分钟
+    // 素材，避免条数过少浪费素材。
+    const qint64 sourceDurationMs = source.durationMs;
+    const int minClipCount = minClipCountForDuration(sourceDurationMs);
+    const int maxClipCount = maxClipCountForDuration(sourceDurationMs);
+    const QString durationText = MediaUtils::formatDuration(sourceDurationMs);
+    const int defaultClipCount = qBound(minClipCount, 6, maxClipCount);
     auto *countGroup = new QWidget(card);
     auto *countLayout = new QVBoxLayout(countGroup);
     countLayout->setContentsMargins(0, 0, 0, 0);
@@ -2917,8 +2937,10 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     countLabelLayout->addWidget(
         Ui::label(QStringLiteral("成片数量"), 12, 400, Theme::Text2, countLabelRow));
     countLabelLayout->addStretch(1);
-    auto *countRange =
-        Ui::label(QStringLiteral("1–100"), 10, 400, Theme::Text3, countLabelRow);
+    auto *countRange = Ui::label(QStringLiteral("%1–%2")
+                                     .arg(minClipCount)
+                                     .arg(maxClipCount),
+                                 10, 400, Theme::Text3, countLabelRow);
     countRange->setFont(Theme::monoFont(10));
     countLabelLayout->addWidget(countRange);
     countLayout->addWidget(countLabelRow);
@@ -2941,10 +2963,11 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     countInputLayout->setSpacing(8);
     auto *countInput = new InputField(countInputRow);
     countInput->setFixedWidth(84);
-    countInput->setText(QStringLiteral("6"));
-    countInput->setPlaceholder(QStringLiteral("6"));
+    countInput->setText(QString::number(defaultClipCount));
+    countInput->setPlaceholder(QString::number(defaultClipCount));
     if (countInput->lineEdit()) {
-        countInput->lineEdit()->setValidator(new QIntValidator(0, 1000, countInput));
+        countInput->lineEdit()->setValidator(
+            new QIntValidator(0, qMax(1000, maxClipCount), countInput));
         countInput->lineEdit()->setAlignment(Qt::AlignCenter);
     }
     countInputLayout->addWidget(countInput);
@@ -2960,10 +2983,10 @@ void MainWindow::openStartPipeline(qint64 sourceId)
     card->contentLayout()->addWidget(countGroup);
 
     card->contentLayout()->addWidget(makeNotice(
-        QStringLiteral("流程：提取 MP3 → ASR 转写（缓存到本地）→ 按转写时长均衡切成"
-                       "每段不超过 30 分钟的多段，由 AI 按提示词选出若干片段并合并成成片"
-                       " → 裁剪并生成剪映草稿。"
-                       "草稿只在点击「导出到剪映」时下载。"),
+        QStringLiteral("流程：提取 MP3 → ASR 转写（缓存到本地）→ 按成片数量把素材"
+                       "均分为等长时间段（每条成片独占一段，每段 5–30 分钟素材），"
+                       "由 AI 在各自时间段内按提示词选片并合并成成片 → 裁剪并生成"
+                       "剪映草稿。草稿只在点击「导出到剪映」时下载。"),
         card));
 
     auto *cancel = new Button(QStringLiteral("取消"), Button::Default, card);
@@ -2971,32 +2994,57 @@ void MainWindow::openStartPipeline(qint64 sourceId)
 
     auto applyCountUi =
         [countAutoButton, countFixedButton, countInputRow, countHint, countInput,
-         start](bool focusInput) {
+         start, minClipCount, maxClipCount, sourceDurationMs,
+         durationText](bool focusInput) {
             const bool automatic = countAutoButton->isSelected();
             countFixedButton->setSelected(!automatic);
             countInputRow->setVisible(!automatic);
 
             bool ok = false;
             const int value = countInput->text().trimmed().toInt(&ok);
-            const bool valid =
-                automatic || (ok && value >= 1 && value <= 100);
-            start->setEnabled(valid);
+            bool isError = false;
+            QString hint;
 
             if (automatic) {
-                countHint->setText(
-                    QStringLiteral("自动：按转写内容与直播时长决定，每段精选 1 条。"));
-                countHint->setStyleSheet(QStringLiteral(
-                    "color:#62697E;background:transparent;"));
-            } else if (valid) {
-                countHint->setText(
-                    QStringLiteral("AI 会按目标条数精选，数量越多生成越久。"));
-                countHint->setStyleSheet(QStringLiteral(
-                    "color:#62697E;background:transparent;"));
+                hint = QStringLiteral(
+                    "自动：按素材时长生成最少条数（每条最多使用 30 分钟素材，"
+                    "当前为 %1 条）。").arg(minClipCount);
+            } else if (!ok || value <= 0) {
+                hint = QStringLiteral("请输入 %1–%2 之间的整数。")
+                           .arg(minClipCount)
+                           .arg(maxClipCount);
+                isError = true;
+            } else if (value > maxClipCount) {
+                hint = QStringLiteral(
+                    "素材时长 %1，最多只能生成 %2 条：每 5 分钟素材最多生成 1 条，"
+                    "数量过多会导致切片重复，可能被抖音等平台判违规。")
+                           .arg(durationText)
+                           .arg(maxClipCount);
+                isError = true;
+            } else if (value < minClipCount) {
+                hint = QStringLiteral(
+                    "素材时长 %1，至少需要生成 %2 条：每条最多使用 30 分钟素材，"
+                    "数量过少会浪费素材。")
+                           .arg(durationText)
+                           .arg(minClipCount);
+                isError = true;
             } else {
-                countHint->setText(QStringLiteral("请输入 1–100 之间的整数。"));
-                countHint->setStyleSheet(QStringLiteral(
-                    "color:#F6465D;background:transparent;"));
+                const qint64 perClipMs =
+                    sourceDurationMs > 0 ? sourceDurationMs / value : 0;
+                hint = perClipMs > 0
+                           ? QStringLiteral(
+                                 "每条约使用 %1 素材：素材将均分为 %2 个时间段，"
+                                 "每个时间段生成 1 条成片。")
+                                 .arg(MediaUtils::formatDuration(perClipMs))
+                                 .arg(value)
+                           : QStringLiteral("AI 会按目标条数精选，数量越多生成越久。");
             }
+
+            start->setEnabled(!isError);
+            countHint->setText(hint);
+            countHint->setStyleSheet(
+                isError ? QStringLiteral("color:#F6465D;background:transparent;")
+                        : QStringLiteral("color:#62697E;background:transparent;"));
 
             if (focusInput && !automatic && countInput->lineEdit()) {
                 countInput->lineEdit()->setFocus();
@@ -3025,12 +3073,13 @@ void MainWindow::openStartPipeline(qint64 sourceId)
 
     connect(cancel, &QAbstractButton::clicked, this, [this] { m_modalOverlay->closeModal(); });
     connect(start, &QAbstractButton::clicked, this,
-            [this, source, select, countAutoButton, countInput] {
+            [this, source, select, countAutoButton, countInput, minClipCount,
+             maxClipCount] {
                 int targetClipCount = -1;
                 if (!countAutoButton->isSelected()) {
                     bool ok = false;
                     const int value = countInput->text().trimmed().toInt(&ok);
-                    if (!ok || value < 1 || value > 100) {
+                    if (!ok || value < minClipCount || value > maxClipCount) {
                         return;
                     }
                     targetClipCount = value;

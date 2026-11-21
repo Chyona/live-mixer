@@ -1,8 +1,9 @@
 // 文件作用：直播切片流水线实现，串起 ASR、LLM、ffmpeg 与剪映小助手。
 // 录制源处理：HLS/TS 只用于录制恢复；成片前先无损合成完整 MP4（已存在时
 // 直接复用），之后的音频提取、ASR 与裁剪都按本地 MP4 处理。
-// 选片策略：单次 LLM 选片最多覆盖 30 分钟转写；超过时按总时长均衡切成
-// 若干段分别调用（40 分钟 → 2×20，66 分钟 → 3×22），切点尽量落在句号上。
+// 选片策略：指定成片数量 N 时，把素材按 N 均分为等长时间窗，每个窗口生成
+// 一条成片（窗口时长 = 总时长 / N，条数范围保证其落在 5–30 分钟）；自动模式
+// 按每条最多 30 分钟素材取最少条数。切点尽量落在句号上。
 // 模型返回句段索引与标题/描述/话题，再把选中句段合并、裁剪并拼成一条草稿。
 // 平台去重开启时，主轨每段随机放大，并在主视频与字幕之间叠低透明度随机图片。
 #include "LiveClipService.h"
@@ -36,9 +37,6 @@
 #include <cmath>
 
 namespace {
-
-// 单次 LLM 选片最多覆盖 30 分钟转写；超过时均衡切成多段，避免硬切。
-constexpr qint64 kLlmChunkLimitMs = 30LL * 60 * 1000;
 
 // 在每段目标切点前后各 5 分钟内寻找句号。
 constexpr qint64 kChunkSplitSearchMs = 5LL * 60 * 1000;
@@ -98,15 +96,6 @@ private:
 QString formatSeconds(qint64 milliseconds)
 {
     return MediaUtils::formatDuration(qMax<qint64>(0, milliseconds));
-}
-
-// 单次 LLM 最多处理 30 分钟转写：段数向上取整，再按段数均分总时长。
-int chunkCountForDuration(qint64 durationMs)
-{
-    if (durationMs <= kLlmChunkLimitMs) {
-        return 1;
-    }
-    return int((durationMs + kLlmChunkLimitMs - 1) / kLlmChunkLimitMs);
 }
 
 qint64 totalDuration(const QVector<ClipRange> &ranges)
@@ -713,14 +702,15 @@ bool endsWithSentenceEnd(const QString &text)
         || last == QLatin1Char('?');
 }
 
-// 返回目标切点之后一段的起始句索引；优先取目标时间前后 5 分钟内离目标
-// 最近的句号，找不到句号时退回离目标最近的句段边界。
-// searchFrom 用于保证多段切分时索引持续前进，不会切出空段。
+// 返回目标切点之后一段的起始句索引。优先在 searchRadiusMs 内找离目标最近的
+// 句号，找不到时退回离目标最近的句段边界；searchFrom 保证多段切分时索引持续
+// 前进，不会切出空段。searchRadiusMs 由单段窗口时长决定：窗口越小，允许的
+// 句号偏移越小，避免把 5 分钟的窗口切成 1 分钟或 9 分钟。
 int splitIndexNear(const QVector<AsrUtterance> &utterances, qint64 targetMs,
-                   int searchFrom)
+                   int searchFrom, qint64 searchRadiusMs)
 {
     int periodSplit = 0;
-    qint64 periodDistance = kChunkSplitSearchMs + 1;
+    qint64 periodDistance = searchRadiusMs + 1;
     int nearestSplit = qMax(1, searchFrom);
     qint64 nearestDistance = -1;
 
@@ -736,7 +726,7 @@ int splitIndexNear(const QVector<AsrUtterance> &utterances, qint64 targetMs,
         }
         // 切点落在上一句的句号之后，按句号结束时间衡量与目标的距离。
         const qint64 distance = qAbs(utterances.at(i - 1).endMs - targetMs);
-        if (distance <= kChunkSplitSearchMs
+        if (distance <= searchRadiusMs
             && (periodSplit == 0 || distance < periodDistance)) {
             periodDistance = distance;
             periodSplit = i;
@@ -747,6 +737,24 @@ int splitIndexNear(const QVector<AsrUtterance> &utterances, qint64 targetMs,
 }
 
 } // namespace
+
+int minClipCountForDuration(qint64 durationMs)
+{
+    if (durationMs <= 0) {
+        return 1;
+    }
+    return int(qMax<qint64>(1, (durationMs + kMaxClipMaterialMs - 1)
+                                   / kMaxClipMaterialMs));
+}
+
+int maxClipCountForDuration(qint64 durationMs)
+{
+    if (durationMs <= 0) {
+        // 时长未知时保留旧版上限，避免界面出现无法输入的极大值。
+        return 100;
+    }
+    return int(qMax<qint64>(1, durationMs / kMinClipMaterialMs));
+}
 
 LiveClipService::LiveClipService(const LiveClipRequest &request, QObject *parent)
     : QObject(parent)
@@ -809,20 +817,48 @@ void LiveClipService::run()
     }
 
     m_sourceDurationMs = qMax<qint64>(0, source.durationMs);
+    // 少数来源可能没有写入时长；补一次探测，确保数量规则能生效。
+    if (m_sourceDurationMs <= 0 && !source.localPath.isEmpty()) {
+        qint64 probedMs = 0;
+        if (FfmpegUtils::mediaDurationMs(source.localPath, &probedMs)
+            && probedMs > 0) {
+            m_sourceDurationMs = probedMs;
+        }
+    }
 
     const int requestedClips = m_request.targetClipCount;
-    const int estimatedChunks = chunkCountForDuration(m_sourceDurationMs);
+    // 成片数量受素材时长约束：每 5 分钟素材最多 1 条，每条最多 30 分钟素材。
+    // 弹窗已按同一规则限制输入，这里再做一次防御校验，避免重试/任务恢复绕过。
+    if (requestedClips > 0 && m_sourceDurationMs > 0) {
+        const int minAllowed = minClipCountForDuration(m_sourceDurationMs);
+        const int maxAllowed = maxClipCountForDuration(m_sourceDurationMs);
+        if (requestedClips < minAllowed || requestedClips > maxAllowed) {
+            emit finished(
+                false,
+                QStringLiteral(
+                    "素材时长 %1，成片数量需在 %2–%3 条之间：每 5 分钟素材最多"
+                    "生成 1 条，数量过多会导致切片重复，可能被抖音等平台判违规；"
+                    "每条最多使用 30 分钟素材，数量过少会浪费素材。")
+                    .arg(MediaUtils::formatDuration(m_sourceDurationMs))
+                    .arg(minAllowed)
+                    .arg(maxAllowed));
+            return;
+        }
+    }
+    // 自动模式：按每条最多 30 分钟素材取最少条数。
+    const int estimatedChunks = minClipCountForDuration(m_sourceDurationMs);
 
     PipelineUi::Event runStarted;
     runStarted.type = PipelineUi::EventType::RunStarted;
     runStarted.sourceTitle = source.title;
     runStarted.promptLabel = m_request.promptLabel;
     runStarted.durationMs = m_sourceDurationMs;
-    // ASR 返回前先按源视频时长预判段数；ASR 完成后会按实际转写时长重算。
-    runStarted.count = estimatedChunks;
-    runStarted.segmentCount = estimatedChunks;
+    // ASR 返回前先按源视频时长预判段数；指定数量时窗口数就是目标条数。
+    const int plannedCount = requestedClips > 0 ? requestedClips : estimatedChunks;
+    runStarted.count = plannedCount;
+    runStarted.segmentCount = plannedCount;
     runStarted.clipTarget = requestedClips > 0 ? requestedClips : -1;
-    runStarted.targetClipCount = requestedClips > 0 ? requestedClips : estimatedChunks;
+    runStarted.targetClipCount = plannedCount;
     emit pipelineEvent(runStarted);
 
     // ---- 第零步：准备本地 MP4 ---------------------------------------------
@@ -849,25 +885,42 @@ void LiveClipService::run()
         return;
     }
 
-    const QVector<TranscriptChunk> chunks = buildChunks(transcript);
+    // 指定数量时，素材按目标条数均分为等长时间窗：每条成片独占一个窗口，
+    // 窗口时长 = 素材总时长 / 条数（60 分钟选 6 条 → 每条 10 分钟素材）。
+    // 自动模式按每条最多 30 分钟素材取最少条数，与弹窗展示保持一致。
+    const qint64 asrDurationMs = transcript.durationMs();
+    const int autoClips = minClipCountForDuration(
+        m_sourceDurationMs > 0 ? m_sourceDurationMs : asrDurationMs);
+    const int utteranceCount = int(transcript.utterances.size());
+    if (utteranceCount <= 0) {
+        emit finished(false, QStringLiteral("转写结果中没有可用于选片的语句。"));
+        return;
+    }
+    int targetTotal = requestedClips > 0 ? requestedClips : autoClips;
+    // 防御：源时长缺失或元数据异常时，确保单个窗口不超过 LLM 单次 30 分钟上限。
+    const int llmWindowCount = minClipCountForDuration(asrDurationMs);
+    if (targetTotal < llmWindowCount) {
+        qWarning() << "Clip count raised to keep each LLM window <= 30 min:"
+                   << targetTotal << "->" << llmWindowCount;
+        targetTotal = llmWindowCount;
+    }
+    // 极短素材或识别句数不足时，窗口数不能超过可用句数。
+    targetTotal = qBound(1, targetTotal, utteranceCount);
+
+    const QVector<TranscriptChunk> chunks = buildChunks(transcript, targetTotal);
     if (chunks.isEmpty()) {
         emit finished(false, QStringLiteral("转写结果中没有可用于选片的语句。"));
         return;
     }
 
     const int chunkCount = chunks.size();
-    // 自动模式每段精选 1 条；指定数量时把目标条数均匀分配到各段。
-    QVector<int> allocation(chunkCount, 1);
-    int targetTotal = chunkCount;
-    if (requestedClips > 0) {
-        targetTotal = requestedClips;
-        allocation.fill(0);
-        const int base = requestedClips / chunkCount;
-        const int extra = requestedClips % chunkCount;
-        for (int i = 0; i < chunkCount; ++i) {
-            allocation[i] = base + (i < extra ? 1 : 0);
-        }
+    if (targetTotal != chunkCount) {
+        qWarning() << "Clip window count adjusted from" << targetTotal << "to"
+                   << chunkCount;
+        targetTotal = chunkCount;
     }
+    // 每个时间窗只生成一条成片，不再需要把多条成片分配到同一段。
+    QVector<int> allocation(chunkCount, 1);
 
     // 先把分段方案交给过程页，候选卡片在 AI 开始前就能展示“等待评估”。
     PipelineUi::Event selectPlan;
@@ -944,19 +997,6 @@ void LiveClipService::run()
             request.apiKey = m_request.apiKey;
             request.systemPrompt = m_request.promptText;
             request.segments = chunk.segments;
-            if (requestedClips > 0) {
-                request.extraInstruction =
-                    QStringLiteral(
-                        "本段共需要选出 %1 条成片，本次是第 %2 条。请只选出一条"
-                        "成片，并确保与同段其他成片选择的句段不重复。")
-                        .arg(allocation.at(i))
-                        .arg(slot + 1);
-                if (!chunkUsedIndices.isEmpty()) {
-                    QVector<int> excluded = chunkUsedIndices.values().toVector();
-                    std::sort(excluded.begin(), excluded.end());
-                    request.excludedIndices = excluded;
-                }
-            }
 
             // 模型 reasoning_content 的增量实时写入过程页；状态提示用于等待/重试。
             const auto onThought = [this, candidateOrdinal, targetTotal,
@@ -1374,7 +1414,7 @@ bool LiveClipService::ensureTranscript(MediaRepository *repository, HttpClient *
 }
 
 QVector<LiveClipService::TranscriptChunk>
-LiveClipService::buildChunks(const AsrTranscript &transcript) const
+LiveClipService::buildChunks(const AsrTranscript &transcript, int chunkCount) const
 {
     QVector<TranscriptChunk> chunks;
     const QVector<AsrUtterance> &utterances = transcript.utterances;
@@ -1382,12 +1422,12 @@ LiveClipService::buildChunks(const AsrTranscript &transcript) const
         return chunks;
     }
 
-    // 以 ASR 的实际时长决定分段：每段目标时长不超过 30 分钟，
-    // 段数 = 总时长 / 30 分钟向上取整，再按段数均分（40 分钟 → 2×20，
-    // 66 分钟 → 3×22）。切点尽量落在句号上，避免把一句话拆到两组提示词里。
+    // 按目标成片数量把转写均分为等长时间窗（60 分钟选 6 条 → 6×10 分钟）。
+    // 条数范围由 5–30 分钟/条的素材预算保证，因此窗口不会超过 LLM 单次 30
+    // 分钟上限。切点尽量落在句号上，避免把一句话拆到两个窗口。
     const qint64 asrDurationMs = transcript.durationMs();
     const int utteranceCount = int(utterances.size());
-    const int chunkCount = qMin(chunkCountForDuration(asrDurationMs), utteranceCount);
+    chunkCount = qBound(1, chunkCount, utteranceCount);
 
     const auto appendChunk = [&chunks](const QVector<AsrUtterance> &segments) {
         if (segments.isEmpty()) {
@@ -1405,12 +1445,18 @@ LiveClipService::buildChunks(const AsrTranscript &transcript) const
         return chunks;
     }
 
+    // 句号对齐的搜索半径限制在窗口时长的 1/10，避免小窗口被切得忽长忽短。
+    const qint64 windowMs = asrDurationMs / qMax(1, chunkCount);
+    const qint64 searchRadiusMs =
+        qMin(kChunkSplitSearchMs, qMax<qint64>(1000, windowMs / 10));
+
     int previousSplit = 0;
     for (int i = 1; i < chunkCount; ++i) {
         const qint64 targetMs = asrDurationMs * i / chunkCount;
         // 剩余段至少各占一句，避免切点越过末尾。
         const int maxSplit = utteranceCount - (chunkCount - i);
-        int split = splitIndexNear(utterances, targetMs, previousSplit + 1);
+        int split = splitIndexNear(utterances, targetMs, previousSplit + 1,
+                                   searchRadiusMs);
         split = qBound(previousSplit + 1, split, maxSplit);
         appendChunk(utterances.mid(previousSplit, split - previousSplit));
         previousSplit = split;
