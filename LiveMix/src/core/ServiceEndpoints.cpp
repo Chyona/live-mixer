@@ -24,4 +24,9 @@ QUrl capCutMateUrl(const QString &endpoint)
     return url;
 }
 
+QString assetsApiPrefix()
+{
+    return QStringLiteral("/openapi/assets/v1");
+}
+
 } // namespace ServiceEndpoints

@@ -105,6 +105,18 @@ HttpResponse HttpClient::get(const QUrl &url, int timeoutMs,
     return waitForReply(m_manager.get(request), timeoutMs, shouldAbort);
 }
 
+HttpResponse HttpClient::getWithHeaders(
+    const QUrl &url, const QVector<QPair<QByteArray, QByteArray>> &headers,
+    int timeoutMs)
+{
+    QNetworkRequest request(url);
+    applyCommonHeaders(&request);
+    for (const QPair<QByteArray, QByteArray> &header : headers) {
+        request.setRawHeader(header.first, header.second);
+    }
+    return waitForReply(m_manager.get(request), timeoutMs);
+}
+
 HttpResponse HttpClient::postJson(const QUrl &url, const QJsonObject &payload,
                                   const QByteArray &authorization, int timeoutMs)
 {

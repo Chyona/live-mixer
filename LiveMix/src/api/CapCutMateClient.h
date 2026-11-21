@@ -1,8 +1,8 @@
 #pragma once
 
 // 文件作用：剪映小助手（capcut-mate）接口客户端。
-// 负责文件上传、创建草稿、添加视频（含转场）/ 字幕 / 滤镜 / 特效，以及点击
-// 「打开草稿文件夹」时的草稿下载。
+// 负责文件上传、创建草稿、添加视频（含转场）/ 字幕 / 滤镜 / 特效 / 音频，
+// 以及点击「打开草稿文件夹」时的草稿下载。
 
 #include "../services/DraftDownloadJob.h"
 
@@ -45,6 +45,16 @@ struct CapCutFilterInfo
     qint64 startUs = 0;
     qint64 endUs = 0;
     double intensity = 100.0;
+};
+
+// 草稿音频轨的一段；BGM 短于成片时由调用方按整首长度拆成多段循环铺轨。
+// volume 为 0–1 的轨音量。
+struct CapCutAudioInfo
+{
+    QString url;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+    double volume = 0.1;
 };
 
 struct CapCutCaption
@@ -130,6 +140,10 @@ public:
     // 添加滤镜轨（add_filters）；一条滤镜可覆盖整条成片时间轴。
     bool addFilters(const QString &draftUrl, const QVector<CapCutFilterInfo> &filters,
                     QString *error);
+
+    // 添加音频轨（add_audios）；多段按 start/end 顺序铺在同一条音频轨上。
+    bool addAudios(const QString &draftUrl, const QVector<CapCutAudioInfo> &audios,
+                   QString *error);
 
     // 云端合成成片：提交 gen_video 后通过 gen_video_status 轮询。
     bool genVideo(const QString &draftUrl, const QString &apiKey, QString *error);

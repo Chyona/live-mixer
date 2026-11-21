@@ -1886,6 +1886,7 @@ void MainWindow::startClipPipeline(qint64 sourceId, const QString &promptText,
     request.transitions = config.finish.transitions;
     request.effects = config.finish.effects;
     request.filters = config.finish.filters;
+    request.bgm = config.finish.bgm;
     m_lastSourceId = sourceId;
     m_lastPromptText = promptText;
     m_lastPromptLabel = promptLabel;

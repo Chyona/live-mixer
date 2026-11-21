@@ -19,4 +19,7 @@ QString capCutMateApiPrefix();
 // Builds the full URL for a CapCut Mate endpoint, e.g. capCutMateUrl("create_draft").
 QUrl capCutMateUrl(const QString &endpoint);
 
+// 素材服务 OpenAPI 的固定路径前缀；主机地址与凭证内置在 AssetsClient 中。
+QString assetsApiPrefix();
+
 } // namespace ServiceEndpoints

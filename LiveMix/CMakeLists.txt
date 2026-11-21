@@ -106,6 +106,8 @@ qt_add_executable(LiveMixStudio
 
     src/api/AsrClient.h
     src/api/AsrClient.cpp
+    src/api/AssetsClient.h
+    src/api/AssetsClient.cpp
     src/api/CapCutMateClient.h
     src/api/CapCutMateClient.cpp
     src/api/HttpClient.h

@@ -7,6 +7,7 @@
 #include "LiveClipService.h"
 
 #include "../api/AsrClient.h"
+#include "../api/AssetsClient.h"
 #include "../api/CapCutMateClient.h"
 #include "../api/HttpClient.h"
 #include "../api/LlmClient.h"
@@ -280,6 +281,31 @@ const QStringList &transitionTitles()
         QStringLiteral("流光"),
     };
     return titles;
+}
+
+// 自动 BGM：音量沿用 clipflow-ai v3 模板的 DEFAULT_BGM_VOLUME（0–1）。
+constexpr double kBgmVolume = 0.1;
+
+// 与 v3 的 build_bgm_audio_infos 一致：BGM 长于成片时截断为单段；短于成片时
+// 按整首长度循环铺轨，末段不足一整首时仍用同一 URL 铺满剩余时长。
+QVector<CapCutAudioInfo> buildBgmAudioInfos(qint64 videoDurationUs,
+                                            qint64 bgmDurationUs,
+                                            const QString &audioUrl)
+{
+    QVector<CapCutAudioInfo> infos;
+    const QString url = audioUrl.trimmed();
+    if (videoDurationUs <= 0 || bgmDurationUs <= 0 || url.isEmpty()) {
+        return infos;
+    }
+
+    qint64 positionUs = 0;
+    while (positionUs < videoDurationUs) {
+        const qint64 segmentEndUs =
+            positionUs + qMin(bgmDurationUs, videoDurationUs - positionUs);
+        infos.append({url, positionUs, segmentEndUs, kBgmVolume});
+        positionUs = segmentEndUs;
+    }
+    return infos;
 }
 
 // 片段在成片播放轴上的时长（微秒）；有 scene 区间时以其为准。
@@ -855,8 +881,8 @@ void LiveClipService::run()
             : qBound(0.5, m_request.fixedSpeed, 2.0);
         qInfo() << "Draft" << i + 1 << "playback speed:" << speed
                 << "auto:" << m_request.speedAuto;
-        if (!createDraftForProject(&repository, &capcut, &llm, draftInputPath, project,
-                                   i, speed, &error)) {
+        if (!createDraftForProject(&repository, &capcut, &llm, &http, draftInputPath,
+                                   project, i, speed, &error)) {
             emit finished(false, QStringLiteral("第 %1 条草稿生成失败：%2")
                                       .arg(i + 1)
                                       .arg(error));
@@ -1242,7 +1268,7 @@ QString LiveClipService::resolveDraftInputPath(const MediaSource &source,
 
 bool LiveClipService::createDraftForProject(MediaRepository *repository,
                                             CapCutMateClient *capcut, LlmClient *llm,
-                                            const QString &inputPath,
+                                            HttpClient *http, const QString &inputPath,
                                             const SelectedProject &project, int index,
                                             double speed, QString *error)
 {
@@ -1527,6 +1553,48 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         } else {
             qWarning() << "Video filter skipped:" << filterError;
             packagingDetails.append(QStringLiteral("滤镜未写入"));
+        }
+    }
+
+    // 自动 BGM：从素材服务随机取一首，短于成片时循环铺满；音量沿用 v3 的 0.1。
+    // 取曲或写轨失败都不阻断草稿，只在「添加视频」步骤详情里提示。
+    if (m_request.bgm && offsetMs > 0) {
+        emitStep(3, PipelineUi::StepStatus::Running, 95,
+                 QStringLiteral("正在随机匹配背景音乐"));
+        AssetsClient assets(http);
+        BgmTrack track;
+        QString bgmError;
+        if (assets.randomBgm(&track, &bgmError)) {
+            qint64 bgmMs = track.durationMs;
+            // 素材服务通常带 duration_ms；缺失时用 ffprobe 兜底探测签名 URL。
+            if (bgmMs <= 0 && !FfmpegUtils::mediaDurationMs(track.url, &bgmMs)) {
+                bgmMs = 0;
+            }
+            if (bgmMs > 0) {
+                const QVector<CapCutAudioInfo> audios =
+                    buildBgmAudioInfos(offsetMs * 1000, bgmMs * 1000, track.url);
+                QString audioError;
+                if (capcut->addAudios(draft.draftUrl, audios, &audioError)) {
+                    qInfo() << "BGM added:" << track.name << bgmMs << "ms, segments:"
+                            << audios.size();
+                    QString detail =
+                        QStringLiteral("背景音乐「%1」").arg(track.name);
+                    if (audios.size() > 1) {
+                        detail += QStringLiteral(" · 循环 %1 次").arg(audios.size());
+                    }
+                    packagingDetails.append(detail);
+                } else {
+                    qWarning() << "BGM skipped:" << audioError;
+                    packagingDetails.append(QStringLiteral("背景音乐未写入"));
+                }
+            } else {
+                qWarning() << "BGM skipped: cannot determine duration for"
+                           << track.name;
+                packagingDetails.append(QStringLiteral("背景音乐时长未知"));
+            }
+        } else {
+            qWarning() << "Random BGM failed:" << bgmError;
+            packagingDetails.append(QStringLiteral("背景音乐未获取"));
         }
     }
 
