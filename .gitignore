@@ -58,3 +58,6 @@ frontend/.vite/
 /docs
 /backend/docker/html
 /backend/docker/.env
+
+# LiveMix 本地音效数据（音效目录参数已内置到代码）
+/LiveMix/sfx.json

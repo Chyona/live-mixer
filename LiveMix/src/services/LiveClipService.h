@@ -38,11 +38,11 @@ struct LiveClipRequest
     bool filters = true;
     // 自动 BGM：开启时从素材服务随机取一首背景音乐铺满成片。
     bool bgm = true;
-    // 自动音效：开启时按 sfx.json 的音效池，用大模型稀疏挑选字幕并写入音效轨。
+    // 自动音效：开启时按内置音效目录，用大模型稀疏挑选字幕并写入音效轨。
     bool sfx = true;
 };
 
-// 自动音效：sfx.json 提供名称与顺序，音频地址与时长从素材服务获取。
+// 自动音效：内置目录提供资源 ID、名称与顺序，音频地址与时长从素材服务获取。
 struct SfxCategory
 {
     QString name;

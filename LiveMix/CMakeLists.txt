@@ -189,13 +189,6 @@ qt_add_executable(LiveMixStudio
     resources/LiveMixStudio.qrc
 )
 
-# 音效目录（名称与顺序）随应用打包；音频文件运行时从素材服务获取。
-qt_add_resources(LiveMixStudio "sfx_catalog"
-    PREFIX "/"
-    BASE "${CMAKE_CURRENT_SOURCE_DIR}"
-    FILES sfx.json
-)
-
 target_link_libraries(LiveMixStudio PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::Sql Qt6::Network
     Qt6::Multimedia Qt6::MultimediaWidgets)

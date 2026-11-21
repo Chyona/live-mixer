@@ -23,13 +23,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonParseError>
 #include <QMap>
 #include <QRandomGenerator>
-#include <QRegularExpression>
 #include <QSet>
 #include <QSize>
 #include <QThread>
@@ -317,7 +312,7 @@ QVector<CapCutAudioInfo> buildBgmAudioInfos(qint64 videoDurationUs,
 // 自动音效：音量沿用 clipflow-ai v3 advanced 模板的 0.1。
 constexpr double kSfxVolume = 0.1;
 
-// sfx.json 只有名称与资源 ID；选择语义沿用 v3 模板，按名称补齐 usage_hint。
+// 内置音效目录只有名称与资源 ID；选择语义沿用 v3 模板，按名称补齐 usage_hint。
 QString sfxUsageHintForName(const QString &name)
 {
     static const QHash<QString, QString> hints = {
@@ -352,52 +347,39 @@ QString sfxUsageHintForName(const QString &name)
                        QStringLiteral("通用音效：仅在字幕语义明显匹配时使用"));
 }
 
-// sfx.json 的一项：素材服务资源 ID 与展示名称。
+// 内置音效目录：资源 ID 与展示名称，顺序即音效类别 ID。
+// 音频地址与时长仍由素材服务按资源 ID 返回；客户端不依赖 sfx.json 文件。
 struct SfxCatalogEntry
 {
     QString resourceId;
     QString name;
 };
 
-// 读取随应用打包的 sfx.json（保持文件中的顺序）。
-// QJsonDocument 的数字类型是 double，无法精确承载 64 位资源 ID；
-// 解析前先把 "id" 的数字值包成字符串，保证后续能按 ID 精确匹配。
-QVector<SfxCatalogEntry> loadSfxCatalog()
+const QVector<SfxCatalogEntry> &sfxCatalog()
 {
-    QFile file(QStringLiteral(":/sfx.json"));
-    if (!file.open(QIODevice::ReadOnly)) {
-        qWarning() << "SFX catalog unavailable:" << file.errorString();
-        return {};
-    }
-
-    QString raw = QString::fromUtf8(file.readAll());
-    static const QRegularExpression idPattern(
-        QStringLiteral("\"id\"(\\s*:\\s*)(\\d+)"));
-    raw.replace(idPattern, QStringLiteral("\"id\"\\1\"\\2\""));
-
-    QJsonParseError parseError;
-    const QJsonDocument document =
-        QJsonDocument::fromJson(raw.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
-        qWarning() << "SFX catalog is invalid:" << parseError.errorString();
-        return {};
-    }
-
-    QVector<SfxCatalogEntry> entries;
-    for (const QJsonValue &value : document.array()) {
-        const QJsonObject object = value.toObject();
-        const QString resourceId =
-            object.value(QStringLiteral("id")).toString().trimmed();
-        const QString name =
-            object.value(QStringLiteral("name")).toString().trimmed();
-        if (!resourceId.isEmpty() && !name.isEmpty()) {
-            entries.append({resourceId, name});
-        }
-    }
+    static const QVector<SfxCatalogEntry> entries = {
+        {QStringLiteral("2123770113113985024"), QStringLiteral("读评论提示音")},
+        {QStringLiteral("2123770111855693824"), QStringLiteral("诡异的滴水声")},
+        {QStringLiteral("2123770110643539968"), QStringLiteral("讲卖点")},
+        {QStringLiteral("2123770109427191808"), QStringLiteral("综艺卡通biu")},
+        {QStringLiteral("2123770108227620864"),
+         QStringLiteral("服装分类别场景金币声")},
+        {QStringLiteral("2123770106927386624"),
+         QStringLiteral("抓特写场景弹簧声")},
+        {QStringLiteral("2123770105622958080"), QStringLiteral("悬疑咚声")},
+        {QStringLiteral("2123770104381444096"),
+         QStringLiteral("开篇提示水滴声")},
+        {QStringLiteral("2123770103022489600"), QStringLiteral("字幕音效-嘭")},
+        {QStringLiteral("2123770101801947136"), QStringLiteral("呼转场音效")},
+        {QStringLiteral("2123770100271026176"), QStringLiteral("划重点拳击声")},
+        {QStringLiteral("2123770098878517248"),
+         QStringLiteral("写字幕场景打字声")},
+        {QStringLiteral("2123770097435676672"), QStringLiteral("一滴水滴声")},
+    };
     return entries;
 }
 
-// 按 sfx.json 的资源 ID 匹配素材服务返回的地址与时长。
+// 按内置目录的资源 ID 匹配素材服务返回的地址与时长。
 QVector<SfxCategory> buildSfxCategories(const QVector<SfxAsset> &assets)
 {
     QHash<QString, SfxAsset> byResourceId;
@@ -406,7 +388,7 @@ QVector<SfxCategory> buildSfxCategories(const QVector<SfxAsset> &assets)
     }
 
     QVector<SfxCategory> categories;
-    for (const SfxCatalogEntry &entry : loadSfxCatalog()) {
+    for (const SfxCatalogEntry &entry : sfxCatalog()) {
         const auto it = byResourceId.constFind(entry.resourceId);
         if (it == byResourceId.constEnd()) {
             qWarning() << "SFX asset not found in assets service:" << entry.name
@@ -1030,7 +1012,7 @@ void LiveClipService::run()
     }
     emit pipelineEvent(draftPlan);
 
-    // 自动音效：一次拉取素材服务音效目录，再按 sfx.json 的资源 ID 对齐。
+    // 自动音效：一次拉取素材服务音效目录，再按内置音效目录的资源 ID 对齐。
     // 目录不可用时只跳过音效，不阻断草稿生成。
     QVector<SfxCategory> sfxCategories;
     if (m_request.sfx) {
