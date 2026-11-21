@@ -405,7 +405,7 @@ bool CapCutMateClient::createDraft(int width, int height, CapCutDraftInfo *draft
 
 bool CapCutMateClient::addVideos(const QString &draftUrl,
                                  const QVector<CapCutVideoInfo> &videos,
-                                 QString *error)
+                                 double scaleX, double scaleY, QString *error)
 {
     if (videos.isEmpty()) {
         if (error) {
@@ -451,11 +451,68 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
     if (hasSceneTimelines) {
         payload.insert(QStringLiteral("scene_timelines"), sceneArray);
     }
+    // 请求级等比缩放：平台去重时每段独立随机 0%–10% 放大。
+    payload.insert(QStringLiteral("scale_x"), scaleX);
+    payload.insert(QStringLiteral("scale_y"), scaleY);
 
     const HttpResponse response = m_http->postJson(
         ServiceEndpoints::capCutMateUrl(QStringLiteral("add_videos")), payload,
         QByteArray(), 120000);
     return checkEnvelope(response, nullptr, error);
+}
+
+bool CapCutMateClient::addImages(const QString &draftUrl,
+                                 const QVector<CapCutImageInfo> &images,
+                                 double scaleX, double scaleY, int transformX,
+                                 int transformY, double alpha, QString *error)
+{
+    if (images.isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("没有可添加到草稿的图片。");
+        }
+        return false;
+    }
+
+    QJsonArray imageArray;
+    for (const CapCutImageInfo &image : images) {
+        if (image.url.trimmed().isEmpty() || image.endUs <= image.startUs) {
+            continue;
+        }
+        QJsonObject imageInfo;
+        imageInfo.insert(QStringLiteral("image_url"), image.url);
+        imageInfo.insert(QStringLiteral("start"), image.startUs);
+        imageInfo.insert(QStringLiteral("end"), image.endUs);
+        imageArray.append(imageInfo);
+    }
+    if (imageArray.isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("没有可添加到草稿的有效图片。");
+        }
+        return false;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+    payload.insert(QStringLiteral("image_infos"),
+                   QString::fromUtf8(
+                       QJsonDocument(imageArray).toJson(QJsonDocument::Compact)));
+    payload.insert(QStringLiteral("scale_x"), scaleX);
+    payload.insert(QStringLiteral("scale_y"), scaleY);
+    payload.insert(QStringLiteral("transform_x"), transformX);
+    payload.insert(QStringLiteral("transform_y"), transformY);
+    payload.insert(QStringLiteral("alpha"), alpha);
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("add_images")), payload,
+        QByteArray(), 120000);
+    const bool ok = checkEnvelope(response, nullptr, error);
+    if (!ok) {
+        qWarning() << "add_images failed; images:" << imageArray.size()
+                   << "httpStatus:" << response.httpStatus
+                   << "code:" << response.json.value(QStringLiteral("code")).toInt(-1)
+                   << "message:" << (error ? *error : QString());
+    }
+    return ok;
 }
 
 bool CapCutMateClient::addEffects(const QString &draftUrl,

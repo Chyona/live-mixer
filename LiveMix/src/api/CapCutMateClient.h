@@ -30,6 +30,15 @@ struct CapCutVideoInfo
     qint64 transitionDurationUs = 0;
 };
 
+// 草稿时间轴上的一段图片；start/end 为累计时间（微秒）。
+// 图片不写宽高，capcut-mate 按原始尺寸渲染，正是去重叠层需要的“小图”。
+struct CapCutImageInfo
+{
+    QString url;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+};
+
 // 草稿时间轴上的一段视频特效；title 须为剪映支持的特效名称。
 struct CapCutEffectInfo
 {
@@ -129,8 +138,16 @@ public:
 
     // 批量添加视频，多个切片按 start/end 顺序铺在同一条主视频轨上；
     // 每段设置 sceneStart/End 时同时提交 scene_timelines 应用变速。
+    // scaleX/scaleY 为请求级等比缩放（同一请求内所有视频共用），
+    // 平台去重时逐段随机放大。
     bool addVideos(const QString &draftUrl, const QVector<CapCutVideoInfo> &videos,
-                   QString *error);
+                   double scaleX, double scaleY, QString *error);
+
+    // 添加图片轨（add_images）。alpha / scale / transform 都是请求级参数，
+    // 同一请求内的图片共用，因此每张不同位置需要逐张调用。
+    bool addImages(const QString &draftUrl, const QVector<CapCutImageInfo> &images,
+                   double scaleX, double scaleY, int transformX, int transformY,
+                   double alpha, QString *error);
 
     bool addCaptions(const QString &draftUrl, const QVector<CapCutCaption> &captions,
                      const CapCutCaptionStyle &style, QString *error);
