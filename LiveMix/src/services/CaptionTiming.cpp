@@ -2,6 +2,7 @@
 #include "CaptionTiming.h"
 
 #include <QDebug>
+#include <QStringList>
 
 namespace {
 
@@ -74,8 +75,11 @@ QString stripAlignmentText(const QString &displayText)
     return text;
 }
 
-// 按标点把一句 ASR 文本拆成多条字幕。
-QVector<CaptionClause> splitClauses(const QString &text)
+// 把一段文字按字数均衡拆成多条；实现位于文件下方（依赖折行分词器）。
+QStringList splitTextBalanced(const QString &text, int maxCharsPerCaption);
+
+// 按标点把一句 ASR 文本拆成多条字幕；超过字数上限的句段继续均衡切条。
+QVector<CaptionClause> splitClauses(const QString &text, int maxCharsPerCaption)
 {
     QVector<CaptionClause> clauses;
     if (text.isEmpty()) {
@@ -96,10 +100,14 @@ QVector<CaptionClause> splitClauses(const QString &text)
         const int clauseEnd = i + 1;
         const QString displayText =
             stripCaptionPunctuation(text.mid(clauseStart, clauseEnd - clauseStart));
-        if (!displayText.isEmpty()) {
+        for (const QString &piece :
+             splitTextBalanced(displayText, maxCharsPerCaption)) {
+            if (piece.isEmpty()) {
+                continue;
+            }
             CaptionClause clause;
-            clause.displayText = displayText;
-            clause.alignmentText = stripAlignmentText(displayText);
+            clause.displayText = piece;
+            clause.alignmentText = stripAlignmentText(piece);
             clauses.append(clause);
         }
         clauseStart = clauseEnd;
@@ -231,8 +239,8 @@ bool assignWordTimes(const AsrUtterance &utterance,
 
         start = qBound(utterance.startMs, start, utterance.endMs);
         end = qBound(utterance.startMs, end, utterance.endMs);
-        // 相邻词的边界偶尔会有几毫秒重叠；把本行起点吸附到上一行结尾，
-        // 比整句退回字符分摊更准确。重叠大到本行没有时长时才放弃词级时间线。
+        // 相邻词的边界偶尔会有几毫秒重叠；把本条起点吸附到上一条结尾，
+        // 比整句退回字符分摊更准确。重叠大到本条没有时长时才放弃词级时间线。
         start = qMax(start, previousEnd);
         if (end <= start) {
             return false;
@@ -287,7 +295,7 @@ QVector<TimedCaption> assignProportionalTimes(const AsrUtterance &utterance,
     return result;
 }
 
-// 折行用的最小单元：一个汉字/假名/表情，或一个完整的英文单词/数字。
+// 切条用的最小单元：一个汉字/假名/表情，或一个完整的英文单词/数字。
 struct WrapUnit
 {
     QString text;
@@ -377,60 +385,62 @@ QVector<WrapUnit> tokenizeForWrapping(const QString &text)
     return units;
 }
 
-} // namespace
-
-QString CaptionTiming::wrapCaptionText(const QString &text, int maxCharsPerLine)
+QStringList splitTextBalanced(const QString &text, int maxCharsPerCaption)
 {
-    if (maxCharsPerLine <= 0 || text.isEmpty()) {
-        return text;
+    if (maxCharsPerCaption <= 0 || text.isEmpty()) {
+        return {text.trimmed()};
     }
     const QVector<WrapUnit> units = tokenizeForWrapping(text);
     int totalChars = 0;
     for (const WrapUnit &unit : units) {
         totalChars += unit.chars;
     }
-    if (totalChars <= maxCharsPerLine || units.isEmpty()) {
-        return text.trimmed();
+    if (totalChars <= maxCharsPerCaption || units.isEmpty()) {
+        return {text.trimmed()};
     }
 
-    // 每行目标长度按剩余字数动态均分：19 字 → 10/9，31 字 → 11/10/10。
-    QStringList lines;
+    // 每条目标长度按剩余字数动态均分：19 字 → 10/9，31 字 → 11/10/10。
+    QStringList pieces;
     int unitIndex = 0;
     int remainingChars = totalChars;
     while (unitIndex < units.size()) {
-        const int linesLeft =
-            qMax(1, (remainingChars + maxCharsPerLine - 1) / maxCharsPerLine);
-        const int target = (remainingChars + linesLeft - 1) / linesLeft;
+        const int piecesLeft =
+            qMax(1, (remainingChars + maxCharsPerCaption - 1) / maxCharsPerCaption);
+        const int target = (remainingChars + piecesLeft - 1) / piecesLeft;
 
-        QString line;
-        int lineChars = 0;
+        QString piece;
+        int pieceChars = 0;
         while (unitIndex < units.size()) {
             const WrapUnit &unit = units.at(unitIndex);
-            // 空行总是先放入一个不可拆单元；放不下时整体挪到下一行，
+            // 空条总是先放入一个不可拆单元；放不下时整体挪到下一条，
             // 保证单词和数字不会被从中间截断。
-            if (!line.isEmpty() && lineChars + unit.chars > target) {
+            if (!piece.isEmpty() && pieceChars + unit.chars > target) {
                 break;
             }
-            if (!line.isEmpty() && unit.spaceBefore) {
-                line += QLatin1Char(' ');
+            if (!piece.isEmpty() && unit.spaceBefore) {
+                piece += QLatin1Char(' ');
             }
-            line += unit.text;
-            lineChars += unit.chars;
+            piece += unit.text;
+            pieceChars += unit.chars;
             ++unitIndex;
         }
-        lines.append(line);
-        remainingChars -= lineChars;
+        pieces.append(piece);
+        remainingChars -= pieceChars;
     }
-    return lines.join(QLatin1Char('\n'));
+    return pieces;
 }
 
-QVector<TimedCaption> CaptionTiming::splitUtterance(const AsrUtterance &utterance)
+} // namespace
+
+QVector<TimedCaption> CaptionTiming::splitUtterance(const AsrUtterance &utterance,
+                                                    int maxCharsPerCaption)
 {
     if (utterance.text.isEmpty() || utterance.endMs <= utterance.startMs) {
         return {};
     }
 
-    const QVector<CaptionClause> clauses = splitClauses(utterance.text);
+    const QVector<CaptionClause> clauses =
+        splitClauses(utterance.text, maxCharsPerCaption);
     if (clauses.isEmpty()) {
         return {};
     }
