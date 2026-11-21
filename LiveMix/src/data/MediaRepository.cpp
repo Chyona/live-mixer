@@ -1046,7 +1046,8 @@ QVector<ClipDraft> MediaRepository::clipDrafts(qint64 sourceId, QString *error) 
     if (sourceId >= 0) {
         sql += QStringLiteral(" WHERE source_id = ?");
     }
-    sql += QStringLiteral(" ORDER BY created_at_ms ASC, id ASC");
+    // 成片结果按生成时间倒序：最新生成的一批排在最前，进入结果页无需滚动。
+    sql += QStringLiteral(" ORDER BY created_at_ms DESC, id DESC");
     query.prepare(sql);
     if (sourceId >= 0) {
         query.addBindValue(sourceId);

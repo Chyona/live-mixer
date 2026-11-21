@@ -21,8 +21,10 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QSize>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -44,6 +46,31 @@ constexpr qint64 kRangeMergeGapMs = 500;
 // 整片识别返回后，至少让“解析结果”阶段可见约 900ms，
 // 与过程页的解析动画保持一致；期间完成 SQLite 缓存写入。
 constexpr int kAsrResultMinDisplayMs = 900;
+
+// 草稿画布固定为横屏 / 竖屏两档，按源视频宽高比选择最接近的一档。
+constexpr int kLandscapeCanvasWidth = 1920;
+constexpr int kLandscapeCanvasHeight = 1080;
+constexpr int kPortraitCanvasWidth = 1080;
+constexpr int kPortraitCanvasHeight = 1920;
+
+QSize nearestDraftCanvasSize(int sourceWidth, int sourceHeight)
+{
+    // 探测不到源尺寸时沿用横屏保底，与旧行为一致。
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return QSize(kLandscapeCanvasWidth, kLandscapeCanvasHeight);
+    }
+
+    constexpr double landscapeRatio =
+        double(kLandscapeCanvasWidth) / double(kLandscapeCanvasHeight);
+    constexpr double portraitRatio =
+        double(kPortraitCanvasWidth) / double(kPortraitCanvasHeight);
+    const double sourceRatio = double(sourceWidth) / double(sourceHeight);
+    if (std::abs(sourceRatio - portraitRatio)
+        < std::abs(sourceRatio - landscapeRatio)) {
+        return QSize(kPortraitCanvasWidth, kPortraitCanvasHeight);
+    }
+    return QSize(kLandscapeCanvasWidth, kLandscapeCanvasHeight);
+}
 
 // 工作目录在任务结束（无论成功或失败）后自动清理。
 class WorkDirCleanup
@@ -162,6 +189,211 @@ CapCutCaptionStyle randomCaptionStyle()
 {
     const QVector<CapCutCaptionStyle> &presets = captionStylePresets();
     return presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
+}
+
+// 自动成片包装：特效候选池（名称与剪映桌面端一致）及各自的时长约束。
+// 与 clipflow-ai v3 advanced 模板保持同一份名单。
+struct EffectPreset
+{
+    const char *title;
+    qint64 minUs = 3'000'000;
+    qint64 maxUs = 5'000'000;
+};
+
+const QVector<EffectPreset> &effectPresets()
+{
+    static const QVector<EffectPreset> presets = {
+        {"发光 II"},
+        {"ktv灯光"},
+        {"三格漫画"},
+        {"人鱼滤镜"},
+        {"仙女变身 II"},
+        {"夸夸弹幕"},
+        {"小花花"},
+        {"少女心"},
+        {"少女星闪"},
+        {"庆祝彩带"},
+        {"彩虹射线"},
+        {"抖动"},
+        {"撒星星"},
+        {"撒星星 II"},
+        {"撕纸涂鸦边框"},
+        {"星光"},
+        {"星光 II"},
+        {"星光绽放"},
+        {"星星闪烁"},
+        {"星雨"},
+        {"暗角"},
+        {"变清晰"},
+        {"镜像"},
+        {"录制边框 II"},
+        {"录制边框 III"},
+        {"录制边框 IIII"},
+        {"简约边框"},
+        {"手绘拍摄器"},
+        {"白色线框"},
+        {"秋日暖黄"},
+        {"渐渐放大"},
+        // 闪光类特效只停留一瞬，缩短时长避免盖住整句解说。
+        {"咔嚓", 100'000, 1'000'000},
+        {"温柔细闪"},
+        {"细闪 II"},
+        {"星夜"},
+    };
+    return presets;
+}
+
+// 自动成片包装：滤镜候选池，与 v3 模板一致。
+const QStringList &filterTitles()
+{
+    static const QStringList titles = {
+        QStringLiteral("画质高清"), QStringLiteral("清透感"),
+        QStringLiteral("电影镜头"), QStringLiteral("电影画质"),
+        QStringLiteral("电影柔光"), QStringLiteral("电影感增强"),
+        QStringLiteral("电影光感"), QStringLiteral("甜妹感"),
+        QStringLiteral("漫空"),     QStringLiteral("港风夜景"),
+    };
+    return titles;
+}
+
+// 自动成片包装：转场候选池，与 clipflow-ai v3 advanced 模板保持同一份名单。
+const QStringList &transitionTitles()
+{
+    static const QStringList titles = {
+        QStringLiteral("叠化"),     QStringLiteral("叠加"),
+        QStringLiteral("闪黑"),     QStringLiteral("闪白"),
+        QStringLiteral("相片切换"), QStringLiteral("翻页"),
+        QStringLiteral("左移"),     QStringLiteral("立体旋转"),
+        QStringLiteral("右移"),     QStringLiteral("卡片弹出"),
+        QStringLiteral("上下翻页"), QStringLiteral("上移"),
+        QStringLiteral("下移"),     QStringLiteral("旋转圆盘"),
+        QStringLiteral("立体翻转"), QStringLiteral("推近"),
+        QStringLiteral("拉远"),     QStringLiteral("向左"),
+        QStringLiteral("向右"),     QStringLiteral("抖动"),
+        QStringLiteral("吸入"),     QStringLiteral("放射"),
+        QStringLiteral("震动"),     QStringLiteral("向下"),
+        QStringLiteral("向上"),     QStringLiteral("顺时针旋转"),
+        QStringLiteral("逆时针旋转"), QStringLiteral("向右下"),
+        QStringLiteral("向左下"),   QStringLiteral("向下拖拽"),
+        QStringLiteral("向下抖动"), QStringLiteral("旋转震动"),
+        QStringLiteral("扭曲弹动"), QStringLiteral("眨眼"),
+        QStringLiteral("流光"),
+    };
+    return titles;
+}
+
+// 片段在成片播放轴上的时长（微秒）；有 scene 区间时以其为准。
+qint64 videoPlaybackDurationUs(const CapCutVideoInfo &video)
+{
+    if (video.sceneStartUs >= 0 && video.sceneEndUs > video.sceneStartUs) {
+        return video.sceneEndUs - video.sceneStartUs;
+    }
+    return video.endUs - video.startUs;
+}
+
+// 与 v3 模板一致：每个草稿只随机挑一对相邻切片、只用一种转场，时长 800ms。
+// 两段都需长于转场时长，避免转场吞掉过短的片段。
+constexpr qint64 kTransitionDurationUs = 800'000;
+
+// 返回可加转场的左段索引；所有相邻组合都不满足时长时返回 -1。
+int pickTransitionPairIndex(const QVector<CapCutVideoInfo> &videos, qint64 minUs)
+{
+    QVector<int> candidates;
+    for (int i = 0; i + 1 < videos.size(); ++i) {
+        if (videoPlaybackDurationUs(videos.at(i)) <= minUs) {
+            continue;
+        }
+        if (videoPlaybackDurationUs(videos.at(i + 1)) <= minUs) {
+            continue;
+        }
+        candidates.append(i);
+    }
+    if (candidates.isEmpty()) {
+        return -1;
+    }
+    return candidates.at(
+        QRandomGenerator::global()->bounded(int(candidates.size())));
+}
+
+struct CaptionWindow
+{
+    int startIndex = 0;
+    int endIndex = 0;
+};
+
+// 与 v3 的 select_random_effect_time_range_us 一致：在字幕时间轴上枚举所有
+// 时长落在 [minUs, maxUs] 的连续窗口并随机挑一段，让特效贴着解说节奏出现。
+// 没有满足条件的窗口时跳过本次特效。
+bool pickRandomEffectWindow(const QVector<CapCutCaption> &captions, qint64 minUs,
+                            qint64 maxUs, qint64 *startUs, qint64 *endUs)
+{
+    QVector<CaptionWindow> windows;
+    for (int start = 0; start < captions.size(); ++start) {
+        for (int end = start; end < captions.size(); ++end) {
+            const qint64 spanUs =
+                captions.at(end).endUs - captions.at(start).startUs;
+            if (spanUs < minUs) {
+                continue;
+            }
+            if (spanUs > maxUs) {
+                break;
+            }
+            windows.append({start, end});
+        }
+    }
+    if (windows.isEmpty()) {
+        return false;
+    }
+    const CaptionWindow window =
+        windows.at(QRandomGenerator::global()->bounded(int(windows.size())));
+    *startUs = captions.at(window.startIndex).startUs;
+    *endUs = captions.at(window.endIndex).endUs;
+    return true;
+}
+
+// 单行字幕最多 15 个字；英文译文跟随中文字幕，不预折行，
+// 过长时由剪映自动换行。
+constexpr int kCaptionMaxLineChars = 15;
+
+bool containsCjkCharacter(const QString &text)
+{
+    for (const QChar ch : text) {
+        const ushort code = ch.unicode();
+        if ((code >= 0x3400 && code <= 0x4DBF)
+            || (code >= 0x4E00 && code <= 0x9FFF)
+            || (code >= 0xF900 && code <= 0xFAFF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 英文字幕沿用中文的颜色与描边，换成更清晰的无衬线字体与略小字号。
+CapCutCaptionStyle englishCaptionStyle(const CapCutCaptionStyle &chineseStyle)
+{
+    CapCutCaptionStyle style = chineseStyle;
+    style.font = QStringLiteral("Inter-SemiBold");
+    style.fontSize = qMax(5, chineseStyle.fontSize - 2);
+    return style;
+}
+
+// 英文轨跟随中文字幕：按中文折行后的行数估算位置。行高按字号 ×5 像素，
+// 双语行间留白 25px；英文不预折行，按单行估算高度。剪映小助手的
+// transform_y 数值约为屏幕像素的 2 倍，单行中文 + 单行英文时结果为 -920，
+// 与手工调好的间距一致。
+double englishCaptionTransformY(const CapCutCaptionStyle &chineseStyle,
+                                int englishFontSize, int chineseLines,
+                                int canvasHeight)
+{
+    const double chineseLinePx = chineseStyle.fontSize * 5.0;
+    const double englishLinePx = englishFontSize * 5.0;
+    const double chineseCenterPx = -chineseStyle.transformY / 2.0;
+    double englishCenterPx = chineseCenterPx
+        + chineseLinePx * chineseLines / 2.0 + 25.0 + englishLinePx / 2.0;
+    // 英文底部至少留 10px，避免字幕跑出画布。
+    const double maxCenterPx = canvasHeight / 2.0 - 10.0 - englishLinePx / 2.0;
+    englishCenterPx = qMin(englishCenterPx, maxCenterPx);
+    return -2.0 * englishCenterPx;
 }
 
 // 判断一句转写是否以句末标点结尾；允许句号后跟引号、括号等收尾符号。
@@ -616,12 +848,15 @@ void LiveClipService::run()
                           .arg(projects.size())
                           .arg(displayTitle),
                       100 * i / projects.size());
-        // 成片倍速：自动模式下每条成片在 1.0×–1.5× 之间独立随机。
+        // 成片倍速：自动模式下每条成片在 1.0×–1.5× 内独立随机。
+        // 跳过 1.00×，避免抽到原速让「自动倍速」看起来没有生效。
         const double speed = m_request.speedAuto
-            ? 1.0 + 0.05 * QRandomGenerator::global()->bounded(11)
+            ? 1.05 + 0.01 * QRandomGenerator::global()->bounded(46)
             : qBound(0.5, m_request.fixedSpeed, 2.0);
-        if (!createDraftForProject(&repository, &capcut, draftInputPath, project, i,
-                                   speed, &error)) {
+        qInfo() << "Draft" << i + 1 << "playback speed:" << speed
+                << "auto:" << m_request.speedAuto;
+        if (!createDraftForProject(&repository, &capcut, &llm, draftInputPath, project,
+                                   i, speed, &error)) {
             emit finished(false, QStringLiteral("第 %1 条草稿生成失败：%2")
                                       .arg(i + 1)
                                       .arg(error));
@@ -1006,7 +1241,7 @@ QString LiveClipService::resolveDraftInputPath(const MediaSource &source,
 }
 
 bool LiveClipService::createDraftForProject(MediaRepository *repository,
-                                            CapCutMateClient *capcut,
+                                            CapCutMateClient *capcut, LlmClient *llm,
                                             const QString &inputPath,
                                             const SelectedProject &project, int index,
                                             double speed, QString *error)
@@ -1021,10 +1256,14 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
 
     QVector<CapCutVideoInfo> videos;
     QVector<CapCutCaption> captions;
+    // 与 captions 一一对应的未折行文本，用于翻译（折行后的 \n 不适合放进提示词）。
+    QStringList captionTexts;
     QStringList clipPaths;
-    QVector<qint64> actualDurations;
-    int canvasWidth = 1920;
-    int canvasHeight = 1080;
+    // 切片真实时长（原速，作为 add_videos 的素材时长）与成片播放轴时长（除以倍速）。
+    QVector<qint64> sourceDurations;
+    QVector<qint64> playbackDurations;
+    int canvasWidth = kLandscapeCanvasWidth;
+    int canvasHeight = kLandscapeCanvasHeight;
     bool hasCanvasSize = false;
 
     // 草稿生成的过程页按真实执行顺序拆成 6 步；每步开始/结束时上报，
@@ -1069,31 +1308,35 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
                      .arg(rangeCount)
                      .arg(PipelineUi::formatRange(range.startMs, range.endMs)));
         if (!FfmpegUtils::cutClip(inputPath, range.startMs, range.endMs, clipPath,
-                                  error, boundedSpeed)) {
+                                  error)) {
             emitFailure(0, QStringLiteral("视频裁剪失败"));
             return false;
         }
         clipPaths.append(clipPath);
 
+        // 切片保持源分辨率，按源画幅在 1920×1080 / 1080×1920 中选择最接近的一档。
         if (!hasCanvasSize) {
             int width = 0;
             int height = 0;
             if (FfmpegUtils::videoSize(clipPath, &width, &height)) {
-                canvasWidth = width;
-                canvasHeight = height;
+                const QSize canvas = nearestDraftCanvasSize(width, height);
+                canvasWidth = canvas.width();
+                canvasHeight = canvas.height();
                 hasCanvasSize = true;
             }
         }
 
-        // 用切片真实时长铺时间轴；变速后理论时长为原区间 / 倍速。
-        qint64 actualMs = 0;
-        const qint64 wantMs = qMax<qint64>(
-            1, qint64(range.durationMs() / boundedSpeed));
-        if (!FfmpegUtils::mediaDurationMs(clipPath, &actualMs) || actualMs <= 0
-            || qAbs(actualMs - wantMs) > 2500) {
-            actualMs = wantMs;
+        // 切片按原速裁剪；倍速在 add_videos 的 scene_timelines 中应用到草稿，
+        // 保证剪映里能看到片段速度，也避免重复转码损失画质。
+        qint64 sourceMs = 0;
+        const qint64 wantMs = qMax<qint64>(1, range.durationMs());
+        if (!FfmpegUtils::mediaDurationMs(clipPath, &sourceMs) || sourceMs <= 0
+            || qAbs(sourceMs - wantMs) > 2500) {
+            sourceMs = wantMs;
         }
-        actualDurations.append(actualMs);
+        sourceDurations.append(sourceMs);
+        playbackDurations.append(
+            qMax<qint64>(1, qRound64(sourceMs / boundedSpeed)));
 
         emitStep(0, PipelineUi::StepStatus::Running, 100 * (i + 1) / rangeCount,
                  QStringLiteral("已裁入第 %1/%2 段 · %3")
@@ -1125,10 +1368,16 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
 
         CapCutVideoInfo video;
         video.url = clipUrl;
+        // start/end 是草稿时间轴上的累计位置，scene 区间是变速后的播放范围；
+        // add_videos 用两者之比得到片段速度（1.0× 时不提交 scene_timelines）。
         video.startUs = offsetMs * 1000;
-        video.endUs = (offsetMs + actualDurations.at(i)) * 1000;
+        video.endUs = (offsetMs + sourceDurations.at(i)) * 1000;
+        if (qAbs(boundedSpeed - 1.0) > 0.001) {
+            video.sceneStartUs = offsetMs * 1000;
+            video.sceneEndUs = (offsetMs + playbackDurations.at(i)) * 1000;
+        }
         videos.append(video);
-        offsetMs += actualDurations.at(i);
+        offsetMs += playbackDurations.at(i);
 
         emitStep(1, PipelineUi::StepStatus::Running, 100 * (i + 1) / clipPaths.size(),
                  QStringLiteral("已上传第 %1/%2 个切片")
@@ -1142,12 +1391,13 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     //    合并区间内的未选中内容不会产生字幕。
     qint64 captionOffsetMs = 0;
     // 剪映小助手把字幕写进同一条轨道，时间一旦重叠会整批失败（2019）。
-    // 切片实际时长可能短于 ASR 区间（尤其是 HLS 分片 seek），上一段末尾字幕
-    // 会越过下一段起点，所以重叠保护必须跨区间累计，并截到当前切片实际结尾。
+    // 切片播放时长可能短于 ASR 区间（尤其是 HLS 分片 seek），上一段末尾字幕
+    // 会越过下一段起点，所以重叠保护必须跨区间累计，并截到当前切片播放结尾。
     qint64 previousCaptionEndUs = -1;
     for (int i = 0; i < rangeCount; ++i) {
         const ClipRange &range = project.ranges.at(i);
-        const qint64 rangeEndUs = (captionOffsetMs + actualDurations.at(i)) * 1000;
+        const qint64 rangeEndUs =
+            (captionOffsetMs + playbackDurations.at(i)) * 1000;
         for (const TimedCaption &timed : timedCaptions) {
             const qint64 captionStart = qMax(timed.startMs, range.startMs);
             const qint64 captionEnd = qMin(timed.endMs, range.endMs);
@@ -1157,11 +1407,11 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             }
             // 字幕随视频同步变速：原区间内的相对时间除以倍速。
             qint64 startUs = (captionOffsetMs
-                              + qint64((captionStart - range.startMs) / boundedSpeed))
+                              + qRound64((captionStart - range.startMs) / boundedSpeed))
                 * 1000;
             qint64 endUs = qMin(
                 (captionOffsetMs
-                 + qint64((captionEnd - range.startMs) / boundedSpeed))
+                 + qRound64((captionEnd - range.startMs) / boundedSpeed))
                     * 1000,
                 rangeEndUs);
             if (previousCaptionEndUs >= 0 && startUs < previousCaptionEndUs) {
@@ -1173,11 +1423,14 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             CapCutCaption caption;
             caption.startUs = startUs;
             caption.endUs = endUs;
-            caption.text = timed.text;
+            // 超过 15 个字时均衡折成多行；翻译仍使用未折行的原文。
+            caption.text =
+                CaptionTiming::wrapCaptionText(timed.text, kCaptionMaxLineChars);
             captions.append(caption);
+            captionTexts.append(timed.text);
             previousCaptionEndUs = endUs;
         }
-        captionOffsetMs += actualDurations.at(i);
+        captionOffsetMs += playbackDurations.at(i);
     }
 
     // 4. 创建草稿，把所有裁剪片段依次添加到主视频轨。
@@ -1190,9 +1443,31 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         return false;
     }
     emitStep(2, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("新建 %1×%2 工程 · 保持源画幅")
+             QStringLiteral("新建 %1×%2 工程 · 按源画幅匹配")
                  .arg(canvasWidth)
                  .arg(canvasHeight));
+
+    // 自动成片包装：转场与 v3 模板一致——每个草稿随机挑一对相邻切片，
+    // 只写一种转场；转场挂在左段上，随 add_videos 一次性写入主轨。
+    QStringList packagingDetails;
+    QString transitionTitle;
+    if (m_request.transitions) {
+        const int pairIndex =
+            pickTransitionPairIndex(videos, kTransitionDurationUs);
+        if (pairIndex >= 0) {
+            const QStringList &titles = transitionTitles();
+            transitionTitle = titles.at(
+                QRandomGenerator::global()->bounded(int(titles.size())));
+            CapCutVideoInfo &left = videos[pairIndex];
+            left.transition = transitionTitle;
+            left.transitionDurationUs = kTransitionDurationUs;
+            qInfo() << "Video transition:" << transitionTitle << "between clip"
+                    << pairIndex + 1 << "and" << pairIndex + 2;
+        } else {
+            qInfo() << "Video transition skipped: no adjacent clip pair longer than"
+                    << kTransitionDurationUs << "us";
+        }
+    }
 
     stepClock.restart();
     emitStep(3, PipelineUi::StepStatus::Running, 0,
@@ -1201,8 +1476,66 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         emitFailure(3, QStringLiteral("添加切片资源失败"));
         return false;
     }
-    emitStep(3, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("%1 个视频片段已写入主轨").arg(videos.size()));
+    if (!transitionTitle.isEmpty()) {
+        packagingDetails.append(
+            QStringLiteral("转场「%1」").arg(transitionTitle));
+    }
+
+    // 自动成片包装：按「成片设置」开关写特效/滤镜轨，手法与 v3 模板一致——
+    // 特效贴着解说节奏选一段字幕窗口，滤镜以很低的强度覆盖整条时间轴。
+    // 写入失败不阻断草稿（用户仍可在剪映中调整），只在步骤详情里提示。
+    if (m_request.effects || m_request.filters) {
+        emitStep(3, PipelineUi::StepStatus::Running, 85,
+                 QStringLiteral("正在叠加自动包装"));
+    }
+    if (m_request.effects) {
+        const QVector<EffectPreset> &presets = effectPresets();
+        const EffectPreset preset =
+            presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
+        qint64 effectStartUs = 0;
+        qint64 effectEndUs = 0;
+        if (pickRandomEffectWindow(captions, preset.minUs, preset.maxUs,
+                                   &effectStartUs, &effectEndUs)) {
+            const QString title = QString::fromUtf8(preset.title);
+            QString effectError;
+            const QVector<CapCutEffectInfo> effects = {
+                {title, effectStartUs, effectEndUs},
+            };
+            if (capcut->addEffects(draft.draftUrl, effects, &effectError)) {
+                packagingDetails.append(QStringLiteral("特效「%1」").arg(title));
+            } else {
+                qWarning() << "Video effect skipped:" << effectError;
+                packagingDetails.append(QStringLiteral("特效未写入"));
+            }
+        } else {
+            qInfo() << "Video effect skipped: no caption window between"
+                    << preset.minUs << "and" << preset.maxUs << "us";
+        }
+    }
+    if (m_request.filters && offsetMs > 0) {
+        const QStringList &titles = filterTitles();
+        const QString title =
+            titles.at(QRandomGenerator::global()->bounded(int(titles.size())));
+        // 强度沿用 v3 模板的 1–30，给成片一层很淡的统一色调。
+        const double intensity = QRandomGenerator::global()->bounded(1, 31);
+        QString filterError;
+        const QVector<CapCutFilterInfo> filters = {
+            {title, 0, offsetMs * 1000, intensity},
+        };
+        if (capcut->addFilters(draft.draftUrl, filters, &filterError)) {
+            packagingDetails.append(QStringLiteral("滤镜「%1」").arg(title));
+        } else {
+            qWarning() << "Video filter skipped:" << filterError;
+            packagingDetails.append(QStringLiteral("滤镜未写入"));
+        }
+    }
+
+    QString videoDetail = QStringLiteral("%1 个视频片段已写入主轨").arg(videos.size());
+    if (!packagingDetails.isEmpty()) {
+        videoDetail += QStringLiteral(" · ")
+            + packagingDetails.join(QStringLiteral(" · "));
+    }
+    emitStep(3, PipelineUi::StepStatus::Done, 100, videoDetail);
 
     stepClock.restart();
     emitStep(4, PipelineUi::StepStatus::Running, 0,
@@ -1213,10 +1546,128 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         emitFailure(4, QStringLiteral("添加字幕失败"));
         return false;
     }
-    emitStep(4, PipelineUi::StepStatus::Done, 100,
-             QStringLiteral("%1 条字幕 · %2")
-                 .arg(captions.size())
-                 .arg(captionStyle.font));
+
+    // 中英文双字幕：逐条翻译后追加一条英文轨，放在中文字幕下方。
+    // 翻译或英文轨写入失败都不阻断草稿生成，只回退为仅中文字幕。
+    int englishCount = 0;
+    QString englishNote;
+    if (m_request.bilingualSubtitles && !captions.isEmpty()) {
+        if (!llm) {
+            englishNote = QStringLiteral("翻译服务不可用");
+        } else {
+            QStringList pendingTexts;
+            QVector<int> pendingIndices;
+            for (int i = 0; i < captionTexts.size(); ++i) {
+                if (containsCjkCharacter(captionTexts.at(i))) {
+                    pendingIndices.append(i);
+                    pendingTexts.append(captionTexts.at(i));
+                }
+            }
+            if (pendingTexts.isEmpty()) {
+                englishNote = QStringLiteral("没有需要翻译的中文字幕");
+            } else {
+                emitStep(4, PipelineUi::StepStatus::Running, 50,
+                         QStringLiteral("正在生成 %1 条英文译文")
+                             .arg(pendingTexts.size()));
+                LlmTranslationRequest translationRequest;
+                translationRequest.baseUrl = m_request.gatewayBaseUrl;
+                translationRequest.apiKey = m_request.apiKey;
+                translationRequest.texts = pendingTexts;
+
+                QStringList translations;
+                QString translationError;
+                const auto onTranslateStatus = [&emitStep](const QString &text) {
+                    emitStep(4, PipelineUi::StepStatus::Running, 60, text);
+                };
+                if (!llm->translateCaptions(translationRequest, &translations,
+                                            &translationError, onTranslateStatus)) {
+                    qWarning() << "Caption translation failed:" << translationError;
+                    englishNote = QStringLiteral("英文译文生成失败");
+                } else {
+                    // 不同中文行数需要不同的英文轨位置，而 capcut-mate 每批字幕
+                    // 只能共用一套样式，因此按 transform_y 分组分别写入。
+                    const CapCutCaptionStyle englishBaseStyle =
+                        englishCaptionStyle(captionStyle);
+                    QMap<int, QVector<CapCutCaption>> englishGroups;
+                    for (int i = 0; i < translations.size(); ++i) {
+                        const QString translated = translations.at(i).trimmed();
+                        // 漏译、回显中文或原样返回的条目直接跳过，避免英文轨重复中文。
+                        if (translated.isEmpty()
+                            || containsCjkCharacter(translated)
+                            || translated.compare(pendingTexts.at(i),
+                                                  Qt::CaseInsensitive) == 0) {
+                            continue;
+                        }
+                        const int chineseIndex = pendingIndices.at(i);
+                        const CapCutCaption &chinese = captions.at(chineseIndex);
+                        CapCutCaption english;
+                        english.startUs = chinese.startUs;
+                        english.endUs = chinese.endUs;
+                        // 英文跟随中文字幕，不预折行；过长时由剪映自动换行。
+                        english.text = translated;
+
+                        const int chineseLines =
+                            captions.at(chineseIndex).text.count(QLatin1Char('\n')) + 1;
+                        const int transformY = qRound(englishCaptionTransformY(
+                            captionStyle, englishBaseStyle.fontSize, chineseLines,
+                            canvasHeight));
+                        englishGroups[transformY].append(english);
+                    }
+
+                    if (englishGroups.isEmpty()) {
+                        englishNote = QStringLiteral("未得到有效英文译文");
+                    } else {
+                        int writtenGroups = 0;
+                        int failedGroups = 0;
+                        for (auto it = englishGroups.constBegin();
+                             it != englishGroups.constEnd(); ++it) {
+                            emitStep(4, PipelineUi::StepStatus::Running,
+                                     80 + 20 * writtenGroups
+                                         / qMax(1, englishGroups.size()),
+                                     QStringLiteral("正在写入 %1 条英文译文")
+                                         .arg(it.value().size()));
+                            CapCutCaptionStyle groupStyle = englishBaseStyle;
+                            groupStyle.transformY = it.key();
+                            QString englishError;
+                            if (capcut->addCaptions(draft.draftUrl, it.value(),
+                                                    groupStyle, &englishError)) {
+                                englishCount += it.value().size();
+                            } else {
+                                ++failedGroups;
+                                qWarning() << "Add English captions failed:"
+                                           << englishError;
+                            }
+                            ++writtenGroups;
+                        }
+                        if (failedGroups > 0) {
+                            englishNote =
+                                englishCount > 0
+                                    ? QStringLiteral("部分英文轨写入失败")
+                                    : QStringLiteral("英文轨写入失败");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    QString captionDetail;
+    if (englishCount > 0) {
+        captionDetail = QStringLiteral("%1 条中文字幕 · %2 条英文译文 · %3")
+                            .arg(captions.size())
+                            .arg(englishCount)
+                            .arg(englishNote.isEmpty() ? captionStyle.font
+                                                       : englishNote);
+    } else if (m_request.bilingualSubtitles && !englishNote.isEmpty()) {
+        captionDetail = QStringLiteral("%1 条中文字幕 · %2")
+                            .arg(captions.size())
+                            .arg(englishNote);
+    } else {
+        captionDetail = QStringLiteral("%1 条字幕 · %2")
+                            .arg(captions.size())
+                            .arg(captionStyle.font);
+    }
+    emitStep(4, PipelineUi::StepStatus::Done, 100, captionDetail);
 
     // 5. 只落库草稿信息；用户点击「打开草稿文件夹」时才下载草稿文件。
     stepClock.restart();

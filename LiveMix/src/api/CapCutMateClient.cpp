@@ -415,13 +415,32 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
     }
 
     QJsonArray videoArray;
+    QJsonArray sceneArray;
+    // scene_timelines 必须与 video_infos 一一对应；任一段缺少变速信息时整体不提交。
+    bool hasSceneTimelines = true;
     for (const CapCutVideoInfo &video : videos) {
         QJsonObject videoInfo;
         videoInfo.insert(QStringLiteral("video_url"), video.url);
         // 切片文件本身已经裁剪好，start/end 表示在草稿时间轴上的累计位置。
         videoInfo.insert(QStringLiteral("start"), video.startUs);
         videoInfo.insert(QStringLiteral("end"), video.endUs);
+        // 转场由 add_videos 挂在片段与下一段的衔接处；未设置时保持原样。
+        if (!video.transition.trimmed().isEmpty()
+            && video.transitionDurationUs > 0) {
+            videoInfo.insert(QStringLiteral("transition"), video.transition);
+            videoInfo.insert(QStringLiteral("transition_duration"),
+                             video.transitionDurationUs);
+        }
         videoArray.append(videoInfo);
+
+        if (video.sceneStartUs >= 0 && video.sceneEndUs > video.sceneStartUs) {
+            QJsonObject scene;
+            scene.insert(QStringLiteral("start"), video.sceneStartUs);
+            scene.insert(QStringLiteral("end"), video.sceneEndUs);
+            sceneArray.append(scene);
+        } else {
+            hasSceneTimelines = false;
+        }
     }
 
     QJsonObject payload;
@@ -429,11 +448,101 @@ bool CapCutMateClient::addVideos(const QString &draftUrl,
     payload.insert(QStringLiteral("video_infos"),
                    QString::fromUtf8(
                        QJsonDocument(videoArray).toJson(QJsonDocument::Compact)));
+    if (hasSceneTimelines) {
+        payload.insert(QStringLiteral("scene_timelines"), sceneArray);
+    }
 
     const HttpResponse response = m_http->postJson(
         ServiceEndpoints::capCutMateUrl(QStringLiteral("add_videos")), payload,
         QByteArray(), 120000);
     return checkEnvelope(response, nullptr, error);
+}
+
+bool CapCutMateClient::addEffects(const QString &draftUrl,
+                                  const QVector<CapCutEffectInfo> &effects,
+                                  QString *error)
+{
+    if (effects.isEmpty()) {
+        return true;
+    }
+
+    QJsonArray effectArray;
+    for (const CapCutEffectInfo &effect : effects) {
+        if (effect.endUs <= effect.startUs || effect.title.trimmed().isEmpty()) {
+            continue;
+        }
+        QJsonObject effectInfo;
+        effectInfo.insert(QStringLiteral("effect_title"), effect.title);
+        effectInfo.insert(QStringLiteral("start"), effect.startUs);
+        effectInfo.insert(QStringLiteral("end"), effect.endUs);
+        effectArray.append(effectInfo);
+    }
+    if (effectArray.isEmpty()) {
+        return true;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+    // 接口要求 effect_infos 是 JSON 字符串，而不是嵌套数组。
+    payload.insert(QStringLiteral("effect_infos"),
+                   QString::fromUtf8(
+                       QJsonDocument(effectArray).toJson(QJsonDocument::Compact)));
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("add_effects")), payload,
+        QByteArray(), 120000);
+    const bool ok = checkEnvelope(response, nullptr, error);
+    if (!ok) {
+        qWarning() << "add_effects failed; effects:" << effectArray.size()
+                   << "httpStatus:" << response.httpStatus
+                   << "code:" << response.json.value(QStringLiteral("code")).toInt(-1)
+                   << "message:" << (error ? *error : QString());
+    }
+    return ok;
+}
+
+bool CapCutMateClient::addFilters(const QString &draftUrl,
+                                  const QVector<CapCutFilterInfo> &filters,
+                                  QString *error)
+{
+    if (filters.isEmpty()) {
+        return true;
+    }
+
+    QJsonArray filterArray;
+    for (const CapCutFilterInfo &filter : filters) {
+        if (filter.endUs <= filter.startUs || filter.title.trimmed().isEmpty()) {
+            continue;
+        }
+        QJsonObject filterInfo;
+        filterInfo.insert(QStringLiteral("filter_title"), filter.title);
+        filterInfo.insert(QStringLiteral("start"), filter.startUs);
+        filterInfo.insert(QStringLiteral("end"), filter.endUs);
+        filterInfo.insert(QStringLiteral("intensity"), filter.intensity);
+        filterArray.append(filterInfo);
+    }
+    if (filterArray.isEmpty()) {
+        return true;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+    // 接口要求 filter_infos 是 JSON 字符串，而不是嵌套数组。
+    payload.insert(QStringLiteral("filter_infos"),
+                   QString::fromUtf8(
+                       QJsonDocument(filterArray).toJson(QJsonDocument::Compact)));
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("add_filters")), payload,
+        QByteArray(), 120000);
+    const bool ok = checkEnvelope(response, nullptr, error);
+    if (!ok) {
+        qWarning() << "add_filters failed; filters:" << filterArray.size()
+                   << "httpStatus:" << response.httpStatus
+                   << "code:" << response.json.value(QStringLiteral("code")).toInt(-1)
+                   << "message:" << (error ? *error : QString());
+    }
+    return ok;
 }
 
 bool CapCutMateClient::addCaptions(const QString &draftUrl,

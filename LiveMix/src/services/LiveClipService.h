@@ -30,9 +30,16 @@ struct LiveClipRequest
     // 成片设置：每条成片 1.0×–1.5× 随机取速，或固定为 fixedSpeed。
     bool speedAuto = true;
     double fixedSpeed = 1.0;
+    // 成片设置 → 中英文双字幕：在中文轨下方追加英文译文轨。
+    bool bilingualSubtitles = false;
+    // 成片设置 → 自动成片包装：开关关闭时不写对应轨道 / 转场。
+    bool transitions = true;
+    bool effects = true;
+    bool filters = true;
 };
 
 class HttpClient;
+class LlmClient;
 class MediaRepository;
 struct MediaSource;
 
@@ -78,8 +85,9 @@ private:
     QString sanitizeDescription(const QString &raw) const;
     QStringList sanitizeTopics(const QStringList &raw) const;
 
+    // llm 用于「中英文双字幕」时按需翻译字幕，可为空（为空时跳过英文轨）。
     bool createDraftForProject(MediaRepository *repository, CapCutMateClient *capcut,
-                               const QString &inputPath,
+                               LlmClient *llm, const QString &inputPath,
                                const SelectedProject &project, int index,
                                double speed, QString *error);
 

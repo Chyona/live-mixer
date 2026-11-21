@@ -375,8 +375,9 @@ SpecPage::SpecPage(QWidget *parent)
             "<b style=\"color:#E9ECF4\">主路径：</b> 录制直播（或导入本地视频）→ "
             "视频库中点「一键成片」→ 选择提示词与成片数量（自动，或指定 1–100 条）→ "
             "ASR 转写 → AI 按提示词选出句段并合并成成片 → 生成剪映草稿 → "
-            "结果页点「导出到剪映」将草稿与素材下载到本地剪映目录，"
-            "或点「导出成片」云端合成 MP4 并下载到本地；也可批量选择一次导出多条。"),
+            "在结果页标题旁与每张卡片上查看生成时间，并可点「导出到剪映」将草稿与素材"
+            "下载到本地剪映目录，或点「导出成片」云端合成 MP4 并下载到本地；"
+            "也可批量选择一次导出多条。"),
         flow));
     flowLayout->addSpacing(10);
     flowLayout->addWidget(paragraph(
@@ -386,6 +387,100 @@ SpecPage::SpecPage(QWidget *parent)
             "③ 异步任务不阻塞界面，完成时系统通知 + 底部状态栏计数 +1；"
             "④ 窗口可关闭，任务在后台继续跑，重开后从「任务中心」恢复进度。"),
         flow));
+    bodyLayout()->addSpacing(26);
+
+    // Generation time
+    auto *generation = makeSection(this, QStringLiteral("生成时间格式"));
+    auto *generationLayout = qobject_cast<QVBoxLayout *>(generation->layout());
+    generationLayout->addWidget(paragraph(
+        QStringLiteral(
+            "结果页标题与每张成片卡片使用同一套时间表达：每张卡片显示该草稿自己的"
+            "生成时间，标题旁显示最近一条的生成时间；精确到秒，越近越详细，"
+            "越久越简短。悬停任意时间可查看完整日期与时间；相对标签每 10 秒刷新，"
+            "窗口跨天也不会残留昨天的文案。"),
+        generation));
+    generationLayout->addSpacing(10);
+
+    auto *generationTable =
+        new Card(Qt::transparent, Theme::Border, 8, generation);
+    generationTable->setFixedWidth(820);
+    auto *tableRows = generationTable->contentLayout();
+    tableRows->setContentsMargins(0, 0, 0, 0);
+    tableRows->setSpacing(0);
+
+    auto *tableHeader = new QWidget(generationTable);
+    tableHeader->setObjectName(QStringLiteral("generationTableHeader"));
+    tableHeader->setAttribute(Qt::WA_StyledBackground, true);
+    tableHeader->setStyleSheet(
+        QStringLiteral("#generationTableHeader{background:%1;"
+                       "border-top-left-radius:7px;border-top-right-radius:7px;}")
+            .arg(Theme::Surface2.name()));
+    auto *headerLayout = new QGridLayout(tableHeader);
+    headerLayout->setContentsMargins(14, 8, 14, 8);
+    headerLayout->setHorizontalSpacing(12);
+    headerLayout->setColumnMinimumWidth(0, 120);
+    headerLayout->setColumnMinimumWidth(1, 190);
+    headerLayout->setColumnStretch(2, 1);
+    headerLayout->addWidget(
+        Ui::label(QStringLiteral("场景"), 10, 400, Theme::Text3, tableHeader), 0, 0);
+    headerLayout->addWidget(
+        Ui::label(QStringLiteral("展示"), 10, 400, Theme::Text3, tableHeader), 0, 1);
+    headerLayout->addWidget(
+        Ui::label(QStringLiteral("规则"), 10, 400, Theme::Text3, tableHeader), 0, 2);
+    tableRows->addWidget(tableHeader);
+    tableRows->addWidget(Ui::separator(false));
+
+    struct GenerationExample {
+        const char *scene;
+        const char *value;
+        const char *rule;
+    };
+    const GenerationExample generationExamples[] = {
+        {"刚刚完成", "刚刚 · 14:32:05", "1 分钟内 · 绿色强调最新结果"},
+        {"当天", "今天 14:32:05", "按日历日判断，跨天自动切换"},
+        {"昨天", "昨天 09:15:20", "1 天前"},
+        {"前天", "前天 18:40:05", "2 天前"},
+        {"一周内", "4 天前 11:20:30", "3–6 天前保留相对天数"},
+        {"一周前 / 一月前", "10月22日 15:09:50", "7 天前至今年内，直接显示日期"},
+        {"跨年", "2025年12月3日 08:20:45", "非今年时补全年份"},
+    };
+    const int exampleCount =
+        int(sizeof(generationExamples) / sizeof(generationExamples[0]));
+    for (int i = 0; i < exampleCount; ++i) {
+        const GenerationExample &example = generationExamples[i];
+        auto *row = new QWidget(generationTable);
+        auto *rowLayout = new QGridLayout(row);
+        rowLayout->setContentsMargins(14, 8, 14, 8);
+        rowLayout->setHorizontalSpacing(12);
+        rowLayout->setColumnMinimumWidth(0, 120);
+        rowLayout->setColumnMinimumWidth(1, 190);
+        rowLayout->setColumnStretch(2, 1);
+        rowLayout->addWidget(
+            Ui::label(QString::fromUtf8(example.scene), 11, 400, Theme::Text3, row),
+            0, 0);
+        const QString value = QString::fromUtf8(example.value);
+        auto *valueLabel = Ui::label(
+            value, 11, 400,
+            value.startsWith(QStringLiteral("刚刚")) ? Theme::Success : Theme::Text1,
+            row);
+        valueLabel->setFont(Theme::monoFont(11));
+        rowLayout->addWidget(valueLabel, 0, 1);
+        rowLayout->addWidget(
+            Ui::label(QString::fromUtf8(example.rule), 11, 400, Theme::Text3, row),
+            0, 2);
+        tableRows->addWidget(row);
+        if (i < exampleCount - 1) {
+            tableRows->addWidget(Ui::separator(false));
+        }
+    }
+    generationLayout->addWidget(generationTable);
+    generationLayout->addSpacing(10);
+    generationLayout->addWidget(
+        wrappedText(QStringLiteral("每条草稿保存记录时写入自己的生成时间：卡片各自显示"
+                                   "对应时间，页头显示最近一条；新草稿完成后对应卡片"
+                                   "为「刚刚 · HH:mm:ss」，随后自然过渡到"
+                                   "「今天 HH:mm:ss」。"),
+                    false, 11, Theme::Text3, 820, generation));
     bodyLayout()->addSpacing(26);
 
     // Keyboard shortcuts

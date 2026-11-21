@@ -1,13 +1,15 @@
 #pragma once
 
-// 文件作用：调用 api.jcaigc.cn 大模型网关做 AI 选片。
-// 流程参考 live-mixer 后端：系统提示词使用用户选择的提示词，
+// 文件作用：调用 api.jcaigc.cn 大模型网关做 AI 选片与字幕翻译。
+// 选片流程参考 live-mixer 后端：系统提示词使用用户选择的提示词，
 // 用户提示词是带行号的 ASR 句段 + 固定 JSON 输出格式，
 // 模型返回 indices / title / description / topics。
+// 翻译用于「成片设置 → 中英文双字幕」，逐条返回与中文字幕等长的英文译文。
 
 #include "../data/ClipTypes.h"
 
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <functional>
@@ -26,6 +28,13 @@ struct LlmSelectionRequest
     QVector<int> excludedIndices;
 };
 
+struct LlmTranslationRequest
+{
+    QString baseUrl;
+    QString apiKey;
+    QStringList texts; // 按字幕顺序待翻译的中文文本
+};
+
 class LlmClient
 {
 public:
@@ -38,6 +47,12 @@ public:
     bool selectProject(const LlmSelectionRequest &request, LlmSelectionResult *result,
                        QString *error, const StreamCallback &onThought = {},
                        const StreamCallback &onStatus = {});
+
+    // 逐条把中文字幕翻译成英文，用于中英文双字幕。
+    // translations 与 request.texts 等长，缺失或无效的条目为空；至少一条成功即返回 true。
+    bool translateCaptions(const LlmTranslationRequest &request,
+                           QStringList *translations, QString *error,
+                           const StreamCallback &onStatus = {});
 
 private:
     HttpClient *m_http = nullptr;

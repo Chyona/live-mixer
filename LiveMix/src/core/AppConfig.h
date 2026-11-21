@@ -44,7 +44,8 @@ struct GeneralConfig
     bool systemNotifications = true;
 };
 
-// 成片设置：自动包装开关、视频倍速与单条成片时长，应用到之后每次一键成片。
+// 成片设置：自动包装开关（含中英文双字幕与平台去重）、视频倍速与单条成片时长，
+// 应用到之后每次一键成片。
 struct FinishConfig
 {
     bool transitions = true;
@@ -53,6 +54,10 @@ struct FinishConfig
     bool stickers = true;
     bool bgm = true;
     bool sfx = true;
+    // 中文字幕下方同步展示英文译文，默认关闭。
+    bool bilingualSubtitles = false;
+    // 平台去重：重新处理成片以降低与源素材的相似度，默认开启。
+    bool dedup = true;
     // true：每条成片在 1.0×–1.5× 之间独立随机取速；false：固定为 fixedSpeed。
     bool speedAuto = true;
     double fixedSpeed = 1.0; // 0.5–2.0

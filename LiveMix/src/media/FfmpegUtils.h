@@ -14,9 +14,9 @@ namespace FfmpegUtils {
 bool extractMp3(const QString &inputPath, const QString &outputPath, QString *error);
 
 // 按绝对时间裁剪并转封装为 H.264/AAC MP4，保证剪映兼容。
-// speed 为成片倍速（0.5–2.0）：视频用 setpts、音频用 atempo 同步变速。
+// 变速不在这里烘焙：成片倍速由 add_videos 的 scene_timelines 写入草稿。
 bool cutClip(const QString &inputPath, qint64 startMs, qint64 endMs,
-             const QString &outputPath, QString *error, double speed = 1.0);
+             const QString &outputPath, QString *error);
 
 // 录制目录中的完整 MP4 路径（与 index.m3u8 同级，固定为 index.mp4）。
 // 输入不是 m3u8 时原样返回。

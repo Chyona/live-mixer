@@ -177,6 +177,8 @@ public:
     void setMonoFont(bool mono);
     // 在文字左侧绘制图标（如 GitHub 开源仓库入口）。
     void setLeadingGlyph(Icons::Glyph glyph, int size = 10);
+    // 在文字右侧绘制图标（如「获取密钥」后的外链角标）。
+    void setTrailingGlyph(Icons::Glyph glyph, int size = 10);
     void setUnderlineOnHover(bool underline);
     QSize sizeHint() const override;
 
@@ -195,6 +197,9 @@ private:
     bool m_hasGlyph = false;
     Icons::Glyph m_glyph = Icons::Glyph::Github;
     int m_glyphSize = 10;
+    bool m_hasTrailingGlyph = false;
+    Icons::Glyph m_trailingGlyph = Icons::Glyph::ExternalLink;
+    int m_trailingGlyphSize = 10;
     bool m_underlineOnHover = true;
 };
 
@@ -504,10 +509,19 @@ public:
     QWidget *contentWidget() const { return m_content; }
     // 提示语按富文本渲染，链接可通过系统默认浏览器打开。
     void setHintRichText(bool enabled);
+    // 标题行右侧的附加控件，如 API 密钥字段的「获取密钥」外链。
+    void setLabelExtra(QWidget *widget);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    // 富文本行高会超出 QLabel 自带的 wordWrap 高度计算，按文档实际高度补足。
+    void adjustHintHeight();
+
     QWidget *m_content = nullptr;
     QLabel *m_hint = nullptr;
+    QHBoxLayout *m_labelLayout = nullptr;
 };
 
 class SelectBox : public QComboBox
@@ -545,13 +559,10 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
-    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     QLineEdit *m_edit = nullptr;
     QHBoxLayout *m_layout = nullptr;
-    bool m_focused = false;
-    bool m_readOnly = false;
 };
 
 class Toast : public QWidget

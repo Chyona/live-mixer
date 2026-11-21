@@ -1,7 +1,8 @@
 #pragma once
 
 // 文件作用：剪映小助手（capcut-mate）接口客户端。
-// 负责文件上传、创建草稿、添加视频与字幕，以及点击「打开草稿文件夹」时的草稿下载。
+// 负责文件上传、创建草稿、添加视频（含转场）/ 字幕 / 滤镜 / 特效，以及点击
+// 「打开草稿文件夹」时的草稿下载。
 
 #include "../services/DraftDownloadJob.h"
 
@@ -14,11 +15,36 @@
 class HttpClient;
 
 // 草稿时间轴上的一段视频；start/end 为拼接后的累计时间（微秒）。
+// sceneStartUs / sceneEndUs 为变速后的播放轴区间，与 start/end 一起提交为
+// add_videos 的 scene_timelines（speed = (end-start)/(sceneEnd-sceneStart)）。
+// 原速时不设置（保持 -1），接口按 1.0× 处理。
+// 转场挂在相邻两段中的前一段上，由 add_videos 在该片段与下一段之间渲染。
 struct CapCutVideoInfo
 {
     QString url;
     qint64 startUs = 0;
     qint64 endUs = 0;
+    qint64 sceneStartUs = -1;
+    qint64 sceneEndUs = -1;
+    QString transition;
+    qint64 transitionDurationUs = 0;
+};
+
+// 草稿时间轴上的一段视频特效；title 须为剪映支持的特效名称。
+struct CapCutEffectInfo
+{
+    QString title;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+};
+
+// 覆盖一段时间的滤镜；intensity 为 0–100，越低越淡。
+struct CapCutFilterInfo
+{
+    QString title;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+    double intensity = 100.0;
 };
 
 struct CapCutCaption
@@ -89,12 +115,21 @@ public:
 
     bool createDraft(int width, int height, CapCutDraftInfo *draft, QString *error);
 
-    // 批量添加视频，多个切片按 start/end 顺序铺在同一条主视频轨上。
+    // 批量添加视频，多个切片按 start/end 顺序铺在同一条主视频轨上；
+    // 每段设置 sceneStart/End 时同时提交 scene_timelines 应用变速。
     bool addVideos(const QString &draftUrl, const QVector<CapCutVideoInfo> &videos,
                    QString *error);
 
     bool addCaptions(const QString &draftUrl, const QVector<CapCutCaption> &captions,
                      const CapCutCaptionStyle &style, QString *error);
+
+    // 添加视频特效轨（add_effects）；每条特效覆盖自己的时间窗。
+    bool addEffects(const QString &draftUrl, const QVector<CapCutEffectInfo> &effects,
+                    QString *error);
+
+    // 添加滤镜轨（add_filters）；一条滤镜可覆盖整条成片时间轴。
+    bool addFilters(const QString &draftUrl, const QVector<CapCutFilterInfo> &filters,
+                    QString *error);
 
     // 云端合成成片：提交 gen_video 后通过 gen_video_status 轮询。
     bool genVideo(const QString &draftUrl, const QString &apiKey, QString *error);

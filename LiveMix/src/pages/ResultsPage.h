@@ -70,6 +70,8 @@ private:
     void refreshCard(qint64 draftRowId);
     void refreshAllCards();
     void updateHeader();
+    // 卡片各用自己的草稿生成时间，页头展示最近一条；相对标签每 10 秒刷新。
+    void updateGenerationTimes();
     void pruneSelection();
     void updateSelectionBar();
 
@@ -85,6 +87,8 @@ private:
     void positionSelectionBar();
 
     PageHeader *m_header = nullptr;
+    QWidget *m_generationBadge = nullptr;
+    QLabel *m_generationValue = nullptr;
     Button *m_batchButton = nullptr;
     QWidget *m_gridHost = nullptr;
     QGridLayout *m_grid = nullptr;

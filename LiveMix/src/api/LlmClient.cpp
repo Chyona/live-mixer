@@ -266,6 +266,183 @@ bool parseSelection(const QString &rawContent, LlmSelectionResult *result,
     return false;
 }
 
+QString translationSystemPrompt()
+{
+    return QString::fromUtf8(R"PROMPT(你是直播短视频的英文字幕翻译。用户会给出按序号排列的中文字幕，每条都是按标点和时间切分后的口播片段。
+请逐条翻译成自然、简洁、适合做视频字幕的英文：
+- 条数、序号和顺序必须与输入完全一致，不合并、不拆分、不增删。
+- 每条只翻译对应那一句，尽量简短；数字、品牌名与专有名词保留可读写法。
+- 不要输出解释、注释或 Markdown 代码块，只输出一个 JSON 对象。)PROMPT");
+}
+
+QString buildTranslationPrompt(const QStringList &texts, bool strictJson)
+{
+    QString prompt;
+    if (strictJson) {
+        prompt += QStringLiteral(
+            "上一次输出不是合法 JSON。本次必须只输出一个 JSON 对象，"
+            "不要使用 Markdown 代码块，不要输出任何解释。\n\n");
+    }
+    prompt += QStringLiteral("## 中文字幕\n");
+    for (int i = 0; i < texts.size(); ++i) {
+        prompt += QStringLiteral("[%1] %2\n").arg(i).arg(texts.at(i).trimmed());
+    }
+    prompt += QStringLiteral("\n## 输出格式\n"
+                             "- 仅输出 JSON 对象："
+                             "{\"translations\":[{\"index\":0,\"text\":\"英文译文\"}]}\n"
+                             "- translations 必须包含全部 %1 条，index 与输入序号一一对应，"
+                             "text 只放英文译文。\n")
+                  .arg(texts.size());
+    return prompt;
+}
+
+int applyTranslationValue(const QJsonValue &value, int index, int count,
+                          QStringList *translations)
+{
+    if (!value.isString() || index < 0 || index >= count) {
+        return 0;
+    }
+    const QString text = value.toString().simplified();
+    if (text.isEmpty()) {
+        return 0;
+    }
+    (*translations)[index] = text;
+    return 1;
+}
+
+int applyTranslationArray(const QJsonArray &array, int count, QStringList *translations)
+{
+    int filled = 0;
+    int positional = 0;
+    for (const QJsonValue &value : array) {
+        if (value.isObject()) {
+            const QJsonObject object = value.toObject();
+            int index = positional;
+            static const QStringList indexKeys = {
+                QStringLiteral("index"), QStringLiteral("id"),
+                QStringLiteral("i"),     QStringLiteral("no"),
+            };
+            for (const QString &key : indexKeys) {
+                const QJsonValue indexValue = object.value(key);
+                if (indexValue.isDouble()) {
+                    index = static_cast<int>(indexValue.toDouble());
+                    break;
+                }
+                if (indexValue.isString()) {
+                    bool ok = false;
+                    const int parsed = indexValue.toString().trimmed().toInt(&ok);
+                    if (ok) {
+                        index = parsed;
+                        break;
+                    }
+                }
+            }
+            static const QStringList textKeys = {
+                QStringLiteral("text"),    QStringLiteral("translation"),
+                QStringLiteral("english"), QStringLiteral("en"),
+                QStringLiteral("value"),
+            };
+            QJsonValue text;
+            for (const QString &key : textKeys) {
+                const QJsonValue candidate = object.value(key);
+                if (candidate.isString()) {
+                    text = candidate;
+                    break;
+                }
+            }
+            filled += applyTranslationValue(text, index, count, translations);
+        } else {
+            filled += applyTranslationValue(value, positional, count, translations);
+        }
+        ++positional;
+    }
+    return filled;
+}
+
+int applyTranslationsObject(const QJsonObject &object, int count,
+                            QStringList *translations)
+{
+    static const QStringList arrayKeys = {
+        QStringLiteral("translations"), QStringLiteral("items"),
+        QStringLiteral("data"),         QStringLiteral("results"),
+    };
+    for (const QString &key : arrayKeys) {
+        const QJsonValue value = object.value(key);
+        if (value.isArray()) {
+            const int filled = applyTranslationArray(value.toArray(), count, translations);
+            if (filled > 0) {
+                return filled;
+            }
+        } else if (value.isObject()) {
+            // 兼容 {"translations":{"0":"...","1":"..."}} 的映射形式。
+            const int filled = applyTranslationsObject(value.toObject(), count, translations);
+            if (filled > 0) {
+                return filled;
+            }
+        }
+    }
+
+    // 兼容网关直接返回 {"0":"...", "1":"..."} 的映射形式。
+    int filled = 0;
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        bool ok = false;
+        const int index = it.key().trimmed().toInt(&ok);
+        if (ok) {
+            filled += applyTranslationValue(it.value(), index, count, translations);
+        }
+    }
+    return filled;
+}
+
+int parseTranslations(const QString &rawContent, int count, QStringList *translations)
+{
+    QString content = stripMarkdownFence(rawContent);
+    if (content.isEmpty()) {
+        return 0;
+    }
+
+    QJsonParseError parseError;
+    const auto fillFromDocument = [&](const QJsonDocument &document) {
+        if (document.isObject()) {
+            return applyTranslationsObject(document.object(), count, translations);
+        }
+        if (document.isArray()) {
+            return applyTranslationArray(document.array(), count, translations);
+        }
+        return 0;
+    };
+
+    const QJsonDocument document = QJsonDocument::fromJson(content.toUtf8(), &parseError);
+    if (parseError.error == QJsonParseError::NoError) {
+        if (const int filled = fillFromDocument(document); filled > 0) {
+            return filled;
+        }
+    }
+
+    // 模型偶尔在 JSON 前后附带解释文字，截取第一个完整对象/数组再试。
+    const QString objectText =
+        extractBalanced(content, QLatin1Char('{'), QLatin1Char('}'));
+    if (!objectText.isEmpty() && objectText != content) {
+        const QJsonDocument inner = QJsonDocument::fromJson(objectText.toUtf8(), &parseError);
+        if (parseError.error == QJsonParseError::NoError) {
+            if (const int filled = fillFromDocument(inner); filled > 0) {
+                return filled;
+            }
+        }
+    }
+    const QString arrayText =
+        extractBalanced(content, QLatin1Char('['), QLatin1Char(']'));
+    if (!arrayText.isEmpty()) {
+        const QJsonDocument inner = QJsonDocument::fromJson(arrayText.toUtf8(), &parseError);
+        if (parseError.error == QJsonParseError::NoError) {
+            if (const int filled = fillFromDocument(inner); filled > 0) {
+                return filled;
+            }
+        }
+    }
+    return 0;
+}
+
 QString requestErrorMessage(const HttpResponse &response)
 {
     const QJsonObject error = response.json.value(QStringLiteral("error")).toObject();
@@ -569,6 +746,141 @@ bool LlmClient::selectProject(const LlmSelectionRequest &request,
             *error = lastError;
         }
         return false;
+    }
+
+    if (error) {
+        *error = lastError;
+    }
+    return false;
+}
+
+bool LlmClient::translateCaptions(const LlmTranslationRequest &request,
+                                  QStringList *translations, QString *error,
+                                  const StreamCallback &onStatus)
+{
+    if (!m_http || !translations) {
+        if (error) {
+            *error = QStringLiteral("LLM 客户端未初始化。");
+        }
+        return false;
+    }
+    if (request.apiKey.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("尚未配置 API 密钥。");
+        }
+        return false;
+    }
+    if (request.texts.isEmpty()) {
+        translations->clear();
+        return true;
+    }
+
+    const QUrl url = chatCompletionsUrl(request.baseUrl);
+    if (!url.isValid() || url.host().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("API 地址无效：%1").arg(request.baseUrl);
+        }
+        return false;
+    }
+
+    constexpr int kMaxAttempts = 3;
+    constexpr int kTranslationTimeoutMs = 180000;
+    QString lastError;
+    bool strictJson = false;
+
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        QJsonArray messages;
+        QJsonObject systemMessage;
+        systemMessage.insert(QStringLiteral("role"), QStringLiteral("system"));
+        systemMessage.insert(QStringLiteral("content"), translationSystemPrompt());
+        messages.append(systemMessage);
+
+        QJsonObject userMessage;
+        userMessage.insert(QStringLiteral("role"), QStringLiteral("user"));
+        userMessage.insert(QStringLiteral("content"),
+                           buildTranslationPrompt(request.texts, strictJson));
+        messages.append(userMessage);
+
+        QJsonObject payload;
+        payload.insert(QStringLiteral("model"), QString::fromLatin1(kModel));
+        payload.insert(QStringLiteral("messages"), messages);
+        payload.insert(QStringLiteral("temperature"), 0.1);
+        // 推理模型会先消耗 reasoning token；给足余量，避免 JSON 被截断。
+        payload.insert(QStringLiteral("max_tokens"),
+                       qBound(2000, int(request.texts.size()) * 160, 8000));
+        payload.insert(QStringLiteral("stream"), false);
+
+        if (onStatus) {
+            onStatus(attempt == 0 ? QStringLiteral("正在生成英文译文…")
+                                  : QStringLiteral("英文译文格式异常，正在重试…"));
+        }
+
+        const HttpResponse response = m_http->postJson(
+            url, payload, QByteArray("Bearer ") + request.apiKey.toUtf8(),
+            kTranslationTimeoutMs);
+        if (response.isHttpOk()) {
+            QString content;
+            const QJsonArray choices =
+                response.json.value(QStringLiteral("choices")).toArray();
+            if (!choices.isEmpty()) {
+                const QJsonObject message = choices.first()
+                                                .toObject()
+                                                .value(QStringLiteral("message"))
+                                                .toObject();
+                content = contentText(message.value(QStringLiteral("content")));
+            }
+            if (content.trimmed().isEmpty()) {
+                lastError = QStringLiteral("LLM 未返回英文译文。");
+                strictJson = true;
+                continue;
+            }
+
+            QStringList parsed;
+            parsed.reserve(request.texts.size());
+            for (int i = 0; i < request.texts.size(); ++i) {
+                parsed.append(QString());
+            }
+            const int filled = parseTranslations(content, request.texts.size(), &parsed);
+            if (filled > 0) {
+                if (filled < request.texts.size()) {
+                    qWarning() << "Caption translation incomplete:" << filled << "/"
+                               << request.texts.size();
+                }
+                *translations = parsed;
+                return true;
+            }
+
+            lastError = QStringLiteral("无法解析 LLM 返回的译文 JSON：%1")
+                            .arg(content.left(256));
+            strictJson = true;
+            continue;
+        }
+
+        lastError = QStringLiteral("LLM 翻译请求失败：%1")
+                        .arg(requestErrorMessage(response));
+        const bool overloaded =
+            response.httpStatus == 429
+            || (response.httpStatus >= 500 && response.httpStatus < 600);
+        const bool network = !response.networkOk;
+        if (overloaded || network) {
+            const int allowedAttempts = (network && !overloaded) ? 2 : kMaxAttempts;
+            if (attempt + 1 < allowedAttempts) {
+                const int waitSeconds = overloaded ? (attempt == 0 ? 2 : 5) : 2;
+                if (onStatus) {
+                    const QString reason =
+                        response.httpStatus == 429
+                            ? QStringLiteral("模型服务繁忙")
+                            : (overloaded ? QStringLiteral("模型服务暂时不可用")
+                                          : QStringLiteral("请求未完成"));
+                    onStatus(QStringLiteral("%1，%2 秒后重试…")
+                                 .arg(reason)
+                                 .arg(waitSeconds));
+                }
+                QThread::msleep(static_cast<unsigned long>(waitSeconds) * 1000);
+                continue;
+            }
+        }
+        break;
     }
 
     if (error) {
