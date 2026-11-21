@@ -246,6 +246,43 @@ const QVector<EffectPreset> &effectPresets()
     return presets;
 }
 
+// 自动贴纸：与 clipflow-ai v3 advanced/medium 模板保持同一份素材池与坐标。
+// 单次成片随机挑一张，贴在 3–10 秒的字幕窗口上。
+struct StickerPreset
+{
+    const char *name;
+    const char *stickerId;
+    int transformX = 0;
+    int transformY = 0;
+    double scale = 1.0;
+};
+
+constexpr qint64 kStickerMinDurationUs = 3'000'000;
+constexpr qint64 kStickerMaxDurationUs = 10'000'000;
+
+const QVector<StickerPreset> &stickerPresets()
+{
+    static const QVector<StickerPreset> presets = {
+        {"WOW英文发光手写字", "7446241135808400664", -597, 1437, 0.6},
+        {"Wow 哇哦 爆炸框", "7451806976591351066", 450, -1290, 1.5},
+        {"东北话嘎嘎香好好吃点赞", "7320536109421743396", -660, 1500, 1.0},
+        {"促销-推荐", "7511614047159209278", -660, 1500, 1.0},
+        {"互动引导推荐", "7457470334497770776", -660, 1500, 1.0},
+        {"美妆情绪表达太美啦", "7419883362036321555", -660, 1500, 1.0},
+        {"超Nice", "7576165100781079870", -660, 1500, 1.0},
+        {"爆款推荐", "7427495509792738610", -660, 1500, 1.0},
+        {"强烈推荐", "7419269230199065895", -660, 1500, 1.0},
+        {"膨胀风互动引导橙色推荐", "7332009879277817100", -660, 1500, 1.0},
+        {"星星跳跃", "7640102113392987416", -660, 1500, 1.0},
+        {"促销-千万别错过", "7511630681584274712", -660, 1500, 1.0},
+        {"促销-好物分享", "7511668505528241432", -660, 1500, 1.0},
+        {"燃爆全场爆炸贴文字", "7429213485097143564", -660, 1500, 1.0},
+        {"满分", "7511728644570598718", -660, 1500, 1.0},
+        {"wow", "7021054635322395934", -660, 1500, 0.6},
+    };
+    return presets;
+}
+
 // 自动成片包装：滤镜候选池，与 v3 模板一致。
 const QStringList &filterTitles()
 {
@@ -1789,10 +1826,10 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
             QStringLiteral("转场「%1」").arg(transitionTitle));
     }
 
-    // 自动成片包装：按「成片设置」开关写特效/滤镜轨，手法与 v3 模板一致——
-    // 特效贴着解说节奏选一段字幕窗口，滤镜以很低的强度覆盖整条时间轴。
+    // 自动成片包装：按「成片设置」开关写特效/贴纸/滤镜轨，手法与 v3 模板一致——
+    // 特效与贴纸贴着解说节奏选一段字幕窗口，滤镜以很低的强度覆盖整条时间轴。
     // 写入失败不阻断草稿（用户仍可在剪映中调整），只在步骤详情里提示。
-    if (m_request.effects || m_request.filters) {
+    if (m_request.effects || m_request.stickers || m_request.filters) {
         emitStep(3, PipelineUi::StepStatus::Running, 85,
                  QStringLiteral("正在叠加自动包装"));
     }
@@ -1818,6 +1855,35 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         } else {
             qInfo() << "Video effect skipped: no caption window between"
                     << preset.minUs << "and" << preset.maxUs << "us";
+        }
+    }
+    if (m_request.stickers) {
+        const QVector<StickerPreset> &presets = stickerPresets();
+        const StickerPreset preset =
+            presets.at(QRandomGenerator::global()->bounded(int(presets.size())));
+        qint64 stickerStartUs = 0;
+        qint64 stickerEndUs = 0;
+        if (pickRandomEffectWindow(captions, kStickerMinDurationUs,
+                                   kStickerMaxDurationUs, &stickerStartUs,
+                                   &stickerEndUs)) {
+            const QString name = QString::fromUtf8(preset.name);
+            QString stickerError;
+            if (capcut->addSticker(draft.draftUrl,
+                                   QString::fromLatin1(preset.stickerId),
+                                   stickerStartUs, stickerEndUs, preset.scale,
+                                   preset.transformX, preset.transformY,
+                                   &stickerError)) {
+                qInfo() << "Video sticker added:" << name << preset.stickerId
+                        << stickerStartUs << stickerEndUs;
+                packagingDetails.append(QStringLiteral("贴纸「%1」").arg(name));
+            } else {
+                qWarning() << "Video sticker skipped:" << stickerError;
+                packagingDetails.append(QStringLiteral("贴纸未写入"));
+            }
+        } else {
+            qInfo() << "Video sticker skipped: no caption window between"
+                    << kStickerMinDurationUs << "and" << kStickerMaxDurationUs
+                    << "us";
         }
     }
     if (m_request.filters && offsetMs > 0) {

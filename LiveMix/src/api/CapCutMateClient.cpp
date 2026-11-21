@@ -515,6 +515,40 @@ bool CapCutMateClient::addImages(const QString &draftUrl,
     return ok;
 }
 
+bool CapCutMateClient::addSticker(const QString &draftUrl,
+                                  const QString &stickerId, qint64 startUs,
+                                  qint64 endUs, double scale, int transformX,
+                                  int transformY, QString *error)
+{
+    if (stickerId.trimmed().isEmpty() || endUs <= startUs) {
+        if (error) {
+            *error = QStringLiteral("贴纸参数无效。");
+        }
+        return false;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("draft_url"), draftUrl);
+    payload.insert(QStringLiteral("sticker_id"), stickerId.trimmed());
+    payload.insert(QStringLiteral("start"), startUs);
+    payload.insert(QStringLiteral("end"), endUs);
+    payload.insert(QStringLiteral("scale"), scale);
+    payload.insert(QStringLiteral("transform_x"), transformX);
+    payload.insert(QStringLiteral("transform_y"), transformY);
+
+    const HttpResponse response = m_http->postJson(
+        ServiceEndpoints::capCutMateUrl(QStringLiteral("add_sticker")), payload,
+        QByteArray(), 60000);
+    const bool ok = checkEnvelope(response, nullptr, error);
+    if (!ok) {
+        qWarning() << "add_sticker failed; stickerId:" << stickerId
+                   << "httpStatus:" << response.httpStatus
+                   << "code:" << response.json.value(QStringLiteral("code")).toInt(-1)
+                   << "message:" << (error ? *error : QString());
+    }
+    return ok;
+}
+
 bool CapCutMateClient::addEffects(const QString &draftUrl,
                                   const QVector<CapCutEffectInfo> &effects,
                                   QString *error)

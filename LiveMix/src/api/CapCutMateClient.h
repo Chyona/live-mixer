@@ -149,6 +149,11 @@ public:
                    double scaleX, double scaleY, int transformX, int transformY,
                    double alpha, QString *error);
 
+    // 添加一张贴纸（add_sticker）；时间区间为成片播放轴上的微秒。
+    bool addSticker(const QString &draftUrl, const QString &stickerId,
+                    qint64 startUs, qint64 endUs, double scale, int transformX,
+                    int transformY, QString *error);
+
     bool addCaptions(const QString &draftUrl, const QVector<CapCutCaption> &captions,
                      const CapCutCaptionStyle &style, QString *error);
 
