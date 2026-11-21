@@ -48,13 +48,15 @@ struct CapCutFilterInfo
 };
 
 // 草稿音频轨的一段；BGM 短于成片时由调用方按整首长度拆成多段循环铺轨。
-// volume 为 0–1 的轨音量。
+// volume 为 0–1 的轨音量；durationUs > 0 时随 add_audios 提交素材时长
+// （v3 模板的音效条目会带 duration）。
 struct CapCutAudioInfo
 {
     QString url;
     qint64 startUs = 0;
     qint64 endUs = 0;
     double volume = 0.1;
+    qint64 durationUs = -1;
 };
 
 struct CapCutCaption

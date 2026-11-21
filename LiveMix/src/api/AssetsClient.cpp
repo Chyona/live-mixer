@@ -1,4 +1,4 @@
-// 文件作用：素材服务 OpenAPI 调用，HMAC-SHA256 签名与随机 BGM 解析。
+// 文件作用：素材服务 OpenAPI 调用，HMAC-SHA256 签名与资源解析。
 #include "AssetsClient.h"
 
 #include "../core/ServiceEndpoints.h"
@@ -26,7 +26,7 @@ constexpr char kAssetsSecretKey[] =
     "sk_5237a982ce2b8893c06b10e36633682ae73c887149c0e997";
 
 // 与 Go 后端 canonicalizeQuery 一致：按 key、value 排序后用 "&" 连接。
-// limit=1 这类纯 ASCII 查询在两种实现下编码结果相同。
+// page=1&page_size=100 这类纯 ASCII 查询在两种实现下编码结果相同。
 QString canonicalQuery(const QUrlQuery &query)
 {
     QList<QPair<QString, QString>> items = query.queryItems(QUrl::FullyEncoded);
@@ -88,33 +88,10 @@ QVector<QPair<QByteArray, QByteArray>> signedHeaders(const QString &accessKey,
     };
 }
 
-} // namespace
-
-AssetsClient::AssetsClient(HttpClient *http)
-    : m_http(http)
+// 拼出素材服务的完整地址；endpoint 形如 "bgm/random"、"sfx"。
+QUrl serviceUrl(const QString &endpoint)
 {
-}
-
-bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
-{
-    if (!m_http) {
-        if (error) {
-            *error = QStringLiteral("HTTP 客户端不可用。");
-        }
-        return false;
-    }
-
-    const QString baseUrl = QString::fromLatin1(kAssetsBaseUrl);
-    const QString accessKey = QString::fromLatin1(kAssetsAccessKey);
-    const QString secretKey = QString::fromLatin1(kAssetsSecretKey);
-
-    QUrl url = QUrl::fromUserInput(baseUrl);
-    if (!url.isValid() || url.host().isEmpty()) {
-        if (error) {
-            *error = QStringLiteral("素材服务地址无效：%1").arg(baseUrl);
-        }
-        return false;
-    }
+    QUrl url = QUrl::fromUserInput(QString::fromLatin1(kAssetsBaseUrl));
     QString path = url.path();
     if (path.isEmpty()) {
         path = QStringLiteral("/");
@@ -122,17 +99,15 @@ bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
     if (!path.endsWith(QLatin1Char('/'))) {
         path += QLatin1Char('/');
     }
-    // 容许 baseUrl 带子路径前缀（反向代理场景），签名使用最终请求路径。
-    path += ServiceEndpoints::assetsApiPrefix().mid(1)
-        + QStringLiteral("/bgm/random");
+    path += ServiceEndpoints::assetsApiPrefix().mid(1) + QLatin1Char('/')
+        + endpoint;
     url.setPath(path);
+    return url;
+}
 
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("limit"), QStringLiteral("1"));
-    url.setQuery(query);
-
-    const HttpResponse response = m_http->getWithHeaders(
-        url, signedHeaders(accessKey, secretKey, url), 15000);
+// 校验素材服务统一响应：网络 / HTTP / 业务 code，成功后取出 data 对象。
+bool checkResponse(const HttpResponse &response, QJsonObject *data, QString *error)
+{
     if (!response.networkOk) {
         if (error) {
             *error = response.error.isEmpty() ? QStringLiteral("网络请求失败。")
@@ -146,7 +121,7 @@ bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
                 *error = QStringLiteral("素材服务鉴权失败（HTTP 401），请检查凭证。");
             } else if (response.httpStatus == 403) {
                 *error = QStringLiteral(
-                    "素材服务拒绝访问（HTTP 403），请确认凭证已开通 BGM 权限。");
+                    "素材服务拒绝访问（HTTP 403），请确认凭证已开通对应资源权限。");
             } else {
                 *error = QStringLiteral("素材服务返回 HTTP %1。")
                              .arg(response.httpStatus);
@@ -171,11 +146,43 @@ bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
         }
         return false;
     }
+    if (data) {
+        *data = response.json.value(QStringLiteral("data")).toObject();
+    }
+    return true;
+}
 
-    const QJsonArray items = response.json.value(QStringLiteral("data"))
-                                 .toObject()
-                                 .value(QStringLiteral("items"))
-                                 .toArray();
+} // namespace
+
+AssetsClient::AssetsClient(HttpClient *http)
+    : m_http(http)
+{
+}
+
+bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
+{
+    if (!m_http) {
+        if (error) {
+            *error = QStringLiteral("HTTP 客户端不可用。");
+        }
+        return false;
+    }
+
+    QUrl url = serviceUrl(QStringLiteral("bgm/random"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("limit"), QStringLiteral("1"));
+    url.setQuery(query);
+
+    const HttpResponse response = m_http->getWithHeaders(
+        url, signedHeaders(QString::fromLatin1(kAssetsAccessKey),
+                           QString::fromLatin1(kAssetsSecretKey), url),
+        15000);
+    QJsonObject data;
+    if (!checkResponse(response, &data, error)) {
+        return false;
+    }
+
+    const QJsonArray items = data.value(QStringLiteral("items")).toArray();
     if (items.isEmpty()) {
         if (error) {
             *error = QStringLiteral("素材服务没有可用的背景音乐。");
@@ -201,6 +208,55 @@ bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
         }
         track->durationMs =
             qint64(item.value(QStringLiteral("duration_ms")).toDouble());
+    }
+    return true;
+}
+
+bool AssetsClient::listSfx(QVector<SfxAsset> *assets, QString *error)
+{
+    if (!m_http) {
+        if (error) {
+            *error = QStringLiteral("HTTP 客户端不可用。");
+        }
+        return false;
+    }
+
+    QUrl url = serviceUrl(QStringLiteral("sfx"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("page"), QStringLiteral("1"));
+    query.addQueryItem(QStringLiteral("page_size"), QStringLiteral("100"));
+    url.setQuery(query);
+
+    const HttpResponse response = m_http->getWithHeaders(
+        url, signedHeaders(QString::fromLatin1(kAssetsAccessKey),
+                           QString::fromLatin1(kAssetsSecretKey), url),
+        15000);
+    QJsonObject data;
+    if (!checkResponse(response, &data, error)) {
+        return false;
+    }
+
+    if (assets) {
+        assets->clear();
+        const QJsonArray items = data.value(QStringLiteral("items")).toArray();
+        assets->reserve(items.size());
+        for (const QJsonValue &value : items) {
+            const QJsonObject item = value.toObject();
+            // resource_id 在接口里是字符串，避免 64 位整数经 JSON double 丢精度。
+            const QString resourceId =
+                item.value(QStringLiteral("resource_id")).toString().trimmed();
+            const QString name =
+                item.value(QStringLiteral("name")).toString().trimmed();
+            const QString fileUrl =
+                item.value(QStringLiteral("file_url")).toString().trimmed();
+            const qint64 durationMs =
+                qint64(item.value(QStringLiteral("duration_ms")).toDouble());
+            if (resourceId.isEmpty() || name.isEmpty() || fileUrl.isEmpty()
+                || durationMs <= 0) {
+                continue;
+            }
+            assets->append({resourceId, name, fileUrl, durationMs});
+        }
     }
     return true;
 }
