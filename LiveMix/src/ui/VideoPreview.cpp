@@ -153,8 +153,12 @@ QTemporaryFile *createEndedPlaylist(const QString &playlistPath,
 // 首次打开先转封装开头一小段，让预览尽快出现；完整文件在后台继续生成。
 constexpr qint64 kHeadPreviewDurationMs = 60 * 1000;
 
+// 不使用 -readrate 限速：实测高倍率（录像时长 / 50 秒）下 ffmpeg 的
+// readrate 会严重过冲，数小时的录像只能跑出约 3 倍速，完整预览实际要等
+// 几小时。这里直接全速转封装，几十秒即可完成；开头预览播放的是本地缓存
+// 文件，不会与录制分片的读取争抢。
 QStringList remuxArguments(const QString &playlistPath, const QString &tempPath,
-                           qint64 limitMs, double readRate)
+                           qint64 limitMs)
 {
     QStringList args{
         QStringLiteral("-y"),
@@ -166,11 +170,6 @@ QStringList remuxArguments(const QString &playlistPath, const QString &tempPath,
         QStringLiteral("pipe:1"),
         QStringLiteral("-nostats"),
     };
-    if (readRate > 0.0) {
-        // 限制输入读取速度，避免完整预览转封装在播放期间占满磁盘。
-        args << QStringLiteral("-readrate")
-             << QString::number(readRate, 'f', 2);
-    }
     args << QStringLiteral("-i") << playlistPath
          // 只保留画面和首条音轨，避免 HLS 中的附加数据流导致 MP4 封装失败。
          << QStringLiteral("-map") << QStringLiteral("0:v:0")
@@ -184,17 +183,6 @@ QStringList remuxArguments(const QString &playlistPath, const QString &tempPath,
     // 读写，长录像会成倍放大后台转封装的磁盘压力。
     args << QStringLiteral("-f") << QStringLiteral("mp4") << tempPath;
     return args;
-}
-
-// 完整预览与 60 秒开头预览并行生成时，按录像时长限速到约 50 秒完成，
-// 把后台转封装的磁盘读写摊平，避免拖慢正在播放的开头预览。
-double pacedRemuxRate(qint64 durationMs)
-{
-    constexpr double kTargetSeconds = 50.0;
-    if (durationMs <= 0) {
-        return 0.0;
-    }
-    return qMax(1.0, durationMs / 1000.0 / kTargetSeconds);
 }
 
 void attachRemuxProgress(QProcess *process, QByteArray *buffer, qint64 durationMs,
@@ -682,7 +670,7 @@ void VideoPreviewCard::startHeadPreview(const QString &playlistPath)
 #endif
     m_prepare->setProgram(ffmpeg);
     m_prepare->setArguments(
-        remuxArguments(inputPlaylist, tempPath, kHeadPreviewDurationMs, 0.0));
+        remuxArguments(inputPlaylist, tempPath, kHeadPreviewDurationMs));
     m_prepare->start();
 }
 
@@ -795,13 +783,8 @@ void VideoPreviewCard::startFullPreview()
             args->flags |= CREATE_NO_WINDOW;
         });
 #endif
-    // 开头预览正在播放时，完整预览转封装限速进行，避免磁盘 I/O 抢占。
-    const double readRate = m_headPreviewActive
-        ? pacedRemuxRate(m_prepareDurationMs)
-        : 0.0;
     m_fullPrepare->setProgram(ffmpeg);
-    m_fullPrepare->setArguments(
-        remuxArguments(inputPlaylist, tempPath, 0, readRate));
+    m_fullPrepare->setArguments(remuxArguments(inputPlaylist, tempPath, 0));
     m_fullPrepare->start();
 }
 
