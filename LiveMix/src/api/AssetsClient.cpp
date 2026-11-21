@@ -212,6 +212,54 @@ bool AssetsClient::randomBgm(BgmTrack *track, QString *error)
     return true;
 }
 
+bool AssetsClient::randomImages(int limit, const QString &tags,
+                                QVector<ImageAsset> *images, QString *error)
+{
+    if (!m_http) {
+        if (error) {
+            *error = QStringLiteral("HTTP 客户端不可用。");
+        }
+        return false;
+    }
+
+    QUrl url = serviceUrl(QStringLiteral("images/random"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("limit"),
+                       QString::number(qBound(1, limit, 100)));
+    // 标签由运营侧维护：摘掉「去重」标签即可停用图片叠层，无需发版。
+    if (!tags.trimmed().isEmpty()) {
+        query.addQueryItem(QStringLiteral("tags"), tags.trimmed());
+    }
+    url.setQuery(query);
+
+    const HttpResponse response = m_http->getWithHeaders(
+        url, signedHeaders(QString::fromLatin1(kAssetsAccessKey),
+                           QString::fromLatin1(kAssetsSecretKey), url),
+        15000);
+    QJsonObject data;
+    if (!checkResponse(response, &data, error)) {
+        return false;
+    }
+
+    if (images) {
+        images->clear();
+        const QJsonArray items = data.value(QStringLiteral("items")).toArray();
+        images->reserve(items.size());
+        for (const QJsonValue &value : items) {
+            const QJsonObject item = value.toObject();
+            const QString fileUrl =
+                item.value(QStringLiteral("file_url")).toString().trimmed();
+            if (fileUrl.isEmpty()) {
+                continue;
+            }
+            images->append({fileUrl,
+                            item.value(QStringLiteral("width")).toInt(),
+                            item.value(QStringLiteral("height")).toInt()});
+        }
+    }
+    return true;
+}
+
 bool AssetsClient::listSfx(QVector<SfxAsset> *assets, QString *error)
 {
     if (!m_http) {

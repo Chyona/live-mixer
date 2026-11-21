@@ -40,6 +40,8 @@ struct LiveClipRequest
     bool bgm = true;
     // 自动音效：开启时按内置音效目录，用大模型稀疏挑选字幕并写入音效轨。
     bool sfx = true;
+    // 平台去重：每段切片随机放大，并叠加低透明度随机图片。
+    bool dedup = true;
 };
 
 // 自动音效：内置目录提供资源 ID、名称与顺序，音频地址与时长从素材服务获取。

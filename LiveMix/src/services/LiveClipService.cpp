@@ -4,6 +4,7 @@
 // 选片策略：单次 LLM 选片最多覆盖 30 分钟转写；超过时按总时长均衡切成
 // 若干段分别调用（40 分钟 → 2×20，66 分钟 → 3×22），切点尽量落在句号上。
 // 模型返回句段索引与标题/描述/话题，再把选中句段合并、裁剪并拼成一条草稿。
+// 平台去重开启时，主轨每段随机放大，并在主视频与字幕之间叠低透明度随机图片。
 #include "LiveClipService.h"
 
 #include "../api/AsrClient.h"
@@ -494,6 +495,83 @@ int pickTransitionPairIndex(const QVector<CapCutVideoInfo> &videos, qint64 minUs
     }
     return candidates.at(
         QRandomGenerator::global()->bounded(int(candidates.size())));
+}
+
+// 平台去重参数：与 v3 素材库成片（clipflow-ai
+// src/clip_editor/dedup/constants.py）固定口径一致。
+// 每次成片注入 5 张、单张 20 秒、透明度 3%、原始尺寸、位置在画布中心附近随机。
+constexpr int kDedupImageCount = 5;
+constexpr qint64 kDedupImageDurationUs = 20'000'000;
+constexpr double kDedupImageAlpha = 0.03;
+constexpr double kDedupImageScale = 1.0;
+// 位置随机范围：capcut-mate 的 transform 像素单位，原点在画布中心、y 轴向上。
+constexpr int kDedupTransformXMin = -1080;
+constexpr int kDedupTransformXMax = 1080;
+constexpr int kDedupTransformYMin = -1920;
+constexpr int kDedupTransformYMax = 1920;
+// 每段切片独立等比放大 0%–10%（系数 [1.0, 1.1]）。
+constexpr double kDedupRandomScaleMin = 1.0;
+constexpr double kDedupRandomScaleMax = 1.1;
+// 素材服务中「去重」标签的图片；运营侧摘掉标签即可停用叠层，无需发版。
+const QString kDedupImageTag = QStringLiteral("去重");
+
+// 单张去重图片的落点：时间窗 + 位置。
+struct DedupImagePlacement
+{
+    QString url;
+    qint64 startUs = 0;
+    qint64 endUs = 0;
+    int transformX = 0;
+    int transformY = 0;
+};
+
+double randomDedupScale()
+{
+    return kDedupRandomScaleMin
+        + (kDedupRandomScaleMax - kDedupRandomScaleMin)
+            * QRandomGenerator::global()->generateDouble();
+}
+
+// 在 [0, totalUs - durationUs] 内随机取起点；窗口不大于 0 时固定为 0。
+qint64 randomDedupStartUs(qint64 totalUs, qint64 durationUs)
+{
+    const qint64 window = totalUs - durationUs;
+    if (window <= 0) {
+        return 0;
+    }
+    return qint64(QRandomGenerator::global()->generateDouble() * double(window));
+}
+
+// 两端各收 1，严格落在开区间 (min, max) 内，与参考实现一致。
+int randomDedupTransform(int min, int max)
+{
+    return QRandomGenerator::global()->bounded(min + 1, max);
+}
+
+// 为每张图片生成随机时间窗与随机坐标；短成片自动把时长钳到总时长。
+QVector<DedupImagePlacement> buildDedupPlacements(const QVector<ImageAsset> &images,
+                                                  qint64 totalUs)
+{
+    QVector<DedupImagePlacement> placements;
+    if (totalUs <= 0) {
+        return placements;
+    }
+    const qint64 durationUs = qMin(kDedupImageDurationUs, totalUs);
+    for (const ImageAsset &image : images) {
+        if (image.url.trimmed().isEmpty()) {
+            continue;
+        }
+        DedupImagePlacement placement;
+        placement.url = image.url;
+        placement.startUs = randomDedupStartUs(totalUs, durationUs);
+        placement.endUs = placement.startUs + durationUs;
+        placement.transformX =
+            randomDedupTransform(kDedupTransformXMin, kDedupTransformXMax);
+        placement.transformY =
+            randomDedupTransform(kDedupTransformYMin, kDedupTransformYMax);
+        placements.append(placement);
+    }
+    return placements;
 }
 
 struct CaptionWindow
@@ -1650,18 +1728,21 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     // 只写一种转场；转场挂在左段上，随 add_videos 一次性写入主轨。
     QStringList packagingDetails;
     QString transitionTitle;
+    // 平台去重按段随机缩放，add_videos 的缩放是请求级参数；带转场的一对切片
+    // 必须在同一请求内提交，因此记下左段索引，按批写入时整对一起发。
+    int transitionPairIndex = -1;
     if (m_request.transitions) {
-        const int pairIndex =
+        transitionPairIndex =
             pickTransitionPairIndex(videos, kTransitionDurationUs);
-        if (pairIndex >= 0) {
+        if (transitionPairIndex >= 0) {
             const QStringList &titles = transitionTitles();
             transitionTitle = titles.at(
                 QRandomGenerator::global()->bounded(int(titles.size())));
-            CapCutVideoInfo &left = videos[pairIndex];
+            CapCutVideoInfo &left = videos[transitionPairIndex];
             left.transition = transitionTitle;
             left.transitionDurationUs = kTransitionDurationUs;
             qInfo() << "Video transition:" << transitionTitle << "between clip"
-                    << pairIndex + 1 << "and" << pairIndex + 2;
+                    << transitionPairIndex + 1 << "and" << transitionPairIndex + 2;
         } else {
             qInfo() << "Video transition skipped: no adjacent clip pair longer than"
                     << kTransitionDurationUs << "us";
@@ -1671,7 +1752,35 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
     stepClock.restart();
     emitStep(3, PipelineUi::StepStatus::Running, 0,
              QStringLiteral("写入 %1 个视频片段").arg(videos.size()));
-    if (!capcut->addVideos(draft.draftUrl, videos, error)) {
+    if (m_request.dedup) {
+        // 平台去重：每段切片独立随机放大 0%–10%，打散与源素材的画面指纹。
+        // 缩放为请求级参数，因此默认一段一次 add_videos；带转场的一对共用
+        // 同一随机系数，保证转场仍落在两段之间。
+        int written = 0;
+        for (int i = 0; i < videos.size();) {
+            QVector<CapCutVideoInfo> batch;
+            if (i == transitionPairIndex && i + 1 < videos.size()) {
+                batch.append(videos.at(i));
+                batch.append(videos.at(i + 1));
+                i += 2;
+            } else {
+                batch.append(videos.at(i));
+                i += 1;
+            }
+            const double scale = randomDedupScale();
+            emitStep(3, PipelineUi::StepStatus::Running,
+                     80 * written / videos.size(),
+                     QStringLiteral("写入第 %1/%2 个视频片段")
+                         .arg(written + 1)
+                         .arg(videos.size()));
+            if (!capcut->addVideos(draft.draftUrl, batch, scale, scale, error)) {
+                emitFailure(3, QStringLiteral("添加切片资源失败"));
+                return false;
+            }
+            written += batch.size();
+        }
+        packagingDetails.append(QStringLiteral("切片随机放大"));
+    } else if (!capcut->addVideos(draft.draftUrl, videos, 1.0, 1.0, error)) {
         emitFailure(3, QStringLiteral("添加切片资源失败"));
         return false;
     }
@@ -1726,6 +1835,54 @@ bool LiveClipService::createDraftForProject(MediaRepository *repository,
         } else {
             qWarning() << "Video filter skipped:" << filterError;
             packagingDetails.append(QStringLiteral("滤镜未写入"));
+        }
+    }
+
+    // 平台去重：低透明度随机图片叠层，须在主视频之后、字幕之前落轨——
+    // 放在主轨之前会被完全不透明的主轨盖住，放在字幕之后会盖住字幕。
+    // 取图或落轨失败都只降级记录，不阻断成片。
+    if (m_request.dedup) {
+        emitStep(3, PipelineUi::StepStatus::Running, 95,
+                 QStringLiteral("正在叠加去重图片"));
+        AssetsClient assets(http);
+        QVector<ImageAsset> images;
+        QString imageError;
+        if (!assets.randomImages(kDedupImageCount, kDedupImageTag, &images,
+                                 &imageError)) {
+            qWarning() << "Dedup images skipped:" << imageError;
+            packagingDetails.append(QStringLiteral("去重图片未获取"));
+        } else if (images.isEmpty()) {
+            qWarning() << "Dedup images skipped: no image tagged" << kDedupImageTag;
+            packagingDetails.append(QStringLiteral("去重图片未获取"));
+        } else {
+            const QVector<DedupImagePlacement> placements =
+                buildDedupPlacements(images, offsetMs * 1000);
+            int applied = 0;
+            for (const DedupImagePlacement &placement : placements) {
+                // alpha / scale / transform 是请求级参数，每张坐标不同，
+                // 只能一张一组逐次调用 add_images。
+                const QVector<CapCutImageInfo> imageInfos = {
+                    {placement.url, placement.startUs, placement.endUs},
+                };
+                QString addError;
+                if (capcut->addImages(draft.draftUrl, imageInfos,
+                                      kDedupImageScale, kDedupImageScale,
+                                      placement.transformX, placement.transformY,
+                                      kDedupImageAlpha, &addError)) {
+                    ++applied;
+                } else {
+                    qWarning() << "Dedup image skipped:" << addError;
+                }
+            }
+            if (applied > 0) {
+                qInfo() << "Dedup image overlay applied:" << applied
+                        << "fetched:" << images.size()
+                        << "alpha:" << kDedupImageAlpha;
+                packagingDetails.append(
+                    QStringLiteral("去重图片 %1 张").arg(applied));
+            } else {
+                packagingDetails.append(QStringLiteral("去重图片未写入"));
+            }
         }
     }
 
