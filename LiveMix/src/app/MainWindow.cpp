@@ -762,6 +762,8 @@ MainWindow::~MainWindow()
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     const AppConfig config = m_configStore ? m_configStore->config() : AppConfig();
+    // 「关闭窗口时最小化到后台」默认关闭：点 X 直接退出应用；
+    // 仅当用户明确开启时才隐藏到托盘/菜单栏继续跑任务。
     if (!m_forceQuit && config.general.minimizeToBackground) {
         ensureTray();
         if (m_tray && m_tray->isVisible()) {

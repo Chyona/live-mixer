@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr int kConfigVersion = 3;
+constexpr int kConfigVersion = 4;
 
 // 旧版本的默认缓存上限；升级到 v2 时把仍为该值的配置迁移到新的 100GB 默认。
 constexpr int kLegacyCacheLimitGb = 10;
@@ -332,6 +332,11 @@ bool ConfigStore::load(QString *error)
         boolValue(general, QStringLiteral("launchAtLogin"), loaded.general.launchAtLogin);
     loaded.general.minimizeToBackground = boolValue(
         general, QStringLiteral("minimizeToBackground"), loaded.general.minimizeToBackground);
+    // v4 起「关闭窗口时最小化到后台」默认关闭。旧配置里的 true 来自旧默认值，
+    // 升级时统一迁移为关闭，确保点击关闭按钮默认直接退出应用。
+    if (fileVersion < 4) {
+        loaded.general.minimizeToBackground = false;
+    }
     loaded.general.soundOnComplete = boolValue(
         general, QStringLiteral("soundOnComplete"), loaded.general.soundOnComplete);
     loaded.general.systemNotifications = boolValue(

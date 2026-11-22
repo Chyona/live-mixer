@@ -577,10 +577,10 @@ SpecPage::SpecPage(QWidget *parent)
           QStringLiteral("不使用传统菜单栏；页面切换与操作集中在左侧导航、页内按钮和"
                          "标题栏快捷提示，标题栏保持 32px 单层。")},
          {QStringLiteral("快捷键"),
-          QStringLiteral("Ctrl 系快捷键；Alt+F4 关闭窗口，任务继续在后台运行。")},
+          QStringLiteral("Ctrl 系快捷键；Alt+F4 关闭窗口，默认直接退出应用。")},
          {QStringLiteral("关闭行为"),
-          QStringLiteral("最小化后驻留任务栏；关闭按钮驻留系统托盘，任务继续；"
-                         "任务栏与托盘图标都可恢复窗口。")},
+          QStringLiteral("最小化后驻留任务栏；关闭按钮默认直接退出应用，开启「关闭窗口时"
+                         "最小化到系统托盘继续跑任务」后驻留托盘并继续任务。")},
          {QStringLiteral("窗口外观"),
           QStringLiteral("8px 圆角、32px 单层标题栏，阴影较 macOS 更收敛。")}},
         platformCards), 1);
@@ -592,9 +592,10 @@ SpecPage::SpecPage(QWidget *parent)
          {QStringLiteral("菜单"),
           QStringLiteral("应用命令放在系统全局菜单栏，窗口内不重复出现菜单。")},
          {QStringLiteral("快捷键"),
-          QStringLiteral("⌘ 系快捷键；⌘W 关闭窗口，任务继续在后台运行。")},
+          QStringLiteral("⌘ 系快捷键；⌘W 关闭窗口，默认直接退出应用。")},
          {QStringLiteral("关闭行为"),
-          QStringLiteral("关闭窗口后驻留菜单栏，后台任务继续。")},
+          QStringLiteral("默认关闭窗口即退出应用；开启「关闭窗口时最小化到菜单栏继续跑任务」"
+                         "后驻留菜单栏，后台任务继续。")},
          {QStringLiteral("窗口外观"),
           QStringLiteral("12px 圆角、38px 标题栏，窗口阴影更深。")}},
         platformCards), 1);

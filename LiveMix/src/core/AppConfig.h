@@ -39,7 +39,7 @@ struct GeneralConfig
 {
     QString theme = QStringLiteral("dark");
     bool launchAtLogin = false;
-    bool minimizeToBackground = true;
+    bool minimizeToBackground = false;
     bool soundOnComplete = true;
     bool systemNotifications = true;
 };
