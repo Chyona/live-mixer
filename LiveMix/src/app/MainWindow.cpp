@@ -856,8 +856,43 @@ void MainWindow::ensureTray()
     m_tray->setToolTip(QStringLiteral("LiveMix Studio"));
 
     m_trayMenu = new QMenu(this);
-    QAction *showAction = m_trayMenu->addAction(QStringLiteral("显示主窗口"));
-    QAction *quitAction = m_trayMenu->addAction(QStringLiteral("退出 LiveMix"));
+    m_trayMenu->setFont(Theme::font(12));
+    // 让圆角外的区域透明，Windows 上才会呈现真正的圆角而不是方形底色。
+    m_trayMenu->setWindowFlag(Qt::FramelessWindowHint, true);
+    m_trayMenu->setAttribute(Qt::WA_TranslucentBackground, true);
+    m_trayMenu->setStyleSheet(QStringLiteral(
+        "QMenu {"
+        "  background-color: %1;"
+        "  border: 1px solid %2;"
+        "  border-radius: 8px;"
+        "  padding: 6px;"
+        "}"
+        "QMenu::item {"
+        "  min-width: 136px;"
+        "  padding: 8px 24px 8px 10px;"
+        "  border-radius: 6px;"
+        "  color: %3;"
+        "}"
+        "QMenu::item:selected {"
+        "  background-color: rgba(110, 139, 255, 38);"
+        "  color: %4;"
+        "}"
+        "QMenu::separator {"
+        "  height: 1px;"
+        "  background: %5;"
+        "  margin: 6px 10px;"
+        "}")
+        .arg(Theme::Surface2.name(), Theme::BorderStrong.name(),
+             Theme::Text1.name(), Theme::Text1.name(), Theme::Border.name()));
+
+    // 托盘菜单使用图标 + 文字：窗口图标突出「显示主窗口」，电源图标标示退出。
+    QAction *showAction = m_trayMenu->addAction(
+        Icons::glyphIcon(Icons::Glyph::Window, Theme::Primary, 16),
+        QStringLiteral("显示主窗口"));
+    m_trayMenu->addSeparator();
+    QAction *quitAction = m_trayMenu->addAction(
+        Icons::glyphIcon(Icons::Glyph::Power, Theme::Danger, 16),
+        QStringLiteral("退出 LiveMix"));
     connect(showAction, &QAction::triggered, this, &MainWindow::showFromTray);
     connect(quitAction, &QAction::triggered, this, &MainWindow::quitFromTray);
     m_tray->setContextMenu(m_trayMenu);
