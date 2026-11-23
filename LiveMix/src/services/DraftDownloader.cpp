@@ -82,6 +82,8 @@ void DraftDownloader::download()
         const QFileInfo existing(existingPath);
         if (existing.exists() && existing.isDir()) {
             if (MediaUtils::isWithinDirectory(m_draftRoot, existingPath)) {
+                // 旧版本下载的草稿没有提示文件，打开时顺手补齐。
+                CapCutMateClient::writeDraftReadmeFile(existingPath);
                 m_job.status = DraftDownloadStatus::Done;
                 m_job.stage = DraftDownloadStage::Done;
                 m_job.progress = 100;
@@ -100,6 +102,8 @@ void DraftDownloader::download()
                 if (!repository.markDraftDownloaded(draft.id, targetPath, &error)) {
                     qWarning() << "Failed to persist migrated draft path:" << error;
                 }
+                // 旧版本下载的草稿没有提示文件，打开时顺手补齐。
+                CapCutMateClient::writeDraftReadmeFile(targetPath);
                 m_job.status = DraftDownloadStatus::Done;
                 m_job.stage = DraftDownloadStage::Done;
                 m_job.progress = 100;
@@ -117,6 +121,7 @@ void DraftDownloader::download()
                 if (!repository.markDraftDownloaded(draft.id, targetPath, &error)) {
                     qWarning() << "Failed to persist migrated draft path:" << error;
                 }
+                CapCutMateClient::writeDraftReadmeFile(targetPath);
                 m_job.status = DraftDownloadStatus::Done;
                 m_job.stage = DraftDownloadStage::Done;
                 m_job.progress = 100;

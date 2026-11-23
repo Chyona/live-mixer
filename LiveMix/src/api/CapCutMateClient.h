@@ -189,6 +189,11 @@ public:
 
     static QString draftIdFromUrl(const QString &draftUrl);
 
+    // 在草稿目录写入提示文件：文件名与内容都说明这是剪映草稿，
+    // 需要用剪映打开才能看到成片。已存在时覆盖为最新文案。
+    // 提示文件属于附加信息，失败不影响草稿本身可用；返回是否写入成功。
+    static bool writeDraftReadmeFile(const QString &draftDir);
+
 private:
     HttpClient *m_http = nullptr;
 };

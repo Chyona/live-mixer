@@ -239,6 +239,22 @@ QString relativeDraftFilePath(const QUrl &fileUrl, const QString &draftId)
     return relative;
 }
 
+// 草稿目录附带的提示文件。用户常常直接打开草稿文件夹，容易把素材视频
+// 当成成片；文件名本身就要说明「这是剪映草稿」，用户不看内容也能明白。
+constexpr char kDraftReadmeFileName[] = "【剪映草稿】请用剪映打开查看成片.txt";
+
+QByteArray draftReadmeData()
+{
+    // 带 UTF-8 BOM：Windows 记事本等编辑器才能正确识别中文。
+    static const QByteArray bom("\xEF\xBB\xBF", 3);
+    return bom
+        + QStringLiteral(
+              "这是一个剪映草稿，不是可直接播放的视频文件。\n"
+              "\n"
+              "请打开剪映，在「本地草稿」中找到并打开这个草稿，即可查看和导出成片。\n")
+              .toUtf8();
+}
+
 bool writeJsonFile(const QString &path, const QJsonObject &object, QString *error)
 {
     QSaveFile file(path);
@@ -270,6 +286,24 @@ QString CapCutMateClient::draftIdFromUrl(const QString &draftUrl)
 {
     const QUrl url(draftUrl);
     return QUrlQuery(url).queryItemValue(QStringLiteral("draft_id"));
+}
+
+bool CapCutMateClient::writeDraftReadmeFile(const QString &draftDir)
+{
+    if (!QFileInfo(draftDir).isDir()) {
+        return false;
+    }
+    QSaveFile file(QDir(draftDir).filePath(QString::fromUtf8(kDraftReadmeFileName)));
+    if (!file.open(QIODevice::WriteOnly)) {
+        qWarning() << "Failed to open draft readme:" << file.errorString();
+        return false;
+    }
+    const QByteArray data = draftReadmeData();
+    if (file.write(data) != data.size() || !file.commit()) {
+        qWarning() << "Failed to write draft readme:" << file.errorString();
+        return false;
+    }
+    return true;
 }
 
 bool CapCutMateClient::uploadFile(const QString &filePath, const QString &apiKey,
@@ -1102,6 +1136,13 @@ bool CapCutMateClient::downloadDraft(const QString &draftId, const QString &draf
         if (!writeJsonFile(jsonPath, object, error)) {
             return false;
         }
+    }
+
+    // 附带提示文件：用户打开草稿文件夹时，一眼知道这是剪映草稿、
+    // 需要用剪映打开才能看到成片。写进暂存目录，随改名一起发布。
+    // 提示文件不是草稿本体，写入失败只记录日志，不影响下载结果。
+    if (!writeDraftReadmeFile(stagingDir)) {
+        qWarning() << "Failed to write draft readme in" << stagingDir;
     }
 
     // 全部文件就绪后再发布。QDir::rename 在同一文件系统内是原子操作：
