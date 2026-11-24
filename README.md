@@ -20,7 +20,7 @@
 
 > **下载地址：[https://gogoshine.com](https://gogoshine.com)**
 >
-> 支持 **macOS / Windows**；无需安装，也可直接在浏览器中[在线体验](https://gogoshine.com)完整工作台。
+> 支持 **macOS / Windows**。
 
 ---
 
