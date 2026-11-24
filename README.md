@@ -1,166 +1,196 @@
 <p align="center">
-  <a href="https://gogoshine.com"><img src="LiveMix/resources/brand/logo.png" width="96" alt="LiveMix Studio"></a>
+  <a href="https://gogoshine.com">
+    <img src="LiveMix/resources/brand/logo.png" width="88" alt="LiveMix Studio">
+  </a>
 </p>
 
-<h1 align="center">直播切片工作台</h1>
+<h1 align="center">LiveMix Studio</h1>
 
 <p align="center">
-  <strong>AI 辅助直播切片</strong> · 语音识别 · 智能选段 · 剪映草稿 · 一键成片
+  <strong>直播切片工作台</strong><br>
+  把一场直播，变成几十条可直接发布的切片。<br>
+  <sub>素材采集 · 语音转写 · 智能选段 · 剪映草稿 · 一键成片</sub>
 </p>
 
 <p align="center">
-  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-3DA639?style=flat-square">
+  <img alt="Docker" src="https://img.shields.io/badge/self--hosted-Docker-2496ED?style=flat-square&logo=docker&logoColor=white">
 </p>
 
-> 仓库技术名：`live-mixer`。产品由两部分组成：**LiveMix Studio 桌面客户端**负责素材采集与本地创作，**live-mixer 服务端**负责 ASR、AI 选片、剪映草稿与成片任务。
+<p align="center">
+  <a href="https://gogoshine.com"><strong>下载客户端</strong></a>
+  &nbsp;·&nbsp;
+  <a href="#三步出片">快速上手</a>
+  &nbsp;·&nbsp;
+  <a href="#常见问题">常见问题</a>
+  &nbsp;·&nbsp;
+  <a href="#自托管部署">开发者部署</a>
+</p>
+
+<p align="center">
+  <sub><a href="README.md">中文</a> · <a href="README.en.md">English</a></sub>
+</p>
 
 ---
 
-## 下载客户端
+## 它能做什么
 
-> **下载地址：[https://gogoshine.com](https://gogoshine.com)**
->
-> 支持 **macOS / Windows**。
+一场直播动辄几个小时，真正能发布的，可能只是其中十几段几十秒的高光。
 
----
+LiveMix Studio 把最耗时的部分交给 AI：**自动转写整场内容 → 按你的要求挑出高价值片段 → 精确裁剪 → 生成剪映草稿**。你可以全自动出片，也可以先让 AI 粗选、再由自己精修。
 
-## 桌面客户端 LiveMix Studio
+适合 **直播电商、知识分享、游戏娱乐** 等内容团队。
 
-LiveMix Studio 基于 **Qt 6 / C++17** 构建，与 live-mixer 服务端配合使用。它把「素材采集 → ASR 转写 → AI 选片 → 剪映草稿」整条流水线搬到桌面端，适合需要本地录制与批量出片的剪辑团队。
+<p align="center">
+  <img src="LiveMix/help.gif" width="880" alt="LiveMix Studio 使用演示">
+</p>
 
-![LiveMix Studio 客户端使用演示](LiveMix/help.gif)
+## 三步出片
 
-### 核心功能
+| 步骤 | 你来做 | AI 来做 |
+|:---:|------|------|
+| **1** | **添加素材**<br>粘贴直播回放链接、抖音直播间，或拖入本地视频 | 自动识别时长与分辨率，生成封面 |
+| **2** | **提出要求**<br>写下你想要的片段，例如「挑出卖点清晰、有情绪爆点的部分」 | 转写整场内容，按提示词选出高光句段并精确裁剪 |
+| **3** | **导出成片**<br>点击「导出到剪映」继续精修，或「导出成片」直接拿到 MP4 | 生成剪映草稿，或直接合成成片 |
 
-| 能力 | 说明 |
+> 第一次使用，建议先用一段短素材跑通流程，再处理整场直播。
+
+## 核心功能
+
+| 功能 | 说明 |
 |------|------|
-| 源视频采集 | 直播流录制（`http/https/rtmp/rtsp`）、抖音直播间录制（链接或房间号）、mp4 直链下载、本地视频导入（支持拖拽），自动识别时长与分辨率 |
-| 视频预览 | 卡片封面自动截帧，应用内播放器支持播放/暂停与进度拖动；HLS 录像边转封装边播放 |
-| 一键成片 | ASR 整片转写 → LLM 按提示词选片 → ffmpeg 精确裁剪 → 生成剪映草稿，过程页实时展示阶段与进度 |
-| 草稿按需下载 | 草稿生成后先落库，点击「打开草稿文件夹」时才下载草稿与素材，节省本地空间 |
-| 任务中心 | 任务持久化到本地 SQLite，运行中实时进度、失败重试、完成后查看成片 |
-| 本地优先 | 配置与业务数据保存在本机（JSON + SQLite），支持 macOS 与 Windows 打包 |
+| **多种素材来源** | 直播回放、抖音直播间（链接或房间号）、视频下载链接、本地文件，拖进来就能用 |
+| **AI 智能选片** | 语音转写 + 大模型理解内容，按提示词挑出高价值片段，不用再拖进度条找高光 |
+| **剪映草稿** | 一键生成可直接打开的剪映草稿，字幕、音效、BGM、贴纸都能继续调整 |
+| **一键成片** | 不经过剪映，直接输出 MP4，适合批量快速出片 |
+| **按需下载** | 草稿生成后先留存记录，需要时才下载草稿与素材，节省磁盘空间 |
+| **本地优先** | 素材与项目数据保存在本机；长任务在后台运行，进度实时可见，失败可重试 |
 
-> 构建、打包（macOS DMG / Windows 安装包）与实现细节详见 [LiveMix/README.md](LiveMix/README.md)。
+## 下载安装
 
----
+<p align="center">
+  <a href="https://gogoshine.com"><strong>前往官网下载 →</strong></a><br>
+  <sub>支持 macOS 与 Windows</sub>
+</p>
 
-## 服务端部署与使用（live-mixer）
+1. 安装并打开 LiveMix Studio（macOS 拖入「应用程序」，Windows 双击安装包）。
+2. 在「设置 → 服务连接」中填写 API 密钥。
+3. 添加一段素材，开始制作第一条切片。
 
-`live-mixer` 是面向 **直播回放 / 录像** 的自建后端：素材入库、ASR 转写、AI 智能选段、剪映草稿与成片导出一条链路打通。桌面客户端与网页端共用同一套 API，既支持「全自动一键成片」，也支持「AI 粗选 + 人工精修」——把重复劳动交给模型，把成片质量留在人手里。
+## 常见问题
 
-**适合谁用**
+<details>
+<summary><strong>需要安装剪映吗？</strong></summary>
 
-- 直播电商、知识付费、游戏与娱乐等需要高频出切片的团队
-- 希望用大模型加速「听稿选段」，再用剪映完成后期包装的创作者与剪辑师
-- 需要可自建、可私有化部署的直播切片 / 混剪后端服务的研发团队
+只导出成片 MP4 不需要。如果需要继续精修，请安装剪映并用它打开生成的草稿。
 
-### 核心能力
+</details>
 
-| 能力 | 说明 |
-|------|------|
-| 直播素材管理 | 录入回放 / 录像 URL（文件或 m3u8），自动探测分辨率与时长 |
-| 语音识别（ASR） | 异步转写，输出分句、摘要与段落结构，可下载字幕 |
-| 剪辑项目 | 关联素材与系统提示词，维护粗选区间 `clips0` 与精修选段 `clips1` |
-| AI 直播切片 | 按提示词与粗选区间，从 ASR 中筛选高价值句段并回写 `clips1` |
-| 剪映草稿生成 | 精确裁剪素材，调用 capcut-mate 生成可继续后期的剪映草稿 |
-| 一键成片 | 串联「AI 切片 → 草稿 →（可选）视频生成」，适合批量快速出片 |
-| AI + 人工协同 | AI 出选段后人工调整 `clips1`，再单独跑草稿任务 |
+<details>
+<summary><strong>使用需要联网吗？</strong></summary>
 
-### 典型工作流
+需要。语音识别与 AI 选片由云端服务完成，素材与项目数据保存在本机。
 
-```text
-录入直播素材
-  → ASR 转写 / 摘要
-  → 创建剪辑项目（素材 + 提示词，可选粗选 clips0）
-  → 路径 A：一键成片（AI 切片 + 草稿 + 可选成片）
-  → 路径 B：AI 切片 → 人工精修 clips1 → 生成草稿
-  → 下载剪映草稿继续后期
-```
+</details>
 
-### 技术栈
+<details>
+<summary><strong>支持哪些视频来源？</strong></summary>
 
-| 层级 | 技术 |
-|------|------|
-| API / Worker | Go、Gin、异步任务调度 |
-| 数据存储 | PostgreSQL 14+ |
-| 语音识别 | 豆包 BigModel ASR |
-| 大模型 | OpenAI 兼容协议（如阿里云 DashScope） |
-| 剪映草稿 | capcut-mate |
-| 对象存储 | 腾讯云 COS / 阿里云 OSS / 火山引擎 TOS（任选其一） |
-| 部署 | Docker Compose（API + capcut-mate + nginx） |
+直播流 / 回放链接、抖音直播间（链接或房间号）、视频下载链接，以及本地视频文件。
 
-### 快速开始（Docker）
+</details>
 
-#### 前置条件
+<details>
+<summary><strong>草稿会占用很多磁盘空间吗？</strong></summary>
+
+不会。草稿生成后先留存记录，点击「导出到剪映」或「打开草稿文件夹」时才下载草稿与素材。
+
+</details>
+
+## 自托管部署
+
+> 面向开发者。普通用户直接下载客户端即可，无需部署服务端。
+
+服务端（API + 后台 Worker）、剪映草稿服务与 nginx 通过 Docker Compose 一键启动。
+
+**前置条件**
 
 - Docker / Docker Compose
-- 可访问的 **PostgreSQL 14+**（需提前建库，服务不内置数据库）
-- 已配置的对象存储、ASR Key、大模型 Key
+- PostgreSQL 14+（需提前创建数据库）
+- 对象存储：腾讯云 COS / 阿里云 OSS / 火山引擎 TOS（任选其一）
+- 豆包语音识别 API Key、OpenAI 兼容大模型 API Key
 
-#### 1. 准备环境变量
+**1. 配置环境变量**
 
 ```bash
-cd docker
+cd backend/docker
 cp .env.example .env
+# 填写数据库、对象存储、ASR、LLM 等配置
 ```
 
-请至少填写：`APP_DATABASE_*`、`APP_JWT_SECRET`、`APP_STORAGE_*`、`APP_ASR_API_KEY`、`APP_LLM_API_KEY`、`APP_CAPCUT_MATE_BASE_URL`。
-
-Compose 内剪映地址一般填 `http://nginx`。可选：
-
-- `APP_CAPCUT_MATE_GEN_VIDEO_BASE_URL`：视频生成接口独立根地址（未设则走 `BASE_URL`）
-- `APP_CAPCUT_MATE_ENABLE_GEN_VIDEO`：是否导出成片（默认开启；关闭则草稿完成后直接结束任务）
-
-配置优先级：**环境变量 `APP_*` > 外部 yaml > 内嵌默认配置**。
-
-#### 2. 初始化数据库
+**2. 启动服务**
 
 ```bash
-go run ./cmd/envinit init
-# 或
-docker exec -it live-mixer /app/envinit init
-```
-
-默认账号：`admin` / `admin`（生产环境请立刻改密）。
-
-```bash
-go run ./cmd/envinit reset-password -p 'YourStrongPassword'
-```
-
-#### 3. 启动与验证
-
-```bash
-cd docker
 docker compose up -d
-# 如需本地构建：docker compose up -d --build
+docker exec -it live-mixer /app/envinit init   # 建表 + 写入种子数据
+```
 
-curl http://localhost:30000/health
-curl http://localhost:81/openapi/live-mixer/v1/auth/login
+**3. 验证**
+
+```bash
+curl http://localhost:31000/health
+# {"status":"ok"}
+```
+
+默认管理员账号 `admin` / `admin`，首次部署请立即修改密码：
+
+```bash
+docker exec -it live-mixer /app/envinit reset-password -p 'YourStrongPassword'
 ```
 
 | 服务 | 作用 | 宿主机端口 |
 |------|------|------------|
-| `live-mixer` | API + 后台 Worker | `30000` |
+| `live-mixer` | API + 后台 Worker | `31000` |
 | `capcut-mate` | 剪映草稿服务 | `31001` |
-| `nginx` | 静态资源与反向代理 | `81` |
+| `nginx` | 反向代理与静态资源 | `81` |
 
-日志目录：`docker/logs/` · 暂存目录：`docker/html/` · ASR 临时目录：`docker/temp/`（超过 24 小时自动清理）
+> 部署到新环境时，请按实际 IP / 域名调整 `docker-compose.yaml` 中的 `DRAFT_URL` 与 `PROXY_*`，否则草稿下载或代理可能失败。
+>
+> 完整配置项见 [backend/docker/.env.example](backend/docker/.env.example)；客户端构建与打包见 [LiveMix/README.md](LiveMix/README.md)。
+>
+> 如需「导出成片」，在 `.env` 中设置 `APP_CAPCUT_MATE_ENABLE_GEN_VIDEO=true`。
 
-> 部署到新环境时，请按实际网关与域名调整 `docker-compose.yaml` 中的 `PROXY_*` / `DRAFT_URL`，否则草稿下载或代理可能失败。
+<p align="center">
+  <sub>服务端 Go · PostgreSQL · Docker Compose　|　桌面端 Qt 6 · C++17</sub>
+</p>
 
 ---
 
-## 联系方式
+## 联系与支持
 
-| 类型 | 方式 | 说明 |
-|------|------|------|
-| 📱 微信群 | <div align="center"><img src="./assets/LiveMix.jpg" width="200" alt="直播切片 LiveMix Studio 微信交流群"></div> | 直播切片 LiveMix Studio 交流群，扫码加入 |
-| 💬 微信 | <div align="center"><img src="./assets/wechat.png" width="120" alt="微信二维码"></div> | 商务合作 |
-| 📧 邮箱 | taohongmin51@gmail.com | 技术支持 |
+<p align="center">
+  <a href="https://gogoshine.com">官网</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/Chyona/live-mixer">GitHub</a>
+  &nbsp;·&nbsp;
+  <a href="mailto:taohongmin51@gmail.com">邮箱</a>
+</p>
+
+| 加入交流群 | 商务合作 |
+|:---:|:---:|
+| <img src="assets/LiveMix.jpg" width="180" alt="LiveMix Studio 微信交流群"> | <img src="assets/wechat.png" width="120" alt="商务合作微信"> |
+| 扫码加入交流群 | 扫码添加微信 |
+
+<p align="center">技术支持：<a href="mailto:taohongmin51@gmail.com">taohongmin51@gmail.com</a></p>
 
 ---
 
 ## 许可证
 
-详见仓库根目录 [LICENSE](./LICENSE)。
+本项目采用 [Apache-2.0](./LICENSE) 许可证开源。
+
+<p align="center">
+  <sub>把重复劳动交给 AI，把成片质量留在手里。</sub>
+</p>
