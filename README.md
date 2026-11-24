@@ -16,7 +16,7 @@
   <img alt="macOS" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-3DA639?style=flat-square">
-  <img alt="Docker" src="https://img.shields.io/badge/self--hosted-Docker-2496ED?style=flat-square&logo=docker&logoColor=white">
+  <img alt="Docker" src="https://img.shields.io/badge/self--hosted-Docker-2496ED?style=flat-square">
 </p>
 
 <p align="center">
@@ -170,20 +170,11 @@ docker exec -it live-mixer /app/envinit reset-password -p 'YourStrongPassword'
 
 ## 联系与支持
 
-<p align="center">
-  <a href="https://gogoshine.com">官网</a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/Chyona/live-mixer">GitHub</a>
-  &nbsp;·&nbsp;
-  <a href="mailto:taohongmin51@gmail.com">邮箱</a>
-</p>
-
-| 加入交流群 | 商务合作 |
-|:---:|:---:|
-| <img src="assets/LiveMix.jpg" width="180" alt="LiveMix Studio 微信交流群"> | <img src="assets/wechat.png" width="120" alt="商务合作微信"> |
-| 扫码加入交流群 | 扫码添加微信 |
-
-<p align="center">技术支持：<a href="mailto:taohongmin51@gmail.com">taohongmin51@gmail.com</a></p>
+| 类型 | 方式 | 说明 |
+|------|------|------|
+| 📱 微信群 | <div align="center"><img src="./assets/LiveMix.jpg" width="200" alt="直播切片 LiveMix Studio 微信交流群"></div> | 直播切片 LiveMix Studio 交流群，扫码加入 |
+| 💬 微信 | <div align="center"><img src="./assets/wechat.png" width="120" alt="微信二维码"></div> | 商务合作 |
+| 📧 邮箱 | taohongmin51@gmail.com | 技术支持 |
 
 ---
 
