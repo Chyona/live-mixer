@@ -228,19 +228,6 @@ $env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 
 ---
 
-## 文档与语言
-
-| 文档 | 说明 |
-|------|------|
-| [README.md](README.md) | 中文说明（默认） |
-| [README.en.md](README.en.md) | English documentation |
-| [LiveMix/README.md](LiveMix/README.md) | 桌面客户端构建、打包与实现说明 |
-| [LICENSE](LICENSE) | 开源许可 |
-
-关键词：直播切片、AI 切片、直播混剪、语音识别 ASR、剪映草稿、一键成片、直播切片工作台、live-mixer
-
----
-
 ## 联系方式
 
 | 类型 | 方式 | 说明 |
@@ -248,8 +235,6 @@ $env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 | 📱 微信群 | <div align="center"><img src="./assets/LiveMix.jpg" width="200" alt="直播切片 LiveMix Studio 微信交流群"></div> | 直播切片 LiveMix Studio 交流群，扫码加入 |
 | 💬 微信 | <div align="center"><img src="./assets/wechat.png" width="120" alt="微信二维码"></div> | 商务合作 |
 | 📧 邮箱 | taohongmin51@gmail.com | 技术支持 |
-
-> 微信群二维码有效期有限，如失效可在 Issues 中留言获取最新二维码。
 
 ---
 
