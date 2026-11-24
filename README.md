@@ -241,6 +241,18 @@ $env:APP_CAPCUT_MATE_API_KEY="your-capcut-api-key"
 
 ---
 
+## 联系方式
+
+| 类型 | 方式 | 说明 |
+|------|------|------|
+| 📱 微信群 | <div align="center"><img src="./assets/LiveMix.jpg" width="200" alt="直播切片 LiveMix Studio 微信交流群"></div> | 直播切片 LiveMix Studio 交流群，扫码加入 |
+| 💬 微信 | <div align="center"><img src="./assets/wechat.png" width="120" alt="微信二维码"></div> | 商务合作 |
+| 📧 邮箱 | taohongmin51@gmail.com | 技术支持 |
+
+> 微信群二维码有效期有限，如失效可在 Issues 中留言获取最新二维码。
+
+---
+
 ## 许可证
 
 详见仓库根目录 [LICENSE](./LICENSE)。
