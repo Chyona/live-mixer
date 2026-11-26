@@ -1,0 +1,2 @@
+# 本技能只依赖 Python 3.9+ 标准库。
+# 外部依赖仅为系统命令 ffmpeg / ffprobe（可用 LIVEMIX_FFMPEG_DIR 指定目录）。
