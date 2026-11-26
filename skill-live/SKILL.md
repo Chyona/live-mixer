@@ -1,10 +1,12 @@
 ---
 name: livemix-studio
 description: 当用户想把一场直播或一段本地视频变成可直接发布的短视频切片时使用：录制直播流 / 抖音直播间、下载 mp4 直链、导入本地视频，整片语音转写，按提示词让 AI 选出高光句段并精确裁剪，生成可在剪映中继续编辑的剪映草稿，或直接云端导出 MP4 成片，并把草稿按需安装到本机剪映草稿箱。本技能逐参数复刻开源客户端 LiveMix Studio 的「直播录制 → 一键成片 → 剪映草稿 / 成片导出」完整能力，脚本全部使用 Python 标准库。触发词：直播切片、直播录像切片、直播回放、一键成片、直播录制、抖音直播录制、抖音直播间、HLS 录制、本地视频切片、AI 选片、高光切片、ASR 转写、语音转字幕、剪映草稿、生成剪映草稿、导出到剪映、导出成片、剪映草稿下载、草稿箱、批量切片、LiveMix、开源直播切片助手。
+description_zh: 当用户想把一场直播或一段本地视频变成可直接发布的短视频切片时使用：录制直播流 / 抖音直播间、下载 mp4 直链、导入本地视频，整片语音转写，按提示词让 AI 选出高光句段并精确裁剪，生成可在剪映中继续编辑的剪映草稿，或直接云端导出 MP4 成片，并把草稿按需安装到本机剪映草稿箱。本技能逐参数复刻开源客户端 LiveMix Studio 的「直播录制 → 一键成片 → 剪映草稿 / 成片导出」完整能力，脚本全部使用 Python 标准库。触发词：直播切片、直播录像切片、直播回放、一键成片、直播录制、抖音直播录制、抖音直播间、HLS 录制、本地视频切片、AI 选片、高光切片、ASR 转写、语音转字幕、剪映草稿、生成剪映草稿、导出到剪映、导出成片、剪映草稿下载、草稿箱、批量切片、LiveMix、开源直播切片助手。
 description_en: "Turn a live stream or local video into publish-ready short clips exactly like the open-source LiveMix Studio desktop client: record HLS/RTMP/HTTP streams and Douyin live rooms, download direct MP4 links, import local videos, transcribe the full audio with Doubao ASR, let an LLM pick highlight segments, cut them with ffmpeg, build an editable Jianying/CapCut draft with captions, transitions, effects, filters, stickers, BGM, SFX, bilingual subtitles and de-duplication, install the draft into the local Jianying draft folder, or export the final MP4 through CapCut Mate. Python-only scripts, parameter-for-parameter parity with the LiveMix client. Triggers: live clip, stream recording, Douyin live, one-click edit, Jianying draft, CapCut draft, export video, LiveMix."
 slug: livemix-studio
 version: 1.0.0
-displayName: 开源直播切片助手
+display_name: 开源直播切片助手
+display_name_en: Open-Source Live Clip Assistant
 summary: 逐参数复刻开源客户端 LiveMix Studio 的直播切片能力：直播录制 / 抖音直播间 / 本地素材 → 整片 ASR → AI 选片 → ffmpeg 精确裁剪 → 剪映草稿或 MP4 成片；脚本全部为 Python 标准库实现，并与客户端保持 1:1 的成片与草稿生成规则。
 tags:
   - 直播切片
