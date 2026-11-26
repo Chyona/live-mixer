@@ -14,8 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import http
-from .util import qt_round
+import http_client as http
+from util import qt_round
 
 LLM_MODEL = "qwen3.8-flash"
 LLM_IDLE_TIMEOUT_SECONDS = 5 * 60

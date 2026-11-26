@@ -14,8 +14,8 @@ import os
 import urllib.parse
 from typing import Any, Dict, List, Sequence
 
-from . import http
-from .util import json_compact
+import http_client as http
+from util import json_compact
 
 CAPCUT_BASE_URL = "https://capcut-mate.jcaigc.cn"
 CAPCUT_API_PREFIX = "/openapi/capcut-mate/v1"

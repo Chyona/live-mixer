@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .util import utf16_len
+from util import utf16_len
 
 CAPTION_MAX_CHARS = 15
 

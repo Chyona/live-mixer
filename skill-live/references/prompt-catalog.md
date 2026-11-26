@@ -2,7 +2,7 @@
 
 提示词是 LLM 选片的**系统提示词**。技能内置 4 套只读提示词（与客户端
 `PromptCatalog` 一致），完整内容在
-[`scripts/livemix_skill/prompts.py`](../scripts/livemix_skill/prompts.py)，
+[`scripts/prompts.py`](../scripts/prompts.py)，
 可用 `python3 scripts/livemix.py prompts show "<名称>"` 查看。
 
 | 名称 | 来源 / 备注 | 编辑时间 | 适用场景 |
@@ -19,7 +19,7 @@
 ## 1. 选片输出契约
 
 无论使用哪套系统提示词，用户消息都会追加固定输出格式（见
-[`llm.py`](../scripts/livemix_skill/llm.py)）：
+[`llm.py`](../scripts/llm.py)）：
 
 ```
 ## 视频ASR

@@ -35,7 +35,7 @@ def resolve(base_name: str, configured_path: str = "") -> str:
         candidates.append(os.path.join(override_dir, name))
 
     # 脚本目录与当前工作目录相邻的 ffmpeg 目录也纳入候选，便于自带二进制。
-    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     candidates.append(os.path.join(script_dir, "ffmpeg", name))
     candidates.append(os.path.join(os.getcwd(), name))
 

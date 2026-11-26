@@ -20,8 +20,9 @@ import shutil
 import urllib.parse
 from typing import Any, Callable, Dict, List, Optional
 
-from . import capcut, http
-from .util import (
+import capcut
+import http_client as http
+from util import (
     hash6,
     is_http_url,
     sanitize_file_component,

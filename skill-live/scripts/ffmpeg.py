@@ -7,8 +7,9 @@ import subprocess
 import tempfile
 from typing import List
 
-from . import locator, probe
-from .util import hls_playlist_duration_ms
+import locator
+import probe
+from util import hls_playlist_duration_ms
 
 # 与客户端一致：切片重新编码为剪映兼容的 H.264/AAC。
 _CUT_VIDEO_ARGS = [

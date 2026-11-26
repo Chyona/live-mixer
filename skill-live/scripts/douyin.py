@@ -15,7 +15,7 @@ import re
 import urllib.parse
 from typing import Any, Dict
 
-from . import http
+import http_client as http
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

@@ -2,8 +2,8 @@
 
 对应实现：
 
-- [`scripts/livemix_skill/video_export.py`](../scripts/livemix_skill/video_export.py)
-- [`scripts/livemix_skill/draft_download.py`](../scripts/livemix_skill/draft_download.py)
+- [`scripts/video_export.py`](../scripts/video_export.py)
+- [`scripts/draft_download.py`](../scripts/draft_download.py)
 
 客户端基准：`VideoExporter.cpp`、`CapCutMateClient::downloadDraft`。
 

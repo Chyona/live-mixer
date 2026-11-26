@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from . import http
-from .util import qt_round, utf16_len
+import http_client as http
+from util import qt_round, utf16_len
 
 ASR_MODEL = "volc.seedasr.auc"
 ASR_TIMEOUT_SECONDS = 35 * 60

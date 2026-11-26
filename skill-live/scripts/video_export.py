@@ -12,8 +12,9 @@ import os
 import time
 from typing import Callable, Optional
 
-from . import capcut, http
-from .util import sanitize_file_component
+import capcut
+import http_client as http
+from util import sanitize_file_component
 
 POLL_INTERVAL_SECONDS = 3
 FIRST_POLL_DELAY_SECONDS = 1.5

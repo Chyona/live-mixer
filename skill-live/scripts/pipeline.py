@@ -19,11 +19,17 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import assets, asr, capcut, caption, ffmpeg, llm, probe
-from .config import AppConfig
-from .prompts import PromptEntry
-from .store import Store
-from .util import (
+import assets
+import asr
+import capcut
+import caption
+import ffmpeg
+import llm
+import probe
+from config import AppConfig
+from prompts import PromptEntry
+from store import Store
+from util import (
     RandomSource,
     current_ms,
     format_duration,

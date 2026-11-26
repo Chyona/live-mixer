@@ -1,7 +1,7 @@
 # 剪映草稿生成规则
 
-对应实现：[`scripts/livemix_skill/pipeline.py`](../scripts/livemix_skill/pipeline.py)
-与 [`capcut.py`](../scripts/livemix_skill/capcut.py)；
+对应实现：[`scripts/pipeline.py`](../scripts/pipeline.py)
+与 [`capcut.py`](../scripts/capcut.py)；
 客户端基准：`LiveClipService::createDraftForProject` + `CapCutMateClient`。
 
 一条成片对应一个剪映草稿。执行顺序固定为：

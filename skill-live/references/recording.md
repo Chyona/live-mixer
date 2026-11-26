@@ -1,7 +1,7 @@
 # 素材获取
 
-对应实现：[`scripts/livemix_skill/recording.py`](../scripts/livemix_skill/recording.py)
-与 [`douyin.py`](../scripts/livemix_skill/douyin.py)；
+对应实现：[`scripts/recording.py`](../scripts/recording.py)
+与 [`douyin.py`](../scripts/douyin.py)；
 客户端基准：`LiveMix/src/media/RecordingService.cpp`。
 
 ---

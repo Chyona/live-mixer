@@ -17,10 +17,14 @@ import time
 import urllib.parse
 from typing import Any, Callable, Dict, Optional
 
-from . import douyin, ffmpeg, http, locator, probe
-from .config import AppConfig
-from .store import Store
-from .util import (
+import douyin
+import ffmpeg
+import http_client as http
+import locator
+import probe
+from config import AppConfig
+from store import Store
+from util import (
     current_ms,
     directory_size,
     hls_playlist_duration_ms,

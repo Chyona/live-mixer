@@ -5,7 +5,7 @@
 
 ## 1. 模块映射
 
-| 客户端（LiveMix/src） | 技能（skill-live/scripts/livemix_skill） | 说明 |
+| 客户端（LiveMix/src） | 技能（skill-live/scripts） | 说明 |
 | --- | --- | --- |
 | `core/ServiceEndpoints.cpp` | `capcut.py`、`assets.py` | 服务基地址与路径前缀 |
 | `core/AppConfig.{h,cpp}` | `config.py` | 配置字段、默认值、归一化 |

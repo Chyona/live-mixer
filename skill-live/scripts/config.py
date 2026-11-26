@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from .util import read_json, write_json_atomic
+from util import read_json, write_json_atomic
 
 
 def _home() -> str:

@@ -9,9 +9,13 @@ from __future__ import annotations
 import traceback
 from typing import Any, Callable, Dict, List
 
-from . import asr, caption, llm, pipeline, recording
-from .prompts import BUILTIN_PROMPTS
-from .util import utf16_len
+import asr
+import caption
+import llm
+import pipeline
+import recording
+from prompts import BUILTIN_PROMPTS
+from util import utf16_len
 
 
 def _test_caption_balanced_split() -> str:
@@ -188,7 +192,7 @@ def _test_llm_parse() -> str:
 
 
 def _test_sanitize_path() -> str:
-    from .util import sanitize_file_component
+    from util import sanitize_file_component
     assert sanitize_file_component('a/b:c*?"<>|%d') == "a_b_c_______d"
     # 与客户端一致：先 simplified（此时 "... abc"），再去掉开头的点，保留空格。
     assert sanitize_file_component("... abc  ") == " abc"

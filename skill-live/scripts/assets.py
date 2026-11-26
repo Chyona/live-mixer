@@ -17,7 +17,7 @@ import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Sequence
 
-from . import http
+import http_client as http
 
 ASSETS_BASE_URL = "https://assets.gogoshine.com"
 ASSETS_API_PREFIX = "/openapi/assets/v1"

@@ -277,27 +277,29 @@ skill-live/
 ├── LICENSE                      # Apache-2.0
 ├── _icon.png
 ├── references/                  # 10 篇参考文档
-└── scripts/
+└── scripts/                     # 纯标准库 Python 脚本（无第三方依赖）
     ├── livemix.py               # CLI 入口
-    ├── requirements.txt         # 无第三方依赖
-    └── livemix_skill/
-        ├── cli.py               # 子命令与参数
-        ├── config.py            # 配置（对齐客户端 AppConfig）
-        ├── store.py             # SQLite 素材库 / ASR 缓存 / 草稿记录
-        ├── recording.py         # 录制 / 下载 / 本地导入
-        ├── douyin.py            # 抖音直播间解析
-        ├── ffmpeg.py            # ffmpeg / ffprobe 调用
-        ├── probe.py             # 媒体探测
-        ├── asr.py               # 豆包 ASR
-        ├── llm.py               # 选片 / 音效选点 / 字幕翻译
-        ├── caption.py           # 断句、词级时间对齐、均衡折行
-        ├── pipeline.py          # 一键成片主流程
-        ├── capcut.py            # 剪映小助手客户端
-        ├── assets.py            # 素材服务（BGM / 图片 / 音效，HMAC 签名）
-        ├── draft_download.py    # 草稿本地化安装
-        ├── video_export.py      # 成片导出
-        ├── selftest.py          # 18 项纯逻辑自检
-        └── util.py              # Qt 语义工具（round / UTF-16 / 文件名清理）
+    ├── cli.py                   # 子命令与参数
+    ├── config.py                # 配置（对齐客户端 AppConfig）
+    ├── store.py                 # SQLite 素材库 / ASR 缓存 / 草稿记录
+    ├── recording.py             # 录制 / 下载 / 本地导入
+    ├── douyin.py                # 抖音直播间解析
+    ├── ffmpeg.py                # ffmpeg / ffprobe 调用
+    ├── locator.py               # ffmpeg / ffprobe 定位
+    ├── probe.py                 # 媒体探测
+    ├── asr.py                   # 豆包 ASR
+    ├── llm.py                   # 选片 / 音效选点 / 字幕翻译
+    ├── caption.py               # 断句、词级时间对齐、均衡折行
+    ├── pipeline.py              # 一键成片主流程
+    ├── capcut.py                # 剪映小助手客户端
+    ├── assets.py                # 素材服务（BGM / 图片 / 音效，HMAC 签名）
+    ├── http_client.py           # 同步 HTTP 客户端（urllib）
+    ├── draft_download.py        # 草稿本地化安装
+    ├── video_export.py          # 成片导出
+    ├── selftest.py              # 18 项纯逻辑自检
+    ├── version.py               # 版本与技能元信息
+    ├── util.py                  # Qt 语义工具（round / UTF-16 / 文件名清理）
+    └── requirements.txt         # 无第三方依赖
 ```
 
 ---

@@ -11,24 +11,23 @@ import sys
 import traceback
 from typing import Any, Dict, List, Optional
 
-from . import (
-    __version__,
-    asr,
-    capcut,
-    config as config_module,
-    draft_download,
-    http,
-    locator,
-    pipeline,
-    prompts as prompts_module,
-    recording,
-    selftest,
-    video_export,
-)
-from .config import AppConfig
-from .prompts import PromptEntry
-from .store import Store
-from .util import current_ms, format_duration
+import asr
+import capcut
+import config as config_module
+import draft_download
+import http_client as http
+import locator
+import pipeline
+import prompts as prompts_module
+import recording
+import selftest
+import video_export
+
+from config import AppConfig
+from prompts import PromptEntry
+from store import Store
+from util import current_ms, format_duration
+from version import __version__
 
 
 def _emit(payload: Dict[str, Any]) -> None:
@@ -349,7 +348,7 @@ def command_transcribe(args: argparse.Namespace) -> int:
             os.makedirs(work_dir, exist_ok=True)
             audio_path = os.path.join(work_dir, "audio.mp3")
             progress("正在提取 MP3 音频…")
-            from . import ffmpeg as ffmpeg_module
+            import ffmpeg as ffmpeg_module
             ffmpeg_module.extract_mp3(
                 media_path, audio_path,
                 ffmpeg_configured=cfg.recording.ffmpeg_path,

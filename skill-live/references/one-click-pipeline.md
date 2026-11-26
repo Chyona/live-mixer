@@ -1,6 +1,6 @@
 # 一键成片流水线
 
-对应实现：[`scripts/livemix_skill/pipeline.py`](../scripts/livemix_skill/pipeline.py)；
+对应实现：[`scripts/pipeline.py`](../scripts/pipeline.py)；
 客户端基准：`LiveMix/src/services/LiveClipService.cpp`。
 
 ```
