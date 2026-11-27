@@ -25,7 +25,9 @@ QString recordingMp4Path(const QString &playlistPath);
 // 确保录制目录中存在完整 MP4：
 // 1. index.mp4 已存在且完整时直接复用；
 // 2. 可复用的视频预览完整缓存会被移动到 index.mp4；
-// 3. 否则无损合成（-c copy），原子改名后供预览与切片使用。
+// 3. 上次改名失败留下的 index-*.part.mp4 会先重试转正，避免重复转封装；
+// 4. 否则无损合成（-c copy），校验时长后原子改名为 index.mp4；
+//    改名失败时保留临时文件，重试只需重新改名。
 bool ensureRecordingMp4(const QString &playlistPath, QString *mp4Path, QString *error);
 
 // 读取视频宽高；失败时返回 false，由调用方使用默认分辨率。
