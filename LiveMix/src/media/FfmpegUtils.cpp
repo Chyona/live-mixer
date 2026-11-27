@@ -18,6 +18,7 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTemporaryFile>
+#include <QThread>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -95,6 +96,111 @@ bool runFfmpeg(const QStringList &arguments, int timeoutMs, QString *error)
         return false;
     }
     return true;
+}
+
+#ifdef Q_OS_WIN
+QString win32ErrorText(DWORD code)
+{
+    if (code == 0) {
+        return QString();
+    }
+    LPWSTR buffer = nullptr;
+    const DWORD length = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+            | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, code, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    QString text;
+    if (length > 0 && buffer) {
+        text = QString::fromWCharArray(buffer, int(length)).simplified();
+    }
+    if (buffer) {
+        LocalFree(buffer);
+    }
+    return text;
+}
+#endif
+
+// 把已校验通过的 MP4 保存到正式路径。
+// Windows 上 QFile::rename 走的是 MoveFile（不覆盖已存在文件），且临时文件
+// 被杀毒扫描、同步盘或播放器短暂占用时会直接失败且拿不到错误码。这里改用
+// MoveFileEx(REPLACE_EXISTING) 并做退避重试，失败时把 Win32 错误带回界面与
+// 日志（5=拒绝访问/只读，32=文件被占用，183=目标已存在），避免只剩一句
+// 无法保存、无法排查的提示。
+bool promoteFile(const QString &sourcePath, const QString &targetPath, QString *error)
+{
+    constexpr int kMaxAttempts = 6;
+    bool moved = false;
+    QString detail;
+#ifdef Q_OS_WIN
+    const QString source = QDir::toNativeSeparators(sourcePath);
+    const QString target = QDir::toNativeSeparators(targetPath);
+    DWORD lastError = 0;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (::MoveFileExW(reinterpret_cast<const wchar_t *>(source.utf16()),
+                          reinterpret_cast<const wchar_t *>(target.utf16()),
+                          MOVEFILE_REPLACE_EXISTING)) {
+            moved = true;
+            break;
+        }
+        lastError = ::GetLastError();
+        // 共享冲突/权限问题多由杀毒或同步盘短暂占用引起，稍等后重试通常能
+        // 成功；其余错误（路径不存在、跨卷、磁盘满）重试没有意义。
+        if (lastError != ERROR_SHARING_VIOLATION
+            && lastError != ERROR_ACCESS_DENIED
+            && lastError != ERROR_LOCK_VIOLATION) {
+            break;
+        }
+        qWarning() << "MoveFileEx failed, retrying save:" << targetPath
+                   << "win32 error" << lastError << "attempt" << attempt + 1;
+        if (attempt + 1 < kMaxAttempts) {
+            QThread::msleep(100u << attempt); // 100/200/400/800/1600ms
+        }
+    }
+    if (!moved) {
+        // 最常见的两类失败给出可操作的提示，其余错误附上系统文案。
+        if (lastError == ERROR_SHARING_VIOLATION
+            || lastError == ERROR_LOCK_VIOLATION) {
+            detail = QStringLiteral(
+                         "Windows 错误 %1：文件被其他程序占用（可能是杀毒扫描、"
+                         "播放器或同步盘），已重试 %2 次")
+                         .arg(lastError)
+                         .arg(kMaxAttempts - 1);
+        } else if (lastError == ERROR_ACCESS_DENIED) {
+            detail = QStringLiteral(
+                         "Windows 错误 %1：拒绝访问（目标文件可能只读、被其他"
+                         "程序打开或被安全软件阻止）")
+                         .arg(lastError);
+        } else {
+            const QString systemText = win32ErrorText(lastError);
+            detail = systemText.isEmpty()
+                ? QStringLiteral("Windows 错误 %1").arg(lastError)
+                : QStringLiteral("Windows 错误 %1：%2").arg(lastError).arg(systemText);
+        }
+    }
+#else
+    QFile sourceFile(sourcePath);
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (sourceFile.rename(targetPath)) {
+            moved = true;
+            break;
+        }
+        if (attempt + 1 < kMaxAttempts) {
+            QThread::msleep(100u << attempt);
+        }
+    }
+    if (!moved) {
+        detail = sourceFile.errorString();
+    }
+#endif
+    if (moved) {
+        return true;
+    }
+    if (error) {
+        *error = detail.isEmpty()
+            ? QStringLiteral("无法保存完整 MP4：%1").arg(targetPath)
+            : QStringLiteral("无法保存完整 MP4：%1（%2）").arg(targetPath, detail);
+    }
+    return false;
 }
 
 } // namespace
@@ -417,16 +523,44 @@ bool FfmpegUtils::ensureRecordingMp4(const QString &playlistPath, QString *mp4Pa
     // 之前预览生成的完整 MP4 缓存可以直接转正，避免同一录像存两份大文件。
     const QString cachePath = hlsPreviewCachePath(playlistPath);
     if (isUsableMp4(cachePath)) {
-        QFile::remove(outputPath);
-        if (QFile::rename(cachePath, outputPath)) {
+        QString promoteError;
+        if (promoteFile(cachePath, outputPath, &promoteError)) {
             qInfo() << "Reused preview MP4 cache as recording MP4:" << outputPath;
             if (mp4Path) {
                 *mp4Path = outputPath;
             }
             return true;
         }
+        // 缓存本身可能正被预览播放器占用，仍可走重新合成兜底。
         qWarning() << "Unable to move preview MP4 cache, falling back to remux:"
-                   << cachePath;
+                   << cachePath << promoteError;
+    }
+
+    // 上次改名失败留下的完整 MP4（内容已校验过）：直接重试改名即可，避免
+    // 每重试一次就重新转封装数小时的素材。既然内容有效，改名失败通常不是
+    // 文件本身的问题，重新合成只会再烧一遍时间，因此这里直接报错。
+    const QDir recordingDir(playlistInfo.absolutePath());
+    const QStringList leftoverNames =
+        recordingDir.entryList({QStringLiteral("index-*.part.mp4")}, QDir::Files);
+    for (const QString &name : leftoverNames) {
+        const QString partPath = recordingDir.filePath(name);
+        if (!isUsableMp4(partPath)) {
+            continue;
+        }
+        qInfo() << "Retrying save of leftover complete MP4 part:" << partPath;
+        if (!promoteFile(partPath, outputPath, error)) {
+            qWarning() << "Unable to save complete MP4 from leftover part:" << partPath
+                       << (error ? *error : QString());
+            return false;
+        }
+        QFile::setPermissions(outputPath,
+                              QFile::ReadOwner | QFile::WriteOwner
+                                  | QFile::ReadGroup | QFile::ReadOther);
+        qInfo() << "Reused leftover MP4 part as recording MP4:" << outputPath;
+        if (mp4Path) {
+            *mp4Path = outputPath;
+        }
+        return true;
     }
 
     // 中断的录像可能缺少 ENDLIST；合成前补一份临时列表，避免末尾分片被丢弃。
@@ -450,7 +584,7 @@ bool FfmpegUtils::ensureRecordingMp4(const QString &playlistPath, QString *mp4Pa
         playlistForRemux = endedPlaylist.fileName();
     }
 
-    // 清理上次崩溃留下的半成品，避免长期占用双份磁盘空间。
+    // 上面未能复用的半成品视为失效，清理超过 1 小时的，避免长期占用双份磁盘空间。
     const QDateTime staleBefore = QDateTime::currentDateTime().addSecs(-3600);
     const QFileInfoList staleParts = QDir(playlistInfo.absolutePath())
         .entryInfoList({QStringLiteral("index-*.part.mp4")}, QDir::Files);
@@ -506,12 +640,12 @@ bool FfmpegUtils::ensureRecordingMp4(const QString &playlistPath, QString *mp4Pa
         return false;
     }
 
-    QFile::remove(outputPath);
-    if (!QFile::rename(tempPath, outputPath)) {
-        QFile::remove(tempPath);
-        if (error) {
-            *error = QStringLiteral("无法保存完整 MP4：%1").arg(outputPath);
-        }
+    // 校验通过：关闭 QTemporaryFile 的自动删除。改名失败时保留这份成品，
+    // 下次重试会复用并只重试改名，不必重新转封装整段录像。
+    tempOutput.setAutoRemove(false);
+    if (!promoteFile(tempPath, outputPath, error)) {
+        qWarning() << "Unable to save complete MP4, keeping part for retry:"
+                   << tempPath;
         return false;
     }
     // QTemporaryFile 默认 0600；完整 MP4 作为用户可见素材，恢复为常规读权限。
