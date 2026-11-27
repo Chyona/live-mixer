@@ -73,7 +73,6 @@ private:
     void startProject();
     void openVideoFile();
     void openMaterialFiles();
-    void setSourceSample();
     void clearSource();
     void addMaterials(const QStringList &paths);
     void removeMaterial(const QString &id);

@@ -1925,11 +1925,7 @@ QWidget *OralPage::buildSetupStepOne()
                                   buttons);
         upload->setLeadingGlyph(Icons::Glyph::Upload);
         connect(upload, &QAbstractButton::clicked, this, &OralPage::openVideoFile);
-        auto *sample = new Button(QStringLiteral("使用示例口播"), Button::Default,
-                                  buttons);
-        connect(sample, &QAbstractButton::clicked, this, &OralPage::setSourceSample);
         buttonsLayout->addWidget(upload);
-        buttonsLayout->addWidget(sample);
         dropLayout->addWidget(buttons, 0, Qt::AlignHCenter);
         connect(drop, &Studio::DropZone::filesDropped, this,
                 [this](const QStringList &paths) { importVideoFromPaths(paths); });
@@ -2755,14 +2751,6 @@ void OralPage::applyMaterialThumbnail(const QString &path, const QImage &image)
         }
         break;
     }
-}
-
-void OralPage::setSourceSample()
-{
-    m_project.source = StudioData::demoOralSource();
-    m_project.hasSource = true;
-    rebuildSetup();
-    emit toastRequested(QStringLiteral("已载入示例口播，添加相关素材后即可体验"));
 }
 
 void OralPage::clearSource()
