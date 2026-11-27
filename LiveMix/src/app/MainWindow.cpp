@@ -962,7 +962,8 @@ void MainWindow::buildPages()
     addPage(QStringLiteral("dash"), m_dashboard);
     m_material = new MaterialPage;
     addPage(QStringLiteral("material"), m_material);
-    m_oral = new OralPage;
+    // 智能口播需要读取设置页的 API 地址与密钥；传入配置存储但不修改它。
+    m_oral = new OralPage(m_configStore.get());
     addPage(QStringLiteral("oral"), m_oral);
     m_mixcut = new MixcutPage;
     addPage(QStringLiteral("mixcut"), m_mixcut);

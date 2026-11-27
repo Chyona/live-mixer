@@ -1,8 +1,11 @@
 #include "OralPage.h"
 
+#include "../core/AppConfig.h"
 #include "../core/MediaUtils.h"
 #include "../media/FfmpegLocator.h"
 #include "../media/FfmpegUtils.h"
+#include "../oral/OralDraftDownloadTask.h"
+#include "../oral/OralPipelineService.h"
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
 #include "../ui/StudioPosters.h"
@@ -10,17 +13,23 @@
 #include "../ui/WindowChrome.h"
 
 #include <QApplication>
+#include <QAudioOutput>
 #include <QClipboard>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QEnterEvent>
+#include <QGraphicsScene>
+#include <QGraphicsVideoItem>
+#include <QGraphicsView>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -29,14 +38,17 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMediaPlayer>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
 #include <QProcess>
 #include <QScrollArea>
+#include <QThread>
 #include <QUrl>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QScrollBar>
 #include <QStandardPaths>
 #include <QtMath>
@@ -1162,40 +1174,34 @@ QWidget *makeCopyButton(const QString &text, const QString &label,
 /* OralPage                                                             */
 /* ------------------------------------------------------------------ */
 
-OralPage::OralPage(QWidget *parent)
+OralPage::OralPage(ConfigStore *config, QWidget *parent)
     : QWidget(parent)
+    , m_config(config)
 {
     m_project = StudioData::defaultOralProject();
-    m_history = StudioData::recentOralResults();
+    loadHistory();
+    m_history += StudioData::recentOralResults();
 
     m_runTimer = new QTimer(this);
     m_runTimer->setInterval(100);
+    // 真实进度由工作线程推送；这里只负责让「已用时 / 预计还需」持续走动。
     connect(m_runTimer, &QTimer::timeout, this, [this] {
         if (!m_hasRun) {
             return;
         }
-        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_runStartedAt;
-        m_run = StudioData::computeOralRun(elapsed, m_runId);
+        m_run.elapsedMs = QDateTime::currentMSecsSinceEpoch() - m_runStartedAt;
         updateProcessing();
-        if (m_run.done) {
-            finishGeneration();
-        } else {
-            const int percent = qMin(99, static_cast<int>(std::floor(m_run.progress)));
-            emit taskStatusChanged(
-                QStringLiteral("口播包装中 %1% · %2")
-                    .arg(percent)
-                    .arg(StudioData::formatElapsed(m_run.elapsedMs)),
-                true);
-        }
+        const int percent = qMin(99, static_cast<int>(std::floor(m_run.progress)));
+        emit taskStatusChanged(
+            QStringLiteral("口播包装中 %1% · %2")
+                .arg(percent)
+                .arg(StudioData::formatElapsed(m_run.elapsedMs)),
+            true);
     });
 
     m_playTimer = new QTimer(this);
     m_playTimer->setInterval(100);
     connect(m_playTimer, &QTimer::timeout, this, &OralPage::updatePlayback);
-
-    m_draftTimer = new QTimer(this);
-    m_draftTimer->setInterval(110);
-    connect(m_draftTimer, &QTimer::timeout, this, &OralPage::updateDraftGeneration);
 
     m_clockTimer = new QTimer(this);
     m_clockTimer->setInterval(10 * 1000);
@@ -1205,7 +1211,21 @@ OralPage::OralPage(QWidget *parent)
     buildUi();
 }
 
-OralPage::~OralPage() = default;
+OralPage::~OralPage()
+{
+    // 页面销毁时请求取消并给工作线程一点收尾时间；仍在进行的网络请求无法
+    // 强行中断，因此超时后让线程自行结束，避免阻塞应用退出。
+    destroyPipeline();
+    resetResultPlayer();
+    if (m_draftThread) {
+        m_draftThread->quit();
+        if (!m_draftThread->wait(3000)) {
+            // 网络请求可能仍在进行；断开界面回调，线程结束后自行回收。
+            disconnect(m_draftThread, nullptr, this, nullptr);
+        }
+        m_draftThread = nullptr;
+    }
+}
 
 void OralPage::buildUi()
 {
@@ -1261,6 +1281,10 @@ bool OralPage::isRunning() const
 
 void OralPage::showHub()
 {
+    // 离开结果页时停止播放，避免成片声音在其它页面继续播放。
+    if (m_screen == Screen::Result) {
+        resetResultPlayer();
+    }
     m_screen = Screen::Hub;
     rebuildHub();
     m_stack->setCurrentWidget(m_hubScreen);
@@ -1283,6 +1307,9 @@ void OralPage::rememberHubScroll()
 
 void OralPage::showSetup()
 {
+    if (m_screen == Screen::Result) {
+        resetResultPlayer();
+    }
     rememberHubScroll();
     m_screen = Screen::Setup;
     rebuildSetup();
@@ -1291,6 +1318,9 @@ void OralPage::showSetup()
 
 void OralPage::showProcessing()
 {
+    if (m_screen == Screen::Result) {
+        resetResultPlayer();
+    }
     m_screen = Screen::Processing;
     m_stack->setCurrentWidget(m_processingScreen);
 }
@@ -1667,6 +1697,10 @@ QWidget *OralPage::createTemplateCard(const QString &templateId, bool selected,
     texts->addWidget(tags);
     layout->addLayout(texts, 1);
     card->contentLayout()->addWidget(row);
+    if (templateId != QLatin1String("clean")) {
+        card->setToolTip(QStringLiteral(
+            "当前版本仅开放「清透讲解」模板，其它模板即将上线"));
+    }
     connect(card, &Card::clicked, this,
             [this, templateId] { chooseTemplate(templateId); });
     return card;
@@ -1696,7 +1730,9 @@ QWidget *OralPage::createRecentCard(const StudioData::OralResult &result,
     spec.headline = result.projectName.split(QStringLiteral(" · ")).value(0);
     const QString caption = result.tags.value(1, result.tags.value(0)).mid(1);
     spec.caption = caption.isEmpty() ? tmpl.caption : caption;
-    spec.materials = StudioData::demoMaterials().mid(0, 1);
+    spec.materials = result.materials.isEmpty()
+        ? StudioData::demoMaterials().mid(0, 1)
+        : result.materials.mid(0, 1);
     spec.ratio = result.ratio;
     spec.badge = tmpl.name;
     spec.timecode = result.durationLabel;
@@ -1763,19 +1799,18 @@ void OralPage::startProject()
         }
         m_runTimer->stop();
         m_hasRun = false;
+        destroyPipeline();
         emit taskStatusChanged(QString(), false);
     }
 
     if (m_playTimer) {
         m_playTimer->stop();
     }
-    if (m_draftTimer) {
-        m_draftTimer->stop();
-    }
     m_playing = false;
     m_playProgress = 0;
     m_draftState = 0;
     m_draftProgress = 0;
+    resetResultPlayer();
 
     const QString templateId = m_project.templateId;
     m_project = StudioData::defaultOralProject();
@@ -2347,7 +2382,10 @@ QWidget *OralPage::buildSetupStepTwo()
         0, m_project.density == StudioData::OralDensity::Low ? 1 : 2);
     spec.ratio = m_project.ratio;
     spec.subtitleStyle = m_project.subtitleStyle;
-    spec.timecode = QStringLiteral("00:58");
+    // 预览时间码使用真实口播时长；示例项目仍显示设计稿的 00:58。
+    spec.timecode = m_project.hasSource && !m_project.source.duration.isEmpty()
+        ? m_project.source.duration
+        : QStringLiteral("00:58");
     poster->setSpec(spec);
     stageLayout->addWidget(poster, 0, Qt::AlignCenter);
     previewBody->addWidget(stage);
@@ -2440,10 +2478,14 @@ QWidget *OralPage::buildSetupFooter()
         m_project.step == 1
             ? (ready ? QStringLiteral("素材已就绪，AI 将先识别口播，再按语义匹配素材")
                      : QStringLiteral("至少需要 1 段口播视频和 1 个相关素材"))
-            : QStringLiteral("预计成片 00:58 · %1 处 B-Roll · %2 · %3")
-                  .arg(StudioData::oralBrollCount(m_project.density))
-                  .arg(m_project.ratio)
-                  .arg(m_project.outputBoth ? QStringLiteral("成片 + 剪映草稿")
+            : QStringLiteral("预计成片 %1 · %2 处 B-Roll · %3 · %4")
+                  .arg(m_project.hasSource && !m_project.source.duration.isEmpty()
+                           ? m_project.source.duration
+                           : QStringLiteral("00:58"),
+                       QString::number(
+                           StudioData::oralBrollCount(m_project.density)),
+                       m_project.ratio,
+                       m_project.outputBoth ? QStringLiteral("成片 + 剪映草稿")
                                             : QStringLiteral("成片 MP4")),
         footer);
     summary->setPixelSize(10);
@@ -2854,6 +2896,12 @@ void OralPage::clearSource()
 
 void OralPage::chooseTemplate(const QString &templateId)
 {
+    // 当前版本只实现「清透讲解」模板；其它模板保持展示，但不进入流水线。
+    if (templateId != QLatin1String("clean")) {
+        emit toastRequested(QStringLiteral(
+            "当前版本仅开放「清透讲解」模板，其它模板即将上线"));
+        return;
+    }
     m_project.templateId = templateId;
     if (m_screen == Screen::Hub) {
         rebuildHub();
@@ -2889,23 +2937,96 @@ void OralPage::applyOutput(bool both)
 void OralPage::startGeneration()
 {
     if (!m_project.hasSource || m_project.materials.isEmpty()) {
+        emit toastRequested(QStringLiteral("请先添加口播视频和相关素材"));
+        return;
+    }
+    // 当前版本只开放「清透讲解」模板；其它模板保持可见但不进入流水线。
+    m_project.templateId = QStringLiteral("clean");
+    if (m_project.source.filePath.trimmed().isEmpty()
+        || !QFileInfo::exists(m_project.source.filePath)) {
+        emit toastRequested(QStringLiteral("口播视频文件不存在，请重新上传"));
+        return;
+    }
+    // 剪映小助手单文件上传上限 500MB；提前拦截，避免跑到合成阶段才失败。
+    if (QFileInfo(m_project.source.filePath).size() > 500LL * 1024 * 1024) {
+        emit toastRequested(QStringLiteral(
+            "口播视频超过 500MB，请压缩或缩短到 10 分钟以内后再试"));
+        return;
+    }
+    QVector<StudioData::OralMaterial> materials;
+    for (const StudioData::OralMaterial &material : m_project.materials) {
+        if (!material.filePath.trimmed().isEmpty()
+            && QFileInfo::exists(material.filePath)) {
+            materials.append(material);
+        }
+    }
+    if (materials.isEmpty()) {
+        emit toastRequested(QStringLiteral("相关素材文件不存在，请重新添加"));
+        return;
+    }
+
+    const AppConfig config = m_config ? m_config->config() : AppConfig();
+    const QString apiKey = config.service.apiKey.trimmed();
+    if (apiKey.isEmpty()) {
+        emit toastRequested(QStringLiteral("请先在设置中填写 API Key，再开始包装"));
+        emit navigateRequested(QStringLiteral("settings"));
         return;
     }
 
     if (m_playTimer) {
         m_playTimer->stop();
     }
-    if (m_draftTimer) {
-        m_draftTimer->stop();
-    }
     m_playing = false;
     m_playProgress = 0;
+    m_draftState = 0;
+    m_draftProgress = 0;
+    resetResultPlayer();
 
+    // 真实工作目录与 UI 结果页展示的路径保持一致。
+    const QString movies = QStandardPaths::writableLocation(
+        QStandardPaths::MoviesLocation);
+    const QString outputDir =
+        QDir(movies).filePath(QStringLiteral("LiveMix/口播成片"));
+    const QString draftRoot =
+        QDir(movies).filePath(QStringLiteral("LiveMix/CapDraft"));
+    QString cacheDir = QStandardPaths::writableLocation(
+        QStandardPaths::CacheLocation);
+    if (cacheDir.isEmpty()) {
+        cacheDir = QDir::tempPath();
+    }
+    cacheDir = QDir(cacheDir).filePath(QStringLiteral("oral"));
+
+    Oral::PipelineRequest request;
+    request.runId = m_runId + 1;
+    request.apiKey = apiKey;
+    request.gatewayBaseUrl = config.service.apiUrl;
+    request.project = m_project;
+    request.project.materials = materials;
+    request.cacheDir = cacheDir;
+    request.outputDir = outputDir;
+    request.draftRoot = draftRoot;
+
+    destroyPipeline();
     buildProcessingScreen();
-    m_runId += 1;
+    m_runId = request.runId;
     m_runStartedAt = QDateTime::currentMSecsSinceEpoch();
-    m_run = StudioData::computeOralRun(0, m_runId);
+    m_run = StudioData::OralRun();
+    m_run.runId = m_runId;
+    m_run.stage = StudioData::OralStage::Analyze;
+    const QStringList labels = {
+        QStringLiteral("理解口播"), QStringLiteral("匹配素材"),
+        QStringLiteral("智能包装"), QStringLiteral("渲染成片")};
+    const QVector<StudioData::OralStage> keys = {
+        StudioData::OralStage::Analyze, StudioData::OralStage::Match,
+        StudioData::OralStage::Compose, StudioData::OralStage::Render};
+    for (int index = 0; index < keys.size(); ++index) {
+        StudioData::OralStageState stage;
+        stage.key = keys.at(index);
+        stage.label = labels.at(index);
+        m_run.stages.append(stage);
+    }
     m_hasRun = true;
+    m_pipelineRunning = true;
     m_logCount = -1;
     m_lastKeywordCount = -1;
     m_lastMatchedCount = -1;
@@ -2914,6 +3035,20 @@ void OralPage::startGeneration()
     m_runTimer->start();
     emit taskStatusChanged(
         QStringLiteral("口播包装中 0% · 00:00"), true);
+
+    auto *service = new Oral::PipelineService(request);
+    auto *thread = new QThread;
+    service->moveToThread(thread);
+    connect(thread, &QThread::started, service, &Oral::PipelineService::run);
+    connect(service, &Oral::PipelineService::runUpdated, this,
+            &OralPage::onPipelineRunUpdated);
+    connect(service, &Oral::PipelineService::finished, this,
+            &OralPage::onPipelineFinished);
+    connect(thread, &QThread::finished, service, &QObject::deleteLater);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    m_pipelineService = service;
+    m_pipelineThread = thread;
+    thread->start();
 }
 
 void OralPage::buildProcessingScreen()
@@ -2929,6 +3064,7 @@ void OralPage::buildProcessingScreen()
     Studio::clearLayout(root);
     m_stageCards.clear();
     m_processingPoster = nullptr;
+    m_processingProjectLabel = nullptr;
     m_keywordStatus = nullptr;
     m_keywordLayout = nullptr;
     m_matchedLayout = nullptr;
@@ -2966,7 +3102,8 @@ void OralPage::buildProcessingScreen()
     metaLine->setContentsMargins(0, 0, 0, 0);
     metaLine->setSpacing(8);
     auto *projectLabel = Ui::label(
-        QStringLiteral("通勤防晒 · 口播包装"), 10, QFont::Normal, Theme::Text2, top);
+        QStringLiteral("正在理解口播内容"), 10, QFont::Normal, Theme::Text2, top);
+    m_processingProjectLabel = projectLabel;
     metaLine->addWidget(projectLabel);
     metaLine->addWidget(Ui::label(QStringLiteral("·"), 10, QFont::Normal,
                                     Theme::BorderStrong, top));
@@ -3084,7 +3221,7 @@ void OralPage::buildProcessingScreen()
     auto *matchedTop = new QHBoxLayout;
     matchedTop->setContentsMargins(0, 0, 0, 0);
     matchedTop->addStretch(1);
-    m_matchedCount = monoLabel(QStringLiteral("0/8"), 8, Theme::Text2, matchedContent);
+    m_matchedCount = monoLabel(QStringLiteral("0/0"), 8, Theme::Text2, matchedContent);
     matchedTop->addWidget(m_matchedCount);
     matchedBox->addLayout(matchedTop);
     auto *matchedThumbsHost = new QWidget(matchedContent);
@@ -3217,7 +3354,7 @@ void OralPage::buildProcessingScreen()
     statusRow->addWidget(statusLabel);
     logFooterLayout->addLayout(statusRow);
     logFooterLayout->addStretch(1);
-    m_logFooter = monoLabel(QStringLiteral("字幕 0/24"), 8, Theme::Text3, logFooter);
+    m_logFooter = monoLabel(QStringLiteral("字幕 0/0"), 8, Theme::Text3, logFooter);
     logFooterLayout->addWidget(m_logFooter);
     logLayout->addWidget(logFooter);
     bodyLayout->addWidget(logPanel, 1);
@@ -3240,6 +3377,11 @@ void OralPage::updateProcessing()
                 .arg(Theme::Primary.name())
                 .arg(percent)
                 .arg(Theme::Text3.name()));
+    }
+    if (m_processingProjectLabel && !m_run.previewCaption.isEmpty()) {
+        // 语义分析完成后把真实标题写进过程页副标题，替换占位文案。
+        m_processingProjectLabel->setText(
+            QStringLiteral("%1 · 口播包装").arg(m_run.previewCaption.left(20)));
     }
     if (m_processingMeta) {
         m_processingMeta->setText(
@@ -3306,8 +3448,13 @@ void OralPage::updateProcessing()
     }
 
     if (m_matchedCount) {
+        // 分母使用本次真实素材数（界面最多展示 8 个缩略图），不再写死 8。
+        const int totalMaterials =
+            qMin(8, qMax(1, int(m_project.materials.size())));
         m_matchedCount->setText(
-            QStringLiteral("%1/8").arg(m_run.matchedMaterials));
+            QStringLiteral("%1/%2")
+                .arg(qMin(totalMaterials, m_run.matchedMaterials))
+                .arg(totalMaterials));
     }
     const int thumbCount = qMin(2, static_cast<int>(
                                         std::ceil(m_run.matchedMaterials / 4.0)));
@@ -3393,8 +3540,11 @@ void OralPage::updateProcessing()
             QStringLiteral("%1/%2 步").arg(doneCount).arg(m_run.stages.size()));
     }
     if (m_logFooter) {
+        // 字幕总数来自真实 ASR 拆分结果；没有结果前显示 0/0。
         m_logFooter->setText(
-            QStringLiteral("字幕 %1/24").arg(m_run.subtitleCount));
+            QStringLiteral("字幕 %1/%2")
+                .arg(m_run.subtitleCount)
+                .arg(m_run.totalSubtitles));
     }
 
     if (m_logLayout && m_run.logs.size() != m_logCount) {
@@ -3484,28 +3634,142 @@ void OralPage::updateProcessing()
     }
 }
 
-void OralPage::finishGeneration()
+void OralPage::onPipelineRunUpdated(const StudioData::OralRun &run)
 {
+    if (!m_hasRun || run.runId != m_runId) {
+        return;
+    }
+    m_run = run;
+    updateProcessing();
+    const int percent = qMin(99, static_cast<int>(std::floor(m_run.progress)));
+    emit taskStatusChanged(
+        QStringLiteral("口播包装中 %1% · %2")
+            .arg(percent)
+            .arg(StudioData::formatElapsed(m_run.elapsedMs)),
+        true);
+}
+
+void OralPage::onPipelineFinished(bool success, const QString &message,
+                                  const StudioData::OralResult &result)
+{
+    // 取消旧项目后旧线程可能晚到；只接受当前服务实例的结果。
+    if (sender() && m_pipelineService && sender() != m_pipelineService) {
+        return;
+    }
     if (!m_hasRun) {
         return;
     }
     m_runTimer->stop();
-    m_run = StudioData::computeOralRun(StudioData::oralRunTotalMs(), m_runId);
-    m_run.done = true;
-    updateProcessing();
     m_hasRun = false;
-    m_result = StudioData::makeOralResult(
-        m_project, QDateTime::currentMSecsSinceEpoch(),
-        StudioData::oralTemplateName(m_project.templateId));
+    m_pipelineRunning = false;
+    m_pipelineService = nullptr;
+    if (m_pipelineThread) {
+        m_pipelineThread->quit();
+        m_pipelineThread = nullptr;
+    }
+    emit taskStatusChanged(QString(), false);
+
+    if (!success) {
+        m_run.done = true;
+        updateProcessing();
+        QMessageBox::warning(this, QStringLiteral("智能口播生成失败"),
+                             message);
+        emit toastRequested(QStringLiteral("智能口播生成失败：%1").arg(message));
+        m_project.step = 2;
+        showSetup();
+        return;
+    }
+
+    m_run.done = true;
+    m_run.progress = 100.0;
+    updateProcessing();
+    m_result = result;
     m_hasResult = true;
-    // 新生成的成片自动置顶到历史记录；返回首页时从顶部开始展示。
+    // 真实生成记录持久化，演示数据只作为历史列表的补充。
     m_history.prepend(m_result);
+    m_persistedHistory.prepend(m_result);
+    saveHistory();
     m_hubScrollTop = 0;
     showResult();
-    emit taskStatusChanged(QString(), false);
     if (!isVisible()) {
-        emit toastRequested(QStringLiteral("智能口播成片已生成并自动下载，可预览查看"));
+        emit toastRequested(QStringLiteral(
+            "智能口播成片已生成并自动下载，可预览查看"));
+    } else {
+        emit toastRequested(message);
     }
+}
+
+void OralPage::destroyPipeline()
+{
+    if (m_pipelineService) {
+        // cancel() 只写原子标记，可从界面线程直接调用。
+        m_pipelineService->cancel();
+    }
+    if (m_pipelineThread) {
+        m_pipelineThread->quit();
+        // 阻塞网络请求无法立即中断；最多等 3 秒，之后让线程自行结束并回收。
+        if (!m_pipelineThread->wait(3000)) {
+            disconnect(m_pipelineThread, nullptr, this, nullptr);
+        }
+    }
+    m_pipelineService = nullptr;
+    m_pipelineThread = nullptr;
+    m_pipelineRunning = false;
+}
+
+QString oralHistoryFilePath()
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty()) {
+        dir = QDir::homePath() + QStringLiteral("/.livemix");
+    }
+    return QDir(dir).filePath(QStringLiteral("oral_history.json"));
+}
+
+void OralPage::loadHistory()
+{
+    m_persistedHistory.clear();
+    QFile file(oralHistoryFilePath());
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    QJsonArray results;
+    if (document.isArray()) {
+        results = document.array();
+    } else if (document.isObject()) {
+        results = document.object().value(QStringLiteral("results")).toArray();
+    }
+    for (const QJsonValue &value : results) {
+        const StudioData::OralResult result =
+            Oral::oralResultFromJson(value.toObject());
+        // 只保留有真实成片路径的记录，避免把损坏的历史当成可播放结果。
+        if (!result.id.isEmpty() && !result.filePath.isEmpty()) {
+            m_persistedHistory.append(result);
+        }
+    }
+    m_history = m_persistedHistory;
+}
+
+void OralPage::saveHistory()
+{
+    QString dir = QFileInfo(oralHistoryFilePath()).absolutePath();
+    if (!QDir().mkpath(dir)) {
+        return;
+    }
+    QJsonArray results;
+    for (const StudioData::OralResult &result : m_persistedHistory) {
+        results.append(Oral::oralResultToJson(result));
+    }
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("results"), results);
+    QSaveFile file(oralHistoryFilePath());
+    if (!file.open(QIODevice::WriteOnly)) {
+        return;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    file.commit();
 }
 
 /* ------------------------------------------------------------------ */
@@ -3514,6 +3778,9 @@ void OralPage::finishGeneration()
 
 void OralPage::rebuildResult()
 {
+    // 必须在清空旧布局前停止并释放播放器：视频画面是结果页的子控件，
+    // 布局清空后指针会悬空，先 reset 可以避免重复析构。
+    resetResultPlayer();
     auto *root = qobject_cast<QVBoxLayout *>(m_resultScreen->layout());
     if (!root) {
         root = new QVBoxLayout(m_resultScreen);
@@ -3566,9 +3833,6 @@ void OralPage::rebuildResult()
     if (m_playTimer) {
         m_playTimer->stop();
     }
-    if (m_draftTimer) {
-        m_draftTimer->stop();
-    }
 
     const StudioData::OralTemplate tmpl =
         StudioData::oralTemplate(m_result.templateId);
@@ -3576,10 +3840,18 @@ void OralPage::rebuildResult()
     fileName.replace(QStringLiteral(" · "), QStringLiteral("_"));
     const QString movies = QStandardPaths::writableLocation(
         QStandardPaths::MoviesLocation);
-    m_resultFilePath = QDir(movies).filePath(
-        QStringLiteral("LiveMix/口播成片/%1.mp4").arg(fileName));
-    m_resultDraftPath = QDir(movies).filePath(
-        QStringLiteral("LiveMix/CapDraft/%1_%2").arg(fileName, m_result.id));
+    // 真实结果直接使用流水线返回的路径；示例历史退回设计稿路径。
+    m_resultFilePath = m_result.filePath.isEmpty()
+        ? QDir(movies).filePath(
+              QStringLiteral("LiveMix/口播成片/%1.mp4").arg(fileName))
+        : m_result.filePath;
+    m_resultDraftPath = !m_result.draftPath.isEmpty()
+        ? m_result.draftPath
+        : QDir(movies).filePath(
+              QStringLiteral("LiveMix/CapDraft/%1_%2").arg(fileName, m_result.id));
+    const QString videoFileName = QFileInfo(m_resultFilePath).fileName().isEmpty()
+        ? fileName + QStringLiteral(".mp4")
+        : QFileInfo(m_resultFilePath).fileName();
 
     auto *header = new QWidget(m_resultScreen);
     auto *headerLayout = new QVBoxLayout(header);
@@ -3710,7 +3982,9 @@ void OralPage::rebuildResult()
     for (QString &keyword : spec.keywords) {
         keyword = keyword.mid(1);
     }
-    spec.materials = StudioData::demoMaterials().mid(0, 2);
+    spec.materials = m_result.materials.isEmpty()
+        ? StudioData::demoMaterials().mid(0, 2)
+        : m_result.materials.mid(0, 2);
     spec.timecode = m_result.durationLabel;
     spec.progress = 0;
     poster->setSpec(spec);
@@ -3724,7 +3998,51 @@ void OralPage::rebuildResult()
     connect(m_resultCenterPlay, &QToolButton::clicked, this,
             &OralPage::togglePlayback);
     posterHostLayout->addWidget(m_resultCenterPlay, 0, 0, Qt::AlignCenter);
-    previewLayout->addWidget(posterHost, 0, Qt::AlignHCenter);
+
+    // 海报与真实视频放在同一个堆叠控件：未播放时展示设计稿海报，
+    // 点击播放后切到 QMediaPlayer 画面，进度条与时间码随播放器更新。
+    m_resultMediaStack = new QStackedWidget(previewPanel);
+    m_resultMediaStack->setFixedSize(posterWidth, posterHeight);
+    m_resultMediaStack->addWidget(posterHost);
+    m_resultHasVideo = QFileInfo::exists(m_resultFilePath);
+    if (m_resultHasVideo) {
+        auto *videoHost = new QWidget(m_resultMediaStack);
+        videoHost->setStyleSheet(QStringLiteral("background:#000;"));
+        auto *videoLayout = new QVBoxLayout(videoHost);
+        videoLayout->setContentsMargins(0, 0, 0, 0);
+        videoLayout->setSpacing(0);
+        m_resultVideoView = new QGraphicsView(videoHost);
+        m_resultVideoView->setFrameShape(QFrame::NoFrame);
+        m_resultVideoView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_resultVideoView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_resultVideoView->setAlignment(Qt::AlignCenter);
+        m_resultVideoView->setStyleSheet(
+            QStringLiteral("background:#000;border:none;"));
+        auto *scene = new QGraphicsScene(m_resultVideoView);
+        scene->setBackgroundBrush(Qt::black);
+        m_resultVideoItem = new QGraphicsVideoItem;
+        m_resultVideoItem->setAspectRatioMode(Qt::KeepAspectRatio);
+        m_resultVideoItem->setSize(QSizeF(posterWidth, posterHeight));
+        scene->addItem(m_resultVideoItem);
+        scene->setSceneRect(0, 0, posterWidth, posterHeight);
+        m_resultVideoView->setScene(scene);
+        videoLayout->addWidget(m_resultVideoView);
+        m_resultPlayer = new QMediaPlayer(this);
+        m_resultAudio = new QAudioOutput(this);
+        m_resultAudio->setVolume(0.9);
+        m_resultPlayer->setAudioOutput(m_resultAudio);
+        m_resultPlayer->setVideoOutput(m_resultVideoItem);
+        m_resultPlayer->setSource(QUrl::fromLocalFile(m_resultFilePath));
+        connect(m_resultPlayer, &QMediaPlayer::errorOccurred, this,
+                [this](QMediaPlayer::Error, const QString &errorText) {
+                    if (!errorText.isEmpty()) {
+                        emit toastRequested(
+                            QStringLiteral("成片播放失败：%1").arg(errorText));
+                    }
+                });
+        m_resultMediaStack->addWidget(videoHost);
+    }
+    previewLayout->addWidget(m_resultMediaStack, 0, Qt::AlignHCenter);
     previewLayout->addSpacing(12);
 
     auto *playRow = new QWidget(previewPanel);
@@ -3882,7 +4200,11 @@ void OralPage::rebuildResult()
     detailChipsLayout->setContentsMargins(0, 0, 0, 0);
     detailChipsLayout->setSpacing(6);
     detailChipsLayout->addWidget(
-        new Chip(QStringLiteral("素材 · 相关度 92%"), Chip::Neutral, detailChips));
+        new Chip(m_result.materials.isEmpty()
+                     ? QStringLiteral("素材 · 已理解")
+                     : QStringLiteral("素材 · %1 个已理解")
+                           .arg(m_result.materials.size()),
+                 Chip::Neutral, detailChips));
     detailChipsLayout->addWidget(new Chip(
         QStringLiteral("字幕 · %1 条").arg(m_result.subtitleCount), Chip::Neutral,
         detailChips));
@@ -3901,9 +4223,11 @@ void OralPage::rebuildResult()
     outputBody->setSpacing(8);
     auto *videoRight = new Chip(QStringLiteral("已自动下载"), Chip::Ok, output);
     outputBody->addWidget(makeFileRow(
-        Icons::Glyph::Film, fileName + QStringLiteral(".mp4"), QStringLiteral("MP4"),
-        QStringLiteral("%1 · %2 · H.264 · 30fps")
-            .arg(StudioData::oralRatioDimensions(m_result.ratio), m_result.fileSize),
+        Icons::Glyph::Film, videoFileName, QStringLiteral("MP4"),
+        QStringLiteral("%1 · %2 · %3 · 30fps")
+            .arg(StudioData::oralRatioDimensions(m_result.ratio), m_result.fileSize,
+                 m_result.videoCodec.isEmpty() ? QStringLiteral("H.264")
+                                               : m_result.videoCodec),
         videoRight, output));
     auto *draftRight = new QWidget(output);
     auto *draftRightLayout = new QHBoxLayout(draftRight);
@@ -3920,14 +4244,17 @@ void OralPage::rebuildResult()
     }
     connect(m_resultDraftButton, &QAbstractButton::clicked, this, [this] {
         if (m_draftState == 2) {
-            emit toastRequested(QStringLiteral("已在访达中打开剪映草稿文件夹"));
+            openDraftFolder();
             return;
         }
-        startDraftGeneration();
+        startDraftDownload();
     });
     draftRightLayout->addWidget(m_resultDraftButton);
     auto *draftRow = makeFileRow(
-        Icons::Glyph::Scissors, fileName + QStringLiteral("_剪映草稿"),
+        Icons::Glyph::Scissors,
+        QFileInfo(m_resultDraftPath).fileName().isEmpty()
+            ? fileName + QStringLiteral("_剪映草稿")
+            : QFileInfo(m_resultDraftPath).fileName(),
         QStringLiteral("草稿"),
         m_draftState == 2
             ? QStringLiteral("已写入剪映草稿目录，可继续修改字幕、素材与音乐")
@@ -4043,9 +4370,7 @@ void OralPage::restartFromResult()
     if (m_playTimer) {
         m_playTimer->stop();
     }
-    if (m_draftTimer) {
-        m_draftTimer->stop();
-    }
+    resetResultPlayer();
     m_playing = false;
     m_playProgress = 0;
     m_draftState = 0;
@@ -4058,7 +4383,8 @@ void OralPage::restartFromResult()
         m_project = StudioData::defaultOralProject();
     }
     m_project.step = hasInputs ? 2 : 1;
-    m_project.templateId = result.templateId;
+    // 当前只开放清透讲解；历史里的其它模板重新包装时统一回到该模板。
+    m_project.templateId = QStringLiteral("clean");
     m_project.ratio = result.ratio;
     m_project.outputBoth = result.outputBoth;
     showSetup();
@@ -4069,14 +4395,27 @@ void OralPage::togglePlayback()
     if (!m_hasResult) {
         return;
     }
-    if (m_playProgress >= 100) {
-        m_playProgress = 0;
+    if (!m_resultHasVideo || !m_resultPlayer) {
+        emit toastRequested(QStringLiteral(
+            "这条记录没有本地成片；重新包装生成后可播放真实成片"));
+        return;
     }
-    m_playing = !m_playing;
     if (m_playing) {
-        m_playTimer->start();
-    } else {
+        m_resultPlayer->pause();
+        m_playing = false;
         m_playTimer->stop();
+    } else {
+        if (m_resultPlayer->duration() > 0
+            && m_resultPlayer->position() >= m_resultPlayer->duration() - 50) {
+            m_resultPlayer->setPosition(0);
+        }
+        // 切到播放器画面后再开始播放，避免海报覆盖视频首帧。
+        if (m_resultMediaStack && m_resultMediaStack->count() > 1) {
+            m_resultMediaStack->setCurrentIndex(1);
+        }
+        m_resultPlayer->play();
+        m_playing = true;
+        m_playTimer->start();
     }
     if (m_resultPlayButton) {
         m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
@@ -4090,17 +4429,33 @@ void OralPage::togglePlayback()
 
 void OralPage::updatePlayback()
 {
-    if (m_playing) {
-        m_playProgress = qMin(100, m_playProgress + 1);
-        if (m_playProgress >= 100) {
+    if (!m_hasResult) {
+        return;
+    }
+    if (m_resultHasVideo && m_resultPlayer) {
+        const qint64 total = m_resultPlayer->duration();
+        const qint64 current = qMax<qint64>(0, m_resultPlayer->position());
+        m_playProgress = total > 0
+            ? qBound(0, int(current * 100 / total), 100)
+            : 0;
+        if (m_playing && total > 0 && current >= total - 80) {
             m_playing = false;
             m_playTimer->stop();
+            m_resultPlayer->stop();
             if (m_resultPlayButton) {
                 m_resultPlayButton->setText(QStringLiteral("播放成片"));
                 m_resultPlayButton->setLeadingGlyph(Icons::Glyph::Play);
             }
             setResultPlayIcon(m_resultCenterPlay, false);
+            if (m_resultMediaStack) {
+                m_resultMediaStack->setCurrentIndex(0);
+            }
         }
+        if (m_resultPlayClock) {
+            m_resultPlayClock->setText(StudioData::formatElapsed(current));
+        }
+    } else if (m_resultPlayClock) {
+        m_resultPlayClock->setText(QStringLiteral("00:00"));
     }
     if (m_resultPoster) {
         m_resultPoster->setProgress(m_playProgress);
@@ -4108,49 +4463,165 @@ void OralPage::updatePlayback()
     if (m_resultPlayBar) {
         m_resultPlayBar->setValue(m_playProgress);
     }
-    if (m_resultPlayClock && m_hasResult) {
-        const int total = StudioData::parseElapsed(m_result.durationLabel);
-        const int current = qRound(total * m_playProgress / 100.0);
-        m_resultPlayClock->setText(StudioData::formatElapsed(current * 1000LL));
+}
+
+void OralPage::resetResultPlayer()
+{
+    if (m_playTimer) {
+        m_playTimer->stop();
+    }
+    m_playing = false;
+    m_playProgress = 0;
+    if (m_resultPlayer) {
+        m_resultPlayer->stop();
+        m_resultPlayer->setVideoOutput(nullptr);
+        delete m_resultPlayer;
+        m_resultPlayer = nullptr;
+    }
+    if (m_resultAudio) {
+        delete m_resultAudio;
+        m_resultAudio = nullptr;
+    }
+    if (m_resultVideoView) {
+        delete m_resultVideoView;
+        m_resultVideoView = nullptr;
+    }
+    m_resultVideoItem = nullptr;
+    m_resultMediaStack = nullptr;
+    m_resultHasVideo = false;
+}
+
+void OralPage::openResultVideoPreview()
+{
+    if (m_resultFilePath.isEmpty() || !QFileInfo::exists(m_resultFilePath)) {
+        emit toastRequested(QStringLiteral("成片文件不存在，请重新生成"));
+        return;
+    }
+    emit previewRequested(m_result.projectName, m_resultFilePath, true);
+}
+
+void OralPage::openDraftFolder()
+{
+    if (m_resultDraftPath.isEmpty() || !QFileInfo::exists(m_resultDraftPath)) {
+        emit toastRequested(QStringLiteral("草稿目录不存在，请重新生成草稿"));
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(m_resultDraftPath))) {
+        emit toastRequested(QStringLiteral("无法打开草稿文件夹"));
     }
 }
 
-void OralPage::startDraftGeneration()
+void OralPage::startDraftDownload()
 {
-    if (m_draftState != 0) {
+    if (m_draftState == 1) {
         return;
     }
+    if (!m_result.draftPath.isEmpty() && QFileInfo::exists(m_result.draftPath)) {
+        m_draftState = 2;
+        m_resultDraftPath = m_result.draftPath;
+        openDraftFolder();
+        return;
+    }
+    if (m_result.draftId.isEmpty()) {
+        emit toastRequested(QStringLiteral(
+            "这条结果没有可下载的剪映草稿，请重新包装并选择「成片 + 剪映草稿」"));
+        return;
+    }
+
+    const QString movies = QStandardPaths::writableLocation(
+        QStandardPaths::MoviesLocation);
+    const QString draftRoot =
+        QDir(movies).filePath(QStringLiteral("LiveMix/CapDraft"));
     m_draftState = 1;
     m_draftProgress = 0;
     if (m_resultDraftButton) {
         m_resultDraftButton->setText(QStringLiteral("0%"));
         m_resultDraftButton->setEnabled(false);
     }
-    m_draftTimer->start();
+
+    if (m_draftThread) {
+        m_draftThread->quit();
+        if (m_draftThread->wait(2000)) {
+            m_draftThread->deleteLater();
+        } else {
+            // 线程仍在收尾时不能删除 QThread 对象，等它自然结束后回收。
+            disconnect(m_draftThread, nullptr, this, nullptr);
+        }
+        m_draftThread = nullptr;
+    }
+    auto *task = new Oral::DraftDownloadTask(
+        m_result.draftId, m_result.projectName, draftRoot);
+    auto *thread = new QThread;
+    task->moveToThread(thread);
+    connect(thread, &QThread::started, task, &Oral::DraftDownloadTask::run);
+    connect(task, &Oral::DraftDownloadTask::progress, this,
+            &OralPage::onDraftProgress);
+    connect(task, &Oral::DraftDownloadTask::finished, this,
+            &OralPage::onDraftFinished);
+    connect(thread, &QThread::finished, task, &QObject::deleteLater);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    m_draftTask = task;
+    m_draftThread = thread;
+    thread->start();
 }
 
-void OralPage::updateDraftGeneration()
+void OralPage::onDraftProgress(int percent, const QString &detail)
 {
-    m_draftProgress = qMin(100, m_draftProgress + 9);
+    m_draftProgress = qBound(0, percent, 100);
     if (m_resultDraftButton) {
-        m_resultDraftButton->setText(QStringLiteral("%1%").arg(m_draftProgress));
+        m_resultDraftButton->setText(
+            QStringLiteral("%1%").arg(m_draftProgress));
     }
-    if (m_draftProgress >= 100) {
-        m_draftTimer->stop();
-        m_draftState = 2;
+    if (m_resultDraftHint && !detail.isEmpty()) {
+        m_resultDraftHint->setText(detail);
+    }
+}
+
+void OralPage::onDraftFinished(bool success, const QString &localPath,
+                               const QString &error)
+{
+    if (m_draftThread) {
+        m_draftThread->quit();
+        m_draftThread->wait(2000);
+        m_draftThread = nullptr;
+    }
+    m_draftTask = nullptr;
+    if (!success) {
+        m_draftState = 0;
         if (m_resultDraftButton) {
-            m_resultDraftButton->setText(QStringLiteral("打开草稿"));
-            m_resultDraftButton->setLeadingGlyph(Icons::Glyph::Folder);
-            m_resultDraftButton->setTextColor(Theme::Success);
+            m_resultDraftButton->setText(QStringLiteral("生成草稿"));
+            m_resultDraftButton->setLeadingGlyph(Icons::Glyph::Scissors);
             m_resultDraftButton->setEnabled(true);
         }
         if (m_resultDraftHint) {
-            m_resultDraftHint->setText(
-                QStringLiteral("已写入剪映草稿目录，可继续修改字幕、素材与音乐"));
+            m_resultDraftHint->setText(QStringLiteral("生成可二次编辑的剪映草稿"));
         }
-        emit toastRequested(
-            QStringLiteral("剪映草稿已生成，可在剪映「本地草稿」中继续编辑"));
+        emit toastRequested(QStringLiteral("剪映草稿下载失败：%1").arg(error));
+        return;
     }
+    m_draftState = 2;
+    m_result.draftPath = localPath;
+    m_result.draftGenerated = true;
+    m_resultDraftPath = localPath;
+    // 同步更新首页历史与持久化记录中的草稿路径，重启后仍可直接打开。
+    for (StudioData::OralResult &item : m_persistedHistory) {
+        if (item.id == m_result.id) {
+            item.draftPath = localPath;
+            item.draftGenerated = true;
+            break;
+        }
+    }
+    for (StudioData::OralResult &item : m_history) {
+        if (item.id == m_result.id) {
+            item.draftPath = localPath;
+            item.draftGenerated = true;
+            break;
+        }
+    }
+    saveHistory();
+    rebuildResult();
+    emit toastRequested(
+        QStringLiteral("剪映草稿已生成，可在剪映「本地草稿」中继续编辑"));
 }
 
 void OralPage::updateGenerationClock()

@@ -154,6 +154,29 @@ qt_add_executable(LiveMixStudio
     src/model/PromptCatalog.h
     src/model/PromptCatalog.cpp
 
+    # 智能口播：完整的理解 → 剪辑计划 → 剪映草稿/云渲染流水线。
+    # 这些文件与直播切片（LiveClipService / ClipTypes）完全独立。
+    src/oral/OralTypes.h
+    src/oral/OralTypes.cpp
+    src/oral/OralMediaUtils.h
+    src/oral/OralMediaUtils.cpp
+    src/oral/OralAsrClient.h
+    src/oral/OralAsrClient.cpp
+    src/oral/OralLlmClient.h
+    src/oral/OralLlmClient.cpp
+    src/oral/OralAudioAssetsClient.h
+    src/oral/OralAudioAssetsClient.cpp
+    src/oral/OralSfxCatalog.h
+    src/oral/OralSfxCatalog.cpp
+    src/oral/OralCapCutClient.h
+    src/oral/OralCapCutClient.cpp
+    src/oral/OralEditPlanBuilder.h
+    src/oral/OralEditPlanBuilder.cpp
+    src/oral/OralPipelineService.h
+    src/oral/OralPipelineService.cpp
+    src/oral/OralDraftDownloadTask.h
+    src/oral/OralDraftDownloadTask.cpp
+
     src/ui/Icons.h
     src/ui/Icons.cpp
     src/ui/Controls.h
