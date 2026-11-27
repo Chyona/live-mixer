@@ -1,7 +1,8 @@
 #pragma once
 
 // 智能口播工作区：首页、真人口播分步创建、AI 包装过程与成片结果。
-// 当前只实现交互界面与本地过程模拟，不调用真实的 ASR / TTS / 渲染服务。
+// 页面只负责交互与展示；真正的 ASR、大模型分析、剪映草稿与云渲染由
+// Oral::PipelineService 在独立线程执行，两者通过信号连接。
 
 #include "../data/StudioData.h"
 
@@ -22,6 +23,17 @@ class QHBoxLayout;
 class QProcess;
 class Button;
 class ProgressBar;
+class ConfigStore;
+class QThread;
+class QMediaPlayer;
+class QAudioOutput;
+class QGraphicsVideoItem;
+class QGraphicsView;
+
+namespace Oral {
+class PipelineService;
+class DraftDownloadTask;
+}
 
 namespace Studio {
 class OralPosterWidget;
@@ -34,7 +46,7 @@ class OralPage : public QWidget
     Q_OBJECT
 
 public:
-    explicit OralPage(QWidget *parent = nullptr);
+    explicit OralPage(ConfigStore *config = nullptr, QWidget *parent = nullptr);
     ~OralPage() override;
 
 signals:
@@ -91,7 +103,20 @@ private:
     void chooseTemplate(const QString &templateId);
     void startGeneration();
     void updateProcessing();
-    void finishGeneration();
+    // 真实流水线回调：过程快照、成功/失败收尾。
+    void onPipelineRunUpdated(const StudioData::OralRun &run);
+    void onPipelineFinished(bool success, const QString &message,
+                            const StudioData::OralResult &result);
+    void destroyPipeline();
+    void loadHistory();
+    void saveHistory();
+    void startDraftDownload();
+    void onDraftProgress(int percent, const QString &detail);
+    void onDraftFinished(bool success, const QString &localPath,
+                         const QString &error);
+    void openDraftFolder();
+    void openResultVideoPreview();
+    void resetResultPlayer();
     void openRecent(const StudioData::OralResult &result);
     void restartFromResult();
 
@@ -100,8 +125,6 @@ private:
 
     void togglePlayback();
     void updatePlayback();
-    void startDraftGeneration();
-    void updateDraftGeneration();
 
     void updateGenerationClock();
     void copyText(const QString &text, const QString &label);
@@ -118,6 +141,8 @@ private:
     QVBoxLayout *m_hubLayout = nullptr;
     // 全部已完成的口播项目，最新的在前；新生成的成片自动置顶。
     QVector<StudioData::OralResult> m_history;
+    // 真实生成记录单独持久化；演示数据每次启动追加在真实记录之后。
+    QVector<StudioData::OralResult> m_persistedHistory;
     int m_hubScrollTop = 0;
     QWidget *m_setupScreen = nullptr;
     QWidget *m_processingScreen = nullptr;
@@ -142,9 +167,19 @@ private:
     qint64 m_runStartedAt = 0;
     QTimer *m_runTimer = nullptr;
 
+    // 真实流水线：每次生成创建一个工作线程，信号排队回到界面线程。
+    ConfigStore *m_config = nullptr;
+    QThread *m_pipelineThread = nullptr;
+    Oral::PipelineService *m_pipelineService = nullptr;
+    bool m_pipelineRunning = false;
+    // 结果页「生成草稿」下载任务。
+    QThread *m_draftThread = nullptr;
+    Oral::DraftDownloadTask *m_draftTask = nullptr;
+
     // 过程页控件
     QLabel *m_progressLabel = nullptr;
     QLabel *m_processingMeta = nullptr;
+    QLabel *m_processingProjectLabel = nullptr;
     QLabel *m_etaLabel = nullptr;
     Studio::OralPosterWidget *m_processingPoster = nullptr;
     QVector<Studio::StageSummaryCard *> m_stageCards;
@@ -185,7 +220,14 @@ private:
     QTimer *m_playTimer = nullptr;
     int m_draftState = 0; // 0 idle / 1 running / 2 done
     int m_draftProgress = 0;
-    QTimer *m_draftTimer = nullptr;
+
+    // 结果页真实视频播放：海报与播放器放在同一个堆叠控件里，点击播放时切换。
+    QStackedWidget *m_resultMediaStack = nullptr;
+    QGraphicsView *m_resultVideoView = nullptr;
+    QGraphicsVideoItem *m_resultVideoItem = nullptr;
+    QMediaPlayer *m_resultPlayer = nullptr;
+    QAudioOutput *m_resultAudio = nullptr;
+    bool m_resultHasVideo = false;
 
     QTimer *m_clockTimer = nullptr;
 };

@@ -6,6 +6,7 @@
 
 #include <QColor>
 #include <QImage>
+#include <QMetaType>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -116,6 +117,17 @@ struct OralResult {
     int subtitleCount = 0;
     int brollCount = 0;
     bool draftGenerated = false;
+    // 智能口播真实产物路径：成片 MP4、剪映草稿目录、草稿 ID 与剪辑计划 JSON。
+    // 示例历史记录保持为空，界面会退回原型展示。
+    QString filePath;
+    QString draftPath;
+    QString draftId;
+    QString editPlanPath;
+    // 成片实际视频编码（H.264 / H.265 等），用于结果页输出信息。
+    QString videoCodec;
+    // 本次成片使用的真实素材（含缩略图）。不写入历史 JSON，仅用于当前会话
+    // 的结果页海报；重启后历史结果会退回内置插图，但成片播放仍然真实。
+    QVector<OralMaterial> materials;
     QVector<QPair<QString, QString>> highlights;
 };
 
@@ -149,6 +161,8 @@ struct OralRun {
     QStringList previewKeywords;
     int matchedMaterials = 0;
     int subtitleCount = 0;
+    // 本次成片的字幕总数，过程页进度使用「已生成/总数」而不是固定 24。
+    int totalSubtitles = 0;
     int renderedFrames = 0;
     int totalFrames = 0;
 };
@@ -324,3 +338,7 @@ QPair<QColor, QColor> mixcutScenePalette(const QString &scene);
 QColor mixcutSceneAccent(const QString &scene);
 
 } // namespace StudioData
+
+// 智能口播流水线在独立线程运行，过程快照与结果通过 Qt 信号跨线程传递。
+Q_DECLARE_METATYPE(StudioData::OralRun)
+Q_DECLARE_METATYPE(StudioData::OralResult)
