@@ -346,7 +346,7 @@ FFmpeg 默认从项目 COS 镜像
 如需切换镜像，设置 `LIVEMIX_FFMPEG_MIRROR`（详见 `ffmpeg/README.md`）。
 
 DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmpeg` / `ffprobe`
-放入应用包、补充 ad-hoc 签名，并生成带 Applications 快捷方式的拖拽安装包：
+放入应用包、补充 ad-hoc 签名，并生成带品牌背景、精确定位图标和 Applications 快捷方式的拖拽安装包：
 
 ```bash
 ./scripts/pack-macos.sh
@@ -365,7 +365,13 @@ DMG 脚本会自动构建 Release 版本、部署 Qt 框架与插件、把 `ffmp
 | `--build-dir DIR` | 构建目录，默认 `build-dmg` |
 | `--output DIR` | DMG 输出目录，默认 `dist` |
 | `--sign IDENTITY` | 指定 codesign 签名身份 |
+| `--no-dmg-style` | 跳过安装窗口美化，生成默认样式的 DMG |
 | `--keep-staging` | 保留临时部署目录，便于排查打包问题 |
+
+安装窗口背景位于 `resources/dmg/`（`background.png` 640×400，另附 `@2x` 版本），
+卷图标使用 `resources/AppIcon.icns`；窗口尺寸、图标大小与坐标定义在
+`scripts/pack-macos.sh` 顶部。美化依赖 Finder 自动化，若无 GUI 会话或自动化被禁用，
+脚本会打印警告并自动回退为默认样式，不影响打包产出。
 
 示例：
 

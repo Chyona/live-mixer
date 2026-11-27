@@ -3,13 +3,15 @@
 # LiveMix Studio — macOS DMG packaging helper.
 #
 # Builds a Release app, deploys Qt frameworks/plugins, then creates a
-# drag-to-Applications disk image. Requires macOS and Xcode Command Line Tools.
+# drag-to-Applications disk image with a branded installer window.
+# Requires macOS and Xcode Command Line Tools.
 #
 # Examples:
 #   ./scripts/pack-macos.sh
 #   ./scripts/pack-macos.sh --skip-build
 #   ./scripts/pack-macos.sh --clean --jobs 8
 #   ./scripts/pack-macos.sh --sign "Developer ID Application: Example (TEAMID)"
+#   ./scripts/pack-macos.sh --no-dmg-style
 #
 set -euo pipefail
 
@@ -27,6 +29,22 @@ SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 EXTRA_BUILD_ARGS=()
 VOLUME_NAME="LiveMix Studio"
 APP_VERSION_OVERRIDE=""
+DMG_STYLED=1
+
+# 安装窗口布局（单位 pt）：背景图 640×400，图标中心与背景箭头对齐
+DMG_WINDOW_WIDTH=640
+DMG_WINDOW_HEIGHT=400
+DMG_WINDOW_X=200
+DMG_WINDOW_Y=120
+DMG_TITLEBAR_HEIGHT=28
+DMG_ICON_SIZE=120
+DMG_TEXT_SIZE=13
+DMG_APP_ICON_X=168
+DMG_APP_ICON_Y=190
+DMG_APPS_ICON_X=472
+DMG_APPS_ICON_Y=190
+DMG_BACKGROUND_DIR="$ROOT_DIR/resources/dmg"
+DMG_VOLUME_ICON="$ROOT_DIR/resources/AppIcon.icns"
 
 usage() {
     cat <<'EOF'
@@ -38,7 +56,7 @@ LiveMix Studio DMG 打包脚本（macOS）
 流程:
   1. 编译 Release 版本（可通过 --skip-build 跳过）
   2. 复制 .app 并用 macdeployqt 部署 Qt 运行库
-  3. 创建 Applications 快捷方式并生成压缩 DMG
+  3. 创建 Applications 快捷方式，套用品牌背景与图标布局后生成压缩 DMG
 
 选项:
   --skip-build           复用构建目录中已有的 LiveMixStudio.app
@@ -51,6 +69,7 @@ LiveMix Studio DMG 打包脚本（macOS）
   --build-dir DIR        构建目录（默认: build-dmg）
   --output DIR           DMG 输出目录（默认: dist）
   --sign IDENTITY        codesign 签名身份；默认使用 ad-hoc 临时签名
+  --no-dmg-style         跳过安装窗口美化（品牌背景、图标布局、卷图标）
   --keep-staging         保留临时部署目录，便于排查问题
   -h, --help             显示帮助
 
@@ -136,6 +155,9 @@ while [ "$#" -gt 0 ]; do
         --sign=*)
             SIGN_IDENTITY="${arg#*=}"
             ;;
+        --no-dmg-style)
+            DMG_STYLED=0
+            ;;
         --keep-staging)
             KEEP_STAGING=1
             ;;
@@ -179,6 +201,11 @@ fi
 for tool in cmake macdeployqt hdiutil codesign ditto lipo shasum; do
     command -v "$tool" >/dev/null 2>&1 || fail "缺少所需工具: $tool"
 done
+if [ "$DMG_STYLED" -eq 1 ]; then
+    for tool in osascript SetFile; do
+        command -v "$tool" >/dev/null 2>&1 || fail "缺少所需工具: $tool（安装界面美化需要 Xcode Command Line Tools）"
+    done
+fi
 
 case "$BUILD_DIR" in
     /*) ;;
@@ -284,8 +311,14 @@ DMG_PATH="$OUTPUT_DIR/LiveMixStudio-${APP_VERSION}-${ARCH_LABEL}-setup.dmg"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/livemix-dmg.XXXXXX")"
 STAGING_DIR="$WORK_DIR/dmg-root"
 LOG_DIR="$WORK_DIR/logs"
+MOUNT_POINT=""
 mkdir -p "$STAGING_DIR" "$LOG_DIR"
 cleanup() {
+    if [ -n "${MOUNT_POINT:-}" ] && [ -d "$MOUNT_POINT" ]; then
+        hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 \
+            || hdiutil detach -force "$MOUNT_POINT" >/dev/null 2>&1 || true
+        MOUNT_POINT=""
+    fi
     if [ -n "${WORK_DIR:-}" ] && [ -d "$WORK_DIR" ]; then
         if [ "$KEEP_STAGING" -eq 1 ]; then
             printf '\n临时目录已保留: %s\n' "$WORK_DIR"
@@ -378,21 +411,138 @@ done
 ln -s /Applications "$STAGING_DIR/Applications"
 [ -L "$STAGING_DIR/Applications" ] || fail "无法创建 Applications 快捷方式。"
 
+if [ "$DMG_STYLED" -eq 1 ]; then
+    for asset in \
+        "$DMG_BACKGROUND_DIR/background.png" \
+        "$DMG_BACKGROUND_DIR/background@2x.png" \
+        "$DMG_VOLUME_ICON"; do
+        [ -f "$asset" ] || fail "缺少安装界面素材: $asset"
+    done
+    mkdir -p "$STAGING_DIR/.background"
+    cp "$DMG_BACKGROUND_DIR/background.png" "$STAGING_DIR/.background/"
+    cp "$DMG_BACKGROUND_DIR/background@2x.png" "$STAGING_DIR/.background/"
+fi
+
 info "生成 DMG"
 CREATE_LOG="$LOG_DIR/hdiutil-create.log"
 VERIFY_LOG="$LOG_DIR/hdiutil-verify.log"
 rm -f "$DMG_PATH"
-if ! hdiutil create \
+
+create_plain_dmg() {
+    hdiutil create \
         -volname "$VOLUME_NAME" \
         -srcfolder "$STAGING_DIR" \
         -fs HFS+ \
         -format UDZO \
         -imagekey zlib-level=9 \
         -ov \
-        "$DMG_PATH" >"$CREATE_LOG" 2>&1; then
+        "$DMG_PATH" >"$CREATE_LOG" 2>&1
+}
+
+STYLED_RW_DMG="$WORK_DIR/LiveMixStudio-styled-rw.dmg"
+
+detach_styled_image() {
+    [ -n "${MOUNT_POINT:-}" ] || return 0
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if hdiutil detach "$MOUNT_POINT" >>"$CREATE_LOG" 2>&1; then
+            MOUNT_POINT=""
+            return 0
+        fi
+        sleep 1
+    done
+    printf '警告: 无法正常卸载 %s，尝试强制卸载。\n' "$MOUNT_POINT" >&2
+    hdiutil detach -force "$MOUNT_POINT" >>"$CREATE_LOG" 2>&1 || true
+    MOUNT_POINT=""
+    return 0
+}
+
+# 创建读写中间镜像，挂载后用 Finder 写入窗口外观（.DS_Store），
+# 再压缩为只读 UDZO。Finder 自动化不可用时退回默认样式，避免阻塞发布。
+create_styled_dmg() {
+    hdiutil create \
+        -volname "$VOLUME_NAME" \
+        -srcfolder "$STAGING_DIR" \
+        -fs HFS+ \
+        -format UDRW \
+        -ov \
+        "$STYLED_RW_DMG" >>"$CREATE_LOG" 2>&1 || return 1
+
+    local attach_output
+    attach_output="$(hdiutil attach -nobrowse -noautoopen -readwrite "$STYLED_RW_DMG" 2>>"$CREATE_LOG")" || return 1
+    MOUNT_POINT="$(printf '%s\n' "$attach_output" | awk -F'\t' '
+        NF >= 3 && $1 ~ /^\/dev\// {
+            mp = $3
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", mp)
+            if (mp != "") { print mp; exit }
+        }')"
+    [ -n "$MOUNT_POINT" ] && [ -d "$MOUNT_POINT" ] || return 1
+
+    local volume_name escaped_volume window_right window_bottom
+    volume_name="$(basename "$MOUNT_POINT")"
+    escaped_volume="${volume_name//\\/\\\\}"
+    escaped_volume="${escaped_volume//\"/\\\"}"
+    window_right=$((DMG_WINDOW_X + DMG_WINDOW_WIDTH))
+    window_bottom=$((DMG_WINDOW_Y + DMG_WINDOW_HEIGHT + DMG_TITLEBAR_HEIGHT))
+
+    osascript >>"$CREATE_LOG" 2>&1 <<APPLESCRIPT || return 1
+tell application "Finder"
+    tell disk "$escaped_volume"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set pathbar visible of container window to false
+        set the bounds of container window to {$DMG_WINDOW_X, $DMG_WINDOW_Y, $window_right, $window_bottom}
+        set vo to the icon view options of container window
+        set arrangement of vo to not arranged
+        set icon size of vo to $DMG_ICON_SIZE
+        set text size of vo to $DMG_TEXT_SIZE
+        set background picture of vo to file ".background:background.png"
+        set position of item "LiveMixStudio.app" of container window to {$DMG_APP_ICON_X, $DMG_APP_ICON_Y}
+        set position of item "Applications" of container window to {$DMG_APPS_ICON_X, $DMG_APPS_ICON_Y}
+        update without registering applications
+        delay 1
+        close
+    end tell
+end tell
+APPLESCRIPT
+
+    # Finder 打开窗口后会移除预置的 .VolumeIcon.icns，因此最后再写入卷图标
+    cp "$DMG_VOLUME_ICON" "$MOUNT_POINT/.VolumeIcon.icns" >>"$CREATE_LOG" 2>&1 || return 1
+    SetFile -c icnC -a C "$MOUNT_POINT" >>"$CREATE_LOG" 2>&1 || return 1
+
+    sync
+    detach_styled_image || return 1
+
+    local attempt
+    for attempt in 1 2 3; do
+        rm -f "$DMG_PATH"
+        if hdiutil convert "$STYLED_RW_DMG" -format UDZO -imagekey zlib-level=9 \
+                -o "$DMG_PATH" >>"$CREATE_LOG" 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+if [ "$DMG_STYLED" -eq 1 ]; then
+    if ! create_styled_dmg; then
+        detach_styled_image
+        rm -f "$DMG_PATH"
+        printf '警告: 安装界面样式应用失败（Finder 自动化不可用？），改为生成默认样式 DMG。\n' >&2
+        printf '      详情见日志: %s\n' "$CREATE_LOG" >&2
+        if ! create_plain_dmg; then
+            cat "$CREATE_LOG" >&2
+            fail "DMG 创建失败。"
+        fi
+    fi
+elif ! create_plain_dmg; then
     cat "$CREATE_LOG" >&2
     fail "DMG 创建失败。"
 fi
+
 if ! hdiutil verify "$DMG_PATH" >"$VERIFY_LOG" 2>&1; then
     cat "$VERIFY_LOG" >&2
     fail "DMG 校验失败。"
