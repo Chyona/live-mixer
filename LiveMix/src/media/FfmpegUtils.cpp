@@ -202,40 +202,42 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
     const double startSeconds = startMs / 1000.0;
     const double durationSeconds = (endMs - startMs) / 1000.0;
 
-    // -ss 放在 -i 之前可快速定位；配合重新编码，现代 ffmpeg 会丢弃关键帧之前的
-    // 内容，得到准确的起止时间。重新编码为 H.264/AAC 以兼容剪映。
+    // 混合 seek：第三方录制/分段拼接的源 MP4 常见「关键帧索引不可信」——直接按
+    // -ss 定位时 ffmpeg 可能从一个 P/B 帧开始解码，缺参考帧后输出灰影/重影，直到
+    // 下一个真关键帧才恢复，并被重编码进切片。先按输入侧 -ss 回退 15 秒给解码器
+    // 留出预解码时间，再在输出侧 -ss 精确定位；起点不足 15 秒时直接从 0 解码。
+    // 与 backend/internal/pkg/media/ffmpeg.go 的 buildCutVideoArgs 保持一致。
+    constexpr qint64 kCoarseBackMs = 15 * 1000;
+
     QStringList args = {
         QStringLiteral("-y"),
         QStringLiteral("-nostdin"),
         QStringLiteral("-hide_banner"),
         QStringLiteral("-loglevel"),
         QStringLiteral("error"),
-        QStringLiteral("-ss"),
-        QString::number(startSeconds, 'f', 3),
-        // -t 作为输入时限，精确截取指定区间后再重新编码。
-        QStringLiteral("-t"),
-        QString::number(durationSeconds, 'f', 3),
-        QStringLiteral("-i"),
-        inputPath,
-        QStringLiteral("-map"),
-        QStringLiteral("0:v:0"),
-        QStringLiteral("-map"),
-        QStringLiteral("0:a:0?"),
-        QStringLiteral("-c:v"),
-        QStringLiteral("libx264"),
-        QStringLiteral("-preset"),
-        QStringLiteral("veryfast"),
-        QStringLiteral("-crf"),
-        QStringLiteral("20"),
-        QStringLiteral("-pix_fmt"),
-        QStringLiteral("yuv420p"),
-        QStringLiteral("-c:a"),
-        QStringLiteral("aac"),
-        QStringLiteral("-b:a"),
-        QStringLiteral("128k"),
     };
-
-    args << QStringLiteral("-movflags") << QStringLiteral("+faststart") << outputPath;
+    if (startMs >= kCoarseBackMs) {
+        const double backSeconds = (startMs - kCoarseBackMs) / 1000.0;
+        const double dropSeconds = kCoarseBackMs / 1000.0;
+        args << QStringLiteral("-ss") << QString::number(backSeconds, 'f', 3)
+             << QStringLiteral("-i") << inputPath
+             << QStringLiteral("-ss") << QString::number(dropSeconds, 'f', 3)
+             << QStringLiteral("-t") << QString::number(durationSeconds, 'f', 3);
+    } else {
+        args << QStringLiteral("-i") << inputPath
+             << QStringLiteral("-ss") << QString::number(startSeconds, 'f', 3)
+             << QStringLiteral("-t") << QString::number(durationSeconds, 'f', 3);
+    }
+    args << QStringLiteral("-map") << QStringLiteral("0:v:0")
+         << QStringLiteral("-map") << QStringLiteral("0:a:0?")
+         << QStringLiteral("-c:v") << QStringLiteral("libx264")
+         << QStringLiteral("-preset") << QStringLiteral("veryfast")
+         << QStringLiteral("-crf") << QStringLiteral("20")
+         << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p")
+         << QStringLiteral("-c:a") << QStringLiteral("aac")
+         << QStringLiteral("-b:a") << QStringLiteral("128k")
+         << QStringLiteral("-movflags") << QStringLiteral("+faststart")
+         << outputPath;
 
     if (!runFfmpeg(args, 10 * 60 * 1000, error)) {
         return false;
