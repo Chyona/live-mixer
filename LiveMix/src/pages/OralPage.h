@@ -5,7 +5,11 @@
 
 #include "../data/StudioData.h"
 
+#include <QHash>
+#include <QSet>
 #include <QWidget>
+
+#include <functional>
 
 class QLabel;
 class ElidedLabel;
@@ -15,12 +19,14 @@ class QStackedWidget;
 class QTimer;
 class QVBoxLayout;
 class QHBoxLayout;
+class QProcess;
 class Button;
 class ProgressBar;
 
 namespace Studio {
 class OralPosterWidget;
 class StageSummaryCard;
+class MaterialVisualWidget;
 }
 
 class OralPage : public QWidget
@@ -34,6 +40,9 @@ public:
 signals:
     void toastRequested(const QString &message);
     void navigateRequested(const QString &pageId);
+    // 素材预览：由主窗口弹出视频播放或图片预览。
+    void previewRequested(const QString &title, const QString &filePath,
+                          bool video);
     // 底部状态栏的 AI 任务入口；running=false 表示结束并收起。
     void taskStatusChanged(const QString &text, bool running);
 
@@ -68,6 +77,14 @@ private:
     void clearSource();
     void addMaterials(const QStringList &paths);
     void removeMaterial(const QString &id);
+    void importVideoFromPaths(const QStringList &paths);
+    void importVideoFile(const QString &path);
+    void probeSourceMetadata(const QString &path);
+    void previewMaterial(const StudioData::OralMaterial &material);
+    void ensureMaterialPreviews();
+    void requestVideoThumbnail(const QString &path);
+    void startNextThumbnailJob();
+    void applyMaterialThumbnail(const QString &path, const QImage &image);
     void chooseTemplate(const QString &templateId);
     void startGeneration();
     void updateProcessing();
@@ -99,7 +116,17 @@ private:
     QWidget *m_resultScreen = nullptr;
 
     StudioData::OralProject m_project;
-    bool m_transcriptExpanded = false;
+
+    // 视频素材缩略图：顺序生成，完成后直接刷新对应的缩略图控件。
+    QStringList m_thumbnailQueue;
+    QString m_thumbnailInFlight;
+    QProcess *m_thumbnailProcess = nullptr;
+    QSet<QString> m_failedPreviewPaths;
+    // 按文件路径记录素材步骤中的缩略图控件；每次重建步骤时重新登记。
+    QHash<QString, QVector<Studio::MaterialVisualWidget *>> m_previewWidgets;
+    // 口播视频卡片的缩略图/元数据控件；元数据异步探测完成后就地刷新。
+    std::function<void(const StudioData::OralSource &)> m_sourcePreviewUpdater;
+    QLabel *m_sourceMetaLabel = nullptr;
 
     bool m_hasRun = false;
     StudioData::OralRun m_run;

@@ -1,5 +1,8 @@
 #include "OralPage.h"
 
+#include "../core/MediaUtils.h"
+#include "../media/FfmpegLocator.h"
+#include "../media/FfmpegUtils.h"
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
 #include "../ui/StudioPosters.h"
@@ -10,6 +13,10 @@
 #include <QClipboard>
 #include <QDateTime>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -17,11 +24,18 @@
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QImageReader>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
+#include <QProcess>
 #include <QScrollArea>
+#include <QUrl>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QStandardPaths>
@@ -40,6 +54,109 @@ namespace {
 QString cssColor(const QColor &color)
 {
     return color.name(QColor::HexArgb);
+}
+
+const QStringList &imageMaterialSuffixes()
+{
+    static const QStringList suffixes = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("webp"), QStringLiteral("gif"), QStringLiteral("bmp"),
+    };
+    return suffixes;
+}
+
+const QStringList &videoMaterialSuffixes()
+{
+    static const QStringList suffixes = {
+        QStringLiteral("mp4"), QStringLiteral("mov"), QStringLiteral("m4v"),
+        QStringLiteral("mkv"), QStringLiteral("avi"), QStringLiteral("webm"),
+    };
+    return suffixes;
+}
+
+bool isImageMaterialFile(const QFileInfo &info)
+{
+    return imageMaterialSuffixes().contains(info.suffix().toLower());
+}
+
+bool isVideoMaterialFile(const QFileInfo &info)
+{
+    return videoMaterialSuffixes().contains(info.suffix().toLower());
+}
+
+bool isSupportedMaterialFile(const QFileInfo &info)
+{
+    return info.isFile() && (isImageMaterialFile(info) || isVideoMaterialFile(info));
+}
+
+QString materialFileFilter()
+{
+    QStringList patterns;
+    for (const QString &suffix : imageMaterialSuffixes()) {
+        patterns.append(QStringLiteral("*.%1").arg(suffix));
+    }
+    for (const QString &suffix : videoMaterialSuffixes()) {
+        patterns.append(QStringLiteral("*.%1").arg(suffix));
+    }
+    return QStringLiteral("图片与视频 (%1)").arg(patterns.join(QLatin1Char(' ')));
+}
+
+// 按目标区域等比铺满并居中裁剪绘制图片。
+void paintCoverImage(QPainter &painter, const QRectF &rect, const QImage &image)
+{
+    if (image.isNull() || rect.width() < 2 || rect.height() < 2) {
+        return;
+    }
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    const qreal imageAspect = qreal(image.width()) / image.height();
+    const qreal rectAspect = rect.width() / rect.height();
+    QRectF source(0, 0, image.width(), image.height());
+    if (imageAspect > rectAspect) {
+        const qreal width = image.height() * rectAspect;
+        source = QRectF((image.width() - width) / 2.0, 0, width, image.height());
+    } else {
+        const qreal height = image.width() / rectAspect;
+        source = QRectF(0, (image.height() - height) / 2.0, image.width(), height);
+    }
+    painter.drawImage(rect, image, source);
+}
+
+QString sourceFileMetaText(const StudioData::OralSource &source)
+{
+    return QStringLiteral("%1 · %2 · 本地文件 · 可拖入替换")
+        .arg(source.size, source.resolution);
+}
+
+// 按缩略图尺寸解码图片，避免把原始大图整张读进内存。
+QImage loadMaterialPreview(const QString &path)
+{
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    if (!reader.canRead()) {
+        return QImage();
+    }
+    const QSize sourceSize = reader.size();
+    if (sourceSize.isValid()) {
+        const QSize target(640, 480);
+        QSize decodeSize = sourceSize;
+        // 只缩小、不放大：小图保持原分辨率，大图按铺满缩略图的尺寸解码。
+        if (sourceSize.width() > target.width()
+            || sourceSize.height() > target.height()) {
+            decodeSize = sourceSize.scaled(target, Qt::KeepAspectRatioByExpanding);
+        }
+        // 极端长宽比的图片不让解码尺寸失控，稍后由绘制端再等比裁剪。
+        const QSize limit(target.width() * 2, target.height() * 2);
+        if (decodeSize.width() > limit.width()
+            || decodeSize.height() > limit.height()) {
+            const QSize cap(qMin(sourceSize.width(), limit.width()),
+                            qMin(sourceSize.height(), limit.height()));
+            decodeSize = decodeSize.scaled(cap, Qt::KeepAspectRatio);
+        }
+        if (decodeSize != sourceSize) {
+            reader.setScaledSize(decodeSize);
+        }
+    }
+    return reader.read();
 }
 
 QScrollArea *makeScrollArea(QWidget *content, QWidget *parent)
@@ -131,21 +248,6 @@ QWidget *makeSectionHeading(const QString &title, const QString &hint,
         layout->addWidget(right, 0, Qt::AlignVCenter);
     }
     return row;
-}
-
-QString highlightedHtml(const QString &text, const QString &highlight)
-{
-    QString html = text.toHtmlEscaped();
-    if (highlight.isEmpty()) {
-        return html;
-    }
-    const QString escapedHighlight = highlight.toHtmlEscaped();
-    html.replace(escapedHighlight,
-                 QStringLiteral("<span style=\"background:%1;color:%2;"
-                                "border-radius:2px;padding:0 2px;\">%3</span>")
-                     .arg(cssColor(Theme::alpha(Theme::Ai, 0.20)),
-                          cssColor(Theme::Ai), escapedHighlight));
-    return html;
 }
 
 QLabel *monoLabel(const QString &text, int pixelSize, const QColor &color,
@@ -369,6 +471,15 @@ public:
         setCursor(Qt::PointingHandCursor);
         setFixedHeight(250);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setToolTip(source.filePath.isEmpty()
+                       ? QStringLiteral("示例口播（原型演示）")
+                       : QStringLiteral("点击播放口播原片；拖入新视频可替换"));
+    }
+
+    void setSource(const StudioData::OralSource &source)
+    {
+        m_source = source;
+        update();
     }
 
 protected:
@@ -379,7 +490,11 @@ protected:
         QPainterPath clip;
         clip.addRoundedRect(QRectF(rect()), 8, 8);
         painter.setClipPath(clip);
-        Studio::paintStudioScene(painter, QRectF(rect()));
+        if (!m_source.preview.isNull()) {
+            paintCoverImage(painter, QRectF(rect()), m_source.preview);
+        } else {
+            Studio::paintStudioScene(painter, QRectF(rect()));
+        }
 
         QLinearGradient shade(0, 0, 0, height());
         shade.setColorAt(0, QColor(4, 5, 9, 115));
@@ -543,16 +658,29 @@ class MaterialTile : public Card
 {
 public:
     MaterialTile(const StudioData::OralMaterial &material,
-                 std::function<void()> onRemove, QWidget *parent = nullptr)
+                 std::function<void()> onRemove,
+                 std::function<void()> onPreview, QWidget *parent = nullptr)
         : Card(Theme::Surface2, Theme::Border, 7, parent)
         , m_onRemove(std::move(onRemove))
+        , m_onPreview(std::move(onPreview))
     {
         setHoverEnabled(true);
         setHoverColors(Theme::Surface2, Theme::BorderStrong);
-        setMinimumHeight(122);
+        // 固定高度，避免素材卡被同行更高的卡片拉伸后挤掉底部的名称行。
+        setFixedHeight(122);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         contentLayout()->setContentsMargins(0, 0, 0, 0);
         contentLayout()->setSpacing(0);
+
+        if (!material.filePath.isEmpty()) {
+            setClickable(true);
+            setToolTip(QStringLiteral("点击预览「%1」").arg(material.name));
+            connect(this, &Card::clicked, this, [this] {
+                if (m_onPreview) {
+                    m_onPreview();
+                }
+            });
+        }
 
         auto *art = new Studio::MaterialVisualWidget(this);
         art->setMaterial(material);
@@ -561,6 +689,7 @@ public:
         contentLayout()->addWidget(art);
 
         auto *bottom = new QWidget(this);
+        bottom->setFixedHeight(26);
         auto *bottomLayout = new QHBoxLayout(bottom);
         bottomLayout->setContentsMargins(6, 2, 6, 3);
         bottomLayout->setSpacing(4);
@@ -571,6 +700,7 @@ public:
         bottomLayout->addWidget(Ui::label(material.kind, 8, QFont::Normal,
                                           Theme::Text3, bottom));
         contentLayout()->addWidget(bottom);
+        bottom->show();
 
         m_tag = Studio::tagLabel(material.tag, QColor(255, 255, 255, 230),
                                  QColor(0, 0, 0, 166), 8, this);
@@ -589,7 +719,8 @@ public:
         m_remove->setColors(Qt::white, Qt::white);
         m_remove->setBackgroundColors(QColor(0, 0, 0, 153), Theme::Danger);
         m_remove->setToolTipText(QStringLiteral("移除「%1」").arg(material.name));
-        m_remove->hide();
+        // 删除入口常驻显示，导入的素材始终可以一键移除。
+        m_remove->show();
         connect(m_remove, &QAbstractButton::clicked, this, [this] {
             if (m_onRemove) {
                 m_onRemove();
@@ -597,13 +728,13 @@ public:
         });
     }
 
+    Studio::MaterialVisualWidget *visualWidget() const { return m_art; }
+
 protected:
     void resizeEvent(QResizeEvent *event) override
     {
         Card::resizeEvent(event);
-        if (m_art) {
-            m_art->setGeometry(0, 0, width(), m_art->height());
-        }
+        // 缩略图由布局固定在顶部 96px，不要再手动改几何，避免覆盖底部名称行。
         if (m_tag) {
             m_tag->move(4, qMax(0, (m_art ? m_art->height() : 96) - m_tag->height() - 4));
         }
@@ -620,27 +751,14 @@ protected:
         if (m_duration) {
             m_duration->raise();
         }
-    }
-
-    void enterEvent(QEnterEvent *event) override
-    {
-        Card::enterEvent(event);
         if (m_remove) {
-            m_remove->show();
             m_remove->raise();
-        }
-    }
-
-    void leaveEvent(QEvent *event) override
-    {
-        Card::leaveEvent(event);
-        if (m_remove) {
-            m_remove->hide();
         }
     }
 
 private:
     std::function<void()> m_onRemove;
+    std::function<void()> m_onPreview;
     Studio::MaterialVisualWidget *m_art = nullptr;
     QLabel *m_tag = nullptr;
     QLabel *m_duration = nullptr;
@@ -699,6 +817,113 @@ private:
     bool m_hovered = false;
 };
 
+// 可接收文件拖放的区块卡片：口播视频与相关素材共用。
+class MediaDropCard : public Studio::SectionCard
+{
+public:
+    MediaDropCard(Icons::Glyph glyph, const QString &title, const QString &meta,
+                  const QString &dropHint,
+                  std::function<void(const QStringList &)> onFilesDropped,
+                  QWidget *parent = nullptr)
+        : Studio::SectionCard(glyph, title, meta, parent)
+        , m_onFilesDropped(std::move(onFilesDropped))
+    {
+        setAcceptDrops(true);
+        setToolTip(dropHint);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Studio::SectionCard::paintEvent(event);
+        if (!m_dragging) {
+            return;
+        }
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF rect = QRectF(this->rect()).adjusted(1.5, 1.5, -1.5, -1.5);
+        QPen pen(Theme::alpha(Theme::Primary, 0.85), 1.5, Qt::DashLine);
+        pen.setDashPattern({5, 4});
+        painter.setPen(pen);
+        painter.setBrush(Theme::alpha(Theme::Primary, 0.07));
+        painter.drawRoundedRect(rect, 9, 9);
+    }
+
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (hasLocalFiles(event->mimeData())) {
+            setDragging(true);
+            event->acceptProposedAction();
+        } else {
+            event->ignore();
+        }
+    }
+
+    void dragMoveEvent(QDragMoveEvent *event) override
+    {
+        if (hasLocalFiles(event->mimeData())) {
+            event->acceptProposedAction();
+        } else {
+            event->ignore();
+        }
+    }
+
+    void dragLeaveEvent(QDragLeaveEvent *event) override
+    {
+        setDragging(false);
+        Studio::SectionCard::dragLeaveEvent(event);
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        setDragging(false);
+        QStringList paths;
+        if (event->mimeData()) {
+            const QList<QUrl> urls = event->mimeData()->urls();
+            for (const QUrl &url : urls) {
+                if (url.isLocalFile()) {
+                    paths.append(url.toLocalFile());
+                }
+            }
+        }
+        if (paths.isEmpty()) {
+            event->ignore();
+            return;
+        }
+        event->acceptProposedAction();
+        if (m_onFilesDropped) {
+            m_onFilesDropped(paths);
+        }
+    }
+
+private:
+    static bool hasLocalFiles(const QMimeData *mimeData)
+    {
+        if (!mimeData) {
+            return false;
+        }
+        const QList<QUrl> urls = mimeData->urls();
+        for (const QUrl &url : urls) {
+            if (url.isLocalFile()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void setDragging(bool dragging)
+    {
+        if (m_dragging == dragging) {
+            return;
+        }
+        m_dragging = dragging;
+        update();
+    }
+
+    std::function<void(const QStringList &)> m_onFilesDropped;
+    bool m_dragging = false;
+};
+
 class DarkStage : public QWidget
 {
 public:
@@ -727,24 +952,6 @@ protected:
         painter.fillRect(rect, glow);
     }
 };
-
-QWidget *makeSourceBox(const QString &label, const QString &value, QWidget *parent)
-{
-    auto *box = new QWidget(parent);
-    box->setObjectName(QStringLiteral("oralSourceBox"));
-    box->setStyleSheet(QStringLiteral(
-        "#oralSourceBox { background:%1; border:1px solid %2; border-radius:6px; }")
-                           .arg(Theme::alpha(Theme::Surface2, 0.6).name(QColor::HexArgb),
-                                Theme::Border.name()));
-    auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(10, 6, 10, 6);
-    layout->setSpacing(1);
-    layout->addWidget(Ui::label(label, 9, QFont::Normal, Theme::Text3, box));
-    auto *valueLabel = monoLabel(value, 12, Theme::Text1, box);
-    valueLabel->setFont(Theme::monoFont(12, QFont::Medium));
-    layout->addWidget(valueLabel);
-    return box;
-}
 
 QWidget *makeInfoPanel(const QString &title, Icons::Glyph glyph, QWidget *content,
                        QWidget *parent)
@@ -1482,7 +1689,6 @@ void OralPage::startProject()
     const QString templateId = m_project.templateId;
     m_project = StudioData::defaultOralProject();
     m_project.templateId = templateId;
-    m_transcriptExpanded = false;
     showSetup();
 }
 
@@ -1500,7 +1706,14 @@ void OralPage::rebuildSetup()
             scrollValue = oldScroll->verticalScrollBar()->value();
         }
     }
+    // 旧步骤里的缩略图控件即将重建，先取消登记避免异步回调更新悬空指针。
+    m_previewWidgets.clear();
+    m_sourcePreviewUpdater = {};
+    m_sourceMetaLabel = nullptr;
     Studio::clearLayout(root);
+
+    // 进入素材步骤时补齐真实缩略图；视频缩略图在后台生成。
+    ensureMaterialPreviews();
 
     root->addWidget(buildSetupHeader());
     root->addWidget(Ui::separator(false, m_setupScreen));
@@ -1643,8 +1856,8 @@ QWidget *OralPage::buildSetupStepOne()
     if (m_project.hasSource && m_project.source.sample) {
         auto *note = new Studio::Note(
             QStringLiteral(
-                "<b style=\"color:%1\">已载入示例项目</b>：这段口播已经过 ASR 识别，"
-                "素材也已打好标签，可直接下一步体验 AI 包装；替换口播或素材后会重新识别。")
+                "<b style=\"color:%1\">已载入示例口播</b>：这段口播已经过 ASR 识别；"
+                "添加至少 1 个相关素材即可体验 AI 包装，替换口播后会重新识别。")
                 .arg(Theme::Text1.name()),
             Studio::Note::Ai);
         auto *clear = new LinkLabel(QStringLiteral("清空示例"), note);
@@ -1654,7 +1867,7 @@ QWidget *OralPage::buildSetupStepOne()
         clear->setUnderlineOnHover(true);
         connect(clear, &QAbstractButton::clicked, this, [this] {
             clearSource();
-            emit toastRequested(QStringLiteral("已清空示例，请上传自己的口播与素材"));
+            emit toastRequested(QStringLiteral("已清空示例口播，请上传自己的口播视频"));
         });
         note->rowLayout()->addWidget(clear, 0, Qt::AlignTop);
         layout->addWidget(note);
@@ -1666,8 +1879,11 @@ QWidget *OralPage::buildSetupStepOne()
     gridLayout->setContentsMargins(0, 0, 0, 0);
     gridLayout->setSpacing(14);
 
-    auto *sourceCard = new Studio::SectionCard(
-        Icons::Glyph::Film, QStringLiteral("口播视频"), QStringLiteral("必填"), grid);
+    auto *sourceCard = new MediaDropCard(
+        Icons::Glyph::Film, QStringLiteral("口播视频"), QStringLiteral("必填"),
+        m_project.hasSource ? QStringLiteral("可将新视频拖到这里替换口播原片")
+                            : QStringLiteral("可将口播视频拖到这里上传"),
+        [this](const QStringList &paths) { importVideoFromPaths(paths); }, grid);
     auto *sourceAction = new Button(
         m_project.hasSource ? QStringLiteral("替换视频") : QStringLiteral("上传视频"),
         Button::Ghost, sourceCard);
@@ -1698,6 +1914,8 @@ QWidget *OralPage::buildSetupStepOne()
         hint->setWordWrap(true);
         hint->setAlignment(Qt::AlignCenter);
         hint->setMaximumWidth(340);
+        // QLabel 自动换行时布局只按单行高度预留，显式给出三行空间避免压住按钮。
+        hint->setMinimumHeight(hint->fontMetrics().lineSpacing() * 3);
         dropLayout->addWidget(hint, 0, Qt::AlignHCenter);
         auto *buttons = new QWidget(drop);
         auto *buttonsLayout = new QHBoxLayout(buttons);
@@ -1714,28 +1932,24 @@ QWidget *OralPage::buildSetupStepOne()
         buttonsLayout->addWidget(sample);
         dropLayout->addWidget(buttons, 0, Qt::AlignHCenter);
         connect(drop, &Studio::DropZone::filesDropped, this,
-                [this](const QStringList &paths) {
-                    if (paths.isEmpty()) {
-                        return;
-                    }
-                    const QFileInfo info(paths.first());
-                    m_project.source = StudioData::demoOralSource();
-                    m_project.source.name = info.fileName();
-                    m_project.source.size = QStringLiteral("%1 MB")
-                                                .arg(qMax<qint64>(
-                                                    1, qRound64(info.size()
-                                                                / (1024.0 * 1024.0))));
-                    m_project.source.sample = false;
-                    m_project.hasSource = true;
-                    rebuildSetup();
-                    emit toastRequested(
-                        QStringLiteral("已导入口播视频，AI 正在识别画面与口播内容"));
-                });
+                [this](const QStringList &paths) { importVideoFromPaths(paths); });
         sourceBody->addWidget(drop);
     } else {
         auto *preview = new SourcePreview(m_project.source, sourceCard);
+        m_sourcePreviewUpdater = [preview](const StudioData::OralSource &source) {
+            preview->setSource(source);
+        };
         connect(preview, &QAbstractButton::clicked, this, [this] {
-            emit toastRequested(QStringLiteral("正在播放口播原片（原型演示）"));
+            if (m_project.source.filePath.isEmpty()) {
+                emit toastRequested(QStringLiteral("正在播放口播原片（原型演示）"));
+                return;
+            }
+            if (!QFileInfo::exists(m_project.source.filePath)) {
+                emit toastRequested(QStringLiteral("口播视频文件不存在，请重新导入"));
+                return;
+            }
+            emit previewRequested(m_project.source.name,
+                                  m_project.source.filePath, true);
         });
         sourceBody->addWidget(preview);
         sourceBody->addSpacing(8);
@@ -1752,10 +1966,9 @@ QWidget *OralPage::buildSetupStepOne()
         name->setFontWeight(QFont::Medium);
         name->setTextColor(Theme::Text1);
         fileTexts->addWidget(name);
-        auto *meta = Ui::label(QStringLiteral("%1 · %2 · 本地文件")
-                                   .arg(m_project.source.size,
-                                        m_project.source.resolution),
+        auto *meta = Ui::label(sourceFileMetaText(m_project.source),
                                9, QFont::Normal, Theme::Text3, fileRow);
+        m_sourceMetaLabel = meta;
         fileTexts->addWidget(meta);
         fileLayout->addLayout(fileTexts, 1);
         auto *remove = new LinkLabel(QStringLiteral("移除"), fileRow);
@@ -1771,99 +1984,16 @@ QWidget *OralPage::buildSetupStepOne()
         });
         fileLayout->addWidget(remove, 0, Qt::AlignVCenter);
         sourceBody->addWidget(fileRow);
-        sourceBody->addSpacing(10);
-
-        auto *stats = new QWidget(sourceCard);
-        auto *statsLayout = new QHBoxLayout(stats);
-        statsLayout->setContentsMargins(0, 0, 0, 0);
-        statsLayout->setSpacing(6);
-        statsLayout->addWidget(makeSourceBox(QStringLiteral("口播时长"),
-                                             m_project.source.duration, stats));
-        statsLayout->addWidget(makeSourceBox(
-            QStringLiteral("识别字数"),
-            QStringLiteral("%1 字").arg(m_project.source.words), stats));
-        statsLayout->addWidget(makeSourceBox(
-            QStringLiteral("语义段"),
-            QStringLiteral("%1 段").arg(m_project.source.segments), stats));
-        sourceBody->addWidget(stats);
-        sourceBody->addSpacing(10);
-
-        auto *topics = new QWidget(sourceCard);
-        auto *topicsLayout = new QHBoxLayout(topics);
-        topicsLayout->setContentsMargins(0, 0, 0, 0);
-        topicsLayout->setSpacing(5);
-        topicsLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 9,
-                                                   Theme::Ai, topics));
-        topicsLayout->addWidget(Ui::label(QStringLiteral("关键主题"), 9, QFont::Normal,
-                                           Theme::Text3, topics));
-        for (const QString &topic : m_project.source.topics) {
-            topicsLayout->addWidget(Studio::tagLabel(
-                topic, Theme::Ai, Theme::alpha(Theme::Ai, 0.13), 9, topics));
-        }
-        topicsLayout->addStretch(1);
-        sourceBody->addWidget(topics);
-        sourceBody->addSpacing(10);
-
-        auto *transcript = new Card(Theme::alpha(Theme::Surface2, 0.4),
-                                    Theme::Border, 8, sourceCard);
-        transcript->contentLayout()->setContentsMargins(0, 0, 0, 0);
-        transcript->contentLayout()->setSpacing(0);
-        auto *transcriptHeader = new QWidget(transcript);
-        auto *transcriptHeaderLayout = new QHBoxLayout(transcriptHeader);
-        transcriptHeaderLayout->setContentsMargins(10, 6, 10, 6);
-        transcriptHeaderLayout->setSpacing(6);
-        transcriptHeaderLayout->addWidget(
-            Studio::iconLabel(Icons::Glyph::Sparkle, 9, Theme::Ai, transcriptHeader));
-        transcriptHeaderLayout->addWidget(Ui::label(QStringLiteral("AI 口播稿"), 10,
-                                                     QFont::Medium, Theme::Text2,
-                                                     transcriptHeader));
-        transcriptHeaderLayout->addWidget(
-            new Chip(QStringLiteral("已识别"), Chip::Ok, transcriptHeader));
-        transcriptHeaderLayout->addStretch(1);
-        auto *confidence = monoLabel(QStringLiteral("置信度 98.2%"), 9,
-                                     Theme::Text3, transcriptHeader);
-        transcriptHeaderLayout->addWidget(confidence);
-        auto *expand = new LinkLabel(
-            m_transcriptExpanded ? QStringLiteral("收起") : QStringLiteral("展开全文"),
-            transcriptHeader);
-        expand->setPixelSize(9);
-        expand->setTextColor(Theme::Primary);
-        expand->setHoverColor(Theme::PrimaryHover);
-        expand->setUnderlineOnHover(true);
-        connect(expand, &QAbstractButton::clicked, this, [this] {
-            m_transcriptExpanded = !m_transcriptExpanded;
-            rebuildSetup();
-        });
-        transcriptHeaderLayout->addWidget(expand);
-        transcript->contentLayout()->addWidget(transcriptHeader);
-        transcript->contentLayout()->addWidget(Ui::separator(false, transcript));
-        const QVector<StudioData::OralTranscriptLine> lines =
-            m_transcriptExpanded
-            ? m_project.source.transcript
-            : m_project.source.transcript.mid(0, 3);
-        for (int index = 0; index < lines.size(); ++index) {
-            const StudioData::OralTranscriptLine &line = lines.at(index);
-            auto *lineRow = new QWidget(transcript);
-            auto *lineLayout = new QHBoxLayout(lineRow);
-            lineLayout->setContentsMargins(10, 5, 10, 5);
-            lineLayout->setSpacing(9);
-            lineLayout->addWidget(monoLabel(line.time, 8, Theme::Text3, lineRow), 0,
-                                  Qt::AlignTop);
-            auto *textLabel = Ui::richLabel(highlightedHtml(line.text, line.highlight),
-                                            10, Theme::Text2, lineRow);
-            textLabel->setWordWrap(true);
-            lineLayout->addWidget(textLabel, 1);
-            transcript->contentLayout()->addWidget(lineRow);
-            if (index < lines.size() - 1) {
-                transcript->contentLayout()->addWidget(Ui::separator(false, transcript));
-            }
-        }
-        sourceBody->addWidget(transcript);
     }
+    // 两张卡片在同一行会被拉成等高：把多余高度留在卡片底部，
+    // 避免文件名、素材等内容被均匀撑开。
+    sourceBody->addStretch(1);
 
-    auto *materialsCard = new Studio::SectionCard(
+    auto *materialsCard = new MediaDropCard(
         Icons::Glyph::Image, QStringLiteral("相关素材"),
-        QStringLiteral("%1 个").arg(m_project.materials.size()), grid);
+        QStringLiteral("%1 个").arg(m_project.materials.size()),
+        QStringLiteral("可将图片或视频拖到这里添加素材"),
+        [this](const QStringList &paths) { addMaterials(paths); }, grid);
     auto *addButton = new Button(QStringLiteral("添加"), Button::Default, materialsCard);
     addButton->setCompact(true);
     addButton->setLeadingGlyph(Icons::Glyph::Plus);
@@ -1874,7 +2004,8 @@ QWidget *OralPage::buildSetupStepOne()
     auto *materialsBody = materialsCard->bodyLayout();
     materialsBody->setSpacing(0);
     auto *materialsHint = Ui::label(
-        QStringLiteral("添加与口播内容相关的产品、场景或细节素材，AI 会按语义自动匹配并插入画面。"),
+        QStringLiteral("添加与口播内容相关的产品、场景或细节素材，也可将图片或视频直接拖入本卡片；"
+                       "点击素材可预览，AI 会按语义自动匹配并插入画面。"),
         10, QFont::Normal, Theme::Text3, materialsCard);
     materialsHint->setWordWrap(true);
     materialsBody->addWidget(materialsHint);
@@ -1888,137 +2019,28 @@ QWidget *OralPage::buildSetupStepOne()
     int tileIndex = 0;
     for (const StudioData::OralMaterial &material : m_project.materials) {
         auto *tile = new MaterialTile(
-            material, [this, id = material.id] { removeMaterial(id); }, tileHost);
+            material, [this, id = material.id] { removeMaterial(id); },
+            [this, material] { previewMaterial(material); }, tileHost);
+        if (!material.filePath.isEmpty() && tile->visualWidget()) {
+            m_previewWidgets[material.filePath].append(tile->visualWidget());
+        }
         tileGrid->addWidget(tile, tileIndex / 3, tileIndex % 3);
         ++tileIndex;
     }
     auto *addTile = new AddMaterialTile(tileHost);
     connect(addTile, &QAbstractButton::clicked, this, &OralPage::openMaterialFiles);
-    tileGrid->addWidget(addTile, tileIndex / 3, tileIndex % 3);
+    if (m_project.materials.isEmpty()) {
+        // 空状态用一个通栏上传区，避免右侧留下无意义的空白格。
+        tileGrid->addWidget(addTile, 0, 0, 1, 3);
+    } else {
+        tileGrid->addWidget(addTile, tileIndex / 3, tileIndex % 3);
+    }
     for (int column = 0; column < 3; ++column) {
         tileGrid->setColumnStretch(column, 1);
     }
     materialsBody->addWidget(tileHost);
-    materialsBody->addSpacing(10);
-
-    auto *estimate = new QWidget(materialsCard);
-    estimate->setObjectName(QStringLiteral("oralEstimate"));
-    estimate->setStyleSheet(
-        QStringLiteral("#oralEstimate { background:%1; border:1px solid %2;"
-                       " border-radius:7px; }")
-            .arg(Theme::alpha(Theme::Surface2, 0.45).name(QColor::HexArgb),
-                 Theme::Border.name()));
-    auto *estimateLayout = new QVBoxLayout(estimate);
-    estimateLayout->setContentsMargins(10, 8, 10, 8);
-    estimateLayout->setSpacing(4);
-    if (!m_project.materials.isEmpty()) {
-        auto *top = new QHBoxLayout;
-        top->setContentsMargins(0, 0, 0, 0);
-        top->setSpacing(5);
-        top->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 9, Theme::Ai,
-                                          estimate));
-        top->addWidget(Ui::label(QStringLiteral("AI 匹配预估"), 9, QFont::Normal,
-                                  Theme::Text2, estimate));
-        top->addStretch(1);
-        auto *match = monoLabel(QStringLiteral("相关度 92%"), 9, Theme::Success,
-                                estimate);
-        top->addWidget(match);
-        estimateLayout->addLayout(top);
-        auto *estimateText = Ui::label(
-            QStringLiteral("预计插入 %1 处 B-Roll，覆盖约 68% 口播时长；可在下一步调整插入密度。")
-                .arg(StudioData::oralBrollCount(m_project.density)),
-            9, QFont::Normal, Theme::Text3, estimate);
-        estimateText->setWordWrap(true);
-        estimateLayout->addWidget(estimateText);
-        auto *bars = new QWidget(estimate);
-        auto *barsLayout = new QHBoxLayout(bars);
-        barsLayout->setContentsMargins(0, 2, 0, 0);
-        barsLayout->setSpacing(3);
-        for (int index = 0; index < 8; ++index) {
-            auto *bar = new QWidget(bars);
-            bar->setFixedHeight(4);
-            bar->setStyleSheet(
-                QStringLiteral("background:%1;border-radius:2px;")
-                    .arg(index < qMin(8, m_project.materials.size())
-                             ? Theme::alpha(Theme::Success, 0.7).name()
-                             : Theme::BorderStrong.name()));
-            bar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            if (index < m_project.materials.size()) {
-                bar->setToolTip(QStringLiteral("%1 · %2")
-                                    .arg(m_project.materials.at(index).name,
-                                         m_project.materials.at(index).tag));
-            } else {
-                bar->setToolTip(QStringLiteral("待补充素材"));
-            }
-            barsLayout->addWidget(bar);
-        }
-        estimateLayout->addWidget(bars);
-    } else {
-        auto *empty = Ui::label(
-            QStringLiteral("至少添加 1 个相关素材，才能让 AI 自动插入画面。"), 9,
-            QFont::Normal, Theme::Text3, estimate);
-        empty->setWordWrap(true);
-        estimateLayout->addWidget(empty);
-    }
-    materialsBody->addWidget(estimate);
-    materialsBody->addSpacing(8);
-
-    if (!m_project.materials.isEmpty()) {
-        auto *restore = new LinkLabel(QStringLiteral("恢复示例素材"), materialsCard);
-        restore->setPixelSize(9);
-        restore->setTextColor(Theme::Text3);
-        restore->setHoverColor(Theme::Text1);
-        restore->setUnderlineOnHover(true);
-        connect(restore, &QAbstractButton::clicked, this, [this] {
-            m_project.materials = StudioData::demoMaterials();
-            rebuildSetup();
-            emit toastRequested(QStringLiteral("已恢复示例素材"));
-        });
-        materialsBody->addWidget(restore, 0, Qt::AlignLeft);
-    } else {
-        auto *suggestTitle = Ui::label(
-            QStringLiteral("还没有素材？先用示例素材体验 AI 匹配："), 9,
-            QFont::Normal, Theme::Text3, materialsCard);
-        materialsBody->addWidget(suggestTitle);
-        materialsBody->addSpacing(6);
-        auto *suggest = new QWidget(materialsCard);
-        auto *suggestLayout = new QGridLayout(suggest);
-        suggestLayout->setContentsMargins(0, 0, 0, 0);
-        suggestLayout->setHorizontalSpacing(6);
-        suggestLayout->setVerticalSpacing(6);
-        const QVector<StudioData::OralMaterial> demos =
-            StudioData::demoMaterials().mid(0, 4);
-        for (int index = 0; index < demos.size(); ++index) {
-            const StudioData::OralMaterial material = demos.at(index);
-            auto *sample = new Card(Theme::alpha(Theme::Surface2, 0.45),
-                                    Theme::Border, 6, suggest);
-            sample->setHoverEnabled(true);
-            sample->setClickable(true);
-            sample->setHoverColors(Theme::alpha(Theme::Primary, 0.10),
-                                   Theme::alpha(Theme::Primary, 0.45));
-            sample->contentLayout()->setContentsMargins(4, 4, 4, 4);
-            auto *sampleLayout = new QHBoxLayout;
-            sampleLayout->setContentsMargins(0, 0, 0, 0);
-            sampleLayout->setSpacing(5);
-            auto *art = new Studio::MaterialVisualWidget(sample);
-            art->setMaterial(material);
-            art->setFixedSize(36, 28);
-            sampleLayout->addWidget(art);
-            auto *name = new ElidedLabel(material.name, sample);
-            name->setPixelSize(9);
-            name->setTextColor(Theme::Text2);
-            sampleLayout->addWidget(name, 1);
-            sampleLayout->addWidget(Studio::iconLabel(Icons::Glyph::Plus, 9,
-                                                       Theme::Text3, sample));
-            sample->contentLayout()->addLayout(sampleLayout);
-            connect(sample, &Card::clicked, this, [this, material] {
-                m_project.materials.append(material);
-                rebuildSetup();
-            });
-            suggestLayout->addWidget(sample, index / 2, index % 2);
-        }
-        materialsBody->addWidget(suggest);
-    }
+    // 素材较少时把多余高度留白在底部，保持卡片内容紧凑。
+    materialsBody->addStretch(1);
 
     gridLayout->addWidget(sourceCard, 142);
     gridLayout->addWidget(materialsCard, 100);
@@ -2380,28 +2402,128 @@ QWidget *OralPage::buildSetupFooter()
 void OralPage::openVideoFile()
 {
     const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("选择口播视频"), QString(),
+        window(), QStringLiteral("选择口播视频"), QString(),
         QStringLiteral("视频文件 (*.mp4 *.mov *.m4v *.mkv *.avi *.webm)"));
-    if (path.isEmpty()) {
+    if (!path.isEmpty()) {
+        importVideoFile(path);
+    }
+}
+
+void OralPage::importVideoFromPaths(const QStringList &paths)
+{
+    for (const QString &path : paths) {
+        const QFileInfo info(path);
+        if (info.isFile() && isVideoMaterialFile(info)) {
+            importVideoFile(info.absoluteFilePath());
+            return;
+        }
+    }
+    emit toastRequested(QStringLiteral("请拖入口播视频文件：MP4 / MOV / MKV 等"));
+}
+
+void OralPage::importVideoFile(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.isFile() || !isVideoMaterialFile(info)) {
+        emit toastRequested(QStringLiteral("仅支持视频文件：MP4 / MOV / MKV 等"));
         return;
     }
-    const QFileInfo info(path);
+
+    const QString absolutePath = info.absoluteFilePath();
     m_project.source = StudioData::demoOralSource();
     m_project.source.name = info.fileName();
-    m_project.source.size = QStringLiteral("%1 MB")
-                                .arg(qMax<qint64>(
-                                    1, qRound64(info.size() / (1024.0 * 1024.0))));
+    m_project.source.size = MediaUtils::formatByteSize(info.size());
+    // 真实时长与分辨率由 ffprobe 异步补齐，先避免展示示例数据的假值。
+    m_project.source.duration = QStringLiteral("—");
+    m_project.source.resolution = QStringLiteral("—");
+    m_project.source.filePath = absolutePath;
+    m_project.source.preview = QImage();
     m_project.source.sample = false;
     m_project.hasSource = true;
+    // 重新导入同一路径时允许重试曾失败的截帧。
+    m_failedPreviewPaths.remove(absolutePath);
     rebuildSetup();
     emit toastRequested(QStringLiteral("已导入口播视频，AI 正在识别画面与口播内容"));
+    probeSourceMetadata(absolutePath);
+}
+
+void OralPage::probeSourceMetadata(const QString &path)
+{
+    const QString ffprobe = FfmpegLocator::ffprobePath();
+    if (ffprobe.isEmpty()) {
+        return;
+    }
+    auto *process = new QProcess(this);
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            [this, process, path](int exitCode, QProcess::ExitStatus status) {
+                if (exitCode != 0 || status != QProcess::NormalExit) {
+                    process->deleteLater();
+                    return;
+                }
+                const QByteArray payload = process->readAllStandardOutput();
+                process->deleteLater();
+                if (!m_project.hasSource || m_project.source.filePath != path) {
+                    return;
+                }
+
+                const QJsonObject root =
+                    QJsonDocument::fromJson(payload).object();
+                int width = 0;
+                int height = 0;
+                const QJsonArray streams =
+                    root.value(QStringLiteral("streams")).toArray();
+                if (!streams.isEmpty()) {
+                    const QJsonObject stream = streams.first().toObject();
+                    width = stream.value(QStringLiteral("width")).toInt();
+                    height = stream.value(QStringLiteral("height")).toInt();
+                }
+                bool durationOk = false;
+                double seconds = 0.0;
+                const QJsonValue durationValue =
+                    root.value(QStringLiteral("format"))
+                        .toObject()
+                        .value(QStringLiteral("duration"));
+                if (durationValue.isString()) {
+                    seconds = durationValue.toString().toDouble(&durationOk);
+                } else if (durationValue.isDouble()) {
+                    seconds = durationValue.toDouble();
+                    durationOk = true;
+                }
+
+                if (width > 0 && height > 0) {
+                    m_project.source.resolution =
+                        QStringLiteral("%1×%2").arg(width).arg(height);
+                }
+                if (durationOk && seconds > 0.0) {
+                    m_project.source.duration =
+                        MediaUtils::formatDuration(qRound64(seconds * 1000.0));
+                }
+                if (m_sourceMetaLabel) {
+                    m_sourceMetaLabel->setText(sourceFileMetaText(m_project.source));
+                }
+                if (m_sourcePreviewUpdater) {
+                    m_sourcePreviewUpdater(m_project.source);
+                }
+            });
+    connect(process, &QProcess::errorOccurred, this,
+            [process](QProcess::ProcessError error) {
+                if (error == QProcess::FailedToStart) {
+                    process->deleteLater();
+                }
+            });
+    process->start(ffprobe,
+                   {QStringLiteral("-v"), QStringLiteral("error"),
+                    QStringLiteral("-select_streams"), QStringLiteral("v:0"),
+                    QStringLiteral("-show_entries"),
+                    QStringLiteral("stream=width,height:format=duration"),
+                    QStringLiteral("-of"), QStringLiteral("json"), path});
 }
 
 void OralPage::openMaterialFiles()
 {
     const QStringList paths = QFileDialog::getOpenFileNames(
-        this, QStringLiteral("添加相关素材"), QString(),
-        QStringLiteral("图片与视频 (*.png *.jpg *.jpeg *.webp *.mp4 *.mov *.mkv)"));
+        window(), QStringLiteral("添加相关素材"), QString(), materialFileFilter());
     if (!paths.isEmpty()) {
         addMaterials(paths);
     }
@@ -2409,30 +2531,47 @@ void OralPage::openMaterialFiles()
 
 void OralPage::addMaterials(const QStringList &paths)
 {
-    int index = m_project.materials.size();
-    QStringList addedNames;
+    constexpr int kMaterialLimit = 24;
+    int added = 0;
+    int skipped = 0;
+    bool limitReached = false;
     for (const QString &path : paths) {
-        if (m_project.materials.size() >= 24) {
+        if (m_project.materials.size() >= kMaterialLimit) {
+            limitReached = true;
             break;
         }
         const QFileInfo info(path);
-        const bool video =
-            QStringList({QStringLiteral("mp4"), QStringLiteral("mov"),
-                         QStringLiteral("mkv"), QStringLiteral("avi"),
-                         QStringLiteral("webm")})
-                .contains(info.suffix().toLower());
-        m_project.materials.append(
-            StudioData::oralMaterialFromFile(info.fileName(), info.size(), video,
-                                             index));
-        ++index;
-        addedNames.append(info.fileName());
-        if (m_project.materials.size() >= 24) {
-            break;
+        if (!isSupportedMaterialFile(info)) {
+            ++skipped;
+            continue;
         }
+        m_project.materials.append(StudioData::oralMaterialFromFile(
+            info.absoluteFilePath(), info.size(), isVideoMaterialFile(info),
+            m_project.materials.size()));
+        ++added;
     }
+
+    if (added == 0) {
+        if (skipped > 0) {
+            emit toastRequested(QStringLiteral(
+                "仅支持图片或视频素材：PNG / JPG / WEBP / MP4 / MOV 等"));
+        } else if (limitReached) {
+            emit toastRequested(
+                QStringLiteral("素材最多添加 24 个，请先移除部分素材"));
+        }
+        return;
+    }
+
     rebuildSetup();
-    emit toastRequested(
-        QStringLiteral("已添加 %1 个素材，AI 正在建立匹配").arg(addedNames.size()));
+    QString message =
+        QStringLiteral("已添加 %1 个素材，AI 正在建立匹配").arg(added);
+    if (skipped > 0) {
+        message += QStringLiteral("；已跳过 %1 个不支持的文件").arg(skipped);
+    }
+    if (limitReached) {
+        message += QStringLiteral("；最多可添加 24 个素材");
+    }
+    emit toastRequested(message);
 }
 
 void OralPage::removeMaterial(const QString &id)
@@ -2446,19 +2585,191 @@ void OralPage::removeMaterial(const QString &id)
     rebuildSetup();
 }
 
+void OralPage::previewMaterial(const StudioData::OralMaterial &material)
+{
+    const QFileInfo info(material.filePath);
+    if (material.filePath.isEmpty() || !info.isFile()) {
+        emit toastRequested(QStringLiteral("素材文件不存在，无法预览"));
+        return;
+    }
+    emit previewRequested(material.name, info.absoluteFilePath(),
+                          isVideoMaterialFile(info));
+}
+
+void OralPage::ensureMaterialPreviews()
+{
+    // 口播原片同样使用首帧缩略图；与素材共用截帧队列和磁盘缓存。
+    if (m_project.hasSource && !m_project.source.filePath.isEmpty()
+        && m_project.source.preview.isNull()) {
+        const QFileInfo sourceInfo(m_project.source.filePath);
+        if (sourceInfo.isFile()) {
+            const QString path = sourceInfo.absoluteFilePath();
+            if (!m_failedPreviewPaths.contains(path)) {
+                const QImage cached(FfmpegUtils::thumbnailCachePath(path));
+                if (!cached.isNull()) {
+                    m_project.source.preview = cached;
+                } else {
+                    requestVideoThumbnail(path);
+                }
+            }
+        }
+    }
+
+    for (StudioData::OralMaterial &material : m_project.materials) {
+        if (material.filePath.isEmpty() || !material.preview.isNull()) {
+            continue;
+        }
+        const QFileInfo info(material.filePath);
+        if (!info.isFile()) {
+            continue;
+        }
+        const QString path = info.absoluteFilePath();
+        if (m_failedPreviewPaths.contains(path)) {
+            continue;
+        }
+        if (isImageMaterialFile(info)) {
+            const QImage preview = loadMaterialPreview(path);
+            if (preview.isNull()) {
+                m_failedPreviewPaths.insert(path);
+            } else {
+                material.preview = preview;
+            }
+        } else if (isVideoMaterialFile(info)) {
+            const QImage cached(FfmpegUtils::thumbnailCachePath(path));
+            if (!cached.isNull()) {
+                material.preview = cached;
+            } else {
+                requestVideoThumbnail(path);
+            }
+        }
+    }
+}
+
+void OralPage::requestVideoThumbnail(const QString &path)
+{
+    if (m_thumbnailInFlight == path || m_thumbnailQueue.contains(path)
+        || m_failedPreviewPaths.contains(path)) {
+        return;
+    }
+    m_thumbnailQueue.append(path);
+    startNextThumbnailJob();
+}
+
+void OralPage::startNextThumbnailJob()
+{
+    if (m_thumbnailProcess || m_thumbnailQueue.isEmpty()) {
+        return;
+    }
+    const QString ffmpeg = FfmpegLocator::ffmpegPath();
+    if (ffmpeg.isEmpty()) {
+        m_thumbnailQueue.clear();
+        return;
+    }
+
+    const QString path = m_thumbnailQueue.takeFirst();
+    const QString cachePath = FfmpegUtils::thumbnailCachePath(path);
+    if (!QDir().mkpath(QFileInfo(cachePath).absolutePath())) {
+        m_failedPreviewPaths.insert(path);
+        startNextThumbnailJob();
+        return;
+    }
+
+    auto *process = new QProcess(this);
+    m_thumbnailProcess = process;
+    m_thumbnailInFlight = path;
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            [this, process, path, cachePath](int exitCode,
+                                             QProcess::ExitStatus status) {
+                if (m_thumbnailProcess != process) {
+                    return;
+                }
+                process->deleteLater();
+                m_thumbnailProcess = nullptr;
+                m_thumbnailInFlight.clear();
+                QImage image;
+                if (exitCode == 0 && status == QProcess::NormalExit) {
+                    image = QImage(cachePath);
+                }
+                if (image.isNull()) {
+                    m_failedPreviewPaths.insert(path);
+                } else {
+                    applyMaterialThumbnail(path, image);
+                }
+                startNextThumbnailJob();
+            });
+    connect(process, &QProcess::errorOccurred, this,
+            [this, process, path](QProcess::ProcessError error) {
+                if (error != QProcess::FailedToStart || m_thumbnailProcess != process) {
+                    return;
+                }
+                process->deleteLater();
+                m_thumbnailProcess = nullptr;
+                m_thumbnailInFlight.clear();
+                m_failedPreviewPaths.insert(path);
+                startNextThumbnailJob();
+            });
+    process->start(ffmpeg,
+                   {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+                    QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"),
+                    QStringLiteral("error"), QStringLiteral("-ss"),
+                    QStringLiteral("0.500"), QStringLiteral("-i"), path,
+                    QStringLiteral("-frames:v"), QStringLiteral("1"),
+                    QStringLiteral("-vf"), QStringLiteral("scale=640:-2"),
+                    cachePath});
+}
+
+void OralPage::applyMaterialThumbnail(const QString &path, const QImage &image)
+{
+    // 首帧同时回填给口播原片（若当前原片就是刚截帧的视频）。
+    if (m_project.hasSource && m_project.source.preview.isNull()
+        && m_project.source.filePath == path) {
+        m_project.source.preview = image;
+        if (m_sourcePreviewUpdater) {
+            m_sourcePreviewUpdater(m_project.source);
+        }
+    }
+
+    bool changed = false;
+    for (StudioData::OralMaterial &material : m_project.materials) {
+        if (material.preview.isNull() && material.filePath == path) {
+            material.preview = image;
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    const QVector<Studio::MaterialVisualWidget *> widgets =
+        m_previewWidgets.value(path);
+    if (widgets.isEmpty()) {
+        return;
+    }
+    // 同一路径可能被多个素材引用，用更新后的素材刷新对应的缩略图控件。
+    for (const StudioData::OralMaterial &material : m_project.materials) {
+        if (material.filePath != path) {
+            continue;
+        }
+        for (Studio::MaterialVisualWidget *widget : widgets) {
+            widget->setMaterial(material);
+        }
+        break;
+    }
+}
+
 void OralPage::setSourceSample()
 {
     m_project.source = StudioData::demoOralSource();
     m_project.hasSource = true;
     rebuildSetup();
-    emit toastRequested(QStringLiteral("已载入示例口播，可直接体验"));
+    emit toastRequested(QStringLiteral("已载入示例口播，添加相关素材后即可体验"));
 }
 
 void OralPage::clearSource()
 {
+    // 只清空口播视频，已添加的相关素材保留。
     m_project.hasSource = false;
     m_project.source = StudioData::OralSource();
-    m_project.materials.clear();
     rebuildSetup();
 }
 
@@ -2528,6 +2839,8 @@ void OralPage::startGeneration()
 
 void OralPage::buildProcessingScreen()
 {
+    ensureMaterialPreviews();
+
     auto *root = qobject_cast<QVBoxLayout *>(m_processingScreen->layout());
     if (!root) {
         root = new QVBoxLayout(m_processingScreen);
@@ -3657,8 +3970,13 @@ void OralPage::restartFromResult()
     m_draftState = 0;
     m_draftProgress = 0;
     const StudioData::OralResult result = m_result;
-    m_project = StudioData::defaultOralProject();
-    m_project.step = 2;
+    // 当前项目仍有口播和素材时直接回到设置步骤；从历史结果进入时没有
+    // 可复用的导入内容，回到素材步骤让用户重新添加。
+    const bool hasInputs = m_project.hasSource && !m_project.materials.isEmpty();
+    if (!hasInputs) {
+        m_project = StudioData::defaultOralProject();
+    }
+    m_project.step = hasInputs ? 2 : 1;
     m_project.templateId = result.templateId;
     m_project.ratio = result.ratio;
     m_project.outputBoth = result.outputBoth;

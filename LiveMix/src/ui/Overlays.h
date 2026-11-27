@@ -39,6 +39,16 @@ private:
     bool m_shadowEnabled = true;
 };
 
+// 图片素材的应用内预览：等比适配弹窗，并在底栏显示尺寸与体积。
+class ImagePreviewCard : public ModalCard
+{
+    Q_OBJECT
+
+public:
+    ImagePreviewCard(const QString &title, const QString &filePath,
+                     QWidget *parent = nullptr);
+};
+
 class ModalOverlay : public QWidget
 {
     Q_OBJECT

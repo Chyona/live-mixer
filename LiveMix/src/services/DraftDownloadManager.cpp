@@ -191,6 +191,8 @@ void DraftDownloadManager::startBatch(const QVector<ClipDraft> &drafts,
     launchQueuedBatchItems();
     recomputeBatch();
     emit batchChanged(m_batch);
+    // 队列项若全部在启动阶段被判定失败，不会有任务回调，这里补一次收尾。
+    finishBatchIfIdle();
 }
 
 void DraftDownloadManager::cancelBatch()
@@ -422,6 +424,8 @@ void DraftDownloadManager::finishBatchIfIdle()
         return;
     }
     m_batchRunning = false;
+    // 与成片批量导出一致：结束态必须写回快照，界面才能从“进行中”切到“已完成”。
+    m_batch.running = false;
     m_batch.progress = 100.0;
     recomputeBatch();
     emit batchChanged(m_batch);

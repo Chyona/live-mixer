@@ -215,6 +215,9 @@ void VideoExportManager::startBatch(const QVector<ClipDraft> &drafts,
     launchQueuedBatchItems();
     recomputeBatch();
     emit batchChanged(m_batch);
+    // 极端情况下（队列项全部因缺少草稿记录而立即失败）不会有任务回调，
+    // 这里补一次收尾判断，避免批量任务永远停在运行态。
+    finishBatchIfIdle();
 }
 
 void VideoExportManager::cancelBatch()
@@ -616,6 +619,9 @@ void VideoExportManager::finishBatchIfIdle()
         return;
     }
     m_batchRunning = false;
+    // 快照里的 running 是界面判断“进行中/已完成”的唯一依据，必须同步结束，
+    // 否则批量弹窗和结果页会一直停在“正在导出 99%”。
+    m_batch.running = false;
     m_batch.progress = 100.0;
     recomputeBatch();
     emit batchChanged(m_batch);

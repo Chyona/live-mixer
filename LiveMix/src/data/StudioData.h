@@ -5,6 +5,7 @@
 // 用于 1:1 还原设计稿中的各种状态，不触发真实的 ASR / TTS / 渲染。
 
 #include <QColor>
+#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -55,6 +56,10 @@ struct OralMaterial {
     QString visual;
     QColor paletteFrom;
     QColor paletteTo;
+    // 本地导入素材的真实路径；示例素材为空。
+    QString filePath;
+    // 导入素材的缩略图（图片按需缩放，视频截取首帧）；为空时回退到内置插画。
+    QImage preview;
 };
 
 struct OralTranscriptLine {
@@ -73,6 +78,9 @@ struct OralSource {
     bool sample = false;
     QVector<OralTranscriptLine> transcript;
     QStringList topics;
+    // 本地导入口播视频的真实路径与首帧缩略图；示例素材为空。
+    QString filePath;
+    QImage preview;
 };
 
 struct OralProject {
@@ -157,7 +165,7 @@ qint64 oralRunTotalMs();
 OralRun computeOralRun(qint64 elapsedMs, int runId);
 OralResult makeOralResult(const OralProject &project, qint64 generatedAt,
                           const QString &templateName);
-OralMaterial oralMaterialFromFile(const QString &fileName, qint64 sizeBytes,
+OralMaterial oralMaterialFromFile(const QString &filePath, qint64 sizeBytes,
                                   bool video, int index);
 QString shortOralCaption(const QString &text, int maxLength = 20);
 int oralBrollCount(OralDensity density);

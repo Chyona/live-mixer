@@ -1092,6 +1092,23 @@ void MainWindow::wireSignals()
     if (m_oral) {
         connect(m_oral, &OralPage::toastRequested, this, &MainWindow::showToast);
         connect(m_oral, &OralPage::navigateRequested, this, &MainWindow::navigateTo);
+        connect(m_oral, &OralPage::previewRequested, this,
+                [this](const QString &title, const QString &filePath, bool video) {
+                    if (!m_modalOverlay) {
+                        return;
+                    }
+                    if (filePath.isEmpty() || !QFileInfo::exists(filePath)) {
+                        showToast(QStringLiteral("素材文件不存在，无法预览"));
+                        return;
+                    }
+                    ModalCard *card = nullptr;
+                    if (video) {
+                        card = new VideoPreviewCard(title, filePath);
+                    } else {
+                        card = new ImagePreviewCard(title, filePath);
+                    }
+                    m_modalOverlay->showModal(card);
+                });
         connect(m_oral, &OralPage::taskStatusChanged, this,
                 [this](const QString &text, bool running) {
                     if (running) {
