@@ -223,18 +223,30 @@ max_clip_count = max(1, floor(duration_ms / 5min))
 
 ## 8. 裁剪与倍速
 
-每个区间用 ffmpeg 从完整 MP4 裁剪并重新编码：
+每个区间用 ffmpeg 从完整 MP4 裁剪并重新编码。采用与后端一致的混合 seek：
+起点 ≥15 秒时先输入侧回退 15 秒预解码，再在输出侧精确定位；起点 <15 秒时
+直接从文件头解码。
 
 ```bash
+# start >= 15s
 ffmpeg -y -nostdin -hide_banner -loglevel error \
-  -ss <start秒> -t <时长秒> -i <mp4> \
+  -ss <start-15秒> -i <mp4> -ss 15 -t <时长秒> \
+  -map 0:v:0 -map 0:a:0? \
+  -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p \
+  -c:a aac -b:a 128k \
+  -movflags +faststart <clip.mp4>
+
+# start < 15s
+ffmpeg -y -nostdin -hide_banner -loglevel error \
+  -i <mp4> -ss <start秒> -t <时长秒> \
   -map 0:v:0 -map 0:a:0? \
   -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p \
   -c:a aac -b:a 128k \
   -movflags +faststart <clip.mp4>
 ```
 
-- `-ss` 放在 `-i` 之前快速定位；重新编码保证起止时间精确；
+- 混合 seek 为解码器留出预解码窗口，避免第三方录制/分段拼接源 MP4 的关键帧
+  索引不可信时，从 P/B 帧起解产生的灰影/重影被重编码进切片；
 - 切片按**原速**裁剪，倍速在草稿 `add_videos` 的 `scene_timelines` 中应用，
   剪映里可继续调整速度，也避免重复转码损失画质；
 - 切片实际时长与请求区间偏差 >2.5 秒时，以请求区间为准（防止源时间戳异常）；

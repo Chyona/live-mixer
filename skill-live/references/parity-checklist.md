@@ -68,7 +68,7 @@
 - [x] 索引去重、越界忽略、空窗跳过；
 - [x] 合并间隔 ≤500ms、保留模型顺序；
 - [x] 标题 12 字、描述 128 字、话题去 #/去重/≤6；
-- [x] 裁剪参数（-ss 前置、libx264 veryfast crf20 yuv420p、AAC 128k、faststart）；
+- [x] 裁剪参数（混合 seek：≥15s 回退 15s 预解码再输出侧精确定位；libx264 veryfast crf20 yuv420p、AAC 128k、faststart）；
 - [x] 切片原速，倍速通过 `scene_timelines`；
 - [x] 自动倍速 `1.05 + 0.01 × rand(46)`；固定倍速 clamp 0.5–2.0；
 - [x] 画布 1920×1080 / 1080×1920 按第一段探测结果选择；

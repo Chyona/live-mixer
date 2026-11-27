@@ -22,6 +22,9 @@ _CUT_VIDEO_ARGS = [
     "-movflags", "+faststart",
 ]
 
+# 与客户端一致：混合 seek 的回退窗口（毫秒）。
+_CUT_COARSE_BACK_MS = 15_000
+
 
 class FfmpegError(RuntimeError):
     pass
@@ -111,7 +114,12 @@ def extract_mp3(input_path: str, output_path: str,
 
 def cut_clip(input_path: str, start_ms: int, end_ms: int, output_path: str,
              ffmpeg_configured: str = "") -> None:
-    """按区间裁剪并重新编码（与 FfmpegUtils::cutClip 完全一致）。"""
+    """按区间裁剪并重新编码（与 FfmpegUtils::cutClip 完全一致）。
+
+    混合 seek：start >= 15s 时先输入侧 -ss 回退 15 秒预解码，再输出侧 -ss
+    精确定位；start < 15s 时从文件头解码。避免第三方录制/拼接源 MP4 的关键帧
+    索引不可信时，从 P/B 帧起解产生灰影/重影并被重编码进切片。
+    """
     if end_ms <= start_ms:
         raise FfmpegError("切片时间范围无效。")
     output_dir = os.path.dirname(os.path.abspath(output_path))
@@ -121,9 +129,23 @@ def cut_clip(input_path: str, start_ms: int, end_ms: int, output_path: str,
     duration_seconds = (end_ms - start_ms) / 1000.0
     args = [
         "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
-        "-ss", f"{start_seconds:.3f}",
-        "-t", f"{duration_seconds:.3f}",
-        "-i", input_path,
+    ]
+    if start_ms >= _CUT_COARSE_BACK_MS:
+        back_seconds = (start_ms - _CUT_COARSE_BACK_MS) / 1000.0
+        drop_seconds = _CUT_COARSE_BACK_MS / 1000.0
+        args += [
+            "-ss", f"{back_seconds:.3f}",
+            "-i", input_path,
+            "-ss", f"{drop_seconds:.3f}",
+            "-t", f"{duration_seconds:.3f}",
+        ]
+    else:
+        args += [
+            "-i", input_path,
+            "-ss", f"{start_seconds:.3f}",
+            "-t", f"{duration_seconds:.3f}",
+        ]
+    args += [
         "-map", "0:v:0", "-map", "0:a:0?",
         *_CUT_VIDEO_ARGS,
         output_path,
