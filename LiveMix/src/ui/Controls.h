@@ -143,6 +143,7 @@ public:
     void setColors(const QColor &normal, const QColor &hover);
     void setBackgroundColors(const QColor &normal, const QColor &hover);
     void setGlyphSize(qreal size);
+    void setCornerRadius(int radius);
     void setToolTipText(const QString &text);
 
     QSize sizeHint() const override;
@@ -156,6 +157,7 @@ private:
     Icons::Glyph m_glyph;
     int m_side;
     qreal m_glyphSize;
+    int m_radius = 6;
     QColor m_normal;
     QColor m_hoverColor;
     QColor m_background;
