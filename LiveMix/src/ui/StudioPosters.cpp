@@ -4,6 +4,7 @@
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPolygonF>
 #include <QRadialGradient>
 #include <QTimer>
 
@@ -928,6 +929,28 @@ void paintOralMaterial(QPainter &painter, const QRectF &rect,
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setClipRect(rect);
+
+    // 导入素材使用真实缩略图：按目标区域等比铺满并居中裁剪。
+    if (!material.preview.isNull()) {
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        const QSize imageSize = material.preview.size();
+        const qreal imageAspect = qreal(imageSize.width()) / imageSize.height();
+        const qreal rectAspect = rect.width() / rect.height();
+        QRectF source(0, 0, imageSize.width(), imageSize.height());
+        if (imageAspect > rectAspect) {
+            const qreal width = imageSize.height() * rectAspect;
+            source = QRectF((imageSize.width() - width) / 2.0, 0, width,
+                            imageSize.height());
+        } else {
+            const qreal height = imageSize.width() / rectAspect;
+            source = QRectF(0, (imageSize.height() - height) / 2.0,
+                            imageSize.width(), height);
+        }
+        painter.drawImage(rect, material.preview, source);
+        painter.restore();
+        return;
+    }
+
     const qreal scale = qMax(rect.width() / 160.0, rect.height() / 100.0);
     painter.translate(rect.center());
     painter.scale(scale, scale);
@@ -1360,6 +1383,24 @@ void MaterialVisualWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     paintOralMaterial(painter, QRectF(rect()), m_material);
+
+    // 导入的视频素材叠加播放标记，提示可以点击预览（缩略图未就绪时也显示）。
+    if (m_material.filePath.isEmpty() || m_material.kind != QLatin1String("视频")
+        || width() < 72 || height() < 48) {
+        return;
+    }
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QPointF center = rect().center();
+    const qreal radius = qBound<qreal>(9.0, qMin(width(), height()) * 0.15, 15.0);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 110));
+    painter.drawEllipse(center, radius, radius);
+    QPolygonF triangle;
+    triangle << center + QPointF(-radius * 0.30, -radius * 0.46)
+             << center + QPointF(radius * 0.55, 0.0)
+             << center + QPointF(-radius * 0.30, radius * 0.46);
+    painter.setBrush(QColor(255, 255, 255, 235));
+    painter.drawPolygon(triangle);
 }
 
 StudioSceneWidget::StudioSceneWidget(QWidget *parent)

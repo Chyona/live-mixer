@@ -482,35 +482,35 @@ const QVector<OralMaterial> &demoMaterials()
         {QStringLiteral("mat-serum"), QStringLiteral("产品特写"),
          QStringLiteral("主图"), QStringLiteral("图片"), QString(),
          QStringLiteral("serum"), QColor(QStringLiteral("#d8a15a")),
-         QColor(QStringLiteral("#5a3520"))},
+         QColor(QStringLiteral("#5a3520")), QString(), QImage()},
         {QStringLiteral("mat-swatch"), QStringLiteral("质地展示"),
          QStringLiteral("质地"), QStringLiteral("视频"), QStringLiteral("00:06"),
          QStringLiteral("swatch"), QColor(QStringLiteral("#f1d5c6")),
-         QColor(QStringLiteral("#9e6d6b"))},
+         QColor(QStringLiteral("#9e6d6b")), QString(), QImage()},
         {QStringLiteral("mat-face"), QStringLiteral("上脸效果"),
          QStringLiteral("效果"), QStringLiteral("视频"), QStringLiteral("00:08"),
          QStringLiteral("face"), QColor(QStringLiteral("#e6b19b")),
-         QColor(QStringLiteral("#4a2d35"))},
+         QColor(QStringLiteral("#4a2d35")), QString(), QImage()},
         {QStringLiteral("mat-city"), QStringLiteral("通勤场景"),
          QStringLiteral("场景"), QStringLiteral("视频"), QStringLiteral("00:05"),
          QStringLiteral("city"), QColor(QStringLiteral("#2c496d")),
-         QColor(QStringLiteral("#e0a15f"))},
+         QColor(QStringLiteral("#e0a15f")), QString(), QImage()},
         {QStringLiteral("mat-bag"), QStringLiteral("包装开箱"),
          QStringLiteral("开箱"), QStringLiteral("图片"), QString(),
          QStringLiteral("bag"), QColor(QStringLiteral("#d7aa84")),
-         QColor(QStringLiteral("#553c34"))},
+         QColor(QStringLiteral("#553c34")), QString(), QImage()},
         {QStringLiteral("mat-sun"), QStringLiteral("户外阳光"),
          QStringLiteral("场景"), QStringLiteral("视频"), QStringLiteral("00:04"),
          QStringLiteral("sun"), QColor(QStringLiteral("#f0b55d")),
-         QColor(QStringLiteral("#315074"))},
+         QColor(QStringLiteral("#315074")), QString(), QImage()},
         {QStringLiteral("mat-ingredient"), QStringLiteral("成分特写"),
          QStringLiteral("成分"), QStringLiteral("图片"), QString(),
          QStringLiteral("cream"), QColor(QStringLiteral("#a9c7b2")),
-         QColor(QStringLiteral("#2d4439"))},
+         QColor(QStringLiteral("#2d4439")), QString(), QImage()},
         {QStringLiteral("mat-desk"), QStringLiteral("使用步骤"),
          QStringLiteral("教程"), QStringLiteral("视频"), QStringLiteral("00:07"),
          QStringLiteral("desk"), QColor(QStringLiteral("#9e8cc4")),
-         QColor(QStringLiteral("#2c243d"))},
+         QColor(QStringLiteral("#2c243d")), QString(), QImage()},
     };
     return materials;
 }
@@ -552,11 +552,8 @@ OralSource demoOralSource()
 
 OralProject defaultOralProject()
 {
-    OralProject project;
-    project.hasSource = true;
-    project.source = demoOralSource();
-    project.materials = demoMaterials();
-    return project;
+    // 新项目不预置示例素材：口播视频与相关素材都由用户导入后再展示。
+    return OralProject();
 }
 
 QString oralRatioDimensions(const QString &ratio)
@@ -870,7 +867,7 @@ QVector<OralResult> recentOralResults()
     return results;
 }
 
-OralMaterial oralMaterialFromFile(const QString &fileName, qint64 sizeBytes,
+OralMaterial oralMaterialFromFile(const QString &filePath, qint64 sizeBytes,
                                   bool video, int index)
 {
     Q_UNUSED(sizeBytes);
@@ -891,16 +888,16 @@ OralMaterial oralMaterialFromFile(const QString &fileName, qint64 sizeBytes,
     material.id = QStringLiteral("upload-%1-%2")
                       .arg(QDateTime::currentMSecsSinceEpoch())
                       .arg(index);
-    QString name = strippedName(fileName).left(16);
+    QString name = strippedName(filePath).left(16);
     if (name.isEmpty()) {
         name = QStringLiteral("素材 %1").arg(index + 1);
     }
     material.name = name;
     material.tag = video ? QStringLiteral("视频素材") : QStringLiteral("图片素材");
     material.kind = video ? QStringLiteral("视频") : QStringLiteral("图片");
-    material.duration = video
-        ? QStringLiteral("00:0%1").arg(4 + index % 5)
-        : QString();
+    // 导入视频的真实时长需要额外探测，先不展示伪造的时长标签。
+    material.duration = QString();
+    material.filePath = QFileInfo(filePath).absoluteFilePath();
     material.visual = visuals.at(index % visuals.size());
     const QPair<QColor, QColor> palette = palettes.at(index % palettes.size());
     material.paletteFrom = palette.first;

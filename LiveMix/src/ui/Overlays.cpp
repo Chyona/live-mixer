@@ -1,20 +1,27 @@
 #include "Overlays.h"
 
+#include "../core/MediaUtils.h"
+
+#include <QDesktopServices>
 #include <QEasingCurve>
 #include <QEnterEvent>
+#include <QFileInfo>
 #include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
+#include <QImageReader>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QPropertyAnimation>
 #include <QShortcut>
 #include <QTextBlockFormat>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextEdit>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace {
@@ -227,6 +234,97 @@ void ModalCard::paintEvent(QPaintEvent *)
     painter.setPen(QPen(Theme::BorderStrong, 1.0));
     painter.setBrush(Theme::Surface1);
     painter.drawPath(roundedRectPath(r, Theme::windowCornerRadius()));
+}
+
+// -----------------------------------------------------------------------------
+// ImagePreviewCard
+// -----------------------------------------------------------------------------
+
+ImagePreviewCard::ImagePreviewCard(const QString &title, const QString &filePath,
+                                   QWidget *parent)
+    : ModalCard(title, 860, parent)
+{
+    setContentSpacing(12);
+
+    QImageReader reader(filePath);
+    reader.setAutoTransform(true);
+    QSize sourceSize = reader.size();
+    if (sourceSize.isValid()) {
+        // 预览最大按 2 倍显示尺寸解码，避免超大图片占满内存；小图不放大。
+        const QSize maxDecodeSize(1520, 1040);
+        if (sourceSize.width() > maxDecodeSize.width()
+            || sourceSize.height() > maxDecodeSize.height()) {
+            QSize decodeSize = sourceSize;
+            decodeSize.scale(maxDecodeSize, Qt::KeepAspectRatio);
+            reader.setScaledSize(decodeSize);
+        }
+    }
+    const QImage image = reader.read();
+    if (!sourceSize.isValid()) {
+        sourceSize = image.size();
+    }
+
+    auto *surface = new QWidget(this);
+    surface->setAttribute(Qt::WA_StyledBackground, true);
+    surface->setObjectName(QStringLiteral("imagePreviewSurface"));
+    surface->setStyleSheet(
+        QStringLiteral("#imagePreviewSurface { background:#05070c; border:1px solid %1;"
+                       " border-radius:8px; }")
+            .arg(Theme::Border.name()));
+    auto *surfaceLayout = new QVBoxLayout(surface);
+    surfaceLayout->setContentsMargins(12, 12, 12, 12);
+    surfaceLayout->setSpacing(0);
+
+    auto *label = new QLabel(surface);
+    label->setAlignment(Qt::AlignCenter);
+    label->setWordWrap(true);
+    QSize displaySize(520, 200);
+    if (image.isNull()) {
+        label->setText(QStringLiteral("无法加载图片：%1")
+                           .arg(reader.errorString()));
+        label->setStyleSheet(QStringLiteral("color:%1;background:transparent;")
+                                 .arg(Theme::Text3.name()));
+    } else {
+        const QSize maxSize(760, 520);
+        displaySize = image.size();
+        if (displaySize.width() > maxSize.width()
+            || displaySize.height() > maxSize.height()) {
+            displaySize.scale(maxSize, Qt::KeepAspectRatio);
+        }
+        if (displaySize.width() < 320 && displaySize.height() < 200) {
+            displaySize.scale(QSize(320, 200), Qt::KeepAspectRatio);
+        }
+        QImage shown = image;
+        if (shown.width() < displaySize.width()
+            || shown.height() < displaySize.height()) {
+            shown = shown.scaled(displaySize, Qt::KeepAspectRatio,
+                                 Qt::SmoothTransformation);
+        }
+        // 保留高分辨率像素，由 devicePixelRatio 映射到显示尺寸，Retina 下更清晰。
+        QPixmap pixmap = QPixmap::fromImage(shown);
+        pixmap.setDevicePixelRatio(qreal(shown.width())
+                                   / qMax(1, displaySize.width()));
+        label->setPixmap(pixmap);
+    }
+    label->setFixedSize(displaySize);
+    surfaceLayout->addWidget(label, 0, Qt::AlignCenter);
+    contentLayout()->addWidget(surface);
+
+    if (!image.isNull()) {
+        auto *meta = Ui::label(
+            QStringLiteral("%1 × %2 · %3")
+                .arg(sourceSize.width())
+                .arg(sourceSize.height())
+                .arg(MediaUtils::formatByteSize(QFileInfo(filePath).size())),
+            10, QFont::Normal, Theme::Text3, this);
+        footerLayout()->insertWidget(0, meta);
+    }
+
+    auto *open = new Button(QStringLiteral("用系统应用打开"), Button::Default, this);
+    connect(open, &QAbstractButton::clicked, this, [filePath] {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
+    });
+    addFooterButton(open);
 }
 
 // -----------------------------------------------------------------------------
