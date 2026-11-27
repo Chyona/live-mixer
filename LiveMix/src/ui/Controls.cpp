@@ -561,6 +561,12 @@ void GlyphButton::setGlyphSize(qreal size)
     update();
 }
 
+void GlyphButton::setCornerRadius(int radius)
+{
+    m_radius = radius;
+    update();
+}
+
 void GlyphButton::setToolTipText(const QString &text)
 {
     setToolTip(text);
@@ -580,7 +586,8 @@ void GlyphButton::paintEvent(QPaintEvent *)
     if (background.alpha() > 0) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(background);
-        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), m_radius,
+                                m_radius);
     }
 
     const QColor color = m_hovered ? m_hoverColor : m_normal;

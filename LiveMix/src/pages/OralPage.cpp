@@ -657,17 +657,21 @@ private:
 class MaterialTile : public Card
 {
 public:
+    // 名称行固定高度：2px 上下内边距 + 8px 文字行高，与设计稿的紧凑卡片一致。
+    static constexpr int kBottomHeight = 16;
+
     MaterialTile(const StudioData::OralMaterial &material,
                  std::function<void()> onRemove,
                  std::function<void()> onPreview, QWidget *parent = nullptr)
-        : Card(Theme::Surface2, Theme::Border, 7, parent)
+        : Card(Theme::Surface2, Theme::Border, 6, parent)
         , m_onRemove(std::move(onRemove))
         , m_onPreview(std::move(onPreview))
     {
         setHoverEnabled(true);
         setHoverColors(Theme::Surface2, Theme::BorderStrong);
-        // 固定高度，避免素材卡被同行更高的卡片拉伸后挤掉底部的名称行。
-        setFixedHeight(122);
+        // 六列网格下卡片更紧凑：缩略图约 4:3（51px），名称行固定 16px；
+        // 固定高度避免素材卡被同行更高的卡片拉伸后挤掉底部的名称行。
+        setFixedHeight(51 + kBottomHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         contentLayout()->setContentsMargins(0, 0, 0, 0);
         contentLayout()->setSpacing(0);
@@ -684,38 +688,49 @@ public:
 
         auto *art = new Studio::MaterialVisualWidget(this);
         art->setMaterial(material);
-        art->setFixedHeight(96);
         m_art = art;
-        contentLayout()->addWidget(art);
+        contentLayout()->addWidget(art, 1);
 
         auto *bottom = new QWidget(this);
-        bottom->setFixedHeight(26);
+        bottom->setFixedHeight(kBottomHeight);
         auto *bottomLayout = new QHBoxLayout(bottom);
-        bottomLayout->setContentsMargins(6, 2, 6, 3);
-        bottomLayout->setSpacing(4);
+        bottomLayout->setContentsMargins(4, 2, 4, 2);
+        bottomLayout->setSpacing(2);
         auto *name = new ElidedLabel(material.name, bottom);
-        name->setPixelSize(9);
+        name->setPixelSize(8);
         name->setTextColor(Theme::Text2);
         bottomLayout->addWidget(name, 1);
-        bottomLayout->addWidget(Ui::label(material.kind, 8, QFont::Normal,
+        bottomLayout->addWidget(Ui::label(material.kind, 7, QFont::Normal,
                                           Theme::Text3, bottom));
         contentLayout()->addWidget(bottom);
         bottom->show();
 
-        m_tag = Studio::tagLabel(material.tag, QColor(255, 255, 255, 230),
-                                 QColor(0, 0, 0, 166), 8, this);
-        m_tag->adjustSize();
-        m_tag->show();
+        // 六列网格的角标更紧凑：7px 文字、2px 圆角与内边距。
+        auto makeMiniTag = [this](const QString &text, const QColor &color,
+                                  const QColor &background, bool mono) {
+            QLabel *label = Studio::tagLabel(text, color, background, 7, this);
+            label->setStyleSheet(
+                QStringLiteral("color:%1;background:%2;border-radius:2px;padding:1px 2px;")
+                    .arg(color.name(QColor::HexArgb),
+                         background.name(QColor::HexArgb)));
+            if (mono) {
+                label->setFont(Theme::monoFont(7));
+            }
+            label->adjustSize();
+            label->show();
+            return label;
+        };
+
+        m_tag = makeMiniTag(material.tag, QColor(255, 255, 255, 230),
+                            QColor(0, 0, 0, 166), false);
         if (!material.duration.isEmpty()) {
-            m_duration = Studio::tagLabel(material.duration,
-                                          QColor(255, 255, 255, 217),
-                                          QColor(0, 0, 0, 140), 8, this);
-            m_duration->setFont(Theme::monoFont(8));
-            m_duration->show();
+            m_duration = makeMiniTag(material.duration, QColor(255, 255, 255, 217),
+                                     QColor(0, 0, 0, 140), true);
         }
 
-        m_remove = new GlyphButton(Icons::Glyph::Trash, 20, this);
-        m_remove->setGlyphSize(10);
+        m_remove = new GlyphButton(Icons::Glyph::Trash, 16, this);
+        m_remove->setGlyphSize(8);
+        m_remove->setCornerRadius(3);
         m_remove->setColors(Qt::white, Qt::white);
         m_remove->setBackgroundColors(QColor(0, 0, 0, 153), Theme::Danger);
         m_remove->setToolTipText(QStringLiteral("移除「%1」").arg(material.name));
@@ -734,15 +749,16 @@ protected:
     void resizeEvent(QResizeEvent *event) override
     {
         Card::resizeEvent(event);
-        // 缩略图由布局固定在顶部 96px，不要再手动改几何，避免覆盖底部名称行。
+        // 缩略图高度由布局决定（卡片高度减去固定名称行），角标贴着缩略图摆放。
+        const int artHeight = height() - kBottomHeight;
         if (m_tag) {
-            m_tag->move(4, qMax(0, (m_art ? m_art->height() : 96) - m_tag->height() - 4));
+            m_tag->move(2, qMax(0, artHeight - m_tag->height() - 2));
         }
         if (m_duration) {
-            m_duration->move(4, 4);
+            m_duration->move(2, 2);
         }
         if (m_remove) {
-            m_remove->move(width() - m_remove->width() - 4, 4);
+            m_remove->move(width() - m_remove->width() - 2, 2);
             m_remove->raise();
         }
         if (m_tag) {
@@ -772,8 +788,9 @@ public:
         : QAbstractButton(parent)
     {
         setCursor(Qt::PointingHandCursor);
-        setMinimumHeight(122);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // 六列网格下上传入口随行高自适应；空状态保持与素材卡一致的最小高度。
+        setMinimumHeight(56);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setToolTip(QStringLiteral("添加相关素材"));
     }
 
@@ -789,13 +806,14 @@ protected:
         pen.setDashPattern({4, 4});
         painter.setPen(pen);
         painter.setBrush(Theme::alpha(Theme::Surface2, 0.2));
-        painter.drawRoundedRect(rect, 7, 7);
-        Icons::paint(&painter, QRectF(width() / 2.0 - 7, height() / 2.0 - 20, 14, 14),
+        painter.drawRoundedRect(rect, 6, 6);
+        // 图标 14px + 间距 2px + 8px 文字，整体垂直居中。
+        Icons::paint(&painter, QRectF(width() / 2.0 - 7, height() / 2.0 - 14, 14, 14),
                      Icons::Glyph::Plus,
                      m_hovered ? Theme::Primary : Theme::Text3, 2.0);
-        painter.setFont(Theme::font(9));
+        painter.setFont(Theme::font(8));
         painter.setPen(m_hovered ? Theme::Primary : Theme::Text3);
-        painter.drawText(QRectF(0, height() / 2.0 - 1, width(), 18),
+        painter.drawText(QRectF(0, height() / 2.0 + 2, width(), 12),
                          Qt::AlignCenter, QStringLiteral("上传素材"));
     }
 
@@ -2020,18 +2038,14 @@ QWidget *OralPage::buildSetupStepOne()
         if (!material.filePath.isEmpty() && tile->visualWidget()) {
             m_previewWidgets[material.filePath].append(tile->visualWidget());
         }
-        tileGrid->addWidget(tile, tileIndex / 3, tileIndex % 3);
+        tileGrid->addWidget(tile, tileIndex / 6, tileIndex % 6);
         ++tileIndex;
     }
     auto *addTile = new AddMaterialTile(tileHost);
     connect(addTile, &QAbstractButton::clicked, this, &OralPage::openMaterialFiles);
-    if (m_project.materials.isEmpty()) {
-        // 空状态用一个通栏上传区，避免右侧留下无意义的空白格。
-        tileGrid->addWidget(addTile, 0, 0, 1, 3);
-    } else {
-        tileGrid->addWidget(addTile, tileIndex / 3, tileIndex % 3);
-    }
-    for (int column = 0; column < 3; ++column) {
+    // 与设计稿一致：上传入口作为网格中的普通单元格，随行高自适应。
+    tileGrid->addWidget(addTile, tileIndex / 6, tileIndex % 6);
+    for (int column = 0; column < 6; ++column) {
         tileGrid->setColumnStretch(column, 1);
     }
     materialsBody->addWidget(tileHost);
