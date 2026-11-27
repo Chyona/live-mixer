@@ -330,6 +330,8 @@ public:
     void setActive(bool active);
     bool isActive() const { return m_active; }
     void setBadge(const QString &badge);
+    // AI 标识使用琥珀色胶囊，与普通数字/数量徽标区分。
+    void setAiBadge(bool ai);
     QSize sizeHint() const override;
 
 protected:
@@ -340,6 +342,7 @@ protected:
 private:
     Icons::Glyph m_glyph;
     QString m_badge;
+    bool m_badgeAi = false;
     bool m_active = false;
     bool m_hovered = false;
 };

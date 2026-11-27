@@ -93,6 +93,22 @@ const char *sourceFor(Glyph glyph)
         return R"(<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/>)";
     case Glyph::Power:
         return R"(<path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/>)";
+    case Glyph::Mic:
+        return R"(<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>)";
+    case Glyph::Mixcut:
+        return R"(<rect x="2.5" y="6.5" width="13" height="14.5" rx="2.5"/><path d="M6.8 6.5v14.5M11.2 6.5v14.5M2.5 11h4.3M2.5 16h4.3M11.2 11h4.3M11.2 16h4.3"/><path d="M19 2.5l.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9z" fill="COLOR" stroke="none"/>)";
+    case Glyph::Palette:
+        return R"(<path d="M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 1.6-3.4 2.1 2.1 0 0 1 1.6-3.4H18a3 3 0 0 0 3-3A8.8 8.8 0 0 0 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/><circle cx="17" cy="10.5" r="1"/>)";
+    case Glyph::Upload:
+        return R"(<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>)";
+    case Glyph::Wand:
+        return R"(<path d="M15 4V2M15 10V8M11 6H9M21 6h-2M18.4 3.6l-1.4 1.4M18.4 8.4l-1.4-1.4M11.6 8.4l1.4-1.4"/><path d="M3 21 17 7l1.5 1.5L4.5 22.5z"/>)";
+    case Glyph::Image:
+        return R"(<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 15-5-5L5 20"/>)";
+    case Glyph::Expand:
+        return R"(<path d="M9 3H3v6M15 3h6v6M21 15v6h-6M3 15v6h6"/>)";
+    case Glyph::ChevronRight:
+        return R"(<path d="m9 18 6-6-6-6"/>)";
     }
     return "";
 }

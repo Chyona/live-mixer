@@ -7,6 +7,7 @@
 #include "../media/FfmpegUtils.h"
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
+#include "../ui/StudioWidgets.h"
 
 #include <QDir>
 #include <QEnterEvent>
@@ -319,7 +320,21 @@ public:
                     m_startPipeline();
                 }
             });
-            bodyLayout->addWidget(action);
+            if (hasDrafts) {
+                bodyLayout->addWidget(action);
+            } else {
+                // 未生成切片时在「一键成片」按钮上沿悬浮 AI 标识。
+                auto *actionWrap = new QWidget(body);
+                actionWrap->setFixedHeight(37);
+                auto *wrapLayout = new QVBoxLayout(actionWrap);
+                wrapLayout->setContentsMargins(0, 7, 0, 0);
+                wrapLayout->setSpacing(0);
+                wrapLayout->addWidget(action);
+                auto *badge = new Studio::AiBadge(actionWrap);
+                badge->move(8, 0);
+                badge->raise();
+                bodyLayout->addWidget(actionWrap);
+            }
 
             // 封面 + 播放按钮：点击后在应用内播放该源视频。
             if (!source.localPath.isEmpty() && QFileInfo::exists(source.localPath)) {

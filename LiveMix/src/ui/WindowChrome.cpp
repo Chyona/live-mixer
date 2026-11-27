@@ -947,17 +947,20 @@ Sidebar::Sidebar(QWidget *parent)
         Icons::Glyph glyph;
         const char *text;
         const char *badge;
+        bool aiBadge = false;
     };
-    const NavSpec navSpecs[] = {
-        {"dash", Icons::Glyph::Dashboard, "工作台", ""},
-        {"material", Icons::Glyph::Library, "源视频库", ""},
-        {"prompt", Icons::Glyph::Prompt, "提示词管理", ""},
-        {"tasks", Icons::Glyph::Tasks, "任务中心", ""},
+    auto addGroupLabel = [this, root](const QString &text) {
+        auto *label = Ui::label(text, 10, QFont::Medium, Theme::Text3, this);
+        QFont font = label->font();
+        font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
+        label->setFont(font);
+        label->setContentsMargins(10, 6, 10, 4);
+        root->addWidget(label);
     };
-
-    for (const auto &spec : navSpecs) {
+    auto addNav = [this, root](const NavSpec &spec) {
         auto *item = new NavItem(spec.glyph, QString::fromUtf8(spec.text),
                                  QString::fromUtf8(spec.badge), this);
+        item->setAiBadge(spec.aiBadge);
         m_items.insert(QString::fromLatin1(spec.id), item);
         root->addWidget(item);
         root->addSpacing(2);
@@ -966,6 +969,27 @@ Sidebar::Sidebar(QWidget *parent)
             setActivePage(id);
             emit pageRequested(id);
         });
+    };
+
+    addGroupLabel(QStringLiteral("直播切片"));
+    const NavSpec clipSpecs[] = {
+        {"dash", Icons::Glyph::Dashboard, "工作台", ""},
+        {"material", Icons::Glyph::Library, "源视频库", ""},
+        {"prompt", Icons::Glyph::Prompt, "提示词管理", ""},
+        {"tasks", Icons::Glyph::Tasks, "任务中心", ""},
+    };
+    for (const auto &spec : clipSpecs) {
+        addNav(spec);
+    }
+
+    root->addSpacing(10);
+    addGroupLabel(QStringLiteral("智能创作"));
+    const NavSpec aiSpecs[] = {
+        {"oral", Icons::Glyph::Mic, "智能口播", "AI", true},
+        {"mixcut", Icons::Glyph::Mixcut, "智能混剪", "AI", true},
+    };
+    for (const auto &spec : aiSpecs) {
+        addNav(spec);
     }
 
     auto *sepWrap = new QWidget(this);
@@ -1126,6 +1150,28 @@ StatusBar::StatusBar(QWidget *parent)
     m_draftCountLabel = monoLabel(QStringLiteral("草稿 0 条"), Theme::Text3);
     layout->addWidget(m_draftCountLabel);
 
+    m_oralStatus = new LinkLabel(QString(), this);
+    m_oralStatus->setPixelSize(11);
+    m_oralStatus->setMonoFont(true);
+    m_oralStatus->setTextColor(Theme::Ai);
+    m_oralStatus->setHoverColor(Theme::PrimaryHover);
+    m_oralStatus->setToolTip(QStringLiteral("返回智能口播"));
+    m_oralStatus->hide();
+    layout->addWidget(m_oralStatus);
+    connect(m_oralStatus, &QAbstractButton::clicked, this,
+            &StatusBar::oralTaskRequested);
+
+    m_mixcutStatus = new LinkLabel(QString(), this);
+    m_mixcutStatus->setPixelSize(11);
+    m_mixcutStatus->setMonoFont(true);
+    m_mixcutStatus->setTextColor(Theme::Ai);
+    m_mixcutStatus->setHoverColor(Theme::PrimaryHover);
+    m_mixcutStatus->setToolTip(QStringLiteral("返回智能混剪"));
+    m_mixcutStatus->hide();
+    layout->addWidget(m_mixcutStatus);
+    connect(m_mixcutStatus, &QAbstractButton::clicked, this,
+            &StatusBar::mixcutTaskRequested);
+
     m_draftStatus = new LinkLabel(QString(), this);
     m_draftStatus->setPixelSize(11);
     m_draftStatus->setMonoFont(true);
@@ -1267,6 +1313,40 @@ void StatusBar::setDraftCount(int count)
     }
     m_draftCountLabel->setText(count >= 0 ? QStringLiteral("草稿 %1 条").arg(count)
                                           : QStringLiteral("草稿 —"));
+}
+
+void StatusBar::setOralTaskStatus(const QString &text)
+{
+    if (!m_oralStatus) {
+        return;
+    }
+    m_oralStatus->setText(QStringLiteral("● ") + text);
+    m_oralStatus->show();
+}
+
+void StatusBar::clearOralTaskStatus()
+{
+    if (m_oralStatus) {
+        m_oralStatus->hide();
+        m_oralStatus->setText(QString());
+    }
+}
+
+void StatusBar::setMixcutTaskStatus(const QString &text)
+{
+    if (!m_mixcutStatus) {
+        return;
+    }
+    m_mixcutStatus->setText(QStringLiteral("● ") + text);
+    m_mixcutStatus->show();
+}
+
+void StatusBar::clearMixcutTaskStatus()
+{
+    if (m_mixcutStatus) {
+        m_mixcutStatus->hide();
+        m_mixcutStatus->setText(QString());
+    }
 }
 
 void StatusBar::setFfmpegAvailable(bool available)

@@ -48,6 +48,15 @@ enum class Glyph {
     Github,
     Window,
     Power,
+    // 智能创作（智能口播 / 智能混剪）与工作室页面新增的图标。
+    Mic,
+    Mixcut,
+    Palette,
+    Upload,
+    Wand,
+    Image,
+    Expand,
+    ChevronRight,
 };
 
 void paint(QPainter *painter, const QRectF &rect, Glyph glyph, const QColor &color,
