@@ -530,6 +530,12 @@ void StepRail::paintEvent(QPaintEvent *)
             circleBorder = Theme::Primary;
             circleText = Theme::OnAccent;
         }
+        if (current) {
+            // 当前步骤外圈 3px 主色光晕，与设计稿的 focus ring 一致。
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(Theme::alpha(Theme::Primary, 0.14));
+            painter.drawEllipse(QRectF(circleRect).adjusted(-3, -3, 3, 3));
+        }
         painter.setPen(QPen(circleBorder, 1.0));
         painter.setBrush(circleFill);
         painter.drawEllipse(circleRect);

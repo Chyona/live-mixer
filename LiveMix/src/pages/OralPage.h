@@ -60,6 +60,10 @@ private:
     void buildProcessingScreen();
     void rebuildResult();
 
+    QWidget *buildHubHeader();
+    // 离开首页时记录列表滚动位置，返回时恢复。
+    void rememberHubScroll();
+
     QWidget *buildSetupHeader();
     QWidget *buildSetupStepOne();
     QWidget *buildSetupStepTwo();
@@ -107,9 +111,14 @@ private:
     Screen m_screen = Screen::Hub;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_hubScreen = nullptr;
+    QWidget *m_hubHeader = nullptr;
+    QVBoxLayout *m_hubHeaderLayout = nullptr;
     QScrollArea *m_hubScroll = nullptr;
     QWidget *m_hubContent = nullptr;
     QVBoxLayout *m_hubLayout = nullptr;
+    // 全部已完成的口播项目，最新的在前；新生成的成片自动置顶。
+    QVector<StudioData::OralResult> m_history;
+    int m_hubScrollTop = 0;
     QWidget *m_setupScreen = nullptr;
     QWidget *m_processingScreen = nullptr;
     QWidget *m_resultScreen = nullptr;

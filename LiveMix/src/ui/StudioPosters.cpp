@@ -1379,28 +1379,58 @@ void MaterialVisualWidget::setMaterial(const StudioData::OralMaterial &material)
     update();
 }
 
+void MaterialVisualWidget::setRoundedFrame(int radius, const QColor &border)
+{
+    m_frameRadius = qMax(0, radius);
+    m_frameBorder = border;
+    update();
+}
+
 void MaterialVisualWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
-    paintOralMaterial(painter, QRectF(rect()), m_material);
+    const QRectF area(rect());
+    QPainterPath frame;
+    if (m_frameRadius > 0) {
+        // 仅顶部圆角：素材卡片底部与名称行相接，不做圆角。
+        const qreal r = m_frameRadius;
+        frame.moveTo(area.left(), area.bottom());
+        frame.lineTo(area.left(), area.top() + r);
+        frame.arcTo(QRectF(area.left(), area.top(), 2 * r, 2 * r), 180, -90);
+        frame.lineTo(area.right() - r, area.top());
+        frame.arcTo(QRectF(area.right() - 2 * r, area.top(), 2 * r, 2 * r), 90,
+                    -90);
+        frame.lineTo(area.right(), area.bottom());
+        painter.setClipPath(frame);
+    }
+    paintOralMaterial(painter, area, m_material);
 
     // 导入的视频素材叠加播放标记，提示可以点击预览（缩略图未就绪时也显示）。
-    if (m_material.filePath.isEmpty() || m_material.kind != QLatin1String("视频")
-        || width() < 72 || height() < 48) {
-        return;
+    if (!m_material.filePath.isEmpty()
+        && m_material.kind == QLatin1String("视频") && width() >= 72
+        && height() >= 48) {
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QPointF center = rect().center();
+        const qreal radius =
+            qBound<qreal>(9.0, qMin(width(), height()) * 0.15, 15.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 110));
+        painter.drawEllipse(center, radius, radius);
+        QPolygonF triangle;
+        triangle << center + QPointF(-radius * 0.30, -radius * 0.46)
+                 << center + QPointF(radius * 0.55, 0.0)
+                 << center + QPointF(-radius * 0.30, radius * 0.46);
+        painter.setBrush(QColor(255, 255, 255, 235));
+        painter.drawPolygon(triangle);
     }
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    const QPointF center = rect().center();
-    const qreal radius = qBound<qreal>(9.0, qMin(width(), height()) * 0.15, 15.0);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0, 0, 0, 110));
-    painter.drawEllipse(center, radius, radius);
-    QPolygonF triangle;
-    triangle << center + QPointF(-radius * 0.30, -radius * 0.46)
-             << center + QPointF(radius * 0.55, 0.0)
-             << center + QPointF(-radius * 0.30, radius * 0.46);
-    painter.setBrush(QColor(255, 255, 255, 235));
-    painter.drawPolygon(triangle);
+
+    // 描边沿缩略图左、上、右三边（不画底边），与卡片自身描边衔接。
+    if (m_frameRadius > 0 && m_frameBorder.isValid()) {
+        painter.setClipping(false);
+        painter.setPen(QPen(m_frameBorder, 1.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(frame);
+    }
 }
 
 StudioSceneWidget::StudioSceneWidget(QWidget *parent)

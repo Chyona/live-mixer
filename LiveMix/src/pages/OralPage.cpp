@@ -121,10 +121,15 @@ void paintCoverImage(QPainter &painter, const QRectF &rect, const QImage &image)
     painter.drawImage(rect, image, source);
 }
 
-QString sourceFileMetaText(const StudioData::OralSource &source)
+QString sourceFileMetaHtml(const StudioData::OralSource &source)
 {
-    return QStringLiteral("%1 · %2 · 本地文件 · 可拖入替换")
-        .arg(source.size, source.resolution);
+    // 与设计稿一致：分辨率使用等宽字体，分隔点用弱化描边色。
+    return QStringLiteral(
+               "%1 <span style=\"color:%2\">·</span> "
+               "<span style=\"font-family:'%3'\">%4</span> "
+               "<span style=\"color:%2\">·</span> 本地文件")
+        .arg(source.size.toHtmlEscaped(), cssColor(Theme::BorderStrong),
+             Theme::monoFont(9).family(), source.resolution.toHtmlEscaped());
 }
 
 // 按缩略图尺寸解码图片，避免把原始大图整张读进内存。
@@ -469,8 +474,9 @@ public:
         , m_source(source)
     {
         setCursor(Qt::PointingHandCursor);
-        setFixedHeight(250);
+        // 设计稿按 16:9 展示口播原片，宽度变化时高度随之调整。
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setFixedHeight(315);
         setToolTip(source.filePath.isEmpty()
                        ? QStringLiteral("示例口播（原型演示）")
                        : QStringLiteral("点击播放口播原片；拖入新视频可替换"));
@@ -482,11 +488,31 @@ public:
         update();
     }
 
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override
+    {
+        return qMax(120, qRound(width * 9.0 / 16.0));
+    }
+    QSize sizeHint() const override
+    {
+        return QSize(560, qRound(560 * 9.0 / 16.0));
+    }
+
 protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QAbstractButton::resizeEvent(event);
+        const int target = heightForWidth(width());
+        if (height() != target) {
+            setFixedHeight(target);
+        }
+    }
+
     void paintEvent(QPaintEvent *) override
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         QPainterPath clip;
         clip.addRoundedRect(QRectF(rect()), 8, 8);
         painter.setClipPath(clip);
@@ -498,43 +524,60 @@ protected:
 
         QLinearGradient shade(0, 0, 0, height());
         shade.setColorAt(0, QColor(4, 5, 9, 115));
-        shade.setColorAt(0.4, QColor(4, 5, 9, 0));
-        shade.setColorAt(0.65, QColor(4, 5, 9, 0));
+        shade.setColorAt(0.36, QColor(4, 5, 9, 0));
+        shade.setColorAt(0.58, QColor(4, 5, 9, 0));
         shade.setColorAt(1, QColor(4, 5, 9, 204));
         painter.fillRect(rect(), shade);
         painter.setClipping(false);
 
-        auto drawChip = [&painter](const QRectF &r, const QColor &bg,
-                                   const QColor &border, const QString &text,
-                                   const QColor &color) {
-            painter.setPen(QPen(border, 1.0));
-            painter.setBrush(bg);
-            painter.drawRoundedRect(r, 4, 4);
-            painter.setFont(Theme::font(9));
-            painter.setPen(color);
-            painter.drawText(r, Qt::AlignCenter, text);
-        };
-        drawChip(QRectF(8, 8, 54, 19), Theme::alpha(Theme::Primary, 0.18),
-                 Theme::alpha(Theme::Primary, 0.4), QStringLiteral("口播原片"),
-                 Theme::Primary);
+        // 左上角标签：口播原片为胶囊，示例素材为小方标，与设计稿一致。
+        const QFont pillFont = Theme::font(10, QFont::Medium);
+        const QFontMetrics pillMetrics(pillFont);
+        const QString pillText = QStringLiteral("口播原片");
+        const QRectF pillRect(8, 8, pillMetrics.horizontalAdvance(pillText) + 16,
+                              21);
+        painter.setPen(QPen(Theme::alpha(Theme::Primary, 0.35), 1.0));
+        painter.setBrush(Studio::primarySoft());
+        painter.drawRoundedRect(pillRect, pillRect.height() / 2.0,
+                                pillRect.height() / 2.0);
+        painter.setFont(pillFont);
+        painter.setPen(Theme::Primary);
+        painter.drawText(pillRect, Qt::AlignCenter, pillText);
+
         if (m_source.sample) {
-            drawChip(QRectF(68, 8, 54, 19), QColor(0, 0, 0, 115),
-                     Theme::BorderStrong, QStringLiteral("示例素材"),
-                     QColor(255, 255, 255, 191));
+            const QFont sampleFont = Theme::font(9);
+            const QFontMetrics sampleMetrics(sampleFont);
+            const QString sampleText = QStringLiteral("示例素材");
+            const QRectF sampleRect(
+                pillRect.right() + 6,
+                pillRect.center().y()
+                    - (sampleMetrics.height() + 4) / 2.0,
+                sampleMetrics.horizontalAdvance(sampleText) + 12,
+                sampleMetrics.height() + 4);
+            painter.setPen(QPen(Theme::BorderStrong, 1.0));
+            painter.setBrush(QColor(0, 0, 0, 115));
+            painter.drawRoundedRect(sampleRect, 4, 4);
+            painter.setFont(sampleFont);
+            painter.setPen(QColor(255, 255, 255, 191));
+            painter.drawText(sampleRect, Qt::AlignCenter, sampleText);
         }
+
         const QString resolution = m_source.resolution;
-        painter.setFont(Theme::monoFont(9));
-        painter.setPen(QColor(255, 255, 255, 217));
-        const QRectF resolutionRect(width() - 90, 8, 82, 19);
+        const QFont resolutionFont = Theme::monoFont(9);
+        const QFontMetrics resolutionMetrics(resolutionFont);
+        const QRectF resolutionRect(
+            width() - 8 - resolutionMetrics.horizontalAdvance(resolution) - 12,
+            8, resolutionMetrics.horizontalAdvance(resolution) + 12, 19);
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(0, 0, 0, 140));
         painter.drawRoundedRect(resolutionRect, 4, 4);
+        painter.setFont(resolutionFont);
         painter.setPen(QColor(255, 255, 255, 217));
         painter.drawText(resolutionRect, Qt::AlignCenter, resolution);
 
         const QRectF playCircle(width() / 2.0 - 22, height() / 2.0 - 22, 44, 44);
-        painter.setPen(QPen(QColor(255, 255, 255, 76), 1.0));
-        painter.setBrush(QColor(0, 0, 0, 150));
+        painter.setPen(QPen(QColor(255, 255, 255, 77), 1.0));
+        painter.setBrush(QColor(0, 0, 0, 153));
         painter.drawEllipse(playCircle);
         QPainterPath play;
         play.moveTo(playCircle.center().x() - 4, playCircle.center().y() - 7);
@@ -545,21 +588,31 @@ protected:
         painter.setPen(Qt::NoPen);
         painter.drawPath(play);
 
-        const QRectF waveRect(12, height() - 26, width() - 78, 14);
+        // 有声波形：2px 细条 + 2px 间距，左侧紧凑排列；时长贴右下角。
+        const qreal waveHeight = 16;
+        const qreal barWidth = 2;
+        const qreal barGap = 2;
+        const qreal waveCenterY = height() - 8 - waveHeight / 2.0;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(255, 255, 255, 153));
         for (int index = 0; index < 34; ++index) {
-            const qreal barWidth = waveRect.width() / 34.0 - 2.0;
-            const int barHeight = 20 + (index * 37) % 80;
-            const qreal h = waveRect.height() * barHeight / 100.0;
-            painter.setBrush(QColor(255, 255, 255, 140));
+            const int barHeight = 22 + (index * 37) % 68;
+            const qreal barPixelHeight = waveHeight * barHeight / 100.0;
             painter.drawRoundedRect(
-                QRectF(waveRect.left() + index * (barWidth + 2.0),
-                       waveRect.center().y() - h / 2.0, barWidth, h),
+                QRectF(12 + index * (barWidth + barGap),
+                       waveCenterY - barPixelHeight / 2.0, barWidth,
+                       barPixelHeight),
                 barWidth / 2.0, barWidth / 2.0);
         }
         painter.setFont(Theme::monoFont(9));
         painter.setPen(QColor(255, 255, 255, 179));
-        painter.drawText(QRectF(width() - 60, height() - 26, 48, 14),
+        painter.drawText(QRectF(width() - 60, height() - 24, 48, 16),
                          Qt::AlignRight | Qt::AlignVCenter, m_source.duration);
+
+        painter.setClipping(false);
+        painter.setPen(QPen(Theme::Border, 1.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(frame, 8, 8);
     }
 
 private:
@@ -663,14 +716,14 @@ public:
     MaterialTile(const StudioData::OralMaterial &material,
                  std::function<void()> onRemove,
                  std::function<void()> onPreview, QWidget *parent = nullptr)
-        : Card(Theme::Surface2, Theme::Border, 6, parent)
+        : Card(Theme::alpha(Theme::Surface2, 0.6), Theme::Border, 6, parent)
         , m_onRemove(std::move(onRemove))
         , m_onPreview(std::move(onPreview))
     {
         setHoverEnabled(true);
-        setHoverColors(Theme::Surface2, Theme::BorderStrong);
-        // 六列网格下卡片更紧凑：缩略图约 4:3（51px），名称行固定 16px；
-        // 固定高度避免素材卡被同行更高的卡片拉伸后挤掉底部的名称行。
+        setHoverColors(Theme::alpha(Theme::Surface2, 0.6), Theme::BorderStrong);
+        // 六列网格下缩略图保持 4:3，名称行固定 16px；宽度变化时在
+        // resizeEvent 中同步高度，避免素材卡被同行更高的卡片拉伸。
         setFixedHeight(51 + kBottomHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         contentLayout()->setContentsMargins(0, 0, 0, 0);
@@ -688,6 +741,7 @@ public:
 
         auto *art = new Studio::MaterialVisualWidget(this);
         art->setMaterial(material);
+        art->setRoundedFrame(6, Theme::Border);
         m_art = art;
         contentLayout()->addWidget(art, 1);
 
@@ -734,8 +788,8 @@ public:
         m_remove->setColors(Qt::white, Qt::white);
         m_remove->setBackgroundColors(QColor(0, 0, 0, 153), Theme::Danger);
         m_remove->setToolTipText(QStringLiteral("移除「%1」").arg(material.name));
-        // 删除入口常驻显示，导入的素材始终可以一键移除。
-        m_remove->show();
+        // 与设计稿一致：移除按钮只在悬停素材卡时出现。
+        m_remove->hide();
         connect(m_remove, &QAbstractButton::clicked, this, [this] {
             if (m_onRemove) {
                 m_onRemove();
@@ -746,19 +800,48 @@ public:
     Studio::MaterialVisualWidget *visualWidget() const { return m_art; }
 
 protected:
+    void enterEvent(QEnterEvent *event) override
+    {
+        Card::enterEvent(event);
+        if (m_art) {
+            m_art->setRoundedFrame(6, Theme::BorderStrong);
+        }
+        if (m_remove) {
+            m_remove->show();
+            m_remove->raise();
+        }
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        if (m_art) {
+            m_art->setRoundedFrame(6, Theme::Border);
+        }
+        if (m_remove) {
+            m_remove->hide();
+        }
+        Card::leaveEvent(event);
+    }
+
     void resizeEvent(QResizeEvent *event) override
     {
         Card::resizeEvent(event);
-        // 缩略图高度由布局决定（卡片高度减去固定名称行），角标贴着缩略图摆放。
-        const int artHeight = height() - kBottomHeight;
+        const int target = qRound(width() * 3.0 / 4.0) + kBottomHeight;
+        if (height() != target) {
+            setFixedHeight(target);
+        }
+        const int tileHeight = qMax(height(), target);
+        // 类型角标贴卡片左下角（与设计稿一致，覆盖在名称行左侧）。
         if (m_tag) {
-            m_tag->move(2, qMax(0, artHeight - m_tag->height() - 2));
+            m_tag->move(2, qMax(0, tileHeight - m_tag->height() - 2));
         }
         if (m_duration) {
             m_duration->move(2, 2);
         }
         if (m_remove) {
             m_remove->move(width() - m_remove->width() - 2, 2);
+        }
+        if (m_remove) {
             m_remove->raise();
         }
         if (m_tag) {
@@ -766,9 +849,6 @@ protected:
         }
         if (m_duration) {
             m_duration->raise();
-        }
-        if (m_remove) {
-            m_remove->raise();
         }
     }
 
@@ -1086,6 +1166,7 @@ OralPage::OralPage(QWidget *parent)
     : QWidget(parent)
 {
     m_project = StudioData::defaultOralProject();
+    m_history = StudioData::recentOralResults();
 
     m_runTimer = new QTimer(this);
     m_runTimer->setInterval(100);
@@ -1140,13 +1221,20 @@ void OralPage::buildUi()
     auto *hubRoot = new QVBoxLayout(m_hubScreen);
     hubRoot->setContentsMargins(0, 0, 0, 0);
     hubRoot->setSpacing(0);
+    // 标题区固定在页面顶部，滚动时「开始口播包装」始终可见。
+    m_hubHeader = new QWidget(m_hubScreen);
+    m_hubHeaderLayout = new QVBoxLayout(m_hubHeader);
+    m_hubHeaderLayout->setContentsMargins(22, 18, 22, 14);
+    m_hubHeaderLayout->setSpacing(0);
+    hubRoot->addWidget(m_hubHeader);
+    hubRoot->addWidget(Ui::separator(false, m_hubScreen));
     m_hubContent = new QWidget;
     m_hubLayout = new QVBoxLayout(m_hubContent);
-    m_hubLayout->setContentsMargins(22, 18, 22, 24);
+    m_hubLayout->setContentsMargins(22, 14, 22, 24);
     m_hubLayout->setSpacing(0);
     m_hubLayout->setAlignment(Qt::AlignTop);
     m_hubScroll = makeScrollArea(m_hubContent, m_hubScreen);
-    hubRoot->addWidget(m_hubScroll);
+    hubRoot->addWidget(m_hubScroll, 1);
     m_stack->addWidget(m_hubScreen);
 
     m_setupScreen = new QWidget(m_stack);
@@ -1176,13 +1264,26 @@ void OralPage::showHub()
     m_screen = Screen::Hub;
     rebuildHub();
     m_stack->setCurrentWidget(m_hubScreen);
-    if (m_hubScroll && m_hubScroll->verticalScrollBar()) {
-        m_hubScroll->verticalScrollBar()->setValue(0);
+    // 返回首页时恢复离开前的列表滚动位置；新成片生成后该值为 0，回到顶部。
+    const int scrollTop = m_hubScrollTop;
+    QTimer::singleShot(0, this, [this, scrollTop] {
+        if (m_hubScroll && m_hubScroll->verticalScrollBar()) {
+            m_hubScroll->verticalScrollBar()->setValue(scrollTop);
+        }
+    });
+}
+
+void OralPage::rememberHubScroll()
+{
+    if (m_screen == Screen::Hub && m_hubScroll
+        && m_hubScroll->verticalScrollBar()) {
+        m_hubScrollTop = m_hubScroll->verticalScrollBar()->value();
     }
 }
 
 void OralPage::showSetup()
 {
+    rememberHubScroll();
     m_screen = Screen::Setup;
     rebuildSetup();
     m_stack->setCurrentWidget(m_setupScreen);
@@ -1196,6 +1297,7 @@ void OralPage::showProcessing()
 
 void OralPage::showResult()
 {
+    rememberHubScroll();
     m_screen = Screen::Result;
     rebuildResult();
     m_stack->setCurrentWidget(m_resultScreen);
@@ -1203,18 +1305,9 @@ void OralPage::showResult()
 
 void OralPage::rebuildHub()
 {
+    Studio::clearLayout(m_hubHeaderLayout);
     Studio::clearLayout(m_hubLayout);
-
-    auto *header = new PageHeader(
-        QStringLiteral("智能口播"),
-        QStringLiteral("上传真人口播与相关素材，选择模板，一键包装成片。"), this);
-    auto *newChip = new Chip(QStringLiteral("新功能"), Chip::Ai, header);
-    header->setTitleMeta(newChip);
-    auto *start = new Button(QStringLiteral("开始口播包装"), Button::Primary, header);
-    start->setLeadingGlyph(Icons::Glyph::Sparkle);
-    connect(start, &QAbstractButton::clicked, this, &OralPage::startProject);
-    header->addAction(start);
-    m_hubLayout->addWidget(header);
+    m_hubHeaderLayout->addWidget(buildHubHeader());
 
     auto *stats = new QWidget(m_hubContent);
     auto *statsLayout = new QHBoxLayout(stats);
@@ -1251,8 +1344,8 @@ void OralPage::rebuildHub()
     m_hubLayout->addSpacing(20);
     auto *recentHeading = makeSectionHeading(
         QStringLiteral("最近口播"),
-        QStringLiteral("%1 个项目").arg(StudioData::recentOralResults().size()),
-        nullptr, m_hubContent);
+        QStringLiteral("全部 %1 个项目").arg(m_history.size()), nullptr,
+        m_hubContent);
     auto *recentMeta = new QWidget(m_hubContent);
     auto *recentMetaLayout = new QHBoxLayout(recentMeta);
     recentMetaLayout->setContentsMargins(0, 0, 0, 0);
@@ -1269,56 +1362,19 @@ void OralPage::rebuildHub()
     recentHeadingLayout->addWidget(recentMeta, 0, Qt::AlignVCenter);
     m_hubLayout->addWidget(recentHeadingRow);
 
-    auto *recentRow = new QWidget(m_hubContent);
-    auto *recentLayout = new QHBoxLayout(recentRow);
+    auto *recentGrid = new QWidget(m_hubContent);
+    auto *recentLayout = new QGridLayout(recentGrid);
     recentLayout->setContentsMargins(0, 0, 0, 0);
-    recentLayout->setSpacing(12);
-    for (const StudioData::OralResult &result : StudioData::recentOralResults()) {
-        recentLayout->addWidget(createRecentCard(result, recentRow), 1);
+    recentLayout->setHorizontalSpacing(12);
+    recentLayout->setVerticalSpacing(12);
+    for (int index = 0; index < m_history.size(); ++index) {
+        recentLayout->addWidget(createRecentCard(m_history.at(index), recentGrid),
+                                index / 3, index % 3);
     }
-    m_hubLayout->addWidget(recentRow);
-
-    m_hubLayout->addSpacing(20);
-    const QString templateId = m_project.templateId;
-    const StudioData::OralTemplate current = StudioData::oralTemplate(templateId);
-    auto *templateMeta = new QWidget(m_hubContent);
-    auto *templateMetaLayout = new QHBoxLayout(templateMeta);
-    templateMetaLayout->setContentsMargins(0, 0, 0, 0);
-    templateMetaLayout->setSpacing(6);
-    auto *dot = new QWidget(templateMeta);
-    dot->setFixedSize(6, 6);
-    dot->setStyleSheet(QStringLiteral("background:%1;border-radius:3px;")
-                           .arg(cssColor(current.accent)));
-    templateMetaLayout->addWidget(dot);
-    templateMetaLayout->addWidget(Ui::label(QStringLiteral("当前默认："), 10,
-                                            QFont::Normal, Theme::Text3, templateMeta));
-    templateMetaLayout->addWidget(Ui::label(current.name, 10, QFont::Medium,
-                                            Theme::Text2, templateMeta));
-    auto *templateHeading = makeSectionHeading(
-        QStringLiteral("包装模板"),
-        QStringLiteral("点击模板设为默认，开始包装时自动套用"), templateMeta,
-        m_hubContent);
-    auto *templateHeadingRow = new QWidget(m_hubContent);
-    auto *templateHeadingLayout = new QHBoxLayout(templateHeadingRow);
-    templateHeadingLayout->setContentsMargins(0, 0, 0, 8);
-    templateHeadingLayout->setSpacing(0);
-    templateHeadingLayout->addWidget(templateHeading, 1);
-    m_hubLayout->addWidget(templateHeadingRow);
-
-    auto *templateGrid = new QWidget(m_hubContent);
-    auto *grid = new QGridLayout(templateGrid);
-    grid->setContentsMargins(0, 0, 0, 0);
-    grid->setHorizontalSpacing(10);
-    grid->setVerticalSpacing(10);
-    const QVector<StudioData::OralTemplate> &templates = StudioData::oralTemplates();
-    for (int index = 0; index < templates.size(); ++index) {
-        grid->addWidget(createTemplateCard(
-                            templates.at(index).id,
-                            templates.at(index).id == m_project.templateId, false,
-                            templateGrid),
-                        index / 3, index % 3);
+    for (int column = 0; column < 3; ++column) {
+        recentLayout->setColumnStretch(column, 1);
     }
-    m_hubLayout->addWidget(templateGrid);
+    m_hubLayout->addWidget(recentGrid);
 
     m_hubLayout->addSpacing(16);
     auto *tip = new QWidget(m_hubContent);
@@ -1333,7 +1389,7 @@ void OralPage::rebuildHub()
     tipLayout->setSpacing(8);
     tipLayout->addWidget(Studio::iconLabel(Icons::Glyph::Wand, 12, Theme::Ai, tip));
     auto *tipLabel = Ui::label(
-        QStringLiteral("小提示：先选模板再开始包装，AI 会自动按模板节奏调整字幕、素材插入密度和音乐风格。"),
+        QStringLiteral("小提示：开始包装后可在「包装设置」里选择模板，AI 会自动按模板节奏调整字幕、素材插入密度和音乐风格。"),
         10, QFont::Normal, Theme::Text3, tip);
     tipLabel->setWordWrap(true);
     tipLayout->addWidget(tipLabel, 1);
@@ -1347,6 +1403,23 @@ void OralPage::rebuildHub()
                                       QFont::Normal, Theme::Text2, ratio));
     tipLayout->addWidget(ratio, 0, Qt::AlignVCenter);
     m_hubLayout->addWidget(tip);
+}
+
+QWidget *OralPage::buildHubHeader()
+{
+    auto *header = new PageHeader(
+        QStringLiteral("智能口播"),
+        QStringLiteral("上传真人口播与相关素材，选择模板，一键包装成片。"),
+        m_hubHeader);
+    // 固定标题区自带上下留白，页头自身不再保留底部间距。
+    header->layout()->setContentsMargins(0, 0, 0, 0);
+    auto *newChip = new Chip(QStringLiteral("新功能"), Chip::Ai, header);
+    header->setTitleMeta(newChip);
+    auto *start = new Button(QStringLiteral("开始口播包装"), Button::Primary, header);
+    start->setLeadingGlyph(Icons::Glyph::Sparkle);
+    connect(start, &QAbstractButton::clicked, this, &OralPage::startProject);
+    header->addAction(start);
+    return header;
 }
 
 QWidget *OralPage::buildHubHero()
@@ -1744,6 +1817,8 @@ void OralPage::rebuildSetup()
     body->addWidget(m_project.step == 1 ? buildSetupStepOne()
                                         : buildSetupStepTwo());
     auto *scroll = makeScrollArea(scrollContent, m_setupScreen);
+    // 上传页布局按窗口高度调校：保留滚动能力，但不绘制滚动条遮挡内容。
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     root->addWidget(scroll, 1);
     root->addWidget(Ui::separator(false, m_setupScreen));
     root->addWidget(buildSetupFooter());
@@ -1759,7 +1834,7 @@ QWidget *OralPage::buildSetupHeader()
 {
     auto *header = new QWidget(m_setupScreen);
     auto *layout = new QVBoxLayout(header);
-    layout->setContentsMargins(22, 10, 22, 10);
+    layout->setContentsMargins(22, 12, 22, 12);
     layout->setSpacing(0);
 
     auto *breadcrumb = new QWidget(header);
@@ -1795,7 +1870,7 @@ QWidget *OralPage::buildSetupHeader()
     connect(exit, &QAbstractButton::clicked, this, &OralPage::showHub);
     breadcrumbLayout->addWidget(exit);
     layout->addWidget(breadcrumb);
-    layout->addSpacing(5);
+    layout->addSpacing(6);
 
     auto *titleRow = new QWidget(header);
     auto *titleLayout = new QHBoxLayout(titleRow);
@@ -1803,7 +1878,7 @@ QWidget *OralPage::buildSetupHeader()
     titleLayout->setSpacing(10);
     auto *titles = new QVBoxLayout;
     titles->setContentsMargins(0, 0, 0, 0);
-    titles->setSpacing(1);
+    titles->setSpacing(2);
     auto *titleLine = new QHBoxLayout;
     titleLine->setContentsMargins(0, 0, 0, 0);
     titleLine->setSpacing(8);
@@ -1931,9 +2006,9 @@ QWidget *OralPage::buildSetupStepOne()
             10, QFont::Normal, Theme::Text3, drop);
         hint->setWordWrap(true);
         hint->setAlignment(Qt::AlignCenter);
-        hint->setMaximumWidth(340);
-        // QLabel 自动换行时布局只按单行高度预留，显式给出三行空间避免压住按钮。
-        hint->setMinimumHeight(hint->fontMetrics().lineSpacing() * 3);
+        hint->setMaximumWidth(430);
+        // QLabel 自动换行时布局只按单行高度预留，显式给出两行空间避免压住按钮。
+        hint->setMinimumHeight(hint->fontMetrics().lineSpacing() * 2);
         dropLayout->addWidget(hint, 0, Qt::AlignHCenter);
         auto *buttons = new QWidget(drop);
         auto *buttonsLayout = new QHBoxLayout(buttons);
@@ -1980,8 +2055,8 @@ QWidget *OralPage::buildSetupStepOne()
         name->setFontWeight(QFont::Medium);
         name->setTextColor(Theme::Text1);
         fileTexts->addWidget(name);
-        auto *meta = Ui::label(sourceFileMetaText(m_project.source),
-                               9, QFont::Normal, Theme::Text3, fileRow);
+        auto *meta = Ui::richLabel(sourceFileMetaHtml(m_project.source),
+                                   9, Theme::Text3, fileRow);
         m_sourceMetaLabel = meta;
         fileTexts->addWidget(meta);
         fileLayout->addLayout(fileTexts, 1);
@@ -2018,8 +2093,8 @@ QWidget *OralPage::buildSetupStepOne()
     auto *materialsBody = materialsCard->bodyLayout();
     materialsBody->setSpacing(0);
     auto *materialsHint = Ui::label(
-        QStringLiteral("添加与口播内容相关的产品、场景或细节素材，也可将图片或视频直接拖入本卡片；"
-                       "点击素材可预览，AI 会按语义自动匹配并插入画面。"),
+        QStringLiteral("添加与口播内容相关的产品、场景或细节素材，"
+                       "AI 会按语义自动匹配并插入画面。"),
         10, QFont::Normal, Theme::Text3, materialsCard);
     materialsHint->setWordWrap(true);
     materialsBody->addWidget(materialsHint);
@@ -2058,6 +2133,8 @@ QWidget *OralPage::buildSetupStepOne()
     layout->addSpacing(12);
     layout->addWidget(new Studio::Note(
         QStringLiteral("上传后 AI 会先识别口播，再按语义选择素材位置。你可以在下一步选择包装模板、字幕样式与 B-Roll 密度，全部设置都可在生成前调整。")));
+    // 多余高度留在页面底部，让两张卡片保持内容高度，不被拉满整页。
+    layout->addStretch(1);
     return content;
 }
 
@@ -2510,7 +2587,7 @@ void OralPage::probeSourceMetadata(const QString &path)
                         MediaUtils::formatDuration(qRound64(seconds * 1000.0));
                 }
                 if (m_sourceMetaLabel) {
-                    m_sourceMetaLabel->setText(sourceFileMetaText(m_project.source));
+                    m_sourceMetaLabel->setText(sourceFileMetaHtml(m_project.source));
                 }
                 if (m_sourcePreviewUpdater) {
                     m_sourcePreviewUpdater(m_project.source);
@@ -3421,6 +3498,9 @@ void OralPage::finishGeneration()
         m_project, QDateTime::currentMSecsSinceEpoch(),
         StudioData::oralTemplateName(m_project.templateId));
     m_hasResult = true;
+    // 新生成的成片自动置顶到历史记录；返回首页时从顶部开始展示。
+    m_history.prepend(m_result);
+    m_hubScrollTop = 0;
     showResult();
     emit taskStatusChanged(QString(), false);
     if (!isVisible()) {
@@ -3509,23 +3589,22 @@ void OralPage::rebuildResult()
     auto *breadcrumb = new QWidget(header);
     auto *breadcrumbLayout = new QHBoxLayout(breadcrumb);
     breadcrumbLayout->setContentsMargins(0, 0, 0, 0);
-    breadcrumbLayout->setSpacing(6);
-    auto *back = new LinkLabel(QStringLiteral("智能口播"), breadcrumb);
-    back->setPixelSize(10);
-    back->setTextColor(Theme::Text3);
-    back->setHoverColor(Theme::Text1);
-    back->setLeadingGlyph(Icons::Glyph::ChevronLeft, 10);
-    back->setUnderlineOnHover(false);
+    breadcrumbLayout->setSpacing(8);
+    auto *back = new Button(QStringLiteral("返回最近口播"), Button::Ghost, breadcrumb);
+    back->setCompact(true);
+    back->setLeadingGlyph(Icons::Glyph::ChevronLeft);
     connect(back, &QAbstractButton::clicked, this, &OralPage::showHub);
     breadcrumbLayout->addWidget(back);
-    breadcrumbLayout->addWidget(Ui::label(QStringLiteral("/"), 10, QFont::Normal,
-                                           Theme::BorderStrong, breadcrumb));
     breadcrumbLayout->addWidget(Ui::label(QStringLiteral("成片结果"), 10,
                                            QFont::Normal, Theme::Text2, breadcrumb));
-    breadcrumbLayout->addSpacing(4);
-    breadcrumbLayout->addWidget(new StatusDot(6, Theme::Success, breadcrumb));
-    breadcrumbLayout->addWidget(Ui::label(QStringLiteral("已自动保存"), 9,
-                                           QFont::Normal, Theme::Success, breadcrumb));
+    auto *saved = new QWidget(breadcrumb);
+    auto *savedLayout = new QHBoxLayout(saved);
+    savedLayout->setContentsMargins(0, 0, 0, 0);
+    savedLayout->setSpacing(4);
+    savedLayout->addWidget(new StatusDot(6, Theme::Success, saved));
+    savedLayout->addWidget(Ui::label(QStringLiteral("已自动保存"), 9,
+                                      QFont::Normal, Theme::Success, saved));
+    breadcrumbLayout->addWidget(saved);
     breadcrumbLayout->addStretch(1);
     headerLayout->addWidget(breadcrumb);
     headerLayout->addSpacing(4);

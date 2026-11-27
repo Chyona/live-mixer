@@ -116,12 +116,16 @@ public:
     explicit MaterialVisualWidget(QWidget *parent = nullptr);
 
     void setMaterial(const StudioData::OralMaterial &material);
+    // 素材网格的小卡片：缩略图顶部圆角并描边，底部与名称行相接。
+    void setRoundedFrame(int radius, const QColor &border);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
     StudioData::OralMaterial m_material;
+    int m_frameRadius = 0;
+    QColor m_frameBorder;
 };
 
 class StudioSceneWidget : public QWidget

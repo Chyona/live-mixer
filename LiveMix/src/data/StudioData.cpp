@@ -863,7 +863,182 @@ QVector<OralResult> recentOralResults()
         {QStringLiteral("模板"), QStringLiteral("杂志大片")},
     };
 
-    results = {first, second, third};
+    OralResult morning;
+    morning.id = QStringLiteral("recent-morning");
+    morning.projectName = QStringLiteral("早八通勤 · 口播包装");
+    morning.title = QStringLiteral("早八人 5 分钟出门，这套护肤流程真的够快");
+    morning.description = QStringLiteral("洁面、精华、防晒三步搞定，赶地铁也不慌。");
+    morning.tags = {QStringLiteral("#早八护肤"), QStringLiteral("#通勤日常"),
+                    QStringLiteral("#极简护肤")};
+    morning.templateId = QStringLiteral("vlog");
+    morning.ratio = QStringLiteral("9:16");
+    morning.durationLabel = QStringLiteral("01:12");
+    morning.fileSize = QStringLiteral("84.6 MB");
+    morning.outputBoth = false;
+    morning.generatedAt = now - 3 * day;
+    morning.sourceLabel = QStringLiteral("真人口播 · 02:05");
+    morning.script = QStringLiteral(
+        "早八人的早上，能多睡五分钟就多睡五分钟。\n"
+        "护肤也尽量精简，洁面之后直接上精华。\n"
+        "最后一步防晒一定不能省，通勤全靠它。\n"
+        "三步做完，刚好赶上那班地铁。");
+    morning.subtitleCount = 22;
+    morning.brollCount = 9;
+    morning.draftGenerated = false;
+    morning.highlights = {
+        {QStringLiteral("字幕"), QStringLiteral("22 条 · 关键词高亮")},
+        {QStringLiteral("素材"), QStringLiteral("9 处 B-Roll")},
+        {QStringLiteral("节奏"), QStringLiteral("3 个转场")},
+        {QStringLiteral("模板"), QStringLiteral("生活 Vlog")},
+    };
+
+    OralResult sunscreenTest;
+    sunscreenTest.id = QStringLiteral("recent-sunscreen-test");
+    sunscreenTest.projectName = QStringLiteral("防晒横评 · 口播包装");
+    sunscreenTest.title = QStringLiteral("5 支热门防晒横评，通勤到底该选哪支");
+    sunscreenTest.description = QStringLiteral("从成膜速度、搓泥到泛白，一次讲清怎么选。");
+    sunscreenTest.tags = {QStringLiteral("#防晒横评"), QStringLiteral("#通勤防晒"),
+                          QStringLiteral("#测评")};
+    sunscreenTest.templateId = QStringLiteral("punch");
+    sunscreenTest.ratio = QStringLiteral("16:9");
+    sunscreenTest.durationLabel = QStringLiteral("01:56");
+    sunscreenTest.fileSize = QStringLiteral("186.2 MB");
+    sunscreenTest.outputBoth = true;
+    sunscreenTest.generatedAt = now - 4 * day;
+    sunscreenTest.sourceLabel = QStringLiteral("真人口播 · 04:10");
+    sunscreenTest.script = QStringLiteral(
+        "五支热门防晒，今天一次测完。\n"
+        "先看成膜速度，涂完等三十秒再摸脸。\n"
+        "再看搓泥和泛白，通勤叠加底妆很关键。\n"
+        "最后是肤感，油皮建议选清爽挂的。");
+    sunscreenTest.subtitleCount = 31;
+    sunscreenTest.brollCount = 16;
+    sunscreenTest.draftGenerated = true;
+    sunscreenTest.highlights = {
+        {QStringLiteral("字幕"), QStringLiteral("31 条 · 关键词高亮")},
+        {QStringLiteral("素材"), QStringLiteral("16 处 B-Roll")},
+        {QStringLiteral("节奏"), QStringLiteral("5 个转场")},
+        {QStringLiteral("模板"), QStringLiteral("高能带货")},
+    };
+
+    OralResult sensitive;
+    sensitive.id = QStringLiteral("recent-sensitive");
+    sensitive.projectName = QStringLiteral("敏感肌护理 · 口播包装");
+    sensitive.title = QStringLiteral("换季敏感泛红？先做好这三步维稳");
+    sensitive.description = QStringLiteral("精简护肤、修护屏障，敏感期别再叠加功效。");
+    sensitive.tags = {QStringLiteral("#敏感肌"), QStringLiteral("#换季护肤"),
+                      QStringLiteral("#屏障修护")};
+    sensitive.templateId = QStringLiteral("clean");
+    sensitive.ratio = QStringLiteral("9:16");
+    sensitive.durationLabel = QStringLiteral("00:51");
+    sensitive.fileSize = QStringLiteral("79.3 MB");
+    sensitive.outputBoth = false;
+    sensitive.generatedAt = now - 6 * day;
+    sensitive.sourceLabel = QStringLiteral("真人口播 · 01:48");
+    sensitive.script = QStringLiteral(
+        "换季泛红的时候，护肤要做减法。\n"
+        "第一步温和清洁，别用清洁力太强的洁面。\n"
+        "第二步用修护类面霜，把屏障先稳住。\n"
+        "第三步减少功效叠加，等皮肤稳定再说。");
+    sensitive.subtitleCount = 18;
+    sensitive.brollCount = 8;
+    sensitive.draftGenerated = false;
+    sensitive.highlights = {
+        {QStringLiteral("字幕"), QStringLiteral("18 条 · 关键词高亮")},
+        {QStringLiteral("素材"), QStringLiteral("8 处 B-Roll")},
+        {QStringLiteral("节奏"), QStringLiteral("3 个转场")},
+        {QStringLiteral("模板"), QStringLiteral("清透讲解")},
+    };
+
+    OralResult weekend;
+    weekend.id = QStringLiteral("recent-weekend");
+    weekend.projectName = QStringLiteral("周末出行 · 口播包装");
+    weekend.title = QStringLiteral("周末短途出行，我的化妆包只带这 5 样");
+    weekend.description = QStringLiteral("轻装出门，补涂和补妆都靠它们。");
+    weekend.tags = {QStringLiteral("#周末出游"), QStringLiteral("#化妆包"),
+                    QStringLiteral("#好物分享")};
+    weekend.templateId = QStringLiteral("neon");
+    weekend.ratio = QStringLiteral("9:16");
+    weekend.durationLabel = QStringLiteral("01:47");
+    weekend.fileSize = QStringLiteral("112.5 MB");
+    weekend.outputBoth = false;
+    weekend.generatedAt = now - 9 * day;
+    weekend.sourceLabel = QStringLiteral("真人口播 · 03:05");
+    weekend.script = QStringLiteral(
+        "周末出门只背小包，化妆包必须做减法。\n"
+        "防晒、气垫、唇膏，是补妆的三件套。\n"
+        "再加一支便携精华和一小瓶保湿喷雾。\n"
+        "五样东西，短途两天完全够用。");
+    weekend.subtitleCount = 27;
+    weekend.brollCount = 14;
+    weekend.draftGenerated = false;
+    weekend.highlights = {
+        {QStringLiteral("字幕"), QStringLiteral("27 条 · 关键词高亮")},
+        {QStringLiteral("素材"), QStringLiteral("14 处 B-Roll")},
+        {QStringLiteral("节奏"), QStringLiteral("4 个转场")},
+        {QStringLiteral("模板"), QStringLiteral("潮酷弹幕")},
+    };
+
+    OralResult serumOrder;
+    serumOrder.id = QStringLiteral("recent-serum-order");
+    serumOrder.projectName = QStringLiteral("护肤答疑 · 口播包装");
+    serumOrder.title = QStringLiteral("精华到底该用在哪一步？三个常见误区");
+    serumOrder.description = QStringLiteral("顺序、用量和搭配，一条视频说明白。");
+    serumOrder.tags = {QStringLiteral("#护肤答疑"), QStringLiteral("#精华使用"),
+                       QStringLiteral("#护肤知识")};
+    serumOrder.templateId = QStringLiteral("tech");
+    serumOrder.ratio = QStringLiteral("16:9");
+    serumOrder.durationLabel = QStringLiteral("01:15");
+    serumOrder.fileSize = QStringLiteral("141.7 MB");
+    serumOrder.outputBoth = true;
+    serumOrder.generatedAt = now - 13 * day;
+    serumOrder.sourceLabel = QStringLiteral("真人口播 · 02:36");
+    serumOrder.script = QStringLiteral(
+        "精华不是用得越多越好，顺序更重要。\n"
+        "一般在洁面和水之后、面霜之前使用。\n"
+        "一次两到三滴就够，重点涂在需要的位置。\n"
+        "叠加多种精华时，从质地轻的开始。");
+    serumOrder.subtitleCount = 20;
+    serumOrder.brollCount = 11;
+    serumOrder.draftGenerated = true;
+    serumOrder.highlights = {
+        {QStringLiteral("字幕"), QStringLiteral("20 条 · 关键词高亮")},
+        {QStringLiteral("素材"), QStringLiteral("11 处 B-Roll")},
+        {QStringLiteral("节奏"), QStringLiteral("3 个转场")},
+        {QStringLiteral("模板"), QStringLiteral("科技质感")},
+    };
+
+    OralResult baseMakeup;
+    baseMakeup.id = QStringLiteral("recent-base-makeup");
+    baseMakeup.projectName = QStringLiteral("底妆实测 · 口播包装");
+    baseMakeup.title = QStringLiteral("通勤 8 小时底妆实测，油皮也能稳住");
+    baseMakeup.description = QStringLiteral("妆前、粉底和定妆的完整流程记录。");
+    baseMakeup.tags = {QStringLiteral("#底妆实测"), QStringLiteral("#油皮底妆"),
+                       QStringLiteral("#通勤妆容")};
+    baseMakeup.templateId = QStringLiteral("magazine");
+    baseMakeup.ratio = QStringLiteral("9:16");
+    baseMakeup.durationLabel = QStringLiteral("01:38");
+    baseMakeup.fileSize = QStringLiteral("103.4 MB");
+    baseMakeup.outputBoth = false;
+    baseMakeup.generatedAt = now - 21 * day;
+    baseMakeup.sourceLabel = QStringLiteral("真人口播 · 02:58");
+    baseMakeup.script = QStringLiteral(
+        "油皮底妆最怕下午就斑驳，今天实测八小时。\n"
+        "妆前先用控油打底，把 T 区照顾好。\n"
+        "粉底少量多次，薄薄一层反而更服帖。\n"
+        "最后定妆喷雾收尾，下班依然在线。");
+    baseMakeup.subtitleCount = 25;
+    baseMakeup.brollCount = 13;
+    baseMakeup.draftGenerated = false;
+    baseMakeup.highlights = {
+        {QStringLiteral("字幕"), QStringLiteral("25 条 · 关键词高亮")},
+        {QStringLiteral("素材"), QStringLiteral("13 处 B-Roll")},
+        {QStringLiteral("节奏"), QStringLiteral("4 个转场")},
+        {QStringLiteral("模板"), QStringLiteral("杂志大片")},
+    };
+
+    results = {first, second, third, morning, sunscreenTest, sensitive, weekend,
+               serumOrder, baseMakeup};
     return results;
 }
 
