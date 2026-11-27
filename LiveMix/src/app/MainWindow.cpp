@@ -18,6 +18,8 @@
 #include "../services/VideoExportManager.h"
 #include "../pages/DashboardPage.h"
 #include "../pages/MaterialPage.h"
+#include "../pages/OralPage.h"
+#include "../pages/MixcutPage.h"
 #include "../pages/PipelinePage.h"
 #include "../pages/PromptPage.h"
 #include "../pages/ResultsPage.h"
@@ -960,6 +962,10 @@ void MainWindow::buildPages()
     addPage(QStringLiteral("dash"), m_dashboard);
     m_material = new MaterialPage;
     addPage(QStringLiteral("material"), m_material);
+    m_oral = new OralPage;
+    addPage(QStringLiteral("oral"), m_oral);
+    m_mixcut = new MixcutPage;
+    addPage(QStringLiteral("mixcut"), m_mixcut);
     m_results = new ResultsPage;
     addPage(QStringLiteral("workspace"), m_results);
     m_pipeline = new PipelinePage;
@@ -1083,6 +1089,37 @@ void MainWindow::wireSignals()
             &MainWindow::showDraftDownloadDialog);
     connect(m_shell->statusBar(), &StatusBar::draftBatchRequested, this,
             &MainWindow::showDraftBatchDialog);
+    if (m_oral) {
+        connect(m_oral, &OralPage::toastRequested, this, &MainWindow::showToast);
+        connect(m_oral, &OralPage::navigateRequested, this, &MainWindow::navigateTo);
+        connect(m_oral, &OralPage::taskStatusChanged, this,
+                [this](const QString &text, bool running) {
+                    if (running) {
+                        m_shell->statusBar()->setOralTaskStatus(text);
+                    } else {
+                        m_shell->statusBar()->clearOralTaskStatus();
+                    }
+                });
+    }
+    if (m_mixcut) {
+        connect(m_mixcut, &MixcutPage::toastRequested, this, &MainWindow::showToast);
+        connect(m_mixcut, &MixcutPage::navigateRequested, this,
+                &MainWindow::navigateTo);
+        connect(m_mixcut, &MixcutPage::taskStatusChanged, this,
+                [this](const QString &text, bool running) {
+                    if (running) {
+                        m_shell->statusBar()->setMixcutTaskStatus(text);
+                    } else {
+                        m_shell->statusBar()->clearMixcutTaskStatus();
+                    }
+                });
+    }
+    connect(m_shell->statusBar(), &StatusBar::oralTaskRequested, this, [this] {
+        navigateTo(QStringLiteral("oral"));
+    });
+    connect(m_shell->statusBar(), &StatusBar::mixcutTaskRequested, this, [this] {
+        navigateTo(QStringLiteral("mixcut"));
+    });
 
     // 成片导出任务管理器：结果页、导出弹窗与状态栏共享同一份任务状态。
     m_videos = new VideoExportManager(this);
@@ -1435,7 +1472,8 @@ void MainWindow::navigateTo(const QString &pageId)
 
     static const QSet<QString> primaryPages = {
         QStringLiteral("dash"), QStringLiteral("material"), QStringLiteral("prompt"),
-        QStringLiteral("tasks"), QStringLiteral("settings"), QStringLiteral("spec"),
+        QStringLiteral("tasks"), QStringLiteral("oral"), QStringLiteral("mixcut"),
+        QStringLiteral("settings"), QStringLiteral("spec"),
     };
     m_sideBar->setActivePage(primaryPages.contains(pageId) ? pageId : QString());
 
@@ -1461,6 +1499,12 @@ void MainWindow::navigateTo(const QString &pageId)
     } else if (pageId == QLatin1String("material")) {
         documentName = QStringLiteral("源视频库");
         projectLabel = QStringLiteral("· 源视频库");
+    } else if (pageId == QLatin1String("oral")) {
+        documentName = QStringLiteral("智能口播");
+        projectLabel = QStringLiteral("· 智能口播");
+    } else if (pageId == QLatin1String("mixcut")) {
+        documentName = QStringLiteral("智能混剪");
+        projectLabel = QStringLiteral("· 智能混剪");
     } else if (pageId == QLatin1String("pipeline")) {
         documentName = QStringLiteral("一键成片");
         projectLabel = QStringLiteral("· 一键成片");

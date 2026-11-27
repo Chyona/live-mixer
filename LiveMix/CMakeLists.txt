@@ -117,6 +117,8 @@ qt_add_executable(LiveMixStudio
 
     src/data/ClipTypes.h
     src/data/ClipTypes.cpp
+    src/data/StudioData.h
+    src/data/StudioData.cpp
     src/data/MediaRepository.h
     src/data/MediaRepository.cpp
     src/data/MediaTypes.h
@@ -168,9 +170,17 @@ qt_add_executable(LiveMixStudio
     src/ui/Overlays.cpp
     src/ui/VideoPreview.h
     src/ui/VideoPreview.cpp
+    src/ui/StudioWidgets.h
+    src/ui/StudioWidgets.cpp
+    src/ui/StudioPosters.h
+    src/ui/StudioPosters.cpp
 
     src/pages/DashboardPage.h
     src/pages/DashboardPage.cpp
+    src/pages/OralPage.h
+    src/pages/OralPage.cpp
+    src/pages/MixcutPage.h
+    src/pages/MixcutPage.cpp
     src/pages/MaterialPage.h
     src/pages/MaterialPage.cpp
     src/pages/ResultsPage.h

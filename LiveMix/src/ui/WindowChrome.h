@@ -170,6 +170,11 @@ public:
     // 真实的运行状态；未配置/未找到时明确展示，而不是固定假数据。
     void setServiceStatus(const QString &text, bool ok, const QString &tooltip = QString());
     void setQueueCount(int count);
+    // 智能口播 / 智能混剪的后台任务入口，点击回到对应工作区。
+    void setOralTaskStatus(const QString &text);
+    void clearOralTaskStatus();
+    void setMixcutTaskStatus(const QString &text);
+    void clearMixcutTaskStatus();
     void setDraftCount(int count);
     void setFfmpegAvailable(bool available);
 
@@ -179,6 +184,8 @@ signals:
     void draftDownloadRequested(qint64 draftRowId);
     void draftBatchRequested();
     void videoExportRequested(qint64 draftRowId);
+    void oralTaskRequested();
+    void mixcutTaskRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -190,6 +197,8 @@ private:
     QLabel *m_queueLabel = nullptr;
     QLabel *m_draftCountLabel = nullptr;
     QLabel *m_ffmpegLabel = nullptr;
+    LinkLabel *m_oralStatus = nullptr;
+    LinkLabel *m_mixcutStatus = nullptr;
     LinkLabel *m_draftStatus = nullptr;
     LinkLabel *m_videoStatus = nullptr;
     qint64 m_draftStatusDraftId = -1;

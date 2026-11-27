@@ -18,6 +18,8 @@ class DraftDownloadManager;
 class FullscreenEditor;
 class LiveClipService;
 class MaterialPage;
+class OralPage;
+class MixcutPage;
 class MediaRepository;
 class ModalOverlay;
 class Page;
@@ -128,6 +130,8 @@ private:
 
     DashboardPage *m_dashboard = nullptr;
     MaterialPage *m_material = nullptr;
+    OralPage *m_oral = nullptr;
+    MixcutPage *m_mixcut = nullptr;
     ResultsPage *m_results = nullptr;
     PipelinePage *m_pipeline = nullptr;
     PromptPage *m_prompt = nullptr;

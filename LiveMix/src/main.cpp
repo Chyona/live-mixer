@@ -38,7 +38,7 @@ int main(int argc, char *argv[])
     QCommandLineOption pageOption(
         QStringLiteral("page"),
         QStringLiteral("Open a specific page for preview "
-                       "(dash/material/workspace/pipeline/prompt/tasks/settings/spec)."),
+                       "(dash/material/oral/mixcut/workspace/pipeline/prompt/tasks/settings/spec)."),
         QStringLiteral("page"));
     QCommandLineOption modalOption(
         QStringLiteral("modal"),

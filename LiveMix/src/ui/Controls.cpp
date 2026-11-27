@@ -1245,6 +1245,15 @@ void NavItem::setBadge(const QString &badge)
     update();
 }
 
+void NavItem::setAiBadge(bool ai)
+{
+    if (m_badgeAi == ai) {
+        return;
+    }
+    m_badgeAi = ai;
+    update();
+}
+
 QSize NavItem::sizeHint() const
 {
     return QSize(180, 34);
@@ -1281,11 +1290,20 @@ void NavItem::paintEvent(QPaintEvent *)
         const QFontMetrics metrics(bf);
         const int badgeWidth = metrics.horizontalAdvance(m_badge) + 12;
         const QRectF badgeRect(width() - 10 - badgeWidth, (height() - 17) / 2.0, badgeWidth, 17);
-        painter.setBrush(m_active ? Theme::alpha(Theme::Primary, 0.20) : Theme::Surface3);
-        painter.setPen(Qt::NoPen);
-        painter.drawRoundedRect(badgeRect, 8.5, 8.5);
-        painter.setFont(bf);
-        painter.setPen(m_active ? Theme::Primary : Theme::Text2);
+        if (m_badgeAi) {
+            painter.setBrush(Theme::alpha(Theme::Ai, 0.13));
+            painter.setPen(Qt::NoPen);
+            painter.drawRoundedRect(badgeRect, 8.5, 8.5);
+            painter.setFont(bf);
+            painter.setPen(Theme::Ai);
+        } else {
+            painter.setBrush(m_active ? Theme::alpha(Theme::Primary, 0.20)
+                                      : Theme::Surface3);
+            painter.setPen(Qt::NoPen);
+            painter.drawRoundedRect(badgeRect, 8.5, 8.5);
+            painter.setFont(bf);
+            painter.setPen(m_active ? Theme::Primary : Theme::Text2);
+        }
         painter.drawText(badgeRect, Qt::AlignCenter, m_badge);
     }
 }
