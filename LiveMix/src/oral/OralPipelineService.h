@@ -1,7 +1,8 @@
 #pragma once
 
 // 文件作用：智能口播流水线（工作线程任务）。
-// 流程严格对应产品三步：
+// 一键包装开始前先执行「剪口气」：用内置提示词删除语气词，并删除超过
+// 0.5 秒的静音，得到一条连续口播视频；随后严格对应产品三步：
 // 1. 理解：语音分析（ASR）+ 素材分析 + 语义分析 + 镜头规划 + 字幕/音频系统；
 // 2. 生成：固化成统一剪辑计划 Edit Plan / Timeline JSON；
 // 3. 合成：调用 capcut-mate 落轨、云渲染并下载成片（可选同时下载剪映草稿）。
@@ -11,6 +12,7 @@
 // 重复上传或重复识别。
 
 #include "../data/StudioData.h"
+#include "OralTrimPlan.h"
 #include "OralTypes.h"
 
 #include <QObject>
@@ -71,12 +73,29 @@ private:
     bool isCancelled() const { return m_cancelled.load(); }
 
     // 1. 理解阶段。
+    // mediaSourcePath 是实际进入成片的口播视频（剪口气之后的连续视频）；
+    // 原片路径始终保留在 plan->originalSourcePath，供重新包装回到原片。
     bool ensureAnalysis(EditPlan *plan, bool *fromCache, AsrClient *asr,
-                        LlmClient *llm, CapCutClient *capcut, QString *error);
+                        LlmClient *llm, CapCutClient *capcut,
+                        const QString &mediaSourcePath,
+                        const SpeechAnalysis &precomputedSpeech, QString *error);
     bool loadAnalysisCache(const QString &cachePath, EditPlan *plan);
     bool saveAnalysisCache(const QString &cachePath, const EditPlan &plan,
                            QString *error);
-    QString analysisCacheKey() const;
+    QString analysisCacheKey(const QString &sourcePath) const;
+
+    // 剪口气：先识别原片，按内置提示词删除语气词，并删除超过 0.5 秒的
+    // 静音；随后按保留区间裁剪拼接成一条连续视频。无需剪除时返回原片。
+    // sourceSpeech 在本次实际识别过原片且未剪除时返回 ASR 结果，供理解阶段
+    // 直接复用，避免同一条原片识别两次；命中剪口缓存时为空。
+    bool trimFillerWords(const QString &sourcePath, AsrClient *asr,
+                         LlmClient *llm, CapCutClient *capcut,
+                         QString *outputPath, TrimStats *stats,
+                         SpeechAnalysis *sourceSpeech, QString *error);
+    // ASR 首选豆包极速版；未开通时回退标准版 / qwen，供剪口气与理解阶段共用。
+    bool transcribeSpeech(const QString &audioPath, AsrClient *asr,
+                          CapCutClient *capcut, SpeechAnalysis *speech,
+                          QString *error);
     bool analyzeMaterialsLocal(const QVector<StudioData::OralMaterial> &materials,
                                QVector<MaterialProfile> *profiles, QString *error);
     void normalizeSemanticTimes(SemanticAnalysis *analysis, qint64 durationMs);

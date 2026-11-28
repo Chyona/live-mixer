@@ -20,6 +20,8 @@
 #include <QTemporaryFile>
 #include <QThread>
 
+#include <algorithm>
+
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -353,6 +355,108 @@ bool FfmpegUtils::cutClip(const QString &inputPath, qint64 startMs, qint64 endMs
     if (!output.exists() || output.size() <= 0) {
         if (error) {
             *error = QStringLiteral("视频裁剪失败，未生成有效文件。");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool FfmpegUtils::cutKeepRanges(const QString &inputPath,
+                                const QVector<QPair<qint64, qint64>> &ranges,
+                                const QString &outputPath, QString *error)
+{
+    // 统一整理区间：去掉空区间、按时间排序并合并重叠部分，保证保留顺序正确。
+    QVector<QPair<qint64, qint64>> normalized;
+    for (const QPair<qint64, qint64> &range : ranges) {
+        const qint64 start = qMax<qint64>(0, range.first);
+        const qint64 end = range.second;
+        if (end > start) {
+            normalized.append({start, end});
+        }
+    }
+    std::sort(normalized.begin(), normalized.end(),
+              [](const QPair<qint64, qint64> &left,
+                 const QPair<qint64, qint64> &right) {
+                  if (left.first != right.first) {
+                      return left.first < right.first;
+                  }
+                  return left.second < right.second;
+              });
+    QVector<QPair<qint64, qint64>> merged;
+    for (const QPair<qint64, qint64> &range : normalized) {
+        if (!merged.isEmpty() && range.first <= merged.last().second) {
+            merged.last().second = qMax(merged.last().second, range.second);
+        } else {
+            merged.append(range);
+        }
+    }
+    if (merged.isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("没有可用的保留区间。");
+        }
+        return false;
+    }
+    if (!QDir().mkpath(QFileInfo(outputPath).absolutePath())) {
+        if (error) {
+            *error = QStringLiteral("无法创建视频输出目录：%1")
+                         .arg(QFileInfo(outputPath).absolutePath());
+        }
+        return false;
+    }
+
+    // 用 select/aselect 只保留目标区间，再按帧序号/采样序号重建连续时间轴。
+    // 区间取半开 [start, end)，避免边界处的帧/采样被相邻区间重复包含。
+    // 这样一条命令即可完成裁剪 + 拼接，且不会引入逐段编码的累计漂移。
+    QStringList terms;
+    terms.reserve(merged.size());
+    for (const QPair<qint64, qint64> &range : merged) {
+        terms.append(QStringLiteral("gte(t,%1)*lt(t,%2)")
+                         .arg(range.first / 1000.0, 0, 'f', 3)
+                         .arg(range.second / 1000.0, 0, 'f', 3));
+    }
+    const QString expression = terms.join(QLatin1Char('+'));
+    const QString filterGraph =
+        QStringLiteral("[0:v:0]select='") + expression
+        + QStringLiteral("',setpts=N/FRAME_RATE/TB[v];[0:a:0]aselect='")
+        + expression + QStringLiteral("',asetpts=N/SR/TB[a]");
+
+    const QStringList args = {
+        QStringLiteral("-y"),
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-i"),
+        inputPath,
+        QStringLiteral("-filter_complex"),
+        filterGraph,
+        QStringLiteral("-map"),
+        QStringLiteral("[v]"),
+        QStringLiteral("-map"),
+        QStringLiteral("[a]"),
+        QStringLiteral("-c:v"),
+        QStringLiteral("libx264"),
+        QStringLiteral("-preset"),
+        QStringLiteral("veryfast"),
+        QStringLiteral("-crf"),
+        QStringLiteral("20"),
+        QStringLiteral("-pix_fmt"),
+        QStringLiteral("yuv420p"),
+        QStringLiteral("-c:a"),
+        QStringLiteral("aac"),
+        QStringLiteral("-b:a"),
+        QStringLiteral("128k"),
+        QStringLiteral("-movflags"),
+        QStringLiteral("+faststart"),
+        outputPath,
+    };
+    if (!runFfmpeg(args, 30 * 60 * 1000, error)) {
+        return false;
+    }
+    const QFileInfo output(outputPath);
+    if (!output.exists() || output.size() <= 0) {
+        if (error) {
+            *error = QStringLiteral("视频裁剪拼接失败，未生成有效文件。");
         }
         return false;
     }

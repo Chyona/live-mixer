@@ -201,7 +201,10 @@ OralRestoredInputs restoreOralInputs(const StudioData::OralResult &result)
 
     inputs.sourcePath = result.sourcePath;
     if (inputs.sourcePath.isEmpty() && hasPlan) {
-        inputs.sourcePath = plan.sourcePath;
+        // 新计划同时保存剪口气后的视频与原始上传路径；重新包装必须回到原片。
+        inputs.sourcePath = plan.originalSourcePath.isEmpty()
+            ? plan.sourcePath
+            : plan.originalSourcePath;
     }
     if (hasPlan) {
         inputs.sourceName = plan.sourceName;

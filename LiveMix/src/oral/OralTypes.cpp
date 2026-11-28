@@ -435,6 +435,17 @@ SpeechAnalysis SpeechAnalysis::fromJson(const QJsonObject &object)
     return analysis;
 }
 
+QVector<Word> flattenSpeechWords(const SpeechAnalysis &speech)
+{
+    QVector<Word> words;
+    for (const Utterance &utterance : speech.utterances) {
+        for (const Word &word : utterance.words) {
+            words.append(word);
+        }
+    }
+    return words;
+}
+
 /* ------------------------------------------------------------------ */
 /* 语义                                                                 */
 /* ------------------------------------------------------------------ */
@@ -773,6 +784,9 @@ QJsonObject EditPlan::toJson() const
 
     QJsonObject source;
     source.insert(QStringLiteral("path"), sourcePath);
+    if (!originalSourcePath.isEmpty()) {
+        source.insert(QStringLiteral("originalPath"), originalSourcePath);
+    }
     source.insert(QStringLiteral("name"), sourceName);
     source.insert(QStringLiteral("width"), sourceWidth);
     source.insert(QStringLiteral("height"), sourceHeight);
@@ -908,6 +922,8 @@ EditPlan EditPlan::fromJson(const QJsonObject &object)
     plan.outputBoth = object.value(QStringLiteral("outputBoth")).toBool();
     const QJsonObject source = object.value(QStringLiteral("source")).toObject();
     plan.sourcePath = readString(source, QStringLiteral("path"));
+    plan.originalSourcePath =
+        readString(source, QStringLiteral("originalPath"));
     plan.sourceName = readString(source, QStringLiteral("name"));
     plan.sourceWidth = source.value(QStringLiteral("width")).toInt();
     plan.sourceHeight = source.value(QStringLiteral("height")).toInt();

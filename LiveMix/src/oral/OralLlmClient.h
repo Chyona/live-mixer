@@ -39,6 +39,14 @@ public:
                           const SpeechAnalysis &speech, SemanticAnalysis *analysis,
                           QString *error, const StatusCallback &onStatus = {});
 
+    // 剪口气：从逐词转写中找出可整词删除的语气词/口头禅。
+    // 返回全局词序号闭区间（见 Oral::flattenSpeechWords）；提示词内置，
+    // 不提供配置。没有逐词时间线时返回空结果。
+    bool analyzeFillers(const QString &baseUrl, const QString &apiKey,
+                        const SpeechAnalysis &speech,
+                        QVector<FillerCut> *cuts, QString *error,
+                        const StatusCallback &onStatus = {});
+
     // 素材分析：视觉特征 + 关键帧图片理解，输出每个素材的描述、标签与用途。
     // 图片输入不被当前模型支持时，会自动降级为纯文本分析。
     bool analyzeMaterials(const QString &baseUrl, const QString &apiKey,
