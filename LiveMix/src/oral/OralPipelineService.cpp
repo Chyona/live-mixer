@@ -1594,12 +1594,13 @@ bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http,
     if (!plan || !http) {
         return false;
     }
-    if (!plan->cover.prompt.trimmed().isEmpty()) {
+    if (!m_request.regenerateCover
+        && !plan->cover.prompt.trimmed().isEmpty()) {
         return true;
     }
 
     // 提示词 2 按「源文件 + 提示词 1 内容 + 文本模型 + 画布」缓存，避免重复调用；
-    // 提示词 1 调整后缓存指纹自动变化。
+    // 提示词 1 调整后缓存指纹自动变化。重新包装时跳过缓存，重新生成。
     const QString promptCachePath = QDir(cacheDir).filePath(
         QStringLiteral("prompt_%1.txt")
             .arg(sha1Hex(QStringList{
@@ -1611,17 +1612,23 @@ bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http,
                     .arg(plan->canvas.width)
                     .arg(plan->canvas.height),
             }.join(QLatin1Char('|')))));
-    QFile cached(promptCachePath);
-    if (cached.open(QIODevice::ReadOnly)) {
-        const QString prompt = QString::fromUtf8(cached.readAll()).trimmed();
-        cached.close();
-        if (!prompt.isEmpty()) {
-            plan->cover.prompt = prompt;
-            addLog(StudioData::OralStage::Compose,
-                   QStringLiteral("复用已生成的封面提示词 2"),
-                   StudioData::Tone::Ok);
-            return true;
+    if (!m_request.regenerateCover) {
+        QFile cached(promptCachePath);
+        if (cached.open(QIODevice::ReadOnly)) {
+            const QString prompt = QString::fromUtf8(cached.readAll()).trimmed();
+            cached.close();
+            if (!prompt.isEmpty()) {
+                plan->cover.prompt = prompt;
+                addLog(StudioData::OralStage::Compose,
+                       QStringLiteral("复用已生成的封面提示词 2"),
+                       StudioData::Tone::Ok);
+                return true;
+            }
         }
+    } else {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("重新包装：重新生成封面提示词 2"),
+               StudioData::Tone::Info);
     }
 
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
@@ -1676,7 +1683,8 @@ bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
         QDir(m_request.cacheDir).filePath(QStringLiteral("covers"));
     ensureCoverPrompt(plan, http, cacheDir, error);
 
-    // 封面按「源文件 + 模型 + 提示词 2 + 画布」缓存，重复包装不重复计费。
+    // 封面按「源文件 + 模型 + 提示词 2 + 画布」缓存；普通生成复用缓存，
+    // 重新包装时强制重新生成。
     const QString cacheKey = sha1Hex(QStringList{
         fileFingerprint(plan->sourcePath),
         CoverClient::modelName(),
@@ -1687,8 +1695,10 @@ bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
         QStringLiteral("cover_%1.jpg").arg(cacheKey));
 
     // 缓存文件可能是上次中断留下的半截图片，必须能读出且尺寸正确才复用。
+    // 重新包装时跳过缓存，强制重新调用图生图生成封面。
     bool coverCached = false;
-    if (QFileInfo::exists(coverPath) && QFileInfo(coverPath).size() > 0) {
+    if (!m_request.regenerateCover && QFileInfo::exists(coverPath)
+        && QFileInfo(coverPath).size() > 0) {
         int coverWidth = 0;
         int coverHeight = 0;
         QString probeError;
@@ -2173,6 +2183,7 @@ StudioData::OralResult PipelineService::makeResult(const EditPlan &plan,
     result.draftId = m_draftId;
     result.editPlanPath = m_editPlanPath;
     result.videoCodec = videoCodecName(videoPath);
+    result.sourcePath = plan.sourcePath;
     result.materials = m_request.project.materials;
 
     int transitionCount = 0;

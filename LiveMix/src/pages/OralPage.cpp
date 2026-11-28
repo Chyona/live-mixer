@@ -165,6 +165,96 @@ QImage loadResultFramePreview(const QString &previewPath,
     return QImage(cachePath);
 }
 
+// 重新包装所需的原始输入。优先使用结果记录里持久化的口播路径与素材；
+// 旧版本历史没有这些字段时，回退到当时生成的剪辑计划 JSON。
+struct OralRestoredInputs
+{
+    QString sourcePath;
+    QString sourceName;
+    qint64 sourceDurationMs = 0;
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    qint64 sourceSizeBytes = 0;
+    QVector<StudioData::OralMaterial> materials;
+    int missingMaterials = 0;
+};
+
+OralRestoredInputs restoreOralInputs(const StudioData::OralResult &result)
+{
+    OralRestoredInputs inputs;
+
+    // 剪辑计划同时保存口播元数据与素材理解结果，还能为老历史补齐素材。
+    Oral::EditPlan plan;
+    bool hasPlan = false;
+    if (!result.editPlanPath.isEmpty()) {
+        QFile file(result.editPlanPath);
+        if (file.open(QIODevice::ReadOnly)) {
+            const QJsonObject object =
+                QJsonDocument::fromJson(file.readAll()).object();
+            if (!object.isEmpty()) {
+                plan = Oral::EditPlan::fromJson(object);
+                hasPlan = !plan.sourcePath.isEmpty()
+                    || !plan.materials.isEmpty();
+            }
+        }
+    }
+
+    inputs.sourcePath = result.sourcePath;
+    if (inputs.sourcePath.isEmpty() && hasPlan) {
+        inputs.sourcePath = plan.sourcePath;
+    }
+    if (hasPlan) {
+        inputs.sourceName = plan.sourceName;
+        inputs.sourceDurationMs = plan.durationMs;
+        inputs.sourceWidth = plan.sourceWidth;
+        inputs.sourceHeight = plan.sourceHeight;
+        inputs.sourceSizeBytes = plan.sourceSizeBytes;
+    }
+
+    QVector<StudioData::OralMaterial> candidates = result.materials;
+    if (candidates.isEmpty() && hasPlan) {
+        for (int index = 0; index < plan.materials.size(); ++index) {
+            const Oral::MaterialProfile &profile = plan.materials.at(index);
+            if (profile.path.trimmed().isEmpty()) {
+                continue;
+            }
+            StudioData::OralMaterial material = StudioData::oralMaterialFromFile(
+                profile.path, QFileInfo(profile.path).size(),
+                profile.kind == Oral::MaterialKind::Video, index);
+            // 保留导入时的 ID 与展示名，重新包装才能命中分析缓存，
+            // 避免重复 ASR 与素材理解。
+            if (!profile.id.isEmpty()) {
+                material.id = profile.id;
+            }
+            if (!profile.name.isEmpty()) {
+                material.name = profile.name;
+            }
+            candidates.append(material);
+        }
+    }
+
+    if (!inputs.sourcePath.trimmed().isEmpty()) {
+        const QFileInfo info(inputs.sourcePath);
+        if (info.isFile()) {
+            inputs.sourcePath = info.absoluteFilePath();
+        } else {
+            inputs.sourcePath.clear();
+        }
+    }
+
+    for (const StudioData::OralMaterial &material : candidates) {
+        const QFileInfo info(material.filePath);
+        if (material.filePath.trimmed().isEmpty() || !info.isFile()) {
+            ++inputs.missingMaterials;
+            continue;
+        }
+        StudioData::OralMaterial restored = material;
+        restored.filePath = info.absoluteFilePath();
+        inputs.materials.append(restored);
+    }
+    return inputs;
+}
+
 // 按缩略图尺寸解码图片，避免把原始大图整张读进内存。
 QImage loadMaterialPreview(const QString &path)
 {
@@ -1842,6 +1932,8 @@ void OralPage::startProject()
     const QString templateId = m_project.templateId;
     m_project = StudioData::defaultOralProject();
     m_project.templateId = templateId;
+    // 新项目沿用普通封面缓存策略；重新包装的标记只属于上一次结果。
+    m_regenerateCover = false;
     showSetup();
 }
 
@@ -3032,6 +3124,7 @@ void OralPage::startGeneration()
     request.cacheDir = cacheDir;
     request.outputDir = outputDir;
     request.draftRoot = draftRoot;
+    request.regenerateCover = m_regenerateCover;
 
     destroyPipeline();
     buildProcessingScreen();
@@ -4355,7 +4448,7 @@ void OralPage::rebuildResult()
     adjustLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 10, Theme::Ai,
                                                adjustTip));
     auto *adjustLabel = Ui::label(
-        QStringLiteral("对结果不满意？可以调整模板、字幕或配图风格后重新包装，口播原片不会重复上传。"),
+        QStringLiteral("对结果不满意？可以调整模板、字幕或配图风格后重新包装，口播原片不会重复上传，封面会重新生成。"),
         9, QFont::Normal, Theme::Text3, adjustTip);
     adjustLabel->setWordWrap(true);
     adjustLayout->addWidget(adjustLabel, 1);
@@ -4406,18 +4499,82 @@ void OralPage::restartFromResult()
     m_draftState = 0;
     m_draftProgress = 0;
     const StudioData::OralResult result = m_result;
-    // 当前项目仍有口播和素材时直接回到设置步骤；从历史结果进入时没有
-    // 可复用的导入内容，回到素材步骤让用户重新添加。
-    const bool hasInputs = m_project.hasSource && !m_project.materials.isEmpty();
-    if (!hasInputs) {
-        m_project = StudioData::defaultOralProject();
+
+    // 重新包装必须沿用这条结果的原始输入，而不是界面上残留的其它项目。
+    // 新历史直接带有口播路径与素材；旧历史从剪辑计划 JSON 补齐。
+    const OralRestoredInputs inputs = restoreOralInputs(result);
+    StudioData::OralProject project = StudioData::defaultOralProject();
+    const bool hasSource = !inputs.sourcePath.isEmpty();
+    if (hasSource) {
+        // 与导入口播的流程保持一致：沿用示例结构里的文案占位，再覆盖真实文件信息。
+        project.source = StudioData::demoOralSource();
+        project.hasSource = true;
+        project.source.filePath = inputs.sourcePath;
+        project.source.name = !inputs.sourceName.isEmpty()
+            ? inputs.sourceName
+            : QFileInfo(inputs.sourcePath).fileName();
+        project.source.size = MediaUtils::formatByteSize(
+            inputs.sourceSizeBytes > 0 ? inputs.sourceSizeBytes
+                                       : QFileInfo(inputs.sourcePath).size());
+        project.source.sample = false;
+        project.source.duration = inputs.sourceDurationMs > 0
+            ? MediaUtils::formatDuration(inputs.sourceDurationMs)
+            : QStringLiteral("—");
+        project.source.resolution =
+            inputs.sourceWidth > 0 && inputs.sourceHeight > 0
+            ? QStringLiteral("%1×%2")
+                  .arg(inputs.sourceWidth)
+                  .arg(inputs.sourceHeight)
+            : QStringLiteral("—");
+        // 旧历史没有剪辑计划时，尽量从结果标签「真人口播 · 02:48」里取时长。
+        if (inputs.sourceDurationMs <= 0) {
+            const QStringList parts =
+                result.sourceLabel.split(QStringLiteral(" · "));
+            if (parts.size() > 1 && !parts.constLast().isEmpty()) {
+                project.source.duration = parts.constLast();
+            }
+        }
     }
-    m_project.step = hasInputs ? 2 : 1;
+    project.materials = inputs.materials;
+
+    const bool hasInputs = project.hasSource && !project.materials.isEmpty();
+    project.step = hasInputs ? 2 : 1;
     // 当前只开放清透讲解；历史里的其它模板重新包装时统一回到该模板。
-    m_project.templateId = QStringLiteral("clean");
-    m_project.ratio = result.ratio;
-    m_project.outputBoth = result.outputBoth;
+    project.templateId = QStringLiteral("clean");
+    project.ratio = result.ratio;
+    project.outputBoth = result.outputBoth;
+    m_project = project;
+    // 重新包装要换一张封面：生成时跳过封面提示词与封面图缓存。
+    m_regenerateCover = true;
     showSetup();
+
+    if (hasSource) {
+        // 历史记录只保存了路径，重新探测一次分辨率与时长。
+        probeSourceMetadata(inputs.sourcePath);
+    }
+    if (inputs.missingMaterials > 0) {
+        if (inputs.materials.isEmpty()) {
+            emit toastRequested(QStringLiteral(
+                "%1 个原始素材文件已不存在，请重新添加").arg(
+                inputs.missingMaterials));
+        } else {
+            emit toastRequested(
+                QStringLiteral("已带入 %1 个素材；%2 个素材文件已不存在，已跳过")
+                    .arg(inputs.materials.size())
+                    .arg(inputs.missingMaterials));
+        }
+    } else if (hasInputs) {
+        emit toastRequested(
+            QStringLiteral("已带入原口播与 %1 个素材，可调整设置后重新包装")
+                .arg(inputs.materials.size()));
+    } else if (!inputs.materials.isEmpty()) {
+        emit toastRequested(QStringLiteral(
+            "口播原片文件已不存在，已带入 %1 个素材，请重新上传口播视频")
+                                .arg(inputs.materials.size()));
+    } else {
+        emit toastRequested(QStringLiteral(
+            "这条记录没有可复用的原始素材，请重新添加上传"));
+    }
 }
 
 void OralPage::togglePlayback()

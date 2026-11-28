@@ -37,6 +37,8 @@ struct PipelineRequest
     QString cacheDir;  // 分析缓存与剪辑计划
     QString outputDir; // 成片输出目录
     QString draftRoot; // 剪映草稿根目录
+    // true：重新包装时强制重跑封面提示词与图生图，不复用封面缓存。
+    bool regenerateCover = false;
 };
 
 class PipelineService : public QObject

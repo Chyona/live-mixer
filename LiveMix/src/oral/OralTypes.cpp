@@ -935,6 +935,51 @@ EditPlan EditPlan::fromJson(const QJsonObject &object)
 /* 结果历史                                                             */
 /* ------------------------------------------------------------------ */
 
+namespace {
+
+// 素材缩略图（QImage）不写入历史：体积大且可从素材文件重新生成。
+// 这里只保存重新包装所需的路径与展示元数据。
+QJsonObject oralMaterialToJson(const StudioData::OralMaterial &material)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("id"), material.id);
+    object.insert(QStringLiteral("name"), material.name);
+    object.insert(QStringLiteral("tag"), material.tag);
+    object.insert(QStringLiteral("kind"), material.kind);
+    object.insert(QStringLiteral("duration"), material.duration);
+    object.insert(QStringLiteral("visual"), material.visual);
+    object.insert(QStringLiteral("filePath"), material.filePath);
+    object.insert(QStringLiteral("paletteFrom"),
+                  material.paletteFrom.name(QColor::HexArgb));
+    object.insert(QStringLiteral("paletteTo"),
+                  material.paletteTo.name(QColor::HexArgb));
+    return object;
+}
+
+StudioData::OralMaterial oralMaterialFromJson(const QJsonObject &object)
+{
+    StudioData::OralMaterial material;
+    material.id = readString(object, QStringLiteral("id"));
+    material.name = readString(object, QStringLiteral("name"));
+    material.tag = readString(object, QStringLiteral("tag"));
+    material.kind = readString(object, QStringLiteral("kind"),
+                               QStringLiteral("图片"));
+    material.duration = readString(object, QStringLiteral("duration"));
+    material.visual = readString(object, QStringLiteral("visual"));
+    material.filePath = readString(object, QStringLiteral("filePath"));
+    const QColor paletteFrom(readString(object, QStringLiteral("paletteFrom")));
+    if (paletteFrom.isValid()) {
+        material.paletteFrom = paletteFrom;
+    }
+    const QColor paletteTo(readString(object, QStringLiteral("paletteTo")));
+    if (paletteTo.isValid()) {
+        material.paletteTo = paletteTo;
+    }
+    return material;
+}
+
+} // namespace
+
 QJsonObject oralResultToJson(const StudioData::OralResult &result)
 {
     QJsonObject object;
@@ -960,6 +1005,16 @@ QJsonObject oralResultToJson(const StudioData::OralResult &result)
     object.insert(QStringLiteral("draftId"), result.draftId);
     object.insert(QStringLiteral("editPlanPath"), result.editPlanPath);
     object.insert(QStringLiteral("videoCodec"), result.videoCodec);
+    object.insert(QStringLiteral("sourcePath"), result.sourcePath);
+    QJsonArray materials;
+    for (const StudioData::OralMaterial &material : result.materials) {
+        // 示例素材没有真实路径，无法用于重新包装，不写入历史。
+        if (material.filePath.trimmed().isEmpty()) {
+            continue;
+        }
+        materials.append(oralMaterialToJson(material));
+    }
+    object.insert(QStringLiteral("materials"), materials);
     QJsonArray highlights;
     for (const auto &highlight : result.highlights) {
         QJsonArray pair;
@@ -1002,6 +1057,15 @@ StudioData::OralResult oralResultFromJson(const QJsonObject &object)
     result.draftId = readString(object, QStringLiteral("draftId"));
     result.editPlanPath = readString(object, QStringLiteral("editPlanPath"));
     result.videoCodec = readString(object, QStringLiteral("videoCodec"));
+    result.sourcePath = readString(object, QStringLiteral("sourcePath"));
+    for (const QJsonValue &value :
+         object.value(QStringLiteral("materials")).toArray()) {
+        StudioData::OralMaterial material =
+            oralMaterialFromJson(value.toObject());
+        if (!material.filePath.trimmed().isEmpty()) {
+            result.materials.append(material);
+        }
+    }
     const QJsonArray highlights =
         object.value(QStringLiteral("highlights")).toArray();
     for (const QJsonValue &value : highlights) {
