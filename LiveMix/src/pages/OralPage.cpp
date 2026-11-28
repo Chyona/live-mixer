@@ -1201,7 +1201,6 @@ OralPage::OralPage(ConfigStore *config, QWidget *parent)
 {
     m_project = StudioData::defaultOralProject();
     loadHistory();
-    m_history += StudioData::recentOralResults();
 
     m_runTimer = new QTimer(this);
     m_runTimer->setInterval(100);
@@ -1421,6 +1420,13 @@ void OralPage::rebuildHub()
     for (int index = 0; index < m_history.size(); ++index) {
         recentLayout->addWidget(createRecentCard(m_history.at(index), recentGrid),
                                 index / 3, index % 3);
+    }
+    if (m_history.isEmpty()) {
+        auto *empty = new Studio::Note(
+            QStringLiteral("还没有真实生成记录。完成一次口播包装后，"
+                           "成片会自动保存在这里。"),
+            Studio::Note::Muted, recentGrid);
+        recentLayout->addWidget(empty, 0, 0, 1, 3);
     }
     for (int column = 0; column < 3; ++column) {
         recentLayout->setColumnStretch(column, 1);
