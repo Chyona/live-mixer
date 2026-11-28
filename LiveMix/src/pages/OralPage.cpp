@@ -1376,9 +1376,16 @@ void OralPage::buildUi()
     auto *hubRoot = new QVBoxLayout(m_hubScreen);
     hubRoot->setContentsMargins(0, 0, 0, 0);
     hubRoot->setSpacing(0);
+    // 头部固定，统计、入口卡片与最近记录在下方独立滚动。
+    auto *hubHeaderHost = new QWidget(m_hubScreen);
+    auto *hubHeaderLayout = new QVBoxLayout(hubHeaderHost);
+    hubHeaderLayout->setContentsMargins(22, 18, 22, 0);
+    hubHeaderLayout->setSpacing(0);
+    hubHeaderLayout->addWidget(buildHubHeader());
+    hubRoot->addWidget(hubHeaderHost);
     m_hubContent = new QWidget;
     m_hubLayout = new QVBoxLayout(m_hubContent);
-    m_hubLayout->setContentsMargins(22, 18, 22, 24);
+    m_hubLayout->setContentsMargins(22, 0, 22, 24);
     m_hubLayout->setSpacing(0);
     m_hubLayout->setAlignment(Qt::AlignTop);
     m_hubScroll = makeScrollArea(m_hubContent, m_hubScreen);
@@ -1466,7 +1473,6 @@ void OralPage::rebuildHub()
     // 旧卡片海报即将随布局清空，先取消登记避免异步截帧回调更新悬空指针。
     m_recentPosterWidgets.clear();
     Studio::clearLayout(m_hubLayout);
-    m_hubLayout->addWidget(buildHubHeader());
 
     auto *stats = new QWidget(m_hubContent);
     auto *statsLayout = new QHBoxLayout(stats);
@@ -1586,7 +1592,7 @@ QWidget *OralPage::buildHubHeader()
     auto *header = new PageHeader(
         QStringLiteral("智能口播"),
         QStringLiteral("上传真人口播与相关素材，选择包装模板，一键成片。"),
-        m_hubContent);
+        m_hubScreen);
     header->layout()->setContentsMargins(0, 0, 0, 16);
     auto *newChip = new Chip(QStringLiteral("新功能"), Chip::Ai, header);
     header->setTitleMeta(newChip);
