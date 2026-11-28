@@ -91,7 +91,7 @@ QString subtitlePresetName(Oral::SubtitlePreset preset)
     return QStringLiteral("智能关键词");
 }
 
-// 成片名取自语义标题前 12 字，与结果页「项目名 · 口播包装」保持一致。
+// 成片名取自语义标题前 12 字，与结果页「项目名 · 智能口播」保持一致。
 QString projectNameFor(const Oral::EditPlan &plan)
 {
     QString title = plan.semantics.title.trimmed();
@@ -102,7 +102,7 @@ QString projectNameFor(const Oral::EditPlan &plan)
     if (title.isEmpty()) {
         title = QStringLiteral("口播成片");
     }
-    return title + QStringLiteral(" · 口播包装");
+    return title + QStringLiteral(" · 智能口播");
 }
 
 // 与 OralPage 的 fileName 规则一致：把「 · 」替换成下划线，方便文件系统使用。

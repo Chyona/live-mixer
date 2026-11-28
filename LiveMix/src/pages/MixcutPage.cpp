@@ -9,9 +9,14 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QAudioOutput>
 #include <QClipboard>
+#include <QCursor>
 #include <QDateTime>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
 #include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -20,9 +25,14 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
+#include <QLineEdit>
+#include <QMediaPlayer>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
+#include <QProgressBar>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -32,11 +42,13 @@
 #include <QTextEdit>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QtMath>
 
 #include <cmath>
 #include <functional>
+#include <memory>
 
 namespace {
 
@@ -470,24 +482,51 @@ protected:
 
 } // namespace
 
-class VoiceChoiceButton : public QAbstractButton
+class VoiceOptionButton : public QAbstractButton
 {
 public:
-    VoiceChoiceButton(const StudioData::MixcutVoice &voice, bool selected,
-                      QWidget *parent = nullptr)
+    VoiceOptionButton(const StudioData::MixcutVoice &voice, bool selected,
+                      bool current, QWidget *parent = nullptr)
         : QAbstractButton(parent)
         , m_voice(voice)
         , m_selected(selected)
+        , m_current(current)
     {
         setCursor(Qt::PointingHandCursor);
         setFixedHeight(46);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setToolTip(voice.description);
+        setToolTip(QStringLiteral("%1 · %2 · 点击试听示例音")
+                       .arg(voice.name, voice.description));
     }
 
     void setSelected(bool selected)
     {
+        if (m_selected == selected) {
+            return;
+        }
         m_selected = selected;
+        update();
+    }
+
+    void setPlaying(bool playing)
+    {
+        if (m_playing == playing) {
+            return;
+        }
+        m_playing = playing;
+        if (m_playing) {
+            if (!m_eqTimer) {
+                m_eqTimer = new QTimer(this);
+                m_eqTimer->setInterval(120);
+                connect(m_eqTimer, &QTimer::timeout, this, [this] {
+                    m_phase = (m_phase + 1) % 12;
+                    update();
+                });
+            }
+            m_eqTimer->start();
+        } else if (m_eqTimer) {
+            m_eqTimer->stop();
+        }
         update();
     }
 
@@ -504,46 +543,97 @@ protected:
                                                    : Theme::Border),
                             1.0));
         painter.setBrush(m_selected ? Theme::alpha(Theme::Primary, 0.14)
-                                    : Theme::alpha(Theme::Surface2, 0.45));
-        painter.drawRoundedRect(rect, 7, 7);
+                                    : Theme::alpha(Theme::Surface2, 0.40));
+        painter.drawRoundedRect(rect, 8, 8);
 
-        const QRectF orb(6, 11, 24, 24);
+        const QRectF orb(8, 9, 28, 28);
         QLinearGradient gradient(orb.topLeft(), orb.bottomRight());
         gradient.setColorAt(0, m_voice.gradientFrom);
         gradient.setColorAt(1, m_voice.gradientTo);
         painter.setPen(QPen(QColor(255, 255, 255, 46), 1.0));
         painter.setBrush(gradient);
         painter.drawEllipse(orb);
-        painter.setFont(Theme::font(9, QFont::DemiBold));
+        painter.setFont(Theme::font(10, QFont::DemiBold));
         painter.setPen(Qt::white);
         painter.drawText(orb, Qt::AlignCenter, m_voice.name.left(1));
 
-        painter.setFont(Theme::font(10, QFont::Medium));
+        // 试听状态覆盖层：播放时显示动态音柱，否则显示播放角标。
+        painter.save();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, m_playing ? 158 : (m_hovered ? 122 : 56)));
+        painter.drawEllipse(orb);
+        if (m_playing) {
+            const qreal baseY = orb.center().y() - 5;
+            for (int index = 0; index < 3; ++index) {
+                const int heights[3] = {4, 8, 6};
+                const int wobble = (m_phase + index * 4) % 12;
+                const qreal height = heights[index] + (wobble < 6 ? wobble / 2 : 3);
+                painter.setBrush(Qt::white);
+                painter.drawRoundedRect(
+                    QRectF(orb.center().x() - 4 + index * 3.5,
+                           baseY + 10 - height, 2, height),
+                    1, 1);
+            }
+        } else {
+            Icons::paint(&painter,
+                         QRectF(orb.center().x() - 4, orb.center().y() - 4, 8, 8),
+                         Icons::Glyph::Play, QColor(255, 255, 255, 230), 1.8);
+        }
+        painter.restore();
+
+        const qreal textLeft = 44;
+        const qreal checkWidth = 13;
+        const qreal textRight = width() - 8 - checkWidth - 6;
+
+        const QFont nameFont = Theme::font(10, QFont::Medium);
+        const QFontMetrics nameMetrics(nameFont);
+        painter.setFont(nameFont);
         painter.setPen(Theme::Text1);
-        painter.drawText(QRectF(36, 7, width() - 62, 16),
-                         Qt::AlignLeft | Qt::AlignVCenter, m_voice.name);
+        qreal nameWidth = nameMetrics.horizontalAdvance(m_voice.name);
+        const qreal nameMax = textRight - textLeft - (m_voice.recommended ? 20 : 0)
+            - (m_current ? 30 : 0);
+        if (nameWidth > nameMax) {
+            nameWidth = qMax<qreal>(0, nameMax);
+            painter.setClipRect(QRectF(textLeft, 6, nameWidth, 18));
+        }
+        painter.drawText(QRectF(textLeft, 6, nameWidth, 18),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         nameMetrics.elidedText(m_voice.name, Qt::ElideRight,
+                                                int(nameWidth)));
+        painter.setClipping(false);
+        qreal badgeX = textLeft + nameWidth + 4;
         if (m_voice.recommended) {
-            const QFontMetrics metrics(Theme::font(7));
-            const int width = metrics.horizontalAdvance(QStringLiteral("荐")) + 4;
-            const QRectF badge(36 + QFontMetrics(Theme::font(10, QFont::Medium))
-                                      .horizontalAdvance(m_voice.name)
-                                  + 4,
-                               8, width, 12);
+            const QRectF badge(badgeX, 8, 10, 12);
             painter.setPen(Qt::NoPen);
             painter.setBrush(Studio::aiSoft());
             painter.drawRoundedRect(badge, 2, 2);
             painter.setFont(Theme::font(7));
             painter.setPen(Theme::Ai);
             painter.drawText(badge, Qt::AlignCenter, QStringLiteral("荐"));
+            badgeX += 14;
         }
+        if (m_current) {
+            const QRectF badge(badgeX, 8, 24, 12);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(Studio::primarySoft());
+            painter.drawRoundedRect(badge, 2, 2);
+            painter.setFont(Theme::font(7));
+            painter.setPen(Theme::Primary);
+            painter.drawText(badge, Qt::AlignCenter, QStringLiteral("当前"));
+        }
+
         painter.setFont(Theme::font(8));
         painter.setPen(Theme::Text3);
-        painter.drawText(QRectF(36, 24, width() - 62, 14),
-                         Qt::AlignLeft | Qt::AlignVCenter,
-                         QStringLiteral("%1 · %2").arg(m_voice.label,
-                                                       m_voice.tags.value(0)));
+        painter.drawText(
+            QRectF(textLeft, 23, textRight - textLeft, 15),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            QFontMetrics(Theme::font(8)).elidedText(
+                QStringLiteral("%1 · %2 · %3")
+                    .arg(m_voice.language, m_voice.gender, m_voice.scene),
+                Qt::ElideRight, int(textRight - textLeft)));
 
-        const QRectF check(width() - 21, height() / 2.0 - 6.5, 13, 13);
+        const QRectF check(width() - 8 - checkWidth, height() / 2.0 - 6.5, checkWidth,
+                           checkWidth);
         painter.setPen(QPen(m_selected ? Theme::Primary : Theme::BorderStrong, 1.0));
         painter.setBrush(m_selected ? Theme::Primary : Qt::NoBrush);
         painter.drawEllipse(check);
@@ -570,7 +660,11 @@ protected:
 private:
     StudioData::MixcutVoice m_voice;
     bool m_selected = false;
+    bool m_current = false;
+    bool m_playing = false;
     bool m_hovered = false;
+    int m_phase = 0;
+    QTimer *m_eqTimer = nullptr;
 };
 
 /* ------------------------------------------------------------------ */
@@ -581,26 +675,30 @@ MixcutPage::MixcutPage(QWidget *parent)
     : QWidget(parent)
 {
     m_project = StudioData::defaultMixcutProject();
-    m_project.hasSource = false;
-    m_project.source = StudioData::MixcutSource();
-    m_project.voiceStatus = StudioData::VoiceStatus::Idle;
 
-    m_analysisTimer = new QTimer(this);
-    m_analysisTimer->setInterval(60);
-    connect(m_analysisTimer, &QTimer::timeout, this, &MixcutPage::tickAnalysis);
-
-    m_voiceTimer = new QTimer(this);
-    m_voiceTimer->setInterval(60);
-    connect(m_voiceTimer, &QTimer::timeout, this, &MixcutPage::tickVoice);
-
-    m_voiceDebounce = new QTimer(this);
-    m_voiceDebounce->setSingleShot(true);
-    m_voiceDebounce->setInterval(900);
-    connect(m_voiceDebounce, &QTimer::timeout, this, &MixcutPage::startVoiceJob);
+    m_scriptTimer = new QTimer(this);
+    m_scriptTimer->setInterval(60);
+    connect(m_scriptTimer, &QTimer::timeout, this, &MixcutPage::tickScript);
 
     m_playTimer = new QTimer(this);
     m_playTimer->setInterval(100);
     connect(m_playTimer, &QTimer::timeout, this, &MixcutPage::updatePlayback);
+
+    m_samplePlayer = new QMediaPlayer(this);
+    m_sampleAudio = new QAudioOutput(this);
+    m_sampleAudio->setVolume(0.78);
+    m_samplePlayer->setAudioOutput(m_sampleAudio);
+    connect(m_samplePlayer, &QMediaPlayer::mediaStatusChanged, this,
+            [this](QMediaPlayer::MediaStatus status) {
+                if (status == QMediaPlayer::EndOfMedia
+                    || status == QMediaPlayer::InvalidMedia) {
+                    stopVoiceSample();
+                }
+            });
+    connect(m_samplePlayer, &QMediaPlayer::errorOccurred, this,
+            [this](QMediaPlayer::Error, const QString &) { stopVoiceSample(); });
+    connect(this, &MixcutPage::voiceSampleChanged, this,
+            &MixcutPage::refreshVoiceSection);
 
     m_runTimer = new QTimer(this);
     m_runTimer->setInterval(100);
@@ -672,23 +770,26 @@ bool MixcutPage::isRunning() const
     return m_hasRun && !m_run.done;
 }
 
+bool MixcutPage::hasMaterials() const
+{
+    return !m_project.materials.isEmpty();
+}
+
+bool MixcutPage::scriptJobRunning() const
+{
+    return m_scriptTimer && m_scriptTimer->isActive();
+}
+
 int MixcutPage::activeStep() const
 {
-    if (!m_project.hasSource) {
-        return 1;
-    }
-    if (canStart()) {
-        return 3;
-    }
-    return 2;
+    return canStart() ? 2 : 1;
 }
 
 bool MixcutPage::canStart() const
 {
     const StudioData::MixcutScriptStats stats =
         StudioData::mixcutScriptStats(m_project.script);
-    return m_project.hasSource && m_project.analysisReady
-        && m_project.voiceStatus == StudioData::VoiceStatus::Ready
+    return hasMaterials() && m_project.analysisReady && !scriptJobRunning()
         && stats.chars > 0;
 }
 
@@ -732,7 +833,7 @@ void MixcutPage::rebuildHub()
 
     auto *header = new PageHeader(
         QStringLiteral("智能混剪"),
-        QStringLiteral("上传一段视频，AI 写文案、配音并自动成片，成片与剪映草稿一次交付。"),
+        QStringLiteral("上传视频或图片素材，输入提示词生成文案，选好音色后一键成片，成片与剪映草稿一次交付。"),
         this);
     header->setTitleMeta(new Chip(QStringLiteral("新功能"), Chip::Ai, header));
     auto *start = new Button(QStringLiteral("开始混剪"), Button::Primary, header);
@@ -767,6 +868,8 @@ void MixcutPage::rebuildHub()
     m_hubLayout->addWidget(stats);
 
     auto *heroRow = new QWidget(m_hubContent);
+    heroRow->setMinimumHeight(244);
+    heroRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *heroLayout = new QHBoxLayout(heroRow);
     heroLayout->setContentsMargins(0, 0, 0, 0);
     heroLayout->setSpacing(14);
@@ -783,9 +886,11 @@ void MixcutPage::rebuildHub()
                                                    Theme::Text3, recentMeta));
     recentMetaLayout->addWidget(Ui::label(QStringLiteral("自动保存生成记录"), 10,
                                            QFont::Normal, Theme::Text3, recentMeta));
+    const int recentCount = StudioData::recentMixcutResults().size();
     auto *recentHeading = makeSectionHeading(
         QStringLiteral("最近混剪"),
-        QStringLiteral("%1 个项目").arg(StudioData::recentMixcutResults().size()),
+        recentCount > 0 ? QStringLiteral("%1 个项目").arg(recentCount)
+                        : QStringLiteral("暂无记录"),
         recentMeta, m_hubContent);
     auto *recentHeadingRow = new QWidget(m_hubContent);
     auto *recentHeadingLayout = new QHBoxLayout(recentHeadingRow);
@@ -793,55 +898,39 @@ void MixcutPage::rebuildHub()
     recentHeadingLayout->addWidget(recentHeading, 1);
     m_hubLayout->addWidget(recentHeadingRow);
 
-    auto *recentRow = new QWidget(m_hubContent);
-    auto *recentLayout = new QHBoxLayout(recentRow);
-    recentLayout->setContentsMargins(0, 0, 0, 0);
-    recentLayout->setSpacing(12);
     const QVector<StudioData::MixcutResult> recents =
         StudioData::recentMixcutResults();
-    for (int index = 0; index < recents.size(); ++index) {
-        recentLayout->addWidget(createRecentCard(recents.at(index), recentRow), 1);
+    if (!recents.isEmpty()) {
+        auto *recentGridHost = new QWidget(m_hubContent);
+        auto *recentGrid = new QGridLayout(recentGridHost);
+        recentGrid->setContentsMargins(0, 0, 0, 0);
+        recentGrid->setHorizontalSpacing(12);
+        recentGrid->setVerticalSpacing(12);
+        for (int index = 0; index < recents.size(); ++index) {
+            recentGrid->addWidget(createRecentCard(recents.at(index), recentGridHost),
+                                  index / 3, index % 3);
+        }
+        for (int column = 0; column < 3; ++column) {
+            recentGrid->setColumnStretch(column, 1);
+        }
+        m_hubLayout->addWidget(recentGridHost);
+    } else {
+        auto *empty = new Studio::EmptyRecent(
+            QStringLiteral("还没有混剪记录"),
+            QStringLiteral("完成第一个混剪后，成片、发布文案与剪映草稿会自动保存到这里，随时回看或重新混剪。"),
+            {QStringLiteral("成片自动下载"), QStringLiteral("发布文案可复制"),
+             QStringLiteral("可回看与重新混剪")},
+            QStringLiteral("用示例素材试剪"), QStringLiteral("开始第一个混剪"),
+            m_hubContent);
+        connect(empty, &Studio::EmptyRecent::startRequested, this,
+                &MixcutPage::startProject);
+        connect(empty, &Studio::EmptyRecent::sampleRequested, this, [this] {
+            if (startProject()) {
+                addSampleMaterials();
+            }
+        });
+        m_hubLayout->addWidget(empty);
     }
-    m_hubLayout->addWidget(recentRow);
-
-    m_hubLayout->addSpacing(20);
-    const StudioData::MixcutVoice currentVoice =
-        StudioData::getMixcutVoice(m_project.voiceId);
-    auto *voiceMeta = new QWidget(m_hubContent);
-    auto *voiceMetaLayout = new QHBoxLayout(voiceMeta);
-    voiceMetaLayout->setContentsMargins(0, 0, 0, 0);
-    voiceMetaLayout->setSpacing(6);
-    auto *dot = new QWidget(voiceMeta);
-    dot->setFixedSize(6, 6);
-    dot->setStyleSheet(QStringLiteral("background:%1;border-radius:3px;")
-                           .arg(cssColor(currentVoice.accent)));
-    voiceMetaLayout->addWidget(dot);
-    voiceMetaLayout->addWidget(Ui::label(QStringLiteral("当前默认："), 10,
-                                           QFont::Normal, Theme::Text3, voiceMeta));
-    voiceMetaLayout->addWidget(Ui::label(
-        QStringLiteral("%1 · %2").arg(currentVoice.name, currentVoice.label), 10,
-        QFont::Medium, Theme::Text2, voiceMeta));
-    auto *voiceHeading = makeSectionHeading(
-        QStringLiteral("常用音色"),
-        QStringLiteral("点击设为默认音色，开始混剪时自动套用"), voiceMeta,
-        m_hubContent);
-    auto *voiceHeadingRow = new QWidget(m_hubContent);
-    auto *voiceHeadingLayout = new QHBoxLayout(voiceHeadingRow);
-    voiceHeadingLayout->setContentsMargins(0, 0, 0, 8);
-    voiceHeadingLayout->addWidget(voiceHeading, 1);
-    m_hubLayout->addWidget(voiceHeadingRow);
-
-    auto *voiceGridHost = new QWidget(m_hubContent);
-    auto *voiceGrid = new QGridLayout(voiceGridHost);
-    voiceGrid->setContentsMargins(0, 0, 0, 0);
-    voiceGrid->setHorizontalSpacing(10);
-    voiceGrid->setVerticalSpacing(10);
-    const QVector<StudioData::MixcutVoice> &voices = StudioData::mixcutVoices();
-    for (int index = 0; index < voices.size(); ++index) {
-        voiceGrid->addWidget(createHubVoiceCard(voices.at(index).id, voiceGridHost),
-                             index / 3, index % 3);
-    }
-    m_hubLayout->addWidget(voiceGridHost);
 
     m_hubLayout->addSpacing(16);
     auto *tip = new QWidget(m_hubContent);
@@ -856,7 +945,7 @@ void MixcutPage::rebuildHub()
     tipLayout->setSpacing(8);
     tipLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 12, Theme::Ai, tip));
     auto *tipLabel = Ui::label(
-        QStringLiteral("小提示：文案、配音与镜头匹配都会自动完成；开始后可先试听配音，再一键成片。示例文案约 %1 字。")
+        QStringLiteral("小提示：填写提示词生成文案、选好音色后点击「一键成片」，配音、字幕、音效与镜头匹配会一次完成。示例文案约 %1 字。")
             .arg(StudioData::mixcutScriptStats(
                      StudioData::generateMixcutScript(m_project.style, 0))
                      .chars),
@@ -869,7 +958,7 @@ void MixcutPage::rebuildHub()
     ratioLayout->setSpacing(4);
     ratioLayout->addWidget(Studio::iconLabel(Icons::Glyph::Palette, 10,
                                               Theme::Text2, ratio));
-    ratioLayout->addWidget(Ui::label(QStringLiteral("支持 9:16 / 16:9 / 1:1"), 10,
+    ratioLayout->addWidget(Ui::label(QStringLiteral("支持 9:16 / 16:9"), 10,
                                       QFont::Normal, Theme::Text2, ratio));
     tipLayout->addWidget(ratio, 0, Qt::AlignVCenter);
     m_hubLayout->addWidget(tip);
@@ -890,24 +979,24 @@ QWidget *MixcutPage::buildHubHero()
         Icons::Glyph::Sparkle, QStringLiteral("AI 文案 · 配音 · 成片"), Theme::Ai,
         Studio::aiSoft(), Theme::alpha(Theme::Ai, 0.30), left), 0, Qt::AlignLeft);
     leftLayout->addSpacing(9);
-    leftLayout->addWidget(Ui::label(QStringLiteral("一段视频，AI 帮你混剪成片"), 17,
+    leftLayout->addWidget(Ui::label(QStringLiteral("一份素材，AI 帮你混剪成片"), 17,
                                      QFont::DemiBold, Theme::Text1, left));
     leftLayout->addSpacing(4);
     auto *description = Ui::label(
-        QStringLiteral("上传原始视频，AI 自动撰写口播文案、生成配音，再按语义匹配镜头，字幕、音效与 BGM 一次到位，直接交付成片与剪映草稿。"),
+        QStringLiteral("上传视频或图片素材，输入文案提示词生成口播；选好音色后一键成片，配音、字幕、音效与 BGM 一次到位，直接交付成片与剪映草稿。"),
         11, QFont::Normal, Theme::Text2, left);
     description->setWordWrap(true);
     description->setMaximumWidth(360);
     leftLayout->addWidget(description);
     leftLayout->addSpacing(10);
-    leftLayout->addWidget(makeBullet(QStringLiteral("AI 看片写稿，几秒生成成片文案"),
+    leftLayout->addWidget(makeBullet(QStringLiteral("视频 / 图片混合，多素材一起剪"),
                                      Theme::Ai, left));
-    leftLayout->addWidget(makeBullet(QStringLiteral("6 种自然音色，选中即自动配音"),
+    leftLayout->addWidget(makeBullet(QStringLiteral("输入提示词，AI 快速生成口播文案"),
+                                     Theme::Ai, left));
+    leftLayout->addWidget(makeBullet(QStringLiteral("40 种豆包音色，一键成片时自动配音"),
                                      Theme::Ai, left));
     leftLayout->addWidget(makeBullet(QStringLiteral("字幕 / 音效 / BGM 智能卡点"),
                                      Theme::Ai, left));
-    leftLayout->addWidget(makeBullet(QStringLiteral("成片与剪映草稿一次交付"), Theme::Ai,
-                                     left));
     leftLayout->addStretch(1);
     auto *action = new QWidget(left);
     auto *actionLayout = new QHBoxLayout(action);
@@ -943,7 +1032,7 @@ QWidget *MixcutPage::buildHubProcessPanel()
     auto *titles = new QVBoxLayout;
     titles->setContentsMargins(0, 0, 0, 0);
     titles->setSpacing(1);
-    titles->addWidget(Ui::label(QStringLiteral("一条原片，三步成片"), 12,
+    titles->addWidget(Ui::label(QStringLiteral("上传素材，三步成片"), 12,
                                 QFont::DemiBold, Theme::Text1, header));
     titles->addWidget(Ui::label(QStringLiteral("全程无需手动剪辑，AI 自动完成"), 9,
                                 QFont::Normal, Theme::Text3, header));
@@ -957,11 +1046,11 @@ QWidget *MixcutPage::buildHubProcessPanel()
         Icons::Glyph glyph;
     };
     const QVector<StepInfo> steps = {
-        {QStringLiteral("上传原片"),
-         QStringLiteral("拖入一段视频，AI 自动识别镜头与画面内容。"),
+        {QStringLiteral("上传素材"),
+         QStringLiteral("拖入视频或图片素材，AI 自动识别镜头与画面内容。"),
          Icons::Glyph::Upload},
-        {QStringLiteral("AI 文案配音"),
-         QStringLiteral("按画面生成口播文案，选好音色即刻配音。"),
+        {QStringLiteral("生成文案 · 选音色"),
+         QStringLiteral("输入文案提示词生成口播，并挑选喜欢的音色。"),
          Icons::Glyph::Sparkle},
         {QStringLiteral("一键成片"),
          QStringLiteral("字幕、音效与 BGM 自动配置，交付成片与草稿。"),
@@ -1092,7 +1181,7 @@ QWidget *MixcutPage::createRecentCard(const StudioData::MixcutResult &result,
     textsLayout->addSpacing(2);
     textsLayout->addWidget(Ui::label(
         QStringLiteral("%1 · %2 · %3")
-            .arg(voice.label, result.durationLabel, result.ratio),
+            .arg(voice.name, result.durationLabel, result.ratio),
         9, QFont::Normal, Theme::Text3, texts));
     textsLayout->addStretch(1);
     auto *bottom = new QHBoxLayout;
@@ -1112,68 +1201,275 @@ QWidget *MixcutPage::createRecentCard(const StudioData::MixcutResult &result,
     return card;
 }
 
-QWidget *MixcutPage::createHubVoiceCard(const QString &voiceId, QWidget *parent)
+namespace {
+
+class MaterialEmptyIcon : public QWidget
 {
-    const StudioData::MixcutVoice voice = StudioData::getMixcutVoice(voiceId);
-    const bool selected = voiceId == m_project.voiceId;
-    auto *card = new Card(
-        selected ? Theme::mix(Theme::Surface1, Theme::Primary, 0.08) : Theme::Surface1,
-        selected ? Theme::alpha(Theme::Primary, 0.5) : Theme::Border, 9, parent);
-    card->setHoverEnabled(true);
-    card->setClickable(true);
-    card->setHoverColors(selected ? Theme::mix(Theme::Surface1, Theme::Primary, 0.10)
-                                  : Theme::alpha(Theme::Surface2, 0.4),
-                         selected ? Theme::alpha(Theme::Primary, 0.6)
-                                  : Theme::BorderStrong);
-    card->contentLayout()->setContentsMargins(10, 10, 10, 10);
-    auto *row = new QWidget(card);
-    auto *layout = new QHBoxLayout(row);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
-    auto *orb = new Studio::VoiceOrbWidget(voice, 30, row);
-    layout->addWidget(orb, 0, Qt::AlignVCenter);
-
-    auto *texts = new QVBoxLayout;
-    texts->setContentsMargins(0, 0, 0, 0);
-    texts->setSpacing(1);
-    auto *nameRow = new QHBoxLayout;
-    nameRow->setContentsMargins(0, 0, 0, 0);
-    nameRow->setSpacing(5);
-    nameRow->addWidget(Ui::label(voice.name, 11, QFont::Medium, Theme::Text1, row));
-    nameRow->addWidget(Ui::label(voice.label, 9, QFont::Normal, Theme::Text3, row));
-    if (voice.recommended) {
-        nameRow->addWidget(Studio::tagLabel(QStringLiteral("推荐"), Theme::Ai,
-                                             Studio::aiSoft(), 8, row));
+public:
+    explicit MaterialEmptyIcon(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setFixedSize(60, 60);
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
     }
-    nameRow->addStretch(1);
-    texts->addLayout(nameRow);
-    texts->addWidget(Ui::label(
-        QStringLiteral("%1 · %2").arg(voice.gender,
-                                       voice.tags.join(QStringLiteral(" · "))),
-        9, QFont::Normal, Theme::Text3, row));
-    layout->addLayout(texts, 1);
 
-    auto *check = new QWidget(row);
-    check->setFixedSize(15, 15);
-    check->setObjectName(QStringLiteral("mixVoiceCheck"));
-    check->setStyleSheet(
-        QStringLiteral("#mixVoiceCheck { background:%1; border:1px solid %2;"
-                       " border-radius:7px; }")
-            .arg(selected ? Theme::Primary.name() : QStringLiteral("transparent"),
-                 selected ? Theme::Primary.name() : Theme::BorderStrong.name()));
-    auto *checkLayout = new QHBoxLayout(check);
-    checkLayout->setContentsMargins(0, 0, 0, 0);
-    checkLayout->addWidget(
-        Studio::iconLabel(Icons::Glyph::Check, 8,
-                          selected ? Theme::OnAccent : QColor(0, 0, 0, 0), check),
-        0, Qt::AlignCenter);
-    layout->addWidget(check, 0, Qt::AlignVCenter);
-    card->contentLayout()->addWidget(row);
-    connect(card, &Card::clicked, this, [this, voiceId] { chooseVoice(voiceId); });
-    return card;
-}
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF box(0, 0, 48, 48);
+        painter.setPen(QPen(Theme::BorderStrong, 1.0));
+        painter.setBrush(Theme::Surface2);
+        painter.drawRoundedRect(box, 15, 15);
+        Icons::paint(&painter, QRectF(14, 14, 20, 20), Icons::Glyph::Film,
+                     Theme::Text2, 1.8);
+        const QRectF badge(34, 34, 20, 20);
+        painter.setPen(QPen(Theme::alpha(Theme::Ai, 0.35), 1.0));
+        painter.setBrush(QColor(QStringLiteral("#1b1509")));
+        painter.drawEllipse(badge);
+        Icons::paint(&painter, badge.adjusted(5, 5, -5, -5), Icons::Glyph::Sparkle,
+                     Theme::Ai, 1.8);
+    }
+};
 
-void MixcutPage::startProject()
+class MixMaterialTile : public QWidget
+{
+public:
+    MixMaterialTile(const StudioData::MixcutMaterial &material, QWidget *parent)
+        : QWidget(parent)
+        , m_material(material)
+    {
+        setFixedHeight(88);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setAttribute(Qt::WA_Hover, true);
+        setMouseTracking(true);
+        setCursor(Qt::PointingHandCursor);
+        setToolTip(QStringLiteral("移除「%1」").arg(material.name));
+    }
+
+    std::function<void()> removeRequested;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF rect = QRectF(this->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const int nameHeight = 19;
+        const QRectF sceneRect(rect.left() + 1, rect.top() + 1, rect.width() - 2,
+                               rect.height() - nameHeight - 1);
+        painter.save();
+        QPainterPath clip;
+        clip.addRoundedRect(rect, 7, 7);
+        painter.setClipPath(clip);
+        painter.fillRect(rect, Theme::alpha(Theme::Surface2, 0.45));
+        Studio::paintMixScene(painter, sceneRect, m_material.scenes.value(0));
+        painter.restore();
+
+        painter.setPen(QPen(m_hovered ? Theme::BorderStrong : Theme::Border, 1.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(rect, 7, 7);
+
+        // 类型角标。
+        const QFont typeFont = Theme::font(8);
+        const QFontMetrics typeMetrics(typeFont);
+        const QString typeText = m_material.kind == StudioData::MixcutMaterialKind::Video
+            ? QStringLiteral("视频")
+            : QStringLiteral("图片");
+        const qreal typeWidth = 8 + 2 + 2 + typeMetrics.horizontalAdvance(typeText) + 4;
+        const QRectF typeBadge(sceneRect.left() + 4, sceneRect.top() + 4, typeWidth,
+                               13);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 140));
+        painter.drawRoundedRect(typeBadge, 3, 3);
+        Icons::paint(&painter,
+                     QRectF(typeBadge.left() + 5, typeBadge.center().y() - 4, 8, 8),
+                     m_material.kind == StudioData::MixcutMaterialKind::Video
+                         ? Icons::Glyph::Film
+                         : Icons::Glyph::Image,
+                     QColor(255, 255, 255, 217), 1.8);
+        painter.setFont(typeFont);
+        painter.setPen(QColor(255, 255, 255, 217));
+        painter.drawText(typeBadge.adjusted(17, 0, -3, 0),
+                         Qt::AlignLeft | Qt::AlignVCenter, typeText);
+
+        if (m_material.kind == StudioData::MixcutMaterialKind::Video) {
+            const QString duration = StudioData::formatElapsed(m_material.durationMs);
+            const QFont timeFont = Theme::monoFont(8);
+            const QFontMetrics timeMetrics(timeFont);
+            const qreal width = timeMetrics.horizontalAdvance(duration) + 8;
+            const QRectF timeBadge(sceneRect.right() - width - 4,
+                                   sceneRect.bottom() - 16, width, 12);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(0, 0, 0, 153));
+            painter.drawRoundedRect(timeBadge, 3, 3);
+            painter.setFont(timeFont);
+            painter.setPen(QColor(255, 255, 255, 204));
+            painter.drawText(timeBadge, Qt::AlignCenter, duration);
+        }
+
+        if (m_material.sample) {
+            const QFont sampleFont = Theme::font(8);
+            const QFontMetrics sampleMetrics(sampleFont);
+            const qreal width = sampleMetrics.horizontalAdvance(QStringLiteral("示例")) + 8;
+            const QRectF sampleBadge(sceneRect.left() + 4,
+                                     sceneRect.bottom() - 16, width, 12);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(Theme::alpha(Theme::Ai, 0.9));
+            painter.drawRoundedRect(sampleBadge, 3, 3);
+            painter.setFont(sampleFont);
+            painter.setPen(QColor(QStringLiteral("#1b1509")));
+            painter.drawText(sampleBadge, Qt::AlignCenter, QStringLiteral("示例"));
+        }
+
+        if (m_hovered) {
+            const QRectF removeRect(this->width() - 20, 4, 16, 16);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(m_removeHovered ? Theme::Danger
+                                             : QColor(0, 0, 0, 153));
+            painter.drawRoundedRect(removeRect, 3, 3);
+            Icons::paint(&painter, removeRect.adjusted(4, 4, -4, -4),
+                         Icons::Glyph::Trash, Qt::white, 1.8);
+        }
+
+        painter.setFont(Theme::font(9));
+        painter.setPen(Theme::Text2);
+        const QString elided = QFontMetrics(Theme::font(9)).elidedText(
+            m_material.name, Qt::ElideRight,
+            qMax(10, int(rect.width()) - 12));
+        painter.drawText(
+            QRectF(rect.left() + 6, rect.bottom() - nameHeight, rect.width() - 12,
+                   nameHeight),
+            Qt::AlignLeft | Qt::AlignVCenter, elided);
+
+        m_removeHovered = m_hovered && removeRect().contains(mapFromGlobal(QCursor::pos()));
+    }
+
+    void enterEvent(QEnterEvent *event) override
+    {
+        m_hovered = true;
+        update();
+        QWidget::enterEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        m_hovered = false;
+        m_removeHovered = false;
+        update();
+        QWidget::leaveEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (m_hovered) {
+            const bool overRemove = removeRect().contains(event->pos());
+            if (overRemove != m_removeHovered) {
+                m_removeHovered = overRemove;
+                update();
+            }
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (m_hovered && removeRect().contains(event->pos())
+            && event->button() == Qt::LeftButton) {
+            if (removeRequested) {
+                removeRequested();
+            }
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    QRectF removeRect() const
+    {
+        return QRectF(width() - 20, 4, 16, 16);
+    }
+
+    StudioData::MixcutMaterial m_material;
+    bool m_hovered = false;
+    bool m_removeHovered = false;
+};
+
+class MaterialDropArea : public QWidget
+{
+public:
+    explicit MaterialDropArea(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAcceptDrops(true);
+        m_overlay = new QWidget(this);
+        m_overlay->setObjectName(QStringLiteral("mixMaterialDropOverlay"));
+        m_overlay->setStyleSheet(
+            QStringLiteral("#mixMaterialDropOverlay { background:rgba(7,9,14,184);"
+                           " border-radius:9px; }"));
+        auto *layout = new QVBoxLayout(m_overlay);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setAlignment(Qt::AlignCenter);
+        layout->addWidget(Ui::label(QStringLiteral("松开鼠标，添加素材"), 11,
+                                    QFont::Normal, Theme::Primary, m_overlay),
+                          0, Qt::AlignCenter);
+        m_overlay->hide();
+    }
+
+    std::function<void(const QStringList &)> filesDropped;
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        m_overlay->setGeometry(rect());
+        QWidget::resizeEvent(event);
+    }
+
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (event->mimeData()->hasUrls()) {
+            m_dragging = true;
+            m_overlay->setGeometry(rect());
+            m_overlay->show();
+            m_overlay->raise();
+            event->acceptProposedAction();
+        }
+    }
+
+    void dragLeaveEvent(QDragLeaveEvent *event) override
+    {
+        m_dragging = false;
+        m_overlay->hide();
+        QWidget::dragLeaveEvent(event);
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        m_dragging = false;
+        m_overlay->hide();
+        QStringList paths;
+        for (const QUrl &url : event->mimeData()->urls()) {
+            if (url.isLocalFile()) {
+                paths.append(url.toLocalFile());
+            }
+        }
+        if (!paths.isEmpty()) {
+            event->acceptProposedAction();
+            if (filesDropped) {
+                filesDropped(paths);
+            }
+        }
+    }
+
+private:
+    QWidget *m_overlay = nullptr;
+    bool m_dragging = false;
+};
+
+} // namespace
+
+bool MixcutPage::startProject()
 {
     if (isRunning()) {
         const auto answer = QMessageBox::question(
@@ -1181,17 +1477,16 @@ void MixcutPage::startProject()
             QStringLiteral("当前有正在生成的智能混剪，开始新项目会取消它，是否继续？"),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) {
-            return;
+            return false;
         }
         m_runTimer->stop();
         m_hasRun = false;
         emit taskStatusChanged(QString(), false);
     }
 
-    m_analysisTimer->stop();
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
+    m_scriptTimer->stop();
     m_playTimer->stop();
+    stopVoiceSample();
     m_playing = false;
     m_playProgress = 0;
 
@@ -1199,18 +1494,16 @@ void MixcutPage::startProject()
     const QString voiceId = m_project.voiceId;
     const QString ratio = m_project.ratio;
     m_project = StudioData::defaultMixcutProject();
-    m_project.hasSource = false;
-    m_project.source = StudioData::MixcutSource();
     m_project.style = style;
     m_project.voiceId = voiceId;
     m_project.ratio = ratio;
-    m_project.voiceStatus = StudioData::VoiceStatus::Idle;
     m_analysisProgress = 0;
-    m_voiceProgress = 0;
     m_scriptVariant = 0;
     m_scriptEdited = false;
+    m_scriptRewrite = false;
     m_hasResult = false;
     showStudio();
+    return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1226,75 +1519,85 @@ void MixcutPage::rebuildStudio()
         root->setSpacing(0);
     }
     int scrollValue = 0;
-    if (auto *oldScroll = m_studioScreen->findChild<QScrollArea *>()) {
-        if (oldScroll->verticalScrollBar()) {
-            scrollValue = oldScroll->verticalScrollBar()->value();
-        }
+    if (m_studioScroll && m_studioScroll->verticalScrollBar()) {
+        scrollValue = m_studioScroll->verticalScrollBar()->value();
     }
     Studio::clearLayout(root);
+    m_studioScroll = nullptr;
 
-    m_previewPoster = nullptr;
-    m_previewPlayButton = nullptr;
-    m_previewAnalysisOverlay = nullptr;
-    m_previewAnalysisLabel = nullptr;
-    m_previewAnalysisProgress = nullptr;
-    m_previewAnalysisBar = nullptr;
-    m_previewSkeleton = nullptr;
-    m_ratioControl = nullptr;
-    m_previewStatusLabel = nullptr;
-    m_previewMeta = nullptr;
-    m_playBar = nullptr;
-    m_previewRowPlay = nullptr;
-    m_playClock = nullptr;
-    m_playDuration = nullptr;
+    m_studioDescription = nullptr;
+    m_studioStepLabel = nullptr;
+    m_stepRail = nullptr;
+    m_outputHint = nullptr;
+    m_deliveryHint = nullptr;
     m_styleControl = nullptr;
     m_promptEdit = nullptr;
     m_scriptEdit = nullptr;
-    m_scriptOverlay = nullptr;
-    m_scriptOverlayLabel = nullptr;
-    m_scriptOverlayDetail = nullptr;
-    m_scriptOverlayProgress = nullptr;
-    m_scriptOverlayBar = nullptr;
     m_scriptSkeleton = nullptr;
+    m_scriptSkeletonProgress = nullptr;
+    m_scriptRewriteOverlay = nullptr;
+    m_scriptRewriteLabel = nullptr;
+    m_scriptRewriteProgress = nullptr;
+    m_scriptRewriteBar = nullptr;
     m_scriptMeta = nullptr;
     m_scriptStats = nullptr;
     m_scriptSave = nullptr;
     m_generateButton = nullptr;
     m_regenerateButton = nullptr;
-    m_voiceCards.clear();
-    m_voiceWave = nullptr;
-    m_voicePlay = nullptr;
     m_voiceMeta = nullptr;
-    m_voiceDurationLabel = nullptr;
-    m_voiceNameLabel = nullptr;
-    m_voiceStatus = nullptr;
-    m_voiceStatusDot = nullptr;
-    m_voiceRegenerate = nullptr;
-    m_voiceProgressBar = nullptr;
+    m_voiceOrb = nullptr;
+    m_voiceName = nullptr;
+    m_voiceScene = nullptr;
+    m_voiceLanguage = nullptr;
+    m_voiceRecommendTag = nullptr;
+    m_voiceSampleButton = nullptr;
+    m_voiceSynthesisHint = nullptr;
     m_footerSummary = nullptr;
     m_footerHint = nullptr;
     m_startButton = nullptr;
-    m_studioDescription = nullptr;
-    m_studioStepLabel = nullptr;
-    m_stepRail = nullptr;
 
     root->addWidget(buildStudioHeader());
     root->addWidget(Ui::separator(false, m_studioScreen));
+
     auto *scrollContent = new QWidget;
-    auto *body = new QVBoxLayout(scrollContent);
+    auto *body = new QHBoxLayout(scrollContent);
     body->setContentsMargins(22, 14, 22, 16);
-    body->setSpacing(0);
+    body->setSpacing(14);
     body->setAlignment(Qt::AlignTop);
-    body->addWidget(m_project.hasSource ? buildWorkbench() : buildUploadPanel());
-    auto *scroll = makeScrollArea(scrollContent, m_studioScreen);
-    root->addWidget(scroll, 1);
+
+    auto *left = new QWidget(scrollContent);
+    auto *leftLayout = new QVBoxLayout(left);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(14);
+    leftLayout->addWidget(buildMaterialCard());
+    leftLayout->addWidget(buildOutputCard());
+    leftLayout->addStretch(1);
+
+    auto *right = new QWidget(scrollContent);
+    auto *rightLayout = new QVBoxLayout(right);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(14);
+    rightLayout->addWidget(buildScriptCard());
+    rightLayout->addWidget(buildVoiceSection());
+    rightLayout->addStretch(1);
+
+    body->addWidget(left, 95);
+    body->addWidget(right, 105);
+
+    m_studioScroll = makeScrollArea(scrollContent, m_studioScreen);
+    root->addWidget(m_studioScroll, 1);
     root->addWidget(Ui::separator(false, m_studioScreen));
     root->addWidget(buildStudioFooter());
 
     refreshStudioState();
-    QTimer::singleShot(0, scroll, [scroll, scrollValue] {
-        if (scroll->verticalScrollBar()) {
-            scroll->verticalScrollBar()->setValue(scrollValue);
+    if (m_scriptEdit) {
+        m_settingText = true;
+        m_scriptEdit->setPlainText(m_project.script);
+        m_settingText = false;
+    }
+    QTimer::singleShot(0, this, [this, scrollValue] {
+        if (m_studioScroll && m_studioScroll->verticalScrollBar()) {
+            m_studioScroll->verticalScrollBar()->setValue(scrollValue);
         }
     });
 }
@@ -1303,7 +1606,7 @@ QWidget *MixcutPage::buildStudioHeader()
 {
     auto *header = new QWidget(m_studioScreen);
     auto *layout = new QVBoxLayout(header);
-    layout->setContentsMargins(22, 10, 22, 10);
+    layout->setContentsMargins(22, 12, 22, 12);
     layout->setSpacing(0);
 
     auto *breadcrumb = new QWidget(header);
@@ -1324,20 +1627,26 @@ QWidget *MixcutPage::buildStudioHeader()
                                            QFont::Normal, Theme::Text2, breadcrumb));
     breadcrumbLayout->addWidget(Ui::label(QStringLiteral("/"), 10, QFont::Normal,
                                            Theme::BorderStrong, breadcrumb));
-    m_studioStepLabel = Ui::label(QString(), 10, QFont::Normal, Theme::Text2,
-                                  breadcrumb);
+    m_studioStepLabel = Ui::label(
+        activeStep() == 2 ? QStringLiteral("一键成片") : QStringLiteral("素材与文案"),
+        10, QFont::Normal, Theme::Text2, breadcrumb);
     breadcrumbLayout->addWidget(m_studioStepLabel);
-    breadcrumbLayout->addSpacing(4);
-    breadcrumbLayout->addWidget(new StatusDot(6, Theme::Success, breadcrumb));
-    breadcrumbLayout->addWidget(Ui::label(QStringLiteral("草稿已自动保存"), 9,
-                                           QFont::Normal, Theme::Text3, breadcrumb));
+    if (hasMaterials()) {
+        breadcrumbLayout->addSpacing(4);
+        breadcrumbLayout->addWidget(new StatusDot(6, Theme::Success, breadcrumb));
+        breadcrumbLayout->addWidget(Ui::label(QStringLiteral("草稿已自动保存"), 9,
+                                               QFont::Normal, Theme::Text3,
+                                               breadcrumb));
+    }
     breadcrumbLayout->addStretch(1);
-    auto *exit = new Button(QStringLiteral("退出编辑"), Button::Ghost, breadcrumb);
+    auto *exit = new Button(hasMaterials() ? QStringLiteral("退出编辑")
+                                           : QStringLiteral("返回"),
+                            Button::Ghost, breadcrumb);
     exit->setCompact(true);
     connect(exit, &QAbstractButton::clicked, this, &MixcutPage::showHub);
     breadcrumbLayout->addWidget(exit);
     layout->addWidget(breadcrumb);
-    layout->addSpacing(5);
+    layout->addSpacing(6);
 
     auto *titleRow = new QWidget(header);
     auto *titleLayout = new QHBoxLayout(titleRow);
@@ -1351,554 +1660,309 @@ QWidget *MixcutPage::buildStudioHeader()
     titleLine->setSpacing(8);
     titleLine->addWidget(Ui::label(QStringLiteral("智能混剪工作台"), 16,
                                     QFont::DemiBold, Theme::Text1, header));
-    if (m_project.hasSource && m_project.source.sample) {
-        titleLine->addWidget(new Chip(QStringLiteral("示例视频"), Chip::Ai, header));
+    bool samplesOnly = hasMaterials();
+    for (const StudioData::MixcutMaterial &material : m_project.materials) {
+        if (!material.sample) {
+            samplesOnly = false;
+            break;
+        }
+    }
+    if (samplesOnly) {
+        titleLine->addWidget(new Chip(QStringLiteral("示例素材"), Chip::Ai, header));
     }
     titleLine->addStretch(1);
     titles->addLayout(titleLine);
-    m_studioDescription = Ui::label(QString(), 11, QFont::Normal, Theme::Text2,
-                                    header);
+    m_studioDescription = Ui::label(headerDescription(), 11, QFont::Normal,
+                                    Theme::Text2, header);
     m_studioDescription->setWordWrap(true);
     titles->addWidget(m_studioDescription);
     titleLayout->addLayout(titles, 1);
-
-    auto *flow = new QWidget(header);
-    auto *flowLayout = new QHBoxLayout(flow);
-    flowLayout->setContentsMargins(0, 2, 0, 0);
-    flowLayout->setSpacing(5);
-    auto addFlow = [&](const QString &text) {
-        auto *chip = new QLabel(text, flow);
-        chip->setFont(Theme::font(9));
-        chip->setStyleSheet(
-            QStringLiteral("color:%1;background:%2;border:1px solid %3;"
-                           "border-radius:4px;padding:1px 6px;")
-                .arg(Theme::Text3.name(), Theme::Surface2.name(),
-                     Theme::Border.name()));
-        flowLayout->addWidget(chip);
-    };
-    addFlow(QStringLiteral("原片"));
-    flowLayout->addWidget(Ui::label(QStringLiteral("→"), 9, QFont::Normal,
-                                    Theme::BorderStrong, flow));
-    addFlow(QStringLiteral("AI 文案配音"));
-    flowLayout->addWidget(Ui::label(QStringLiteral("→"), 9, QFont::Normal,
-                                    Theme::BorderStrong, flow));
-    addFlow(QStringLiteral("成片 + 草稿"));
-    titleLayout->addWidget(flow, 0, Qt::AlignTop);
     layout->addWidget(titleRow);
     layout->addSpacing(10);
 
     m_stepRail = new Studio::StepRail(header);
-    m_stepRail->setSteps(
-        {QStringLiteral("上传视频"), QStringLiteral("文案与配音"),
-         QStringLiteral("一键成片")},
-        {QStringLiteral("原始素材"), QStringLiteral("AI 自动生成"),
-         QStringLiteral("字幕 · 音效 · BGM")});
+    m_stepRail->setSteps({QStringLiteral("素材与文案"),
+                          QStringLiteral("一键成片")},
+                         {QStringLiteral("上传 · 提示词 · 写稿"),
+                          QStringLiteral("配音 · 字幕 · 音效")});
+    m_stepRail->setActiveStep(activeStep());
     layout->addWidget(m_stepRail);
     return header;
 }
 
-QWidget *MixcutPage::buildUploadPanel()
+QWidget *MixcutPage::buildMaterialCard()
 {
-    auto *content = new QWidget;
-    auto *layout = new QHBoxLayout(content);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(14);
-
-    auto *sourceCard = new Studio::SectionCard(
-        Icons::Glyph::Film, QStringLiteral("原始视频"), QStringLiteral("必填"),
-        content);
-    auto *uploadAction = new Button(QStringLiteral("上传视频"), Button::Ghost,
-                                    sourceCard);
-    uploadAction->setCompact(true);
-    uploadAction->setLeadingGlyph(Icons::Glyph::Upload);
-    connect(uploadAction, &QAbstractButton::clicked, this,
-            &MixcutPage::importVideoFile);
-    sourceCard->headerLayout()->addWidget(uploadAction);
-    sourceCard->setBodyMargins(QMargins(12, 12, 12, 12));
-    auto *sourceBody = sourceCard->bodyLayout();
-    sourceBody->setSpacing(0);
-
-    auto *drop = new Studio::DropZone(sourceCard);
-    drop->setMinimumHeight(312);
-    auto *dropLayout = drop->contentLayout();
-    dropLayout->setAlignment(Qt::AlignCenter);
-    dropLayout->addWidget(makeIconCircle(Icons::Glyph::Upload, 44, Theme::Text2,
-                                          Theme::Surface2, Theme::BorderStrong, drop),
-                          0, Qt::AlignHCenter);
-    dropLayout->addSpacing(2);
-    dropLayout->addWidget(Ui::label(QStringLiteral("拖入一段视频，开始智能混剪"), 12,
-                                      QFont::Medium, Theme::Text1, drop),
-                          0, Qt::AlignHCenter);
-    auto *hint = Ui::label(
-        QStringLiteral("支持 MP4 / MOV，建议 15 秒–3 分钟；竖屏、横屏都可以，AI 会自动识别镜头并适配画幅。"),
-        10, QFont::Normal, Theme::Text3, drop);
-    hint->setWordWrap(true);
-    hint->setAlignment(Qt::AlignCenter);
-    hint->setMaximumWidth(360);
-    dropLayout->addWidget(hint, 0, Qt::AlignHCenter);
-    auto *buttons = new QWidget(drop);
-    auto *buttonsLayout = new QHBoxLayout(buttons);
-    buttonsLayout->setContentsMargins(0, 2, 0, 0);
-    buttonsLayout->setSpacing(8);
-    auto *upload = new Button(QStringLiteral("上传视频"), Button::Primary, buttons);
+    const StudioData::MixcutMaterialStats stats =
+        StudioData::mixcutMaterialStats(m_project.materials);
+    QStringList metaParts;
+    if (stats.videoCount > 0) {
+        metaParts.append(QStringLiteral("%1 段视频").arg(stats.videoCount));
+    }
+    if (stats.imageCount > 0) {
+        metaParts.append(QStringLiteral("%1 张图片").arg(stats.imageCount));
+    }
+    auto *card = new Studio::SectionCard(
+        Icons::Glyph::Film, QStringLiteral("素材"),
+        hasMaterials() ? metaParts.join(QStringLiteral(" · "))
+                       : QStringLiteral("必填 · 视频 / 图片"),
+        m_studioScreen);
+    auto *upload = new Button(QStringLiteral("上传素材"), Button::Ghost, card);
+    upload->setCompact(true);
     upload->setLeadingGlyph(Icons::Glyph::Upload);
-    connect(upload, &QAbstractButton::clicked, this, &MixcutPage::importVideoFile);
-    auto *sample = new Button(QStringLiteral("使用示例视频"), Button::Default,
-                              buttons);
-    connect(sample, &QAbstractButton::clicked, this, [this] {
-        importSource(StudioData::mixcutDemoSource(), true);
-    });
-    buttonsLayout->addWidget(upload);
-    buttonsLayout->addWidget(sample);
-    dropLayout->addWidget(buttons, 0, Qt::AlignHCenter);
-    connect(drop, &Studio::DropZone::filesDropped, this,
-            [this](const QStringList &paths) {
-                if (paths.isEmpty()) {
-                    return;
-                }
-                const QFileInfo info(paths.first());
-                const QString suffix = info.suffix().toLower();
-                if (!QStringList({QStringLiteral("mp4"), QStringLiteral("mov"),
-                                  QStringLiteral("m4v"), QStringLiteral("webm"),
-                                  QStringLiteral("avi"), QStringLiteral("mkv")})
-                         .contains(suffix)) {
-                    emit toastRequested(QStringLiteral("请选择视频文件（MP4 / MOV）"));
-                    return;
-                }
-                importSource(
-                    StudioData::mixcutSourceFromFile(info.fileName(), info.size()),
-                    false);
-            });
-    sourceBody->addWidget(drop);
-    sourceBody->addSpacing(12);
+    connect(upload, &QAbstractButton::clicked, this,
+            &MixcutPage::addMaterialsFromDialog);
+    card->headerLayout()->addWidget(upload);
+    card->setBodyMargins(QMargins(12, 12, 12, 12));
+    auto *body = card->bodyLayout();
 
-    auto *features = new QWidget(sourceCard);
-    auto *featureLayout = new QHBoxLayout(features);
-    featureLayout->setContentsMargins(0, 0, 0, 0);
-    featureLayout->setSpacing(8);
-    struct Feature {
+    auto *dropHost = new MaterialDropArea(card);
+    body->addWidget(dropHost);
+    dropHost->filesDropped = [this](const QStringList &paths) {
+        addMaterialPaths(paths, true);
+    };
+    auto *dropLayout = new QVBoxLayout(dropHost);
+    dropLayout->setContentsMargins(0, 0, 0, 0);
+    dropLayout->setSpacing(0);
+
+    if (!hasMaterials()) {
+        auto *dropZone = new Studio::DropZone(dropHost);
+        dropZone->setMinimumHeight(252);
+        auto *emptyLayout = dropZone->contentLayout();
+        emptyLayout->setContentsMargins(16, 12, 16, 12);
+        emptyLayout->setSpacing(4);
+        emptyLayout->setAlignment(Qt::AlignCenter);
+        emptyLayout->addWidget(new MaterialEmptyIcon(dropZone), 0,
+                               Qt::AlignHCenter);
+        emptyLayout->addSpacing(2);
+        emptyLayout->addWidget(Ui::label(QStringLiteral("拖入视频或图片素材"), 14,
+                                          QFont::DemiBold, Theme::Text1,
+                                          dropZone),
+                               0, Qt::AlignHCenter);
+        auto *hint = Ui::label(
+            QStringLiteral("支持多选；视频 MP4 / MOV，图片 JPG / PNG。竖屏、横屏都可以，AI 会自动识别镜头与画面。"),
+            10, QFont::Normal, Theme::Text3, dropZone);
+        hint->setWordWrap(true);
+        hint->setAlignment(Qt::AlignCenter);
+        hint->setFixedWidth(340);
+        hint->setMinimumHeight(34);
+        emptyLayout->addWidget(hint, 0, Qt::AlignHCenter);
+        auto *buttons = new QWidget(dropZone);
+        auto *buttonLayout = new QHBoxLayout(buttons);
+        buttonLayout->setContentsMargins(0, 4, 0, 0);
+        buttonLayout->setSpacing(8);
+        auto *uploadButton = new Button(QStringLiteral("上传素材"), Button::Primary,
+                                        buttons);
+        uploadButton->setLeadingGlyph(Icons::Glyph::Upload);
+        connect(uploadButton, &QAbstractButton::clicked, this,
+                &MixcutPage::addMaterialsFromDialog);
+        auto *sample = new Button(QStringLiteral("使用示例素材"), Button::Default,
+                                  buttons);
+        sample->setLeadingGlyph(Icons::Glyph::Play);
+        connect(sample, &QAbstractButton::clicked, this,
+                &MixcutPage::addSampleMaterials);
+        buttonLayout->addWidget(uploadButton);
+        buttonLayout->addWidget(sample);
+        emptyLayout->addWidget(buttons, 0, Qt::AlignHCenter);
+        auto *features = new QWidget(dropZone);
+        auto *featureLayout = new QHBoxLayout(features);
+        featureLayout->setContentsMargins(0, 8, 0, 0);
+        featureLayout->setSpacing(16);
+        for (const QString &feature :
+             {QStringLiteral("视频 + 图片混合"), QStringLiteral("多选上传"),
+              QStringLiteral("镜头自动识别")}) {
+            auto *item = new QWidget(features);
+            auto *itemLayout = new QHBoxLayout(item);
+            itemLayout->setContentsMargins(0, 0, 0, 0);
+            itemLayout->setSpacing(4);
+            itemLayout->addWidget(Studio::iconLabel(Icons::Glyph::Check, 10,
+                                                     Theme::Success, item));
+            itemLayout->addWidget(Ui::label(feature, 9, QFont::Normal,
+                                            Theme::Text3, item));
+            featureLayout->addWidget(item);
+        }
+        emptyLayout->addWidget(features, 0, Qt::AlignHCenter);
+        connect(dropZone, &Studio::DropZone::filesDropped, this,
+                [this](const QStringList &paths) { addMaterialPaths(paths, true); });
+        dropLayout->addWidget(dropZone);
+    } else {
+        auto *gridScroll = new QScrollArea(dropHost);
+        gridScroll->setFrameShape(QFrame::NoFrame);
+        gridScroll->setWidgetResizable(true);
+        gridScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        gridScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        gridScroll->setMaximumHeight(182);
+        gridScroll->setStyleSheet(QStringLiteral(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"));
+        gridScroll->viewport()->setAutoFillBackground(false);
+        auto *gridContent = new QWidget;
+        auto *grid = new QGridLayout(gridContent);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setHorizontalSpacing(6);
+        grid->setVerticalSpacing(6);
+        const int columnCount = 6;
+        for (int index = 0; index < m_project.materials.size(); ++index) {
+            auto *tile = new MixMaterialTile(m_project.materials.at(index),
+                                             gridContent);
+            tile->removeRequested = [this, id = m_project.materials.at(index).id] {
+                removeMaterial(id);
+            };
+            grid->addWidget(tile, index / columnCount, index % columnCount);
+        }
+        for (int column = 0; column < columnCount; ++column) {
+            grid->setColumnStretch(column, 1);
+        }
+        grid->setRowStretch(grid->rowCount(), 1);
+        gridScroll->setWidget(gridContent);
+        dropLayout->addWidget(gridScroll);
+
+        auto *statsRow = new QWidget(dropHost);
+        statsRow->setObjectName(QStringLiteral("mixMaterialStats"));
+        statsRow->setStyleSheet(
+            QStringLiteral("#mixMaterialStats { background:transparent;"
+                           " border-top:1px solid %1; }")
+                .arg(Theme::Border.name()));
+        auto *statsLayout = new QHBoxLayout(statsRow);
+        statsLayout->setContentsMargins(0, 10, 0, 0);
+        statsLayout->setSpacing(8);
+        QString summary = QStringLiteral("%1 个素材 · %2 个镜头")
+                              .arg(m_project.materials.size())
+                              .arg(stats.shots);
+        if (stats.videoCount > 0) {
+            summary += QStringLiteral(" · 视频共 %1").arg(stats.durationLabel);
+        }
+        if (m_project.materials.size() > 12) {
+            summary += QStringLiteral(" · 向下滚动查看更多");
+        }
+        statsLayout->addWidget(
+            Ui::label(summary, 9, QFont::Normal, Theme::Text3, statsRow), 1);
+        auto *aiHint = new QWidget(statsRow);
+        auto *aiHintLayout = new QHBoxLayout(aiHint);
+        aiHintLayout->setContentsMargins(0, 0, 0, 0);
+        aiHintLayout->setSpacing(4);
+        aiHintLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 10,
+                                                   Theme::Ai, aiHint));
+        aiHintLayout->addWidget(Ui::label(QStringLiteral("AI 按文案语义挑选画面"),
+                                          9, QFont::Normal, Theme::Text3, aiHint));
+        statsLayout->addWidget(aiHint, 0, Qt::AlignVCenter);
+        auto *clear = new LinkLabel(QStringLiteral("清空"), statsRow);
+        clear->setPixelSize(9);
+        clear->setTextColor(Theme::Text3);
+        clear->setHoverColor(Theme::Danger);
+        clear->setUnderlineOnHover(true);
+        connect(clear, &QAbstractButton::clicked, this, &MixcutPage::clearMaterials);
+        statsLayout->addWidget(clear, 0, Qt::AlignVCenter);
+        dropLayout->addWidget(statsRow);
+    }
+    return card;
+}
+
+QWidget *MixcutPage::buildOutputCard()
+{
+    auto *card = new Studio::SectionCard(
+        Icons::Glyph::Wand, QStringLiteral("成片输出"),
+        QStringLiteral("画幅可调 · 包装全自动"), m_studioScreen);
+    card->setBodyMargins(QMargins(12, 12, 12, 12));
+    auto *body = card->bodyLayout();
+
+    auto *ratioRow = new QWidget(card);
+    auto *ratioLayout = new QHBoxLayout(ratioRow);
+    ratioLayout->setContentsMargins(0, 0, 0, 0);
+    ratioLayout->setSpacing(8);
+    ratioLayout->addWidget(Ui::label(QStringLiteral("成片画幅"), 10, QFont::Normal,
+                                       Theme::Text3, ratioRow));
+    auto *ratioControl = new Studio::SegmentedControl(ratioRow);
+    ratioControl->setOptions({QStringLiteral("9:16"), QStringLiteral("16:9")});
+    ratioControl->setCompact(true);
+    ratioControl->setFixedWidth(164);
+    ratioControl->setCurrentIndex(m_project.ratio == QLatin1String("16:9") ? 1 : 0);
+    connect(ratioControl, &Studio::SegmentedControl::currentChanged, this,
+            [this](int index) {
+                chooseRatio(index == 1 ? QStringLiteral("16:9")
+                                       : QStringLiteral("9:16"));
+            });
+    ratioLayout->addWidget(ratioControl);
+    ratioLayout->addStretch(1);
+    m_outputHint = Ui::label(QString(), 9, QFont::Normal, Theme::Text3, ratioRow);
+    ratioLayout->addWidget(m_outputHint, 0, Qt::AlignVCenter);
+    body->addWidget(ratioRow);
+    body->addSpacing(10);
+    body->addWidget(Ui::separator(false, card));
+    body->addSpacing(10);
+
+    const StudioData::MixcutMaterialStats stats =
+        StudioData::mixcutMaterialStats(m_project.materials);
+    struct Item {
         QString title;
         QString description;
         Icons::Glyph glyph;
     };
-    const QVector<Feature> featureItems = {
-        {QStringLiteral("看片写稿"), QStringLiteral("理解画面内容，自动生成口播文案。"),
-         Icons::Glyph::Sparkle},
-        {QStringLiteral("音色配音"), QStringLiteral("6 种自然音色，选中即自动配音。"),
-         Icons::Glyph::Mic},
-        {QStringLiteral("自动包装"), QStringLiteral("字幕、音效与 BGM 一次完成。"),
-         Icons::Glyph::Wand},
+    const QVector<Item> items = {
+        {QStringLiteral("智能字幕"), QStringLiteral("逐句生成 · 关键词高亮"),
+         Icons::Glyph::Subtitles},
+        {QStringLiteral("卡点音效"), QStringLiteral("转场与重音自动加入"),
+         Icons::Glyph::Bolt},
+        {QStringLiteral("情绪 BGM"), QStringLiteral("按文案匹配 · 人声闪避"),
+         Icons::Glyph::Music},
+        {QStringLiteral("镜头匹配"),
+         stats.shots > 0
+             ? QStringLiteral("从 %1 个镜头中按语义挑选").arg(stats.shots)
+             : QStringLiteral("按文案语义自动挑选素材"),
+         Icons::Glyph::Image},
     };
-    for (const Feature &feature : featureItems) {
-        auto *box = new QWidget(features);
-        box->setObjectName(QStringLiteral("mixFeatureBox"));
+    auto *gridHost = new QWidget(card);
+    auto *grid = new QGridLayout(gridHost);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(6);
+    grid->setVerticalSpacing(6);
+    for (int index = 0; index < items.size(); ++index) {
+        auto *box = new QWidget(gridHost);
+        box->setObjectName(QStringLiteral("mixOutputItem"));
         box->setStyleSheet(
-            QStringLiteral("#mixFeatureBox { background:%1; border:1px solid %2;"
+            QStringLiteral("#mixOutputItem { background:%1; border:1px solid %2;"
                            " border-radius:7px; }")
                 .arg(Theme::alpha(Theme::Surface2, 0.45).name(QColor::HexArgb),
                      Theme::Border.name()));
-        auto *boxLayout = new QVBoxLayout(box);
-        boxLayout->setContentsMargins(10, 8, 10, 8);
-        boxLayout->setSpacing(3);
-        auto *head = new QHBoxLayout;
-        head->setContentsMargins(0, 0, 0, 0);
-        head->setSpacing(5);
-        head->addWidget(Studio::iconLabel(feature.glyph, 11, Theme::Ai, box));
-        head->addWidget(Ui::label(feature.title, 10, QFont::Medium, Theme::Text1,
-                                    box));
-        head->addStretch(1);
-        boxLayout->addLayout(head);
-        auto *desc = Ui::label(feature.description, 9, QFont::Normal, Theme::Text3,
-                               box);
-        desc->setWordWrap(true);
-        boxLayout->addWidget(desc);
-        featureLayout->addWidget(box, 1);
+        auto *boxLayout = new QHBoxLayout(box);
+        boxLayout->setContentsMargins(8, 6, 8, 6);
+        boxLayout->setSpacing(8);
+        boxLayout->addWidget(makeIconCircle(items.at(index).glyph, 24, Theme::Text2,
+                                             Theme::Surface1, Theme::Border, box));
+        auto *texts = new QVBoxLayout;
+        texts->setContentsMargins(0, 0, 0, 0);
+        texts->setSpacing(1);
+        texts->addWidget(Ui::label(items.at(index).title, 10, QFont::Medium,
+                                    Theme::Text1, box));
+        auto *desc = Ui::label(items.at(index).description, 9, QFont::Normal,
+                               Theme::Text3, box);
+        desc->setWordWrap(false);
+        texts->addWidget(desc);
+        boxLayout->addLayout(texts, 1);
+        boxLayout->addWidget(Ui::label(QStringLiteral("自动"), 8, QFont::Normal,
+                                        Theme::Success, box), 0, Qt::AlignTop);
+        grid->addWidget(box, index / 2, index % 2);
     }
-    sourceBody->addWidget(features);
-    sourceBody->addSpacing(12);
-    sourceBody->addWidget(new Studio::Note(
-        QStringLiteral("上传后 AI 会自动撰写文案并生成配音；文案、音色与画幅都能在成片前调整，不满意可随时换一版。"),
-        Studio::Note::Ai));
-
-    auto *right = new QWidget(content);
-    auto *rightLayout = new QVBoxLayout(right);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(12);
-    auto *previewCard = new Studio::SectionCard(
-        Icons::Glyph::Play, QStringLiteral("成片效果"),
-        QStringLiteral("示例预览"), right);
-    previewCard->setBodyMargins(QMargins(12, 12, 12, 12));
-    auto *stage = new DarkStage(previewCard);
-    stage->setFixedHeight(380);
-    auto *stageLayout = new QHBoxLayout(stage);
-    stageLayout->setContentsMargins(12, 12, 12, 12);
-    stageLayout->setAlignment(Qt::AlignCenter);
-    auto *poster = new Studio::MixPosterWidget(stage);
-    poster->setFixedSize(194, 344);
-    Studio::MixPosterSpec spec;
-    spec.scene = QStringLiteral("street");
-    spec.title = QStringLiteral("夏天通勤防晒指南");
-    spec.caption = QStringLiteral("这支防晒推开三秒成膜，不搓泥也不泛白。");
-    spec.highlight = QStringLiteral("三秒成膜");
-    spec.voiceName = QStringLiteral("林澜");
-    spec.secondaryScenes = {QStringLiteral("serum"), QStringLiteral("face")};
-    spec.timecode = QStringLiteral("00:24");
-    spec.progress = 62;
-    poster->setSpec(spec);
-    stageLayout->addWidget(poster, 0, Qt::AlignCenter);
-    previewCard->bodyLayout()->addWidget(stage);
-    previewCard->bodyLayout()->addSpacing(10);
-    auto *metrics = new QWidget(previewCard);
-    auto *metricsLayout = new QHBoxLayout(metrics);
-    metricsLayout->setContentsMargins(0, 0, 0, 0);
-    metricsLayout->setSpacing(6);
-    metricsLayout->addWidget(new Studio::StatTile(QStringLiteral("AI 文案"),
-                                                   QStringLiteral("5 句 · 约 24 秒"),
-                                                   metrics));
-    metricsLayout->addWidget(new Studio::StatTile(QStringLiteral("自然配音"),
-                                                   QStringLiteral("6 种音色"), metrics));
-    metricsLayout->addWidget(new Studio::StatTile(QStringLiteral("自动包装"),
-                                                   QStringLiteral("字幕 / 音效 / BGM"),
-                                                   metrics));
-    previewCard->bodyLayout()->addWidget(metrics);
-    rightLayout->addWidget(previewCard);
-    rightLayout->addWidget(new Studio::Note(
-        QStringLiteral("不需要剪辑经验：上传视频后，AI 按画面写文案、生成配音并自动卡点，约 1 分钟即可交付成片与剪映草稿。"),
-        Studio::Note::Primary));
-    rightLayout->addStretch(1);
-
-    layout->addWidget(sourceCard, 142);
-    layout->addWidget(right, 100);
-    return content;
-}
-
-QWidget *MixcutPage::buildWorkbench()
-{
-    auto *content = new QWidget;
-    auto *layout = new QHBoxLayout(content);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(14);
-
-    auto *left = new QWidget(content);
-    auto *leftLayout = new QVBoxLayout(left);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
-    leftLayout->setSpacing(14);
-    leftLayout->addWidget(buildPreviewCard());
-    leftLayout->addWidget(buildSourceCard());
-
-    auto *tip = new QWidget(left);
-    tip->setObjectName(QStringLiteral("mixStudioTip"));
-    tip->setStyleSheet(
-        QStringLiteral("#mixStudioTip { background:%1; border:1px solid %2;"
-                       " border-radius:8px; }")
-            .arg(Theme::alpha(Theme::Surface1, 0.6).name(QColor::HexArgb),
-                 Theme::Border.name()));
-    auto *tipLayout = new QHBoxLayout(tip);
-    tipLayout->setContentsMargins(12, 8, 12, 8);
-    tipLayout->setSpacing(8);
-    tipLayout->addWidget(Studio::iconLabel(Icons::Glyph::Wand, 11, Theme::Ai, tip));
-    auto *tipLabel = Ui::label(
-        QStringLiteral("字幕、音效与 BGM 均由 AI 自动配置；成片完成后自动下载，同时写入剪映草稿。"),
-        9, QFont::Normal, Theme::Text3, tip);
-    tipLabel->setWordWrap(true);
-    tipLayout->addWidget(tipLabel, 1);
-    auto *remove = new LinkLabel(QStringLiteral("移除视频"), tip);
-    remove->setPixelSize(9);
-    remove->setTextColor(Theme::Text3);
-    remove->setHoverColor(Theme::Danger);
-    remove->setUnderlineOnHover(true);
-    connect(remove, &QAbstractButton::clicked, this, &MixcutPage::clearSource);
-    tipLayout->addWidget(remove, 0, Qt::AlignVCenter);
-    leftLayout->addWidget(tip);
-    leftLayout->addStretch(1);
-
-    auto *right = new QWidget(content);
-    auto *rightLayout = new QVBoxLayout(right);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(14);
-    rightLayout->addWidget(buildScriptCard());
-    rightLayout->addWidget(buildVoiceSection());
-    rightLayout->addWidget(buildAutoPackaging());
-    rightLayout->addStretch(1);
-
-    layout->addWidget(left, 104);
-    layout->addWidget(right, 96);
-    return content;
-}
-
-QWidget *MixcutPage::buildPreviewCard()
-{
-    auto *card = new Studio::SectionCard(
-        Icons::Glyph::Play, QStringLiteral("成片预览"),
-        m_project.voiceStatus == StudioData::VoiceStatus::Ready
-            ? QStringLiteral("可试听")
-            : QStringLiteral("文案与配音完成后可试听"),
-        m_studioScreen);
-    m_previewMeta = card->metaLabel();
-    auto *ratioChip = new QLabel(m_project.ratio, card);
-    ratioChip->setFont(Theme::monoFont(9));
-    ratioChip->setStyleSheet(
-        QStringLiteral("color:%1;background:%2;border:1px solid %3;"
-                       "border-radius:4px;padding:1px 5px;")
-            .arg(Theme::Text3.name(), Theme::Surface2.name(), Theme::Border.name()));
-    card->headerLayout()->addWidget(ratioChip);
-    card->setBodyMargins(QMargins(12, 12, 12, 12));
-    auto *body = card->bodyLayout();
-    body->setSpacing(0);
-
-    auto *stage = new DarkStage(card);
-    stage->setFixedHeight(380);
-    auto *stageLayout = new QHBoxLayout(stage);
-    stageLayout->setContentsMargins(12, 12, 12, 12);
-    stageLayout->setAlignment(Qt::AlignCenter);
-
-    const bool portrait = m_project.ratio == QLatin1String("9:16");
-    const bool square = m_project.ratio == QLatin1String("1:1");
-    int posterHeight = 348;
-    if (m_project.ratio == QLatin1String("16:9")) {
-        posterHeight = 196;
-    } else if (square) {
-        posterHeight = 296;
-    }
-    const int posterWidth = portrait ? qRound(posterHeight * 9.0 / 16.0)
-        : (m_project.ratio == QLatin1String("16:9")
-               ? qRound(posterHeight * 16.0 / 9.0)
-               : posterHeight);
-    auto *stack = new QWidget(stage);
-    stack->setFixedSize(posterWidth, posterHeight);
-    auto *stackLayout = new QGridLayout(stack);
-    stackLayout->setContentsMargins(0, 0, 0, 0);
-    m_previewPoster = new Studio::MixPosterWidget(stack);
-    m_previewPoster->setFixedSize(posterWidth, posterHeight);
-    stackLayout->addWidget(m_previewPoster, 0, 0);
-    m_previewPlayButton = makePlayOverlay(stack);
-    stackLayout->addWidget(m_previewPlayButton, 0, 0, Qt::AlignCenter);
-    connect(m_previewPlayButton, &QToolButton::clicked, this,
-            &MixcutPage::togglePlayback);
-
-    m_previewAnalysisOverlay = new QWidget(stack);
-    m_previewAnalysisOverlay->setFixedSize(posterWidth, posterHeight);
-    m_previewAnalysisOverlay->setObjectName(QStringLiteral("mixAnalysisOverlay"));
-    m_previewAnalysisOverlay->setStyleSheet(QStringLiteral(
-        "#mixAnalysisOverlay { background:rgba(5,6,10,133); border-radius:10px; }"));
-    auto *overlayLayout = new QVBoxLayout(m_previewAnalysisOverlay);
-    overlayLayout->setContentsMargins(16, 16, 16, 16);
-    overlayLayout->setSpacing(8);
-    overlayLayout->setAlignment(Qt::AlignCenter);
-    overlayLayout->addWidget(makeIconCircle(Icons::Glyph::Sparkle, 40, Theme::Ai,
-                                             Studio::aiSoft(),
-                                             Theme::alpha(Theme::Ai, 0.35),
-                                             m_previewAnalysisOverlay),
-                             0, Qt::AlignHCenter);
-    m_previewAnalysisLabel = Ui::label(QStringLiteral("AI 正在看片并写文案"), 11,
-                                       QFont::Medium, Qt::white,
-                                       m_previewAnalysisOverlay);
-    m_previewAnalysisLabel->setAlignment(Qt::AlignCenter);
-    overlayLayout->addWidget(m_previewAnalysisLabel);
-    auto *detail = Ui::label(
-        QStringLiteral("已识别 %1 个镜头，完成后自动生成配音")
-            .arg(m_project.source.shots),
-        9, QFont::Normal, QColor(255, 255, 255, 153), m_previewAnalysisOverlay);
-    detail->setAlignment(Qt::AlignCenter);
-    detail->setWordWrap(true);
-    overlayLayout->addWidget(detail);
-    auto *progressRow = new QWidget(m_previewAnalysisOverlay);
-    auto *progressLayout = new QVBoxLayout(progressRow);
-    progressLayout->setContentsMargins(0, 0, 0, 0);
-    progressLayout->setSpacing(4);
-    auto *progressTop = new QHBoxLayout;
-    progressTop->setContentsMargins(0, 0, 0, 0);
-    progressTop->addWidget(Ui::label(QStringLiteral("分析画面"), 8, QFont::Normal,
-                                       QColor(255, 255, 255, 140), progressRow));
-    progressTop->addStretch(1);
-    m_previewAnalysisProgress = monoLabel(QStringLiteral("0%"), 8,
-                                          QColor(255, 255, 255, 140), progressRow);
-    progressTop->addWidget(m_previewAnalysisProgress);
-    progressLayout->addLayout(progressTop);
-    m_previewAnalysisBar = new ProgressBar(progressRow);
-    m_previewAnalysisBar->setBarColor(Theme::Ai);
-    m_previewAnalysisBar->setTrackColor(QColor(255, 255, 255, 38));
-    m_previewAnalysisBar->setValue(0);
-    m_previewAnalysisBar->setFixedHeight(3);
-    progressLayout->addWidget(m_previewAnalysisBar);
-    progressRow->setFixedWidth(qMin(180, posterWidth - 32));
-    overlayLayout->addWidget(progressRow, 0, Qt::AlignHCenter);
-    stackLayout->addWidget(m_previewAnalysisOverlay, 0, 0, Qt::AlignCenter);
-    m_previewAnalysisOverlay->raise();
-    stageLayout->addWidget(stack, 0, Qt::AlignCenter);
-    body->addWidget(stage);
+    body->addWidget(gridHost);
     body->addSpacing(10);
-
-    auto *playRow = new QWidget(card);
-    auto *playLayout = new QHBoxLayout(playRow);
-    playLayout->setContentsMargins(0, 0, 0, 0);
-    playLayout->setSpacing(8);
-    auto *play = new GlyphButton(Icons::Glyph::Play, 28, playRow);
-    play->setGlyphSize(11);
-    play->setColors(Theme::Text1, Theme::Primary);
-    play->setBackgroundColors(Theme::Surface2, Theme::Surface3);
-    play->setToolTipText(QStringLiteral("播放试听配音"));
-    play->setText(QStringLiteral("播放试听"));
-    connect(play, &QAbstractButton::clicked, this, &MixcutPage::togglePlayback);
-    m_voicePlay = nullptr;
-    m_previewRowPlay = play;
-    playLayout->addWidget(play);
-    auto *barHost = new QWidget(playRow);
-    auto *barLayout = new QVBoxLayout(barHost);
-    barLayout->setContentsMargins(0, 0, 0, 0);
-    barLayout->setSpacing(2);
-    m_playBar = new ProgressBar(barHost);
-    m_playBar->setBarColor(Theme::Primary);
-    m_playBar->setValue(0);
-    m_playBar->setFixedHeight(4);
-    barLayout->addWidget(m_playBar);
-    auto *clockRow = new QHBoxLayout;
-    clockRow->setContentsMargins(0, 0, 0, 0);
-    m_playClock = monoLabel(QStringLiteral("00:00"), 8, Theme::Text3, barHost);
-    clockRow->addWidget(m_playClock);
-    clockRow->addStretch(1);
-    m_playDuration = monoLabel(QStringLiteral("--:--"), 8, Theme::Text3, barHost);
-    clockRow->addWidget(m_playDuration);
-    barLayout->addLayout(clockRow);
-    playLayout->addWidget(barHost, 1);
-    m_previewStatusLabel = Ui::label(QStringLiteral("配音生成中"), 9, QFont::Normal,
-                                     Theme::Text3, playRow);
-    playLayout->addWidget(m_previewStatusLabel, 0, Qt::AlignVCenter);
-    body->addWidget(playRow);
-    body->addSpacing(10);
-
     body->addWidget(Ui::separator(false, card));
-    body->addSpacing(10);
-    auto *ratioRow = new QWidget(card);
-    auto *ratioLayout = new QHBoxLayout(ratioRow);
-    ratioLayout->setContentsMargins(0, 0, 0, 0);
-    ratioLayout->setSpacing(10);
-    ratioLayout->addWidget(Ui::label(QStringLiteral("成片画幅"), 10, QFont::Normal,
-                                       Theme::Text3, ratioRow));
-    m_ratioControl = new Studio::SegmentedControl(ratioRow);
-    m_ratioControl->setOptions({QStringLiteral("9:16"), QStringLiteral("16:9"),
-                                QStringLiteral("1:1")});
-    m_ratioControl->setCompact(true);
-    m_ratioControl->setFixedWidth(164);
-    m_ratioControl->setCurrentIndex(m_project.ratio == QLatin1String("16:9")
-                                        ? 1
-                                        : (square ? 2 : 0));
-    connect(m_ratioControl, &Studio::SegmentedControl::currentChanged, this,
-            [this](int index) {
-                chooseRatio(index == 0 ? QStringLiteral("9:16")
-                                       : (index == 1 ? QStringLiteral("16:9")
-                                                     : QStringLiteral("1:1")));
-            });
-    ratioLayout->addWidget(m_ratioControl);
-    ratioLayout->addStretch(1);
-    ratioLayout->addWidget(Ui::label(
-        StudioData::mixcutRatioHint(m_project.ratio), 9, QFont::Normal,
-        Theme::Text3, ratioRow));
-    body->addWidget(ratioRow);
-    return card;
-}
+    body->addSpacing(8);
 
-QWidget *MixcutPage::buildSourceCard()
-{
-    auto *card = new Studio::SectionCard(
-        Icons::Glyph::Film, QStringLiteral("原始视频"),
-        QStringLiteral("%1 个镜头已识别").arg(m_project.source.shots),
-        m_studioScreen);
-    auto *replace = new Button(QStringLiteral("更换视频"), Button::Ghost, card);
-    replace->setCompact(true);
-    connect(replace, &QAbstractButton::clicked, this, &MixcutPage::importVideoFile);
-    card->headerLayout()->addWidget(replace);
-    card->setBodyMargins(QMargins(12, 12, 12, 12));
-    auto *body = card->bodyLayout();
-    body->setSpacing(0);
-
-    auto *row = new QWidget(card);
-    auto *rowLayout = new QHBoxLayout(row);
-    rowLayout->setContentsMargins(0, 0, 0, 0);
-    rowLayout->setSpacing(12);
-    auto *scene = new Studio::MixSceneWidget(row);
-    scene->setScene(m_project.source.scenes.value(0));
-    scene->setFixedSize(88, 58);
-    rowLayout->addWidget(scene);
-    auto *texts = new QVBoxLayout;
-    texts->setContentsMargins(0, 0, 0, 0);
-    texts->setSpacing(2);
-    auto *nameRow = new QHBoxLayout;
-    nameRow->setContentsMargins(0, 0, 0, 0);
-    nameRow->setSpacing(6);
-    auto *name = new ElidedLabel(m_project.source.name, card);
-    name->setPixelSize(11);
-    name->setFontWeight(QFont::Medium);
-    name->setTextColor(Theme::Text1);
-    nameRow->addWidget(name, 1);
-    if (m_project.source.sample) {
-        nameRow->addWidget(new Chip(QStringLiteral("示例"), Chip::Ai, card));
-    }
-    texts->addLayout(nameRow);
-    texts->addWidget(Ui::label(
-        QStringLiteral("%1 · %2 · %3")
-            .arg(m_project.source.size, m_project.source.resolution,
-                 m_project.source.duration),
-        9, QFont::Normal, Theme::Text3, card));
-    auto *topics = new QWidget(card);
-    auto *topicsLayout = new QHBoxLayout(topics);
-    topicsLayout->setContentsMargins(0, 2, 0, 0);
-    topicsLayout->setSpacing(4);
-    const int topicCount = qMin(4, m_project.source.topics.size());
-    for (int index = 0; index < topicCount; ++index) {
-        topicsLayout->addWidget(Studio::tagLabel(
-            m_project.source.topics.at(index), Theme::Ai,
-            Theme::alpha(Theme::Ai, 0.13), 8, topics));
-    }
-    topicsLayout->addStretch(1);
-    texts->addWidget(topics);
-    rowLayout->addLayout(texts, 1);
-    body->addWidget(row);
-    body->addSpacing(10);
-
-    auto *strip = new QWidget(card);
-    auto *stripLayout = new QHBoxLayout(strip);
-    stripLayout->setContentsMargins(0, 0, 0, 0);
-    stripLayout->setSpacing(4);
-    const QStringList scenes = m_project.source.scenes;
-    for (int index = 0; index < scenes.size(); ++index) {
-        auto *thumbHost = new QWidget(strip);
-        auto *thumbLayout = new QVBoxLayout(thumbHost);
-        thumbLayout->setContentsMargins(0, 0, 0, 0);
-        thumbLayout->setSpacing(0);
-        auto *thumb = new Studio::MixSceneWidget(thumbHost);
-        thumb->setScene(scenes.at(index));
-        thumb->setFixedHeight(36);
-        thumb->setToolTip(QStringLiteral("镜头 %1 · %2")
-                              .arg(index + 1)
-                              .arg(StudioData::mixcutSceneLabel(scenes.at(index))));
-        thumbLayout->addWidget(thumb);
-        auto *number = new QLabel(QStringLiteral("%1").arg(index + 1, 2, 10,
-                                                          QLatin1Char('0')),
-                                  thumbHost);
-        number->setAlignment(Qt::AlignCenter);
-        number->setFont(Theme::monoFont(7));
-        number->setStyleSheet(
-            QStringLiteral("color:rgba(255,255,255,166);background:rgba(0,0,0,128);"));
-        number->setFixedHeight(10);
-        thumbLayout->addWidget(number);
-        stripLayout->addWidget(thumbHost, 1);
-    }
-    body->addWidget(strip);
-    body->addSpacing(6);
-    auto *noteRow = new QWidget(card);
-    auto *noteLayout = new QHBoxLayout(noteRow);
-    noteLayout->setContentsMargins(0, 0, 0, 0);
-    noteLayout->setSpacing(5);
-    noteLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 9, Theme::Ai,
-                                             noteRow));
-    noteLayout->addWidget(Ui::label(
-        QStringLiteral("已识别镜头与画面主体，成片时会按文案语义自动挑选。"), 9,
-        QFont::Normal, Theme::Text3, noteRow), 1);
-    noteLayout->addWidget(monoLabel(
-        QStringLiteral("%1 段").arg(m_project.source.shots), 9, Theme::Text3,
-        noteRow));
-    body->addWidget(noteRow);
+    auto *delivery = new QWidget(card);
+    auto *deliveryLayout = new QHBoxLayout(delivery);
+    deliveryLayout->setContentsMargins(0, 0, 0, 0);
+    deliveryLayout->setSpacing(6);
+    deliveryLayout->addWidget(Ui::label(QStringLiteral("交付内容"), 10, QFont::Normal,
+                                         Theme::Text2, delivery));
+    deliveryLayout->addWidget(Studio::tagLabel(
+        QStringLiteral("✓ MP4 成片"), Theme::Success,
+        Theme::alpha(Theme::Success, 0.14), 8, delivery));
+    deliveryLayout->addWidget(Studio::tagLabel(
+        QStringLiteral("✓ 剪映草稿"), Theme::Text2, Theme::Surface2, 8, delivery));
+    deliveryLayout->addStretch(1);
+    m_deliveryHint = Ui::label(QString(), 9, QFont::Normal, Theme::Text3,
+                               delivery);
+    deliveryLayout->addWidget(m_deliveryHint, 0, Qt::AlignVCenter);
+    body->addWidget(delivery);
     return card;
 }
 
@@ -1911,13 +1975,12 @@ QWidget *MixcutPage::buildScriptCard()
     m_regenerateButton = new Button(QStringLiteral("换一版"), Button::Ghost, card);
     m_regenerateButton->setCompact(true);
     m_regenerateButton->setLeadingGlyph(Icons::Glyph::Reset);
-    m_regenerateButton->setToolTip(QStringLiteral("让 AI 换一版文案（会沿用提示词）"));
+    m_regenerateButton->setToolTip(QStringLiteral("生成文案后可换一版"));
     connect(m_regenerateButton, &QAbstractButton::clicked, this,
             &MixcutPage::regenerateScript);
     card->headerLayout()->addWidget(m_regenerateButton);
     card->setBodyMargins(QMargins(12, 12, 12, 12));
     auto *body = card->bodyLayout();
-    body->setSpacing(0);
 
     auto *styleRow = new QWidget(card);
     auto *styleLayout = new QHBoxLayout(styleRow);
@@ -1969,9 +2032,10 @@ QWidget *MixcutPage::buildScriptCard()
     promptHeadLayout->addWidget(Ui::label(QStringLiteral("文案提示词"), 9,
                                             QFont::Medium, Theme::Text2,
                                             promptHead));
-    promptHeadLayout->addWidget(Ui::label(QStringLiteral("标题或原始文案"), 8,
-                                            QFont::Normal, Theme::Text3,
-                                            promptHead));
+    promptHeadLayout->addWidget(Ui::label(
+        hasMaterials() ? QStringLiteral("标题或原始文案 · 用于生成")
+                       : QStringLiteral("可先填写，上传素材后生成"),
+        8, QFont::Normal, Theme::Text3, promptHead));
     promptHeadLayout->addStretch(1);
     auto *expand = new LinkLabel(QStringLiteral("放大"), promptHead);
     expand->setPixelSize(9);
@@ -1994,8 +2058,9 @@ QWidget *MixcutPage::buildScriptCard()
     Studio::applyTextAreaStyle(m_promptEdit, true, 10);
     m_promptEdit->setPlaceholderText(
         QStringLiteral("输入文案标题，或粘贴原始文案，例如：夏天通勤防晒怎么选"));
-    m_promptEdit->setFixedHeight(52);
+    m_promptEdit->setFixedHeight(48);
     m_promptEdit->setAcceptRichText(false);
+    m_promptEdit->setPlainText(m_project.prompt);
     connect(m_promptEdit, &QTextEdit::textChanged, this,
             &MixcutPage::updatePromptFromEditor);
     promptLayout->addWidget(m_promptEdit);
@@ -2003,39 +2068,44 @@ QWidget *MixcutPage::buildScriptCard()
     body->addSpacing(8);
 
     auto *scriptHost = new QWidget(card);
+    scriptHost->setMinimumHeight(118);
     auto *scriptStack = new QGridLayout(scriptHost);
     scriptStack->setContentsMargins(0, 0, 0, 0);
     m_scriptEdit = new QTextEdit(scriptHost);
     Studio::applyTextAreaStyle(m_scriptEdit, false, 11);
-    m_scriptEdit->setPlaceholderText(
-        QStringLiteral("输入口播文案，AI 会自动按句切成字幕并生成配音…"));
     m_scriptEdit->setAcceptRichText(false);
-    m_scriptEdit->setFixedHeight(132);
+    m_scriptEdit->setFixedHeight(118);
+    m_scriptEdit->setPlainText(m_project.script);
     connect(m_scriptEdit, &QTextEdit::textChanged, this,
             &MixcutPage::updateScriptFromEditor);
     scriptStack->addWidget(m_scriptEdit, 0, 0);
 
-    m_scriptOverlay = new QWidget(scriptHost);
-    m_scriptOverlay->setObjectName(QStringLiteral("mixScriptOverlay"));
-    m_scriptOverlay->setStyleSheet(QStringLiteral(
-        "#mixScriptOverlay { background:rgba(7,9,14,200); border-radius:7px; }"));
-    auto *overlayLayout = new QVBoxLayout(m_scriptOverlay);
-    overlayLayout->setContentsMargins(16, 10, 16, 10);
-    overlayLayout->setSpacing(4);
-    overlayLayout->setAlignment(Qt::AlignCenter);
-    m_scriptOverlayLabel = Ui::label(QStringLiteral("AI 正在看片并写文案"), 10,
-                                      QFont::Normal, Theme::Ai,
-                                      m_scriptOverlay);
-    m_scriptOverlayLabel->setAlignment(Qt::AlignCenter);
-    overlayLayout->addWidget(m_scriptOverlayLabel);
-    m_scriptOverlayDetail = Ui::label(QString(), 8, QFont::Normal, Theme::Text3,
-                                       m_scriptOverlay);
-    m_scriptOverlayDetail->setAlignment(Qt::AlignCenter);
-    overlayLayout->addWidget(m_scriptOverlayDetail);
-    m_scriptSkeleton = new QWidget(m_scriptOverlay);
+    m_scriptSkeleton = new QWidget(scriptHost);
+    m_scriptSkeleton->setObjectName(QStringLiteral("mixScriptSkeleton"));
+    m_scriptSkeleton->setStyleSheet(
+        QStringLiteral("#mixScriptSkeleton { background:#0c0e14;"
+                       " border:1px solid %1; border-radius:7px; }")
+            .arg(Theme::Border.name()));
+    m_scriptSkeleton->setFixedHeight(118);
     auto *skeletonLayout = new QVBoxLayout(m_scriptSkeleton);
-    skeletonLayout->setContentsMargins(0, 6, 0, 6);
-    skeletonLayout->setSpacing(6);
+    skeletonLayout->setContentsMargins(12, 12, 12, 10);
+    skeletonLayout->setSpacing(8);
+    auto *skeletonHead = new QHBoxLayout;
+    skeletonHead->setContentsMargins(0, 0, 0, 0);
+    skeletonHead->setSpacing(6);
+    auto *pulseDot = new QWidget(m_scriptSkeleton);
+    pulseDot->setFixedSize(6, 6);
+    pulseDot->setStyleSheet(QStringLiteral("background:%1;border-radius:3px;")
+                                .arg(Theme::Ai.name()));
+    skeletonHead->addWidget(pulseDot, 0, Qt::AlignVCenter);
+    skeletonHead->addWidget(Ui::label(QStringLiteral("正在按提示词撰写口播文案"),
+                                      10, QFont::Normal, Theme::Ai,
+                                      m_scriptSkeleton));
+    skeletonHead->addStretch(1);
+    m_scriptSkeletonProgress = monoLabel(QStringLiteral("0%"), 9, Theme::Text3,
+                                          m_scriptSkeleton);
+    skeletonHead->addWidget(m_scriptSkeletonProgress);
+    skeletonLayout->addLayout(skeletonHead);
     const QVector<int> widths = {92, 100, 84, 66};
     for (const int widthPercent : widths) {
         auto *lineHost = new QWidget(m_scriptSkeleton);
@@ -2043,28 +2113,47 @@ QWidget *MixcutPage::buildScriptCard()
         lineHostLayout->setContentsMargins(0, 0, 0, 0);
         auto *line = new QWidget(lineHost);
         line->setFixedHeight(8);
-        line->setStyleSheet(
-            QStringLiteral("background:%1;border-radius:4px;")
-                .arg(Theme::alpha(Theme::Surface3, 0.9).name()));
+        line->setStyleSheet(QStringLiteral("background:%1;border-radius:4px;")
+                                .arg(Theme::Surface3.name()));
         lineHostLayout->addWidget(line, widthPercent);
         lineHostLayout->addStretch(100 - widthPercent);
         skeletonLayout->addWidget(lineHost);
     }
-    overlayLayout->addWidget(m_scriptSkeleton);
-    auto *overlayProgress = new QWidget(m_scriptOverlay);
-    auto *overlayProgressLayout = new QHBoxLayout(overlayProgress);
-    overlayProgressLayout->setContentsMargins(0, 4, 0, 0);
+    skeletonLayout->addStretch(1);
+    auto *skeletonBar = new ProgressBar(m_scriptSkeleton);
+    skeletonBar->setBarColor(Theme::Ai);
+    skeletonBar->setValue(0);
+    skeletonBar->setFixedHeight(2);
+    skeletonLayout->addWidget(skeletonBar);
+    scriptStack->addWidget(m_scriptSkeleton, 0, 0);
+
+    m_scriptRewriteOverlay = new QWidget(scriptHost);
+    m_scriptRewriteOverlay->setObjectName(QStringLiteral("mixScriptOverlay"));
+    m_scriptRewriteOverlay->setStyleSheet(QStringLiteral(
+        "#mixScriptOverlay { background:rgba(7,9,14,200); border-radius:7px; }"));
+    auto *overlayLayout = new QVBoxLayout(m_scriptRewriteOverlay);
+    overlayLayout->setContentsMargins(16, 10, 16, 10);
+    overlayLayout->setSpacing(6);
+    overlayLayout->setAlignment(Qt::AlignCenter);
+    m_scriptRewriteLabel = Ui::label(QString(), 10, QFont::Normal, Theme::Ai,
+                                      m_scriptRewriteOverlay);
+    m_scriptRewriteLabel->setAlignment(Qt::AlignCenter);
+    overlayLayout->addWidget(m_scriptRewriteLabel);
+    auto *overlayProgressRow = new QWidget(m_scriptRewriteOverlay);
+    overlayProgressRow->setFixedWidth(128);
+    auto *overlayProgressLayout = new QHBoxLayout(overlayProgressRow);
+    overlayProgressLayout->setContentsMargins(0, 0, 0, 0);
     overlayProgressLayout->setSpacing(6);
-    m_scriptOverlayProgress = monoLabel(QStringLiteral("0%"), 8, Theme::Text3,
-                                        overlayProgress);
-    overlayProgressLayout->addWidget(m_scriptOverlayProgress);
-    m_scriptOverlayBar = new ProgressBar(overlayProgress);
-    m_scriptOverlayBar->setBarColor(Theme::Ai);
-    m_scriptOverlayBar->setValue(0);
-    m_scriptOverlayBar->setFixedHeight(2);
-    overlayProgressLayout->addWidget(m_scriptOverlayBar, 1);
-    overlayLayout->addWidget(overlayProgress);
-    scriptStack->addWidget(m_scriptOverlay, 0, 0);
+    m_scriptRewriteProgress = monoLabel(QString(), 8, Theme::Text3,
+                                         overlayProgressRow);
+    overlayProgressLayout->addWidget(m_scriptRewriteProgress);
+    m_scriptRewriteBar = new ProgressBar(overlayProgressRow);
+    m_scriptRewriteBar->setBarColor(Theme::Ai);
+    m_scriptRewriteBar->setValue(0);
+    m_scriptRewriteBar->setFixedHeight(2);
+    overlayProgressLayout->addWidget(m_scriptRewriteBar, 1);
+    overlayLayout->addWidget(overlayProgressRow, 0, Qt::AlignHCenter);
+    scriptStack->addWidget(m_scriptRewriteOverlay, 0, 0);
     body->addWidget(scriptHost);
     body->addSpacing(6);
 
@@ -2072,7 +2161,7 @@ QWidget *MixcutPage::buildScriptCard()
     auto *statsLayout = new QHBoxLayout(statsRow);
     statsLayout->setContentsMargins(0, 0, 0, 0);
     statsLayout->setSpacing(7);
-    m_scriptStats = Ui::label(QString(), 9, QFont::Normal, Theme::Text3, statsRow);
+    m_scriptStats = Ui::richLabel(QString(), 9, Theme::Text3, statsRow);
     statsLayout->addWidget(m_scriptStats, 1);
     auto *savedRow = new QWidget(statsRow);
     auto *savedLayout = new QHBoxLayout(savedRow);
@@ -2085,173 +2174,123 @@ QWidget *MixcutPage::buildScriptCard()
     savedLayout->addWidget(m_scriptSave);
     statsLayout->addWidget(savedRow, 0);
     body->addWidget(statsRow);
+
+    // 骨架屏与重写遮罩轮流出现；进度值与当前步骤提示在刷新时更新。
     return card;
 }
 
 QWidget *MixcutPage::buildVoiceSection()
 {
-    auto *card = new Studio::SectionCard(Icons::Glyph::Mic, QStringLiteral("配音"),
-                                          QStringLiteral("自动生成"),
+    auto *card = new Studio::SectionCard(Icons::Glyph::Mic,
+                                          QStringLiteral("配音音色"),
                                           m_studioScreen);
     m_voiceMeta = card->metaLabel();
     card->setBodyMargins(QMargins(12, 12, 12, 12));
     auto *body = card->bodyLayout();
-    body->setSpacing(0);
 
-    auto *gridHost = new QWidget(card);
-    auto *grid = new QGridLayout(gridHost);
-    grid->setContentsMargins(0, 0, 0, 0);
-    grid->setHorizontalSpacing(6);
-    grid->setVerticalSpacing(6);
-    const QVector<StudioData::MixcutVoice> &voices = StudioData::mixcutVoices();
-    for (int index = 0; index < voices.size(); ++index) {
-        auto *button = new VoiceChoiceButton(
-            voices.at(index), voices.at(index).id == m_project.voiceId, gridHost);
-        m_voiceCards.append(button);
-        connect(button, &QAbstractButton::clicked, this,
-                [this, id = voices.at(index).id] { chooseVoice(id); });
-        grid->addWidget(button, index / 3, index % 3);
-    }
-    body->addWidget(gridHost);
-    body->addSpacing(10);
+    auto *row = new QWidget(card);
+    row->setObjectName(QStringLiteral("mixVoiceRow"));
+    row->setStyleSheet(
+        QStringLiteral("#mixVoiceRow { background:%1; border:1px solid %2;"
+                       " border-radius:8px; }")
+            .arg(Theme::alpha(Theme::Surface2, 0.45).name(QColor::HexArgb),
+                 Theme::Border.name()));
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(8, 8, 8, 8);
+    rowLayout->setSpacing(8);
 
-    auto *playBox = new QWidget(card);
-    playBox->setObjectName(QStringLiteral("mixVoicePlayBox"));
-    playBox->setStyleSheet(
-        QStringLiteral("#mixVoicePlayBox { background:%1; border:1px solid %2;"
+    auto *orbHost = new QWidget(row);
+    orbHost->setFixedSize(32, 32);
+    const StudioData::MixcutVoice voice =
+        StudioData::getMixcutVoice(m_project.voiceId);
+    m_voiceOrb = new Studio::VoiceOrbWidget(voice, 30, orbHost);
+    m_voiceOrb->move(0, 0);
+    auto *checkBadge = new QWidget(orbHost);
+    checkBadge->setFixedSize(14, 14);
+    checkBadge->move(18, 18);
+    checkBadge->setObjectName(QStringLiteral("mixVoiceOrbCheck"));
+    checkBadge->setStyleSheet(
+        QStringLiteral("#mixVoiceOrbCheck { background:%1; border:1px solid %1;"
+                       " border-radius:7px; }")
+            .arg(Theme::Primary.name()));
+    auto *checkLayout = new QHBoxLayout(checkBadge);
+    checkLayout->setContentsMargins(0, 0, 0, 0);
+    checkLayout->addWidget(Studio::iconLabel(Icons::Glyph::Check, 7,
+                                              Theme::OnAccent, checkBadge),
+                           0, Qt::AlignCenter);
+    rowLayout->addWidget(orbHost, 0, Qt::AlignVCenter);
+
+    auto *texts = new QVBoxLayout;
+    texts->setContentsMargins(0, 0, 0, 0);
+    texts->setSpacing(1);
+    auto *nameRow = new QHBoxLayout;
+    nameRow->setContentsMargins(0, 0, 0, 0);
+    nameRow->setSpacing(5);
+    m_voiceName = Ui::label(voice.name, 11, QFont::Medium, Theme::Text1, row);
+    nameRow->addWidget(m_voiceName);
+    m_voiceRecommendTag = Studio::tagLabel(QStringLiteral("荐"), Theme::Ai,
+                                            Studio::aiSoft(), 7, row);
+    m_voiceRecommendTag->setVisible(voice.recommended);
+    nameRow->addWidget(m_voiceRecommendTag);
+    m_voiceScene = Ui::label(voice.scene, 9, QFont::Normal, Theme::Text3, row);
+    nameRow->addWidget(m_voiceScene);
+    nameRow->addStretch(1);
+    texts->addLayout(nameRow);
+    m_voiceLanguage = Ui::label(
+        QStringLiteral("%1 · %2").arg(voice.language, voice.gender), 9,
+        QFont::Normal, Theme::Text3, row);
+    texts->addWidget(m_voiceLanguage);
+    rowLayout->addLayout(texts, 1);
+
+    m_voiceSampleButton = new Button(QStringLiteral("示例音"), Button::Default, row);
+    m_voiceSampleButton->setCompact(true);
+    m_voiceSampleButton->setLeadingGlyph(Icons::Glyph::Play);
+    m_voiceSampleButton->setFixedHeight(28);
+    connect(m_voiceSampleButton, &QAbstractButton::clicked, this,
+            [this] { toggleVoiceSample(m_project.voiceId); });
+    rowLayout->addWidget(m_voiceSampleButton, 0, Qt::AlignVCenter);
+
+    auto *change = new Button(QStringLiteral("更换音色"), Button::Default, row);
+    change->setCompact(true);
+    connect(change, &QAbstractButton::clicked, this, &MixcutPage::openVoicePicker);
+    rowLayout->addWidget(change, 0, Qt::AlignVCenter);
+    body->addWidget(row);
+    body->addSpacing(8);
+
+    auto *synthesis = new QWidget(card);
+    synthesis->setObjectName(QStringLiteral("mixVoiceSynthesis"));
+    synthesis->setStyleSheet(
+        QStringLiteral("#mixVoiceSynthesis { background:%1; border:1px solid %2;"
                        " border-radius:7px; }")
             .arg(Theme::alpha(Theme::Surface2, 0.45).name(QColor::HexArgb),
                  Theme::Border.name()));
-    auto *playLayout = new QVBoxLayout(playBox);
-    playLayout->setContentsMargins(10, 8, 10, 8);
-    playLayout->setSpacing(3);
-    auto *controls = new QWidget(playBox);
-    auto *controlsLayout = new QHBoxLayout(controls);
-    controlsLayout->setContentsMargins(0, 0, 0, 0);
-    controlsLayout->setSpacing(8);
-    m_voicePlay = new GlyphButton(Icons::Glyph::Play, 24, controls);
-    m_voicePlay->setGlyphSize(10);
-    m_voicePlay->setColors(Theme::Text1, Theme::Primary);
-    m_voicePlay->setBackgroundColors(Theme::Surface1, Theme::Surface3);
-    m_voicePlay->setToolTipText(QStringLiteral("播放试听配音"));
-    connect(m_voicePlay, &QAbstractButton::clicked, this,
-            &MixcutPage::togglePlayback);
-    controlsLayout->addWidget(m_voicePlay);
-    m_voiceWave = new Studio::Waveform(controls);
-    m_voiceWave->setBars(28);
-    m_voiceWave->setFixedHeight(16);
-    controlsLayout->addWidget(m_voiceWave, 1);
-    m_voiceDurationLabel = monoLabel(QStringLiteral("—"), 8, Theme::Text3, controls);
-    m_voiceDurationLabel->setFixedWidth(38);
-    m_voiceDurationLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    controlsLayout->addWidget(m_voiceDurationLabel);
-    m_voiceRegenerate = new GlyphButton(Icons::Glyph::Reset, 20, controls);
-    m_voiceRegenerate->setGlyphSize(10);
-    m_voiceRegenerate->setColors(Theme::Text3, Theme::Primary);
-    m_voiceRegenerate->setBackgroundColors(Qt::transparent, Theme::Surface3);
-    m_voiceRegenerate->setToolTipText(QStringLiteral("重新生成配音"));
-    connect(m_voiceRegenerate, &QAbstractButton::clicked, this,
-            &MixcutPage::regenerateVoice);
-    controlsLayout->addWidget(m_voiceRegenerate);
-    playLayout->addWidget(controls);
-    auto *statusRow = new QWidget(playBox);
-    auto *statusLayout = new QHBoxLayout(statusRow);
-    statusLayout->setContentsMargins(0, 0, 0, 0);
-    statusLayout->setSpacing(5);
-    m_voiceStatusDot = new QWidget(statusRow);
-    m_voiceStatusDot->setFixedSize(4, 4);
-    statusLayout->addWidget(m_voiceStatusDot);
-    m_voiceStatus = Ui::label(QString(), 8, QFont::Normal, Theme::Text3, statusRow);
-    statusLayout->addWidget(m_voiceStatus, 1);
-    m_voiceNameLabel = Ui::label(QString(), 8, QFont::Normal, Theme::Text3,
-                                  statusRow);
-    statusLayout->addWidget(m_voiceNameLabel, 0);
-    playLayout->addWidget(statusRow);
-    m_voiceProgressBar = new ProgressBar(playBox);
-    m_voiceProgressBar->setBarColor(Theme::Ai);
-    m_voiceProgressBar->setValue(0);
-    m_voiceProgressBar->setFixedHeight(2);
-    playLayout->addWidget(m_voiceProgressBar);
-    body->addWidget(playBox);
-    return card;
-}
+    auto *synthesisLayout = new QHBoxLayout(synthesis);
+    synthesisLayout->setContentsMargins(10, 8, 10, 8);
+    synthesisLayout->setSpacing(10);
+    synthesisLayout->addWidget(makeIconCircle(Icons::Glyph::Mic, 24, Theme::Ai,
+                                               Theme::Surface1, Theme::Border,
+                                               synthesis),
+                               0, Qt::AlignVCenter);
+    auto *synthesisTexts = new QVBoxLayout;
+    synthesisTexts->setContentsMargins(0, 0, 0, 0);
+    synthesisTexts->setSpacing(1);
+    auto *synthesisHead = new QHBoxLayout;
+    synthesisHead->setContentsMargins(0, 0, 0, 0);
+    synthesisHead->setSpacing(5);
+    synthesisHead->addWidget(Ui::label(QStringLiteral("配音合成"), 10, QFont::Medium,
+                                        Theme::Text2, synthesis));
+    synthesisHead->addWidget(Studio::tagLabel(QStringLiteral("一键成片时"),
+                                               Theme::Ai, Studio::aiSoft(), 8,
+                                               synthesis));
+    synthesisHead->addStretch(1);
+    synthesisTexts->addLayout(synthesisHead);
+    m_voiceSynthesisHint = Ui::label(QString(), 9, QFont::Normal, Theme::Text3,
+                                     synthesis);
+    m_voiceSynthesisHint->setWordWrap(false);
+    synthesisTexts->addWidget(m_voiceSynthesisHint);
+    synthesisLayout->addLayout(synthesisTexts, 1);
+    body->addWidget(synthesis);
 
-QWidget *MixcutPage::buildAutoPackaging()
-{
-    auto *card = new Studio::SectionCard(Icons::Glyph::Wand,
-                                          QStringLiteral("AI 自动包装"),
-                                          QStringLiteral("无需手动设置"),
-                                          m_studioScreen);
-    card->setBodyMargins(QMargins(12, 12, 12, 12));
-    auto *body = card->bodyLayout();
-    body->setSpacing(0);
-    auto *gridHost = new QWidget(card);
-    auto *grid = new QGridLayout(gridHost);
-    grid->setContentsMargins(0, 0, 0, 0);
-    grid->setHorizontalSpacing(6);
-    grid->setVerticalSpacing(6);
-    struct Item {
-        QString title;
-        QString description;
-        Icons::Glyph glyph;
-    };
-    const QVector<Item> items = {
-        {QStringLiteral("智能字幕"), QStringLiteral("逐句生成 · 关键词高亮"),
-         Icons::Glyph::Subtitles},
-        {QStringLiteral("卡点音效"), QStringLiteral("转场与重音自动加入"),
-         Icons::Glyph::Bolt},
-        {QStringLiteral("情绪 BGM"), QStringLiteral("按文案匹配 · 人声闪避"),
-         Icons::Glyph::Music},
-        {QStringLiteral("镜头匹配"),
-         QStringLiteral("从 %1 个镜头中按语义挑选").arg(m_project.source.shots),
-         Icons::Glyph::Image},
-    };
-    for (int index = 0; index < items.size(); ++index) {
-        auto *box = new QWidget(gridHost);
-        box->setObjectName(QStringLiteral("mixAutoItem"));
-        box->setStyleSheet(
-            QStringLiteral("#mixAutoItem { background:%1; border:1px solid %2;"
-                           " border-radius:7px; }")
-                .arg(Theme::alpha(Theme::Surface2, 0.45).name(QColor::HexArgb),
-                     Theme::Border.name()));
-        auto *boxLayout = new QHBoxLayout(box);
-        boxLayout->setContentsMargins(8, 6, 8, 6);
-        boxLayout->setSpacing(8);
-        boxLayout->addWidget(makeIconCircle(items.at(index).glyph, 24, Theme::Text2,
-                                             Theme::Surface1, Theme::Border, box));
-        auto *texts = new QVBoxLayout;
-        texts->setContentsMargins(0, 0, 0, 0);
-        texts->setSpacing(1);
-        texts->addWidget(Ui::label(items.at(index).title, 10, QFont::Medium,
-                                    Theme::Text1, box));
-        auto *desc = Ui::label(items.at(index).description, 8, QFont::Normal,
-                               Theme::Text3, box);
-        desc->setWordWrap(true);
-        texts->addWidget(desc);
-        boxLayout->addLayout(texts, 1);
-        boxLayout->addWidget(Ui::label(QStringLiteral("自动"), 8, QFont::Normal,
-                                        Theme::Success, box), 0, Qt::AlignTop);
-        grid->addWidget(box, index / 2, index % 2);
-    }
-    body->addWidget(gridHost);
-    body->addSpacing(10);
-    body->addWidget(Ui::separator(false, card));
-    body->addSpacing(8);
-    auto *delivery = new QWidget(card);
-    auto *deliveryLayout = new QHBoxLayout(delivery);
-    deliveryLayout->setContentsMargins(0, 0, 0, 0);
-    deliveryLayout->setSpacing(6);
-    deliveryLayout->addWidget(Ui::label(QStringLiteral("交付内容"), 10, QFont::Normal,
-                                         Theme::Text2, delivery));
-    deliveryLayout->addWidget(Studio::tagLabel(
-        QStringLiteral("✓ MP4 成片"), Theme::Success,
-        Theme::alpha(Theme::Success, 0.14), 8, delivery));
-    deliveryLayout->addWidget(Studio::tagLabel(
-        QStringLiteral("✓ 剪映草稿"), Theme::Text2, Theme::Surface2, 8, delivery));
-    deliveryLayout->addStretch(1);
-    deliveryLayout->addWidget(Ui::label(QStringLiteral("自动下载并写入草稿"), 8,
-                                         QFont::Normal, Theme::Text3, delivery));
-    body->addWidget(delivery);
     return card;
 }
 
@@ -2277,18 +2316,12 @@ QWidget *MixcutPage::buildStudioFooter()
     texts->addWidget(m_footerHint);
     layout->addLayout(texts, 1);
 
-    if (!m_project.hasSource) {
-        auto *sample = new Button(QStringLiteral("使用示例视频"), Button::Default,
-                                  footer);
-        connect(sample, &QAbstractButton::clicked, this, [this] {
-            importSource(StudioData::mixcutDemoSource(), true);
-        });
-        layout->addWidget(sample);
-        auto *upload = new Button(QStringLiteral("上传视频"), Button::Primary,
+    if (!hasMaterials()) {
+        auto *upload = new Button(QStringLiteral("上传素材"), Button::Primary,
                                   footer);
         upload->setLeadingGlyph(Icons::Glyph::Upload);
         connect(upload, &QAbstractButton::clicked, this,
-                &MixcutPage::importVideoFile);
+                &MixcutPage::addMaterialsFromDialog);
         layout->addWidget(upload);
     } else {
         m_startButton = new Button(QStringLiteral("一键成片"), Button::Primary,
@@ -2301,116 +2334,150 @@ QWidget *MixcutPage::buildStudioFooter()
     return footer;
 }
 
-void MixcutPage::importVideoFile()
+void MixcutPage::addMaterialsFromDialog()
 {
-    const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("选择原始视频"), QString(),
-        QStringLiteral("视频文件 (*.mp4 *.mov *.m4v *.webm *.avi *.mkv)"));
-    if (path.isEmpty()) {
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this, QStringLiteral("选择素材"), QString(),
+        QStringLiteral("素材文件 (*.mp4 *.mov *.m4v *.webm *.avi *.mkv *.jpg "
+                       "*.jpeg *.png *.webp *.heic *.gif)"));
+    if (paths.isEmpty()) {
         return;
     }
-    const QFileInfo info(path);
-    importSource(StudioData::mixcutSourceFromFile(info.fileName(), info.size()),
-                 false);
+    addMaterialPaths(paths, true);
 }
 
-void MixcutPage::importSource(const StudioData::MixcutSource &source, bool announce)
+void MixcutPage::addMaterialPaths(const QStringList &paths, bool announce)
 {
-    if (m_project.hasSource && !m_project.script.trimmed().isEmpty()) {
+    QStringList valid;
+    int ignored = 0;
+    for (const QString &path : paths) {
+        if (StudioData::isMixcutMaterialFile(path)) {
+            valid.append(path);
+        } else {
+            ++ignored;
+        }
+    }
+    if (valid.isEmpty()) {
+        emit toastRequested(QStringLiteral("请选择视频或图片素材（MP4 / MOV / JPG / PNG）"));
+        return;
+    }
+    if (ignored > 0) {
+        emit toastRequested(QStringLiteral("已忽略 %1 个不支持的文件").arg(ignored));
+    }
+    QVector<StudioData::MixcutMaterial> materials;
+    for (int index = 0; index < valid.size(); ++index) {
+        const QFileInfo info(valid.at(index));
+        materials.append(StudioData::mixcutMaterialFromFile(
+            valid.at(index), info.size(), m_project.materials.size() + index));
+    }
+    appendMaterials(materials, announce);
+}
+
+void MixcutPage::appendMaterials(
+    const QVector<StudioData::MixcutMaterial> &materials, bool announce)
+{
+    if (materials.isEmpty()) {
+        return;
+    }
+    const bool first = m_project.materials.isEmpty();
+    if (first) {
+        m_scriptTimer->stop();
+        m_scriptVariant = 0;
+        m_scriptEdited = false;
+        m_analysisProgress = 0;
+        m_project.script.clear();
+        m_project.analysisReady = true;
+    }
+    m_project.materials += materials;
+    showStudio();
+    if (announce) {
+        if (first && materials.first().sample) {
+            emit toastRequested(QStringLiteral(
+                "已载入示例素材，填写文案提示词后点击「生成文案」"));
+        } else if (first) {
+            emit toastRequested(
+                QStringLiteral("已导入 %1 个素材，填写文案提示词后点击「生成文案」")
+                    .arg(materials.size()));
+        } else {
+            emit toastRequested(
+                QStringLiteral("已添加 %1 个素材，会用于后续镜头匹配")
+                    .arg(materials.size()));
+        }
+    }
+}
+
+void MixcutPage::addSampleMaterials()
+{
+    appendMaterials(StudioData::mixcutDemoMaterials(), true);
+}
+
+void MixcutPage::removeMaterial(const QString &id)
+{
+    int index = -1;
+    for (int i = 0; i < m_project.materials.size(); ++i) {
+        if (m_project.materials.at(i).id == id) {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0) {
+        return;
+    }
+    if (m_project.materials.size() == 1 && !m_project.script.trimmed().isEmpty()) {
         const auto answer = QMessageBox::question(
-            this, QStringLiteral("更换视频"),
-            QStringLiteral("更换视频会重新生成文案与配音，当前修改将丢失，是否继续？"),
+            this, QStringLiteral("移除素材"),
+            QStringLiteral("移除最后一个素材会清空当前文案，是否继续？"),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) {
             return;
         }
     }
-
-    m_analysisTimer->stop();
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
-    m_playTimer->stop();
-    m_playing = false;
-    m_playProgress = 0;
-    m_scriptEdited = false;
-    m_scriptVariant = 0;
-    m_analysisProgress = 0;
-    m_voiceProgress = 0;
-
-    m_project.source = source;
-    m_project.hasSource = true;
-    m_project.analysisReady = false;
-    m_project.prompt.clear();
-    m_project.script.clear();
-    m_project.voiceStatus = StudioData::VoiceStatus::Idle;
-
+    m_project.materials.removeAt(index);
+    if (m_project.materials.isEmpty()) {
+        m_scriptTimer->stop();
+        m_analysisProgress = 0;
+        m_scriptEdited = false;
+        m_scriptRewrite = false;
+        m_project.analysisReady = false;
+        m_project.script.clear();
+    }
     rebuildStudio();
-    startAnalysis(2600,
-                  announce
-                      ? (source.sample
-                             ? QStringLiteral("已载入示例视频，AI 正在看片并生成文案")
-                             : QStringLiteral("已导入视频，AI 正在看片并生成文案"))
-                      : QString());
 }
 
-void MixcutPage::clearSource()
+void MixcutPage::clearMaterials()
 {
-    if (!m_project.script.trimmed().isEmpty()) {
-        const auto answer = QMessageBox::question(
-            this, QStringLiteral("移除视频"),
-            QStringLiteral("移除后需要重新上传视频，是否继续？"),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes) {
-            return;
-        }
+    if (m_project.script.trimmed().isEmpty()
+        || QMessageBox::question(
+               this, QStringLiteral("清空素材"),
+               QStringLiteral("清空全部素材会同时清空文案，是否继续？"),
+               QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+            == QMessageBox::Yes) {
+        m_scriptTimer->stop();
+        m_analysisProgress = 0;
+        m_scriptVariant = 0;
+        m_scriptEdited = false;
+        m_scriptRewrite = false;
+        m_project.materials.clear();
+        m_project.analysisReady = false;
+        m_project.script.clear();
+        rebuildStudio();
     }
-    m_analysisTimer->stop();
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
-    m_playTimer->stop();
-    m_playing = false;
-    m_playProgress = 0;
-    m_project.hasSource = false;
-    m_project.source = StudioData::MixcutSource();
-    m_project.analysisReady = false;
-    m_project.prompt.clear();
-    m_project.script.clear();
-    m_project.voiceStatus = StudioData::VoiceStatus::Idle;
-    m_analysisProgress = 0;
-    m_voiceProgress = 0;
-    rebuildStudio();
 }
 
 void MixcutPage::chooseStyle(StudioData::MixcutStyle style)
 {
-    if (style == m_project.style || !m_project.analysisReady) {
+    if (style == m_project.style || scriptJobRunning()) {
         return;
-    }
-    if (m_scriptEdited) {
-        const auto answer = QMessageBox::question(
-            this, QStringLiteral("切换风格"),
-            QStringLiteral("切换风格会重写当前文案，手动修改的内容将丢失，是否继续？"),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes) {
-            const QVector<StudioData::MixcutStyle> styles =
-                StudioData::mixcutStyles();
-            if (m_styleControl) {
-                const int index = styles.indexOf(m_project.style);
-                if (index >= 0) {
-                    m_styleControl->setCurrentIndex(index);
-                }
-            }
-            return;
-        }
     }
     m_scriptVariant = 0;
     m_project.style = style;
-    if (!m_project.hasSource) {
-        refreshStudioState();
-        return;
-    }
-    startAnalysis(1400, QStringLiteral("已切换为「%1」风格，正在重写文案")
-                            .arg(StudioData::mixcutStyleName(style)));
+    emit toastRequested(
+        m_project.script.trimmed().isEmpty()
+            ? QStringLiteral("已切换为「%1」风格，生成文案时会套用")
+                  .arg(StudioData::mixcutStyleName(style))
+            : QStringLiteral("已切换为「%1」风格，点击「换一版」可按新风格重写文案")
+                  .arg(StudioData::mixcutStyleName(style)));
+    refreshStudioState();
 }
 
 void MixcutPage::chooseVoice(const QString &voiceId)
@@ -2419,23 +2486,11 @@ void MixcutPage::chooseVoice(const QString &voiceId)
         return;
     }
     m_project.voiceId = voiceId;
-    m_playTimer->stop();
-    m_playing = false;
-    m_playProgress = 0;
-    if (m_screen == Screen::Hub) {
-        rebuildHub();
-        emit toastRequested(
-            QStringLiteral("已设为默认音色「%1 · %2」，开始混剪时自动套用")
-                .arg(StudioData::getMixcutVoice(voiceId).name,
-                     StudioData::getMixcutVoice(voiceId).label));
-        return;
-    }
-    if (m_project.analysisReady && !m_project.script.trimmed().isEmpty()) {
-        startVoiceJob();
-    } else {
-        refreshVoicePanel();
-    }
-    refreshPreview();
+    const StudioData::MixcutVoice voice = StudioData::getMixcutVoice(voiceId);
+    emit toastRequested(
+        QStringLiteral("已选择音色「%1 · %2」，一键成片时自动生成配音")
+            .arg(voice.name, voice.label));
+    refreshStudioState();
 }
 
 void MixcutPage::chooseRatio(const QString &ratio)
@@ -2444,112 +2499,414 @@ void MixcutPage::chooseRatio(const QString &ratio)
         return;
     }
     m_project.ratio = ratio;
-    m_playTimer->stop();
-    m_playing = false;
-    m_playProgress = 0;
-    rebuildStudio();
+    refreshStudioState();
 }
 
-/* ------------------------------------------------------------------ */
-/* 分析、配音与预览                                                     */
-/* ------------------------------------------------------------------ */
-
-void MixcutPage::startAnalysis(qint64 durationMs, const QString &announce)
+void MixcutPage::toggleVoiceSample(const QString &voiceId)
 {
-    if (!m_project.hasSource) {
+    if (voiceId.isEmpty()) {
         return;
     }
-    m_analysisTimer->stop();
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
-    m_playTimer->stop();
-    m_playing = false;
-    m_playProgress = 0;
+    if (m_sampleVoiceId == voiceId) {
+        stopVoiceSample();
+        return;
+    }
+    m_samplePlayer->stop();
+    const StudioData::MixcutVoice voice = StudioData::getMixcutVoice(voiceId);
+    m_sampleVoiceId = voiceId;
+    m_samplePlayer->setSource(QUrl(voice.sampleSrc));
+    m_samplePlayer->play();
+    emit voiceSampleChanged();
+}
+
+void MixcutPage::stopVoiceSample()
+{
+    if (m_sampleVoiceId.isEmpty()) {
+        return;
+    }
+    m_samplePlayer->stop();
+    m_sampleVoiceId.clear();
+    emit voiceSampleChanged();
+}
+
+void MixcutPage::openVoicePicker()
+{
+    auto *host = window();
+    if (!host) {
+        return;
+    }
+    auto *overlay = new ModalOverlay(host);
+    auto *card = new ModalCard(QStringLiteral("选择配音音色"), 760);
+    card->setContentSpacing(10);
+    auto *micIcon = Studio::iconLabel(Icons::Glyph::Mic, 14, Theme::Ai, card);
+    card->titleLayout()->insertWidget(0, micIcon);
+    card->titleLayout()->insertWidget(
+        2, Studio::pillLabel(
+               QStringLiteral("豆包语音 · %1 种")
+                   .arg(StudioData::mixcutVoices().size()),
+               Theme::Text3, Theme::Surface2, Theme::Border, 9, card));
+
+    struct PickerState {
+        QString draftId;
+        QString query;
+        QString language = QStringLiteral("全部");
+        QString gender = QStringLiteral("全部");
+        QVector<VoiceOptionButton *> buttons;
+        QGridLayout *grid = nullptr;
+        QWidget *gridHost = nullptr;
+        QLabel *countLabel = nullptr;
+        QLabel *footerLabel = nullptr;
+        std::function<void()> rebuild;
+        std::function<void()> refresh;
+    };
+    auto state = std::make_shared<PickerState>();
+    state->draftId = m_project.voiceId;
+
+    auto *searchRow = new QWidget(card);
+    auto *searchRowLayout = new QHBoxLayout(searchRow);
+    searchRowLayout->setContentsMargins(0, 0, 0, 0);
+    searchRowLayout->setSpacing(8);
+    auto *searchHost = new QWidget(searchRow);
+    searchHost->setFixedHeight(32);
+    searchHost->setObjectName(QStringLiteral("mixVoiceSearch"));
+    searchHost->setStyleSheet(
+        QStringLiteral("#mixVoiceSearch { background:%1; border:1px solid %2;"
+                       " border-radius:7px; }")
+            .arg(Theme::alpha(Theme::Surface2, 0.6).name(QColor::HexArgb),
+                 Theme::Border.name()));
+    auto *searchLayout = new QHBoxLayout(searchHost);
+    searchLayout->setContentsMargins(10, 0, 6, 0);
+    searchLayout->setSpacing(6);
+    searchLayout->addWidget(Studio::iconLabel(Icons::Glyph::Search, 12, Theme::Text3,
+                                               searchHost));
+    auto *searchEdit = new QLineEdit(searchHost);
+    searchEdit->setPlaceholderText(QStringLiteral("搜索音色名称、场景或音色 ID"));
+    searchEdit->setStyleSheet(QStringLiteral(
+        "QLineEdit { background:transparent; border:none; color:%1;"
+        " selection-background-color:#4A63BC; }")
+                                  .arg(Theme::Text1.name()));
+    searchEdit->setFont(Theme::font(10));
+    searchLayout->addWidget(searchEdit, 1);
+    auto *clearSearch = new GlyphButton(Icons::Glyph::Close, 16, searchHost);
+    clearSearch->setGlyphSize(9);
+    clearSearch->setColors(Theme::Text3, Theme::Text1);
+    clearSearch->setBackgroundColors(Qt::transparent, Theme::Surface3);
+    clearSearch->setToolTipText(QStringLiteral("清空搜索"));
+    clearSearch->hide();
+    searchLayout->addWidget(clearSearch);
+    searchRowLayout->addWidget(searchHost, 1);
+    state->countLabel = monoLabel(QString(), 9, Theme::Text3, searchRow);
+    searchRowLayout->addWidget(state->countLabel, 0, Qt::AlignVCenter);
+    card->contentLayout()->addWidget(searchRow);
+
+    auto *filterRow = new QWidget(card);
+    auto *filterLayout = new QHBoxLayout(filterRow);
+    filterLayout->setContentsMargins(0, 0, 0, 0);
+    filterLayout->setSpacing(6);
+    filterLayout->addWidget(Ui::label(QStringLiteral("语言"), 9, QFont::Normal,
+                                       Theme::Text3, filterRow));
+    auto *languageControl = new Studio::SegmentedControl(filterRow);
+    languageControl->setOptions({QStringLiteral("全部"), QStringLiteral("中文"),
+                                 QStringLiteral("外语")});
+    languageControl->setCompact(true);
+    languageControl->setFixedWidth(132);
+    filterLayout->addWidget(languageControl);
+    filterLayout->addSpacing(4);
+    filterLayout->addWidget(Ui::label(QStringLiteral("性别"), 9, QFont::Normal,
+                                       Theme::Text3, filterRow));
+    auto *genderControl = new Studio::SegmentedControl(filterRow);
+    genderControl->setOptions({QStringLiteral("全部"), QStringLiteral("女声"),
+                               QStringLiteral("男声")});
+    genderControl->setCompact(true);
+    genderControl->setFixedWidth(132);
+    filterLayout->addWidget(genderControl);
+    filterLayout->addStretch(1);
+    auto *previewHint = new QWidget(filterRow);
+    auto *previewHintLayout = new QHBoxLayout(previewHint);
+    previewHintLayout->setContentsMargins(0, 0, 0, 0);
+    previewHintLayout->setSpacing(4);
+    previewHintLayout->addWidget(Studio::iconLabel(Icons::Glyph::Play, 10,
+                                                    Theme::Text3, previewHint));
+    previewHintLayout->addWidget(Ui::label(QStringLiteral("点击卡片试听示例音"), 9,
+                                           QFont::Normal, Theme::Text3,
+                                           previewHint));
+    filterLayout->addWidget(previewHint, 0, Qt::AlignVCenter);
+    card->contentLayout()->addWidget(filterRow);
+
+    auto *gridContent = new QWidget;
+    state->grid = new QGridLayout(gridContent);
+    state->grid->setContentsMargins(0, 0, 0, 0);
+    state->grid->setHorizontalSpacing(6);
+    state->grid->setVerticalSpacing(6);
+    state->grid->setAlignment(Qt::AlignTop);
+    state->gridHost = gridContent;
+    auto *scroll = new QScrollArea(card);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setMaximumHeight(360);
+    scroll->setStyleSheet(QStringLiteral(
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollArea > QWidget > QWidget { background: transparent; }"));
+    scroll->viewport()->setAutoFillBackground(false);
+    scroll->setWidget(gridContent);
+    card->contentLayout()->addWidget(scroll);
+
+    state->rebuild = [this, state, searchEdit] {
+        while (QLayoutItem *item = state->grid->takeAt(0)) {
+            if (QWidget *widget = item->widget()) {
+                widget->deleteLater();
+            }
+            delete item;
+        }
+        state->buttons.clear();
+        const QString keyword = state->query.trimmed().toLower();
+        QVector<StudioData::MixcutVoice> filtered;
+        for (const StudioData::MixcutVoice &voice : StudioData::mixcutVoices()) {
+            if (state->language == QStringLiteral("中文")
+                && voice.language != QStringLiteral("中文")) {
+                continue;
+            }
+            if (state->language == QStringLiteral("外语")
+                && voice.language == QStringLiteral("中文")) {
+                continue;
+            }
+            if (state->gender != QStringLiteral("全部")
+                && voice.gender != state->gender) {
+                continue;
+            }
+            if (!keyword.isEmpty()) {
+                const QString haystack = QStringLiteral("%1 %2 %3 %4 %5 %6")
+                                             .arg(voice.name, voice.id, voice.label,
+                                                  voice.language, voice.scene,
+                                                  voice.gender)
+                                             .toLower();
+                if (!haystack.contains(keyword)) {
+                    continue;
+                }
+            }
+            filtered.append(voice);
+        }
+        state->countLabel->setText(
+            QStringLiteral("%1/%2").arg(filtered.size())
+                .arg(StudioData::mixcutVoices().size()));
+        if (filtered.isEmpty()) {
+            auto *empty = Ui::label(
+                QStringLiteral("没有找到匹配的音色，试试其他关键词或筛选条件"),
+                10, QFont::Normal, Theme::Text3, state->gridHost);
+            empty->setAlignment(Qt::AlignCenter);
+            empty->setMinimumHeight(180);
+            state->grid->addWidget(empty, 0, 0, 1, 3);
+            return;
+        }
+        for (int index = 0; index < filtered.size(); ++index) {
+            const StudioData::MixcutVoice voice = filtered.at(index);
+            auto *option = new VoiceOptionButton(
+                voice, voice.id == state->draftId,
+                voice.id == m_project.voiceId, state->gridHost);
+            option->setPlaying(voice.id == m_sampleVoiceId);
+            state->buttons.append(option);
+            connect(option, &QAbstractButton::clicked, this,
+                    [this, state, id = voice.id] {
+                        state->draftId = id;
+                        if (state->refresh) {
+                            state->refresh();
+                        }
+                        toggleVoiceSample(id);
+                    });
+            state->grid->addWidget(option, index / 3, index % 3);
+        }
+        Q_UNUSED(searchEdit);
+    };
+
+    state->refresh = [this, state] {
+        for (VoiceOptionButton *button : state->buttons) {
+            button->setSelected(button->voiceId() == state->draftId);
+            button->setPlaying(button->voiceId() == m_sampleVoiceId);
+        }
+        if (!state->footerLabel) {
+            return;
+        }
+        const StudioData::MixcutVoice currentVoice =
+            StudioData::getMixcutVoice(m_project.voiceId);
+        QString html =
+            QStringLiteral(
+                "<span style=\"color:%1;\">当前使用</span> "
+                "<span style=\"color:%2;\">%3</span> "
+                "<span style=\"color:%4;\">·</span> "
+                "<span style=\"color:%1;\">%5</span>")
+                .arg(Theme::Text3.name(), Theme::Text2.name(), currentVoice.name,
+                     Theme::BorderStrong.name(), currentVoice.label);
+        if (state->draftId != m_project.voiceId) {
+            html += QStringLiteral(
+                        " <span style=\"color:%1;\">→</span> "
+                        "<span style=\"color:%2;\">已选 %3</span>")
+                        .arg(Theme::BorderStrong.name(), Theme::Primary.name(),
+                             StudioData::getMixcutVoice(state->draftId).name);
+        }
+        state->footerLabel->setText(html);
+    };
+
+    auto *footerLabel = Ui::richLabel(QString(), 9, Theme::Text3, card);
+    footerLabel->setMinimumWidth(260);
+    state->footerLabel = footerLabel;
+    card->footerLayout()->insertWidget(0, footerLabel);
+
+    auto *cancel = new Button(QStringLiteral("取消"), Button::Default, card);
+    auto *apply = new Button(QStringLiteral("使用此音色"), Button::Primary, card);
+    connect(cancel, &QAbstractButton::clicked, overlay, &ModalOverlay::closeModal);
+    connect(apply, &QAbstractButton::clicked, this, [this, overlay, state] {
+        chooseVoice(state->draftId);
+        overlay->closeModal();
+    });
+    card->addFooterButton(cancel);
+    card->addFooterButton(apply);
+
+    connect(searchEdit, &QLineEdit::textChanged, this,
+            [state, clearSearch](const QString &text) {
+                state->query = text;
+                clearSearch->setVisible(!text.isEmpty());
+                if (state->rebuild) {
+                    state->rebuild();
+                }
+            });
+    connect(clearSearch, &QAbstractButton::clicked, searchEdit,
+            &QLineEdit::clear);
+    connect(languageControl, &Studio::SegmentedControl::currentChanged, this,
+            [state](int index) {
+                state->language = index == 1 ? QStringLiteral("中文")
+                    : (index == 2 ? QStringLiteral("外语") : QStringLiteral("全部"));
+                if (state->rebuild) {
+                    state->rebuild();
+                }
+            });
+    connect(genderControl, &Studio::SegmentedControl::currentChanged, this,
+            [state](int index) {
+                state->gender = index == 1 ? QStringLiteral("女声")
+                    : (index == 2 ? QStringLiteral("男声") : QStringLiteral("全部"));
+                if (state->rebuild) {
+                    state->rebuild();
+                }
+            });
+    connect(this, &MixcutPage::voiceSampleChanged, card, [state] {
+        if (state->refresh) {
+            state->refresh();
+        }
+    });
+    connect(overlay, &ModalOverlay::closed, this, [this, overlay] {
+        stopVoiceSample();
+        overlay->deleteLater();
+    });
+
+    state->rebuild();
+    state->refresh();
+    overlay->showModal(card);
+    searchEdit->setFocus();
+    state->refresh();
+}
+
+void MixcutPage::updatePromptFromEditor()
+{
+    if (!m_promptEdit || m_settingText) {
+        return;
+    }
+    m_project.prompt = m_promptEdit->toPlainText();
+    refreshStudioState();
+}
+
+void MixcutPage::updateScriptFromEditor()
+{
+    if (!m_scriptEdit || m_settingText) {
+        return;
+    }
+    m_project.script = m_scriptEdit->toPlainText();
+    m_scriptEdited = true;
+    refreshStudioState();
+}
+
+void MixcutPage::generateFromPrompt()
+{
+    if (!hasMaterials() || scriptJobRunning()) {
+        return;
+    }
+    const QString prompt = m_project.prompt.trimmed();
+    if (prompt.isEmpty()) {
+        return;
+    }
+    if (m_scriptEdited
+        && QMessageBox::question(
+               this, QStringLiteral("生成文案"),
+               QStringLiteral("按提示词生成会覆盖你手动修改的文案，是否继续？"),
+               QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+            != QMessageBox::Yes) {
+        return;
+    }
+    const bool rewriting = !m_project.script.trimmed().isEmpty();
+    if (rewriting) {
+        ++m_scriptVariant;
+    }
+    startScriptJob(1800, rewriting);
+}
+
+void MixcutPage::regenerateScript()
+{
+    if (scriptJobRunning() || m_project.script.trimmed().isEmpty()) {
+        return;
+    }
+    if (m_scriptEdited
+        && QMessageBox::question(
+               this, QStringLiteral("换一版文案"),
+               QStringLiteral("换一版会覆盖你手动修改的文案，是否继续？"),
+               QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+            != QMessageBox::Yes) {
+        return;
+    }
+    ++m_scriptVariant;
+    startScriptJob(1800, true);
+}
+
+void MixcutPage::startScriptJob(qint64 durationMs, bool rewriting,
+                                const QString &announce)
+{
+    if (!hasMaterials()) {
+        return;
+    }
+    m_scriptTimer->stop();
     m_analysisProgress = 0;
-    m_voiceProgress = 0;
-    m_analysisDuration = durationMs;
-    m_analysisStartedAt = QDateTime::currentMSecsSinceEpoch();
+    m_scriptRewrite = rewriting;
+    m_scriptStartedAt = QDateTime::currentMSecsSinceEpoch();
+    m_scriptDuration = durationMs;
     m_project.analysisReady = false;
-    m_project.voiceStatus = StudioData::VoiceStatus::Idle;
-    m_analysisTimer->start();
+    m_scriptTimer->start();
     refreshStudioState();
     if (!announce.isEmpty()) {
         emit toastRequested(announce);
     }
 }
 
-void MixcutPage::tickAnalysis()
+void MixcutPage::tickScript()
 {
-    const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_analysisStartedAt;
+    const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_scriptStartedAt;
     m_analysisProgress = qBound(
-        0, static_cast<int>(qMin<qint64>(100, elapsed * 100 / m_analysisDuration)), 100);
-    refreshAnalysisProgress();
+        0, static_cast<int>(qMin<qint64>(100, elapsed * 100 / qMax<qint64>(1, m_scriptDuration))),
+        100);
+    refreshScriptProgress();
     if (m_analysisProgress < 100) {
         return;
     }
-
-    m_analysisTimer->stop();
+    m_scriptTimer->stop();
     m_project.script = StudioData::generateMixcutScriptFromPrompt(
         m_project.prompt, m_project.style, m_scriptVariant);
     m_project.analysisReady = true;
     m_scriptEdited = false;
-    m_project.voiceStatus = StudioData::VoiceStatus::Idle;
-    m_voiceProgress = 0;
+    m_scriptRewrite = false;
     if (m_scriptEdit) {
-        m_settingScriptText = true;
+        m_settingText = true;
         m_scriptEdit->setPlainText(m_project.script);
-        m_settingScriptText = false;
+        m_settingText = false;
     }
     refreshStudioState();
-    startVoiceJob();
-}
-
-void MixcutPage::startVoiceJob()
-{
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
-    if (!m_project.hasSource || !m_project.analysisReady
-        || m_project.script.trimmed().isEmpty()) {
-        m_project.voiceStatus = StudioData::VoiceStatus::Idle;
-        m_voiceProgress = 0;
-        refreshVoicePanel();
-        return;
-    }
-    m_project.voiceStatus = StudioData::VoiceStatus::Generating;
-    m_voiceProgress = 0;
-    m_voiceTimer->start();
-    refreshVoicePanel();
-    refreshStudioState();
-}
-
-void MixcutPage::tickVoice()
-{
-    if (m_project.voiceStatus == StudioData::VoiceStatus::Ready) {
-        m_voiceTimer->stop();
-        return;
-    }
-    m_voiceProgress = qMin(100, m_voiceProgress + 4);
-    if (m_voiceProgress >= 100) {
-        m_voiceTimer->stop();
-        m_project.voiceStatus = StudioData::VoiceStatus::Ready;
-        refreshStudioState();
-        return;
-    }
-    refreshVoicePanel();
-}
-
-void MixcutPage::scheduleVoiceSync()
-{
-    m_voiceDebounce->stop();
-    m_voiceTimer->stop();
-    m_voiceProgress = 0;
-    if (!m_project.script.trimmed().isEmpty() && m_project.analysisReady) {
-        m_project.voiceStatus = StudioData::VoiceStatus::Outdated;
-        m_voiceDebounce->start();
-    } else {
-        m_project.voiceStatus = StudioData::VoiceStatus::Idle;
-    }
-    refreshVoicePanel();
 }
 
 void MixcutPage::refreshStudioState()
@@ -2557,644 +2914,274 @@ void MixcutPage::refreshStudioState()
     if (!m_studioScreen) {
         return;
     }
+    const bool job = scriptJobRunning();
+    const bool ready = m_project.analysisReady;
+    const bool hasScript = !m_project.script.trimmed().isEmpty();
+    const StudioData::MixcutScriptStats stats =
+        StudioData::mixcutScriptStats(m_project.script);
 
-    const int step = activeStep();
-    if (m_stepRail) {
-        m_stepRail->setActiveStep(step);
-    }
-    if (m_studioStepLabel) {
-        m_studioStepLabel->setText(
-            step == 1 ? QStringLiteral("上传视频")
-                      : (step == 2 ? QStringLiteral("文案与配音")
-                                   : QStringLiteral("一键成片")));
-    }
-    if (!m_project.hasSource) {
-        if (m_studioDescription) {
-            m_studioDescription->setText(
-                QStringLiteral("上传一段视频，AI 会看片写文案、生成配音，并自动完成混剪包装。"));
-        }
-        if (m_footerSummary) {
-            m_footerSummary->setText(
-                QStringLiteral("上传视频后，AI 会自动撰写文案并生成配音"));
-        }
-        if (m_footerHint) {
-            m_footerHint->setText(QStringLiteral("字幕、音效与 BGM 无需手动设置"));
-        }
-        return;
-    }
-    const QStringList stepLabels = {QStringLiteral("上传视频"),
-                                    QStringLiteral("文案与配音"),
-                                    QStringLiteral("一键成片")};
-    if (m_stepRail) {
-        m_stepRail->setActiveStep(step);
-    }
-    if (m_studioStepLabel) {
-        m_studioStepLabel->setText(stepLabels.value(step - 1));
-    }
     if (m_studioDescription) {
-        if (!m_project.analysisReady) {
-            m_studioDescription->setText(
-                m_project.prompt.trimmed().isEmpty()
-                    ? (m_project.script.isEmpty()
-                           ? QStringLiteral("AI 正在理解画面并撰写口播文案，完成后自动生成配音。")
-                           : QStringLiteral("AI 正在重写文案，完成后会自动重新生成配音。"))
-                    : QStringLiteral("AI 正在按提示词重写文案，完成后会自动重新生成配音。"));
-        } else if (m_project.voiceStatus == StudioData::VoiceStatus::Generating
-                   || m_project.voiceStatus == StudioData::VoiceStatus::Outdated) {
-            m_studioDescription->setText(
-                QStringLiteral("文案已就绪，AI 正在合成配音，完成后即可一键成片。"));
-        } else {
-            m_studioDescription->setText(
-                QStringLiteral("文案与配音已就绪，可以试听、微调，或直接一键成片。"));
-        }
+        m_studioDescription->setText(headerDescription());
     }
-
-    const bool analyzing = !m_project.analysisReady;
+    if (m_stepRail) {
+        m_stepRail->setActiveStep(activeStep());
+    }
+    if (m_studioStepLabel) {
+        m_studioStepLabel->setText(activeStep() == 2 ? QStringLiteral("一键成片")
+                                                     : QStringLiteral("素材与文案"));
+    }
+    if (m_deliveryHint) {
+        m_deliveryHint->setText(
+            stats.chars > 0
+                ? QStringLiteral("预计 %1 · 自动下载并写入草稿")
+                      .arg(stats.durationLabel)
+                : QStringLiteral("文案生成后自动估算时长"));
+    }
+    if (m_outputHint) {
+        m_outputHint->setText(
+            QStringLiteral("%1 · %2")
+                .arg(StudioData::mixcutRatioDimensions(m_project.ratio),
+                     StudioData::mixcutRatioHint(m_project.ratio)));
+    }
     if (m_styleControl) {
-        m_styleControl->setEnabled(!analyzing);
-    }
-    if (m_ratioControl) {
-        m_ratioControl->setEnabled(!analyzing);
+        m_styleControl->setEnabled(!job);
     }
     if (m_promptEdit) {
-        m_promptEdit->setReadOnly(analyzing);
-        m_promptEdit->setEnabled(!analyzing);
-    }
-    if (m_scriptEdit) {
-        m_scriptEdit->setReadOnly(analyzing);
-        m_scriptEdit->setEnabled(!analyzing);
-    }
-    if (m_promptEdit && m_promptEdit->toPlainText() != m_project.prompt) {
-        m_settingScriptText = true;
-        m_promptEdit->setPlainText(m_project.prompt);
-        m_settingScriptText = false;
-    }
-    if (m_scriptEdit && m_scriptEdit->toPlainText() != m_project.script) {
-        m_settingScriptText = true;
-        m_scriptEdit->setPlainText(m_project.script);
-        m_settingScriptText = false;
-    }
-    if (m_regenerateButton) {
-        m_regenerateButton->setEnabled(!analyzing && m_project.hasSource);
-    }
-
-    if (m_previewAnalysisOverlay) {
-        m_previewAnalysisOverlay->setVisible(analyzing);
-    }
-    if (m_previewPlayButton) {
-        m_previewPlayButton->setEnabled(!analyzing);
-        setPlayIcon(m_previewPlayButton, m_playing);
-    }
-    if (m_previewAnalysisLabel) {
-        m_previewAnalysisLabel->setText(
-            m_project.prompt.trimmed().isEmpty()
-                ? (m_project.script.isEmpty()
-                       ? QStringLiteral("AI 正在看片并写文案")
-                       : QStringLiteral("AI 正在重写文案"))
-                : QStringLiteral("AI 正在按提示词写文案"));
-    }
-    if (m_previewAnalysisProgress) {
-        m_previewAnalysisProgress->setText(
-            QStringLiteral("%1%").arg(m_analysisProgress));
-    }
-    if (m_previewAnalysisBar) {
-        m_previewAnalysisBar->setValue(m_analysisProgress);
-    }
-
-    if (m_scriptOverlay) {
-        m_scriptOverlay->setVisible(analyzing);
-    }
-    if (m_scriptOverlayLabel) {
-        m_scriptOverlayLabel->setText(
-            m_project.prompt.trimmed().isEmpty()
-                ? (m_project.script.isEmpty()
-                       ? QStringLiteral("AI 正在看片并写文案")
-                       : QStringLiteral("AI 正在重写文案"))
-                : QStringLiteral("AI 正在按提示词生成文案"));
-    }
-    if (m_scriptOverlayDetail) {
-        m_scriptOverlayDetail->setText(
-            analyzing ? QStringLiteral("已识别 %1 个镜头，完成后自动生成配音")
-                            .arg(m_project.source.shots)
-                      : QString());
-    }
-    if (m_scriptSkeleton) {
-        const bool skeleton = analyzing && m_project.script.trimmed().isEmpty();
-        m_scriptSkeleton->setVisible(skeleton);
-    }
-    if (m_scriptOverlayProgress) {
-        m_scriptOverlayProgress->setText(QStringLiteral("%1%").arg(m_analysisProgress));
-    }
-    if (m_scriptOverlayBar) {
-        m_scriptOverlayBar->setValue(m_analysisProgress);
-    }
-
-    refreshScriptStats();
-    refreshVoicePanel();
-    refreshPreview();
-
-    if (m_startButton) {
-        const bool syncing =
-            m_project.voiceStatus == StudioData::VoiceStatus::Generating
-            || m_project.voiceStatus == StudioData::VoiceStatus::Outdated;
-        if (analyzing) {
-            m_startButton->setText(QStringLiteral("AI 正在写文案…"));
-            m_startButton->setLeadingGlyph(Icons::Glyph::Sparkle);
-        } else if (syncing) {
-            m_startButton->setText(QStringLiteral("正在生成配音…"));
-            m_startButton->setLeadingGlyph(Icons::Glyph::Sparkle);
-        } else {
-            m_startButton->setText(QStringLiteral("一键成片"));
-            m_startButton->setLeadingGlyph(Icons::Glyph::Sparkle);
-        }
-        m_startButton->setEnabled(canStart());
-        m_startButton->setToolTip(
-            canStart()
-                ? QStringLiteral("开始 AI 混剪，自动生成成片与剪映草稿")
-                : (analyzing ? QStringLiteral("AI 正在撰写文案")
-                             : (syncing ? QStringLiteral("配音生成中")
-                                        : QStringLiteral("请先补全文案"))));
-    }
-
-    if (m_footerSummary) {
-        const StudioData::MixcutScriptStats stats =
-            StudioData::mixcutScriptStats(m_project.script);
-        const StudioData::MixcutVoice voice =
-            StudioData::getMixcutVoice(m_project.voiceId);
-        const bool syncing =
-            m_project.voiceStatus == StudioData::VoiceStatus::Generating
-            || m_project.voiceStatus == StudioData::VoiceStatus::Outdated;
-        QString summary;
-        if (analyzing) {
-            summary = m_project.prompt.trimmed().isEmpty()
-                ? (m_project.script.isEmpty()
-                       ? QStringLiteral("AI 正在看片并撰写文案…")
-                       : QStringLiteral("AI 正在重写文案…"))
-                : QStringLiteral("AI 正在按提示词重写文案…");
-        } else if (syncing) {
-            summary = QStringLiteral("正在合成「%1 · %2」配音…")
-                          .arg(voice.name, voice.label);
-        } else if (stats.chars == 0) {
-            summary = QStringLiteral("文案为空，请先输入口播文案");
-        } else if (canStart()) {
-            summary = QStringLiteral("预计成片 %1 · %2 个镜头 · %3 · 成片 + 剪映草稿")
-                          .arg(stats.durationLabel)
-                          .arg(m_project.source.shots)
-                          .arg(m_project.ratio);
-        } else {
-            summary = QStringLiteral("完成文案与配音后即可一键成片");
-        }
-        m_footerSummary->setText(summary);
-    }
-    if (m_footerHint) {
-        m_footerHint->setText(
-            analyzing
-                ? QStringLiteral("已识别 %1 个镜头，文案完成后自动配音")
-                      .arg(m_project.source.shots)
-                : (m_project.voiceStatus == StudioData::VoiceStatus::Generating
-                       ? QStringLiteral("配音完成后即可成片，无需其他设置")
-                       : (StudioData::mixcutScriptStats(m_project.script).chars == 0
-                              ? QStringLiteral("也可以点击「换一版」让 AI 重新撰写")
-                              : (canStart()
-                                     ? QStringLiteral("字幕、音效与 BGM 将自动配置，可先试听配音")
-                                     : QStringLiteral("请稍候，正在准备成片")))));
-    }
-}
-
-void MixcutPage::refreshAnalysisProgress()
-{
-    if (m_previewAnalysisProgress) {
-        m_previewAnalysisProgress->setText(
-            QStringLiteral("%1%").arg(m_analysisProgress));
-    }
-    if (m_previewAnalysisBar) {
-        m_previewAnalysisBar->setValue(m_analysisProgress);
-    }
-    if (m_scriptOverlayProgress) {
-        m_scriptOverlayProgress->setText(QStringLiteral("%1%").arg(m_analysisProgress));
-    }
-    if (m_scriptOverlayBar) {
-        m_scriptOverlayBar->setValue(m_analysisProgress);
-    }
-    if (m_scriptMeta) {
-        m_scriptMeta->setText(m_project.script.trimmed().isEmpty()
-                                  ? QStringLiteral("正在根据画面生成…")
-                                  : QStringLiteral("正在重写…"));
-        m_scriptMeta->setVisible(true);
-    }
-}
-
-void MixcutPage::refreshScriptStats()
-{
-    const StudioData::MixcutScriptStats stats =
-        StudioData::mixcutScriptStats(m_project.script);
-    if (m_scriptMeta) {
-        if (!m_project.analysisReady) {
-            m_scriptMeta->setText(m_project.script.trimmed().isEmpty()
-                                      ? QStringLiteral("正在根据画面生成…")
-                                      : QStringLiteral("正在重写…"));
-        } else {
-            m_scriptMeta->setText(QStringLiteral("%1 字 · %2 句")
-                                      .arg(stats.chars)
-                                      .arg(stats.sentences));
-        }
-        m_scriptMeta->setVisible(true);
-    }
-    if (m_scriptStats) {
-        if (stats.chars > 0) {
-            m_scriptStats->setText(
-                QStringLiteral("%1 字 · %2 句 · 预计口播 %3 · AI 按句切字幕")
-                    .arg(stats.chars)
-                    .arg(stats.sentences)
-                    .arg(stats.durationLabel));
-        } else {
-            m_scriptStats->setText(
-                QStringLiteral("文案生成后，AI 自动按句切字幕并合成配音"));
-        }
+        m_promptEdit->setEnabled(!job);
     }
     if (m_generateButton) {
-        m_generateButton->setEnabled(m_project.analysisReady
+        m_generateButton->setEnabled(hasMaterials() && ready && !job
                                      && !m_project.prompt.trimmed().isEmpty());
+        m_generateButton->setText(job ? QStringLiteral("生成中…")
+                                      : QStringLiteral("生成文案"));
+        m_generateButton->setToolTip(
+            !hasMaterials()
+                ? QStringLiteral("请先上传素材")
+                : (m_project.prompt.trimmed().isEmpty()
+                       ? QStringLiteral("请先输入文案提示词")
+                       : QStringLiteral("按提示词生成文案（⌘/Ctrl + Enter）")));
     }
+    if (m_regenerateButton) {
+        m_regenerateButton->setEnabled(ready && hasScript && !job);
+        m_regenerateButton->setToolTip(
+            hasScript ? QStringLiteral("让 AI 换一版文案（会沿用提示词）")
+                      : QStringLiteral("生成文案后可换一版"));
+    }
+    if (m_scriptEdit) {
+        m_scriptEdit->setEnabled(ready && !job);
+        m_scriptEdit->setVisible(!(job && !hasScript));
+        m_scriptEdit->setPlaceholderText(
+            hasMaterials()
+                ? QStringLiteral("填写文案提示词并点击「生成文案」，也可以直接在这里写口播文案…")
+                : QStringLiteral("上传素材后，填写文案提示词生成口播文案…"));
+    }
+    if (m_scriptSkeleton) {
+        m_scriptSkeleton->setVisible(job && !hasScript);
+        m_scriptSkeleton->raise();
+    }
+    if (m_scriptRewriteOverlay) {
+        m_scriptRewriteOverlay->setVisible(job && hasScript);
+        if (job && hasScript) {
+            m_scriptRewriteOverlay->raise();
+        }
+        if (m_scriptRewriteLabel) {
+            m_scriptRewriteLabel->setText(
+                m_project.prompt.trimmed().isEmpty()
+                    ? QStringLiteral("正在换一版文案…")
+                    : QStringLiteral("正在按提示词生成文案…"));
+        }
+    }
+    if (m_startButton) {
+        m_startButton->setEnabled(canStart());
+        m_startButton->setText(job ? QStringLiteral("文案生成中…")
+                                   : QStringLiteral("一键成片"));
+        m_startButton->setToolTip(
+            canStart()
+                ? QStringLiteral("自动生成「%1」配音并合成成片与剪映草稿")
+                      .arg(StudioData::getMixcutVoice(m_project.voiceId).name)
+                : (job ? QStringLiteral("AI 正在撰写文案")
+                       : QStringLiteral("请先生成或填写文案")));
+    }
+    refreshScriptMeta();
+    refreshScriptProgress();
+    refreshVoiceSection();
+    refreshFooter();
 }
 
-QString MixcutPage::activeCaption() const
+void MixcutPage::refreshScriptMeta()
 {
-    const StudioData::MixcutScriptStats stats =
-        StudioData::mixcutScriptStats(m_project.script);
-    if (stats.lines.isEmpty()) {
-        return StudioData::mixcutStyleMeta(m_project.style).captionTitle;
-    }
-    if (!m_playing && m_playProgress <= 0) {
-        return stats.lines.first();
-    }
-    const int index = qBound(
-        0, static_cast<int>(std::floor((m_playProgress / 100.0) * stats.lines.size())),
-        stats.lines.size() - 1);
-    return stats.lines.at(index);
-}
-
-void MixcutPage::refreshPreview()
-{
-    if (!m_previewPoster || !m_project.hasSource) {
+    if (!m_scriptMeta) {
         return;
     }
-    const StudioData::MixcutStyleMeta &meta =
-        StudioData::mixcutStyleMeta(m_project.style);
-    const StudioData::MixcutVoice voice =
-        StudioData::getMixcutVoice(m_project.voiceId);
+    const bool job = scriptJobRunning();
     const StudioData::MixcutScriptStats stats =
         StudioData::mixcutScriptStats(m_project.script);
-    const bool analyzing = !m_project.analysisReady;
-    const bool voiceReady =
-        m_project.voiceStatus == StudioData::VoiceStatus::Ready;
-
-    Studio::MixPosterSpec spec = m_previewPoster->spec();
-    spec.scene = m_project.source.scenes.value(0);
-    spec.title = meta.captionTitle;
-    QString caption = activeCaption();
-    if (analyzing && m_project.script.trimmed().isEmpty()) {
-        caption = QStringLiteral("AI 正在理解画面并撰写口播文案…");
-    } else if (analyzing) {
-        caption = QStringLiteral("AI 正在重写一版更合适的文案…");
+    const bool hasScript = stats.chars > 0;
+    if (job) {
+        m_scriptMeta->setText(m_scriptRewrite
+                                  ? QStringLiteral("正在重写…")
+                                  : QStringLiteral("正在按提示词撰写…"));
+    } else if (!hasMaterials()) {
+        m_scriptMeta->setText(QStringLiteral("等待素材"));
+    } else if (hasScript) {
+        m_scriptMeta->setText(QStringLiteral("%1 字 · %2 句")
+                                  .arg(stats.chars)
+                                  .arg(stats.sentences));
+    } else {
+        m_scriptMeta->setText(QStringLiteral("待生成文案"));
     }
-    spec.caption = caption;
-    spec.highlight.clear();
-    for (const QString &keyword : meta.keywords) {
-        if (caption.contains(keyword)) {
-            spec.highlight = keyword;
-            break;
+    m_scriptMeta->setVisible(true);
+    if (m_scriptStats) {
+        if (hasScript) {
+            m_scriptStats->setText(
+                QStringLiteral("%1 字 · %2 句 · 预计口播 "
+                               "<b style=\"font-family:monospace;color:%3;\">%4</b>"
+                               " · 成片时按句切字幕")
+                    .arg(stats.chars)
+                    .arg(stats.sentences)
+                    .arg(Theme::Text2.name(), stats.durationLabel));
+        } else {
+            m_scriptStats->setText(
+                hasMaterials()
+                    ? QStringLiteral("填写提示词生成文案，一键成片时自动生成配音与字幕")
+                    : QStringLiteral("上传素材并生成文案后，一键成片时自动生成配音"));
         }
     }
-    spec.voiceName = voiceReady
-        ? QStringLiteral("%1 · %2").arg(voice.name, voice.label)
-        : QString();
-    spec.secondaryScenes = m_project.source.scenes.mid(1, 2);
-    spec.ratio = m_project.ratio;
-    spec.progress = m_playProgress;
-    spec.timecode = (m_playing || m_playProgress > 0)
-        ? StudioData::formatElapsed(
-              stats.seconds * m_playProgress * 10LL)
-        : (stats.chars > 0 ? stats.durationLabel : QStringLiteral("—"));
-    spec.dimmed = analyzing;
-    m_previewPoster->setSpec(spec);
-
-    if (m_previewPlayButton) {
-        m_previewPlayButton->setVisible(!analyzing);
-        setPlayIcon(m_previewPlayButton, m_playing);
+    if (m_scriptSave) {
+        m_scriptSave->setVisible(hasMaterials());
     }
-    if (m_playBar) {
-        m_playBar->setValue(m_playProgress);
-    }
-    if (m_playClock) {
-        m_playClock->setText(
-            StudioData::formatElapsed(stats.seconds * m_playProgress * 10LL));
-    }
-    if (m_playDuration) {
-        m_playDuration->setText(stats.chars > 0 ? stats.durationLabel
-                                                : QStringLiteral("--:--"));
-    }
-    if (m_previewStatusLabel) {
-        m_previewStatusLabel->setText(
-            voiceReady ? QStringLiteral("配音就绪")
-                       : (analyzing ? QStringLiteral("文案生成中")
-                                    : QStringLiteral("配音生成中")));
-    }
-    if (m_previewMeta) {
-        m_previewMeta->setText(
-            analyzing ? QStringLiteral("文案与配音完成后可试听")
-                      : (voiceReady ? QStringLiteral("可试听")
-                                    : QStringLiteral("配音生成中")));
-        m_previewMeta->setVisible(true);
+    if (m_scriptSave && m_scriptSave->parentWidget()) {
+        m_scriptSave->parentWidget()->setVisible(hasMaterials());
     }
 }
 
-void MixcutPage::refreshVoicePanel()
+void MixcutPage::refreshScriptProgress()
 {
+    const QString percent = QStringLiteral("%1%").arg(m_analysisProgress);
+    if (m_scriptSkeletonProgress) {
+        m_scriptSkeletonProgress->setText(percent);
+    }
+    if (m_scriptRewriteProgress) {
+        m_scriptRewriteProgress->setText(percent);
+    }
+    if (m_scriptRewriteBar) {
+        m_scriptRewriteBar->setValue(m_analysisProgress);
+    }
+    if (m_scriptSkeleton) {
+        auto *bar = m_scriptSkeleton->findChild<ProgressBar *>();
+        if (bar) {
+            bar->setValue(m_analysisProgress);
+        }
+    }
+}
+
+void MixcutPage::refreshVoiceSection()
+{
+    if (!m_voiceOrb) {
+        return;
+    }
     const StudioData::MixcutVoice voice =
         StudioData::getMixcutVoice(m_project.voiceId);
     const StudioData::MixcutScriptStats stats =
         StudioData::mixcutScriptStats(m_project.script);
-    const bool ready = m_project.voiceStatus == StudioData::VoiceStatus::Ready;
-    const bool syncing =
-        m_project.voiceStatus == StudioData::VoiceStatus::Generating
-        || m_project.voiceStatus == StudioData::VoiceStatus::Outdated;
-    const bool analyzing = !m_project.analysisReady;
-
-    for (VoiceChoiceButton *button : m_voiceCards) {
-        if (button) {
-            button->setSelected(button->voiceId() == voice.id);
-        }
+    const bool hasScript = stats.chars > 0;
+    m_voiceOrb->setVoice(voice);
+    if (m_voiceName) {
+        m_voiceName->setText(voice.name);
+    }
+    if (m_voiceRecommendTag) {
+        m_voiceRecommendTag->setVisible(voice.recommended);
+    }
+    if (m_voiceScene) {
+        m_voiceScene->setText(voice.scene);
+    }
+    if (m_voiceLanguage) {
+        m_voiceLanguage->setText(
+            QStringLiteral("%1 · %2").arg(voice.language, voice.gender));
     }
     if (m_voiceMeta) {
-        m_voiceMeta->setText(
-            ready ? QStringLiteral("%1 · %2").arg(voice.label, stats.durationLabel)
-                  : (syncing ? QStringLiteral("生成中…") : QStringLiteral("自动生成")));
+        m_voiceMeta->setText(hasScript
+                                 ? QStringLiteral("%1 · 预计 %2")
+                                       .arg(voice.name, stats.durationLabel)
+                                 : QStringLiteral("40 种豆包音色"));
+        m_voiceMeta->setVisible(true);
     }
-    if (m_voiceDurationLabel) {
-        m_voiceDurationLabel->setText(
-            ready ? stats.durationLabel : QStringLiteral("—"));
+    if (m_voiceSampleButton) {
+        const bool playing = m_sampleVoiceId == voice.id;
+        m_voiceSampleButton->setLeadingGlyph(playing ? Icons::Glyph::Pause
+                                                     : Icons::Glyph::Play);
+        m_voiceSampleButton->setToolTip(
+            playing ? QStringLiteral("停止试听示例音")
+                    : QStringLiteral("播放示例音"));
     }
-    if (m_voiceWave) {
-        m_voiceWave->setColor(syncing ? Theme::Ai
-                                      : (ready ? voice.accent : Theme::Text3));
-        m_voiceWave->setProgress(ready ? m_playProgress : -1);
-        m_voiceWave->setAnimated(syncing);
-    }
-    if (m_voicePlay) {
-        m_voicePlay->setEnabled(ready);
-        m_voicePlay->setGlyph(m_playing ? Icons::Glyph::Pause : Icons::Glyph::Play);
-    }
-    if (m_voiceStatus) {
-        QString status;
-        if (ready) {
-            status = m_playing ? QStringLiteral("正在试听配音，点击暂停")
-                               : QStringLiteral("配音已生成，点击播放试听");
-        } else if (syncing) {
-            status = m_project.voiceStatus == StudioData::VoiceStatus::Outdated
-                ? QStringLiteral("文案已修改，正在自动同步配音…")
-                : QStringLiteral("正在合成配音… %1%").arg(m_voiceProgress);
-        } else if (analyzing) {
-            status = QStringLiteral("AI 写完文案后自动生成配音");
-        } else if (stats.chars > 0) {
-            status = QStringLiteral("选择音色后自动生成配音");
-        } else {
-            status = QStringLiteral("输入文案后自动生成配音");
-        }
-        m_voiceStatus->setText(status);
-        m_voiceStatus->setStyleSheet(
-            QStringLiteral("color:%1;background:transparent;")
-                .arg((syncing ? Theme::Ai : Theme::Text3).name()));
-    }
-    if (m_voiceStatusDot) {
-        m_voiceStatusDot->setStyleSheet(
-            QStringLiteral("background:%1;border-radius:2px;")
-                .arg((syncing ? Theme::Ai
-                              : (ready ? Theme::Success : Theme::BorderStrong))
-                         .name()));
-    }
-    if (m_voiceNameLabel) {
-        m_voiceNameLabel->setText(
-            QStringLiteral("%1 · %2").arg(voice.name, voice.label));
-    }
-    if (m_voiceRegenerate) {
-        m_voiceRegenerate->setEnabled(ready);
-    }
-    if (m_voiceProgressBar) {
-        m_voiceProgressBar->setVisible(syncing);
-        m_voiceProgressBar->setValue(m_voiceProgress);
+    if (m_voiceSynthesisHint) {
+        m_voiceSynthesisHint->setText(
+            hasScript
+                ? QStringLiteral("按当前文案生成，预计 %1 · 上方示例音仅用于试听")
+                      .arg(stats.durationLabel)
+                : (scriptJobRunning()
+                       ? QStringLiteral("文案生成后，一键成片时自动合成配音")
+                       : QStringLiteral("生成文案并选好音色后，一键成片时自动合成配音")));
     }
 }
 
-void MixcutPage::updateScriptFromEditor()
+void MixcutPage::refreshFooter()
 {
-    if (m_settingScriptText || !m_scriptEdit) {
+    if (!m_footerSummary || !m_footerHint) {
         return;
     }
-    if (!m_project.analysisReady) {
-        return;
-    }
-    m_project.script = m_scriptEdit->toPlainText();
-    m_scriptEdited = true;
-    m_project.voiceStatus = m_project.script.trimmed().isEmpty()
-        ? StudioData::VoiceStatus::Idle
-        : StudioData::VoiceStatus::Outdated;
-    m_playTimer->stop();
-    m_playing = false;
-    m_playProgress = 0;
-    refreshScriptStats();
-    scheduleVoiceSync();
-    refreshPreview();
-}
+    const bool job = scriptJobRunning();
+    const bool hasScript = !m_project.script.trimmed().isEmpty();
+    const StudioData::MixcutScriptStats stats =
+        StudioData::mixcutScriptStats(m_project.script);
+    const StudioData::MixcutMaterialStats materialStats =
+        StudioData::mixcutMaterialStats(m_project.materials);
 
-void MixcutPage::updatePromptFromEditor()
-{
-    if (m_settingScriptText || !m_promptEdit) {
+    if (!hasMaterials()) {
+        m_footerSummary->setText(QStringLiteral("等待上传素材"));
+        m_footerHint->setText(
+            QStringLiteral("支持视频与图片素材 · 多选上传 · 视频建议 15 秒–3 分钟"));
         return;
     }
-    m_project.prompt = m_promptEdit->toPlainText();
-    refreshScriptStats();
-}
-
-void MixcutPage::regenerateScript()
-{
-    if (!m_project.analysisReady) {
+    if (job) {
+        m_footerSummary->setText(QStringLiteral("AI 正在按提示词撰写文案…"));
+        m_footerHint->setText(QStringLiteral("文案生成后可手动微调，再选择音色一键成片"));
         return;
     }
-    if (m_scriptEdited) {
-        const auto answer = QMessageBox::question(
-            this, QStringLiteral("换一版"),
-            QStringLiteral("换一版会覆盖你手动修改的文案，是否继续？"),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes) {
-            return;
-        }
-    }
-    m_scriptVariant += 1;
-    startAnalysis(1400, QString());
-}
-
-void MixcutPage::generateFromPrompt()
-{
-    if (!m_project.analysisReady || m_project.prompt.trimmed().isEmpty()) {
+    if (!hasScript) {
+        m_footerSummary->setText(
+            QStringLiteral("文案待生成 · 填写提示词后点击「生成文案」"));
+        m_footerHint->setText(QStringLiteral("也可以直接在文案框中手动撰写"));
         return;
     }
-    if (m_scriptEdited) {
-        const auto answer = QMessageBox::question(
-            this, QStringLiteral("生成文案"),
-            QStringLiteral("按提示词生成会覆盖你手动修改的文案，是否继续？"),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes) {
-            return;
-        }
-    }
-    m_scriptVariant += 1;
-    startAnalysis(1400, QStringLiteral("正在按提示词生成文案"));
-}
-
-void MixcutPage::regenerateVoice()
-{
-    if (m_project.voiceStatus != StudioData::VoiceStatus::Ready) {
-        return;
-    }
-    startVoiceJob();
-}
-
-/* ------------------------------------------------------------------ */
-/* 播放                                                                 */
-/* ------------------------------------------------------------------ */
-
-void MixcutPage::togglePlayback()
-{
-    if (m_screen == Screen::Result) {
-        if (!m_hasResult) {
-            return;
-        }
-        if (m_playProgress >= 100) {
-            m_playProgress = 0;
-        }
-        m_playing = !m_playing;
-        if (m_playing) {
-            m_playTimer->start();
-        } else {
-            m_playTimer->stop();
-        }
-        if (m_resultCenterPlay) {
-            setPlayIcon(m_resultCenterPlay, m_playing);
-        }
-        if (m_resultPlayButton) {
-            m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
-                                                  : QStringLiteral("播放成片"));
-            m_resultPlayButton->setLeadingGlyph(m_playing ? Icons::Glyph::Pause
-                                                          : Icons::Glyph::Play);
-        }
-        return;
-    }
-    if (!m_project.hasSource) {
-        return;
-    }
-    if (m_project.voiceStatus != StudioData::VoiceStatus::Ready) {
-        emit toastRequested(
-            !m_project.analysisReady
-                ? QStringLiteral("AI 正在写文案，文案完成后会自动生成配音")
-                : QStringLiteral("配音生成中，完成后即可试听"));
-        return;
-    }
-    if (m_playProgress >= 100) {
-        m_playProgress = 0;
-    }
-    m_playing = !m_playing;
-    if (m_playing) {
-        m_playTimer->start();
+    if (canStart()) {
+        m_footerSummary->setText(
+            QStringLiteral("预计成片 %1 · %2 个镜头 · %3 · 成片 + 剪映草稿")
+                .arg(stats.durationLabel)
+                .arg(materialStats.shots)
+                .arg(m_project.ratio));
+        m_footerHint->setText(
+            QStringLiteral("将自动生成「%1」配音 · 字幕、音效与 BGM 自动配置")
+                .arg(StudioData::getMixcutVoice(m_project.voiceId).name));
     } else {
-        m_playTimer->stop();
-    }
-    refreshPreview();
-    refreshVoicePanel();
-    if (m_resultPlayButton) {
-        m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
-                                              : QStringLiteral("播放成片"));
-        m_resultPlayButton->setLeadingGlyph(m_playing ? Icons::Glyph::Pause
-                                                      : Icons::Glyph::Play);
+        m_footerSummary->setText(QStringLiteral("生成文案后即可一键成片"));
+        m_footerHint->setText(QStringLiteral("请稍候，正在准备成片"));
     }
 }
 
-void MixcutPage::updatePlayback()
+QString MixcutPage::headerDescription() const
 {
-    if (m_playing) {
-        m_playProgress = qMin(100, m_playProgress + 2);
-        if (m_playProgress >= 100) {
-            m_playing = false;
-            m_playTimer->stop();
-        }
+    if (!hasMaterials()) {
+        return QStringLiteral("上传视频或图片素材，填写文案提示词生成口播，一键成片时自动配音并完成混剪包装。");
     }
-    if (m_screen == Screen::Result) {
-        if (m_resultPoster) {
-            m_resultPoster->setProgress(m_playProgress);
-        }
-        if (m_resultPlayBar) {
-            m_resultPlayBar->setValue(m_playProgress);
-        }
-        if (m_resultPlayClock && m_hasResult) {
-            const int total = StudioData::parseElapsed(m_result.durationLabel);
-            m_resultPlayClock->setText(StudioData::formatElapsed(
-                static_cast<qint64>(total) * m_playProgress * 10LL));
-        }
-        if (m_resultCenterPlay) {
-            setPlayIcon(m_resultCenterPlay, m_playing);
-        }
-        if (m_resultPoster && m_hasResult) {
-            const QStringList lines = StudioData::mixcutScriptLines(m_result.script);
-            const int index = lines.isEmpty()
-                ? 0
-                : qBound(0,
-                         static_cast<int>(std::floor(
-                             (m_playProgress / 100.0) * lines.size())),
-                         lines.size() - 1);
-            const StudioData::MixcutStyleMeta &meta =
-                StudioData::mixcutStyleMeta(m_result.style);
-            QString caption = lines.value(index, m_result.captionTitle);
-            QString highlight;
-            for (const QString &keyword : meta.keywords) {
-                if (caption.contains(keyword)) {
-                    highlight = keyword;
-                    break;
-                }
-            }
-            const int total = StudioData::parseElapsed(m_result.durationLabel);
-            const QString clock = StudioData::formatElapsed(
-                static_cast<qint64>(total) * m_playProgress * 10LL);
-            Studio::MixPosterSpec spec = m_resultPoster->spec();
-            spec.caption = caption;
-            spec.highlight = highlight;
-            spec.timecode = (m_playing || m_playProgress > 0)
-                ? clock
-                : m_result.durationLabel;
-            spec.progress = m_playProgress;
-            m_resultPoster->setSpec(spec);
-        }
-    } else if (m_project.hasSource) {
-        refreshPreview();
-        refreshVoicePanel();
+    if (scriptJobRunning()) {
+        return QStringLiteral("AI 正在按提示词撰写口播文案，生成后可手动微调。");
     }
-    if (m_resultPlayButton) {
-        m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
-                                              : QStringLiteral("播放成片"));
-        m_resultPlayButton->setLeadingGlyph(m_playing ? Icons::Glyph::Pause
-                                                      : Icons::Glyph::Play);
+    if (!m_project.script.trimmed().isEmpty()) {
+        return QStringLiteral("文案已就绪，选择音色后点击「一键成片」，AI 会自动生成配音与成片。");
     }
-    if (m_previewPlayButton) {
-        setPlayIcon(m_previewPlayButton, m_playing);
-    }
-    if (m_previewRowPlay) {
-        m_previewRowPlay->setGlyph(m_playing ? Icons::Glyph::Pause
-                                             : Icons::Glyph::Play);
-    }
+    return QStringLiteral("素材已就绪，填写文案提示词并点击「生成文案」，也可以直接撰写口播文案。");
 }
-
-/* ------------------------------------------------------------------ */
-/* 提示词放大编辑                                                       */
-/* ------------------------------------------------------------------ */
 
 void MixcutPage::openPromptEditor()
 {
@@ -3244,11 +3231,11 @@ void MixcutPage::openPromptEditor()
     auto savePrompt = [this, overlay, editor] {
         m_project.prompt = editor->toPlainText().trimmed();
         if (m_promptEdit) {
-            m_settingScriptText = true;
+            m_settingText = true;
             m_promptEdit->setPlainText(m_project.prompt);
-            m_settingScriptText = false;
+            m_settingText = false;
         }
-        refreshScriptStats();
+        refreshStudioState();
         overlay->closeModal();
     };
     connect(save, &QAbstractButton::clicked, save, savePrompt);
@@ -3262,19 +3249,15 @@ void MixcutPage::openPromptEditor()
     editor->setFocus();
 }
 
-/* ------------------------------------------------------------------ */
-/* 生成过程                                                             */
-/* ------------------------------------------------------------------ */
 
 void MixcutPage::startGeneration()
 {
     if (!canStart()) {
         return;
     }
-    m_analysisTimer->stop();
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
+    m_scriptTimer->stop();
     m_playTimer->stop();
+    stopVoiceSample();
     m_playing = false;
     m_playProgress = 0;
 
@@ -3311,6 +3294,8 @@ void MixcutPage::buildProcessingScreen()
         StudioData::mixcutStyleMeta(m_project.style);
     const StudioData::MixcutVoice voice =
         StudioData::getMixcutVoice(m_project.voiceId);
+    const StudioData::MixcutSource source =
+        StudioData::mixcutSourceFromMaterials(m_project.materials);
 
     auto *top = new QWidget(m_processingScreen);
     auto *topLayout = new QVBoxLayout(top);
@@ -3327,7 +3312,7 @@ void MixcutPage::buildProcessingScreen()
     auto *titleLine = new QHBoxLayout;
     titleLine->setContentsMargins(0, 0, 0, 0);
     titleLine->setSpacing(8);
-    titleLine->addWidget(Ui::label(QStringLiteral("AI 正在混剪你的视频"), 16,
+    titleLine->addWidget(Ui::label(QStringLiteral("AI 正在混剪你的素材"), 16,
                                      QFont::DemiBold, Theme::Text1, top));
     titleLine->addWidget(new Chip(QStringLiteral("智能混剪中"), Chip::Run, top));
     titleLine->addWidget(monoLabel(
@@ -3413,25 +3398,17 @@ void MixcutPage::buildProcessingScreen()
     stageLayout->setContentsMargins(12, 12, 12, 12);
     stageLayout->setAlignment(Qt::AlignCenter);
     const bool portrait = m_project.ratio == QLatin1String("9:16");
-    const bool square = m_project.ratio == QLatin1String("1:1");
-    int previewHeight = 380;
-    if (m_project.ratio == QLatin1String("16:9")) {
-        previewHeight = 206;
-    } else if (square) {
-        previewHeight = 300;
-    }
+    const int previewHeight = portrait ? 380 : 206;
     const int previewWidth = portrait ? qRound(previewHeight * 9.0 / 16.0)
-        : (m_project.ratio == QLatin1String("16:9")
-               ? qRound(previewHeight * 16.0 / 9.0)
-               : previewHeight);
+                                      : qRound(previewHeight * 16.0 / 9.0);
     m_processingPoster = new Studio::MixPosterWidget(stageHost);
     m_processingPoster->setFixedSize(previewWidth, previewHeight);
     Studio::MixPosterSpec spec;
-    spec.scene = m_project.source.scenes.value(0);
+    spec.scene = source.scenes.value(0);
     spec.title = meta.captionTitle;
     spec.caption = QStringLiteral("AI 正在拆解文案与画面节奏…");
     spec.voiceName = QStringLiteral("%1 · %2").arg(voice.name, voice.label);
-    spec.secondaryScenes = m_project.source.scenes.mid(1, 2);
+    spec.secondaryScenes = source.scenes.mid(1, 2);
     spec.ratio = m_project.ratio;
     spec.timecode = QStringLiteral("00:00");
     spec.progress = 0;
@@ -3467,7 +3444,7 @@ void MixcutPage::buildProcessingScreen()
     voiceWaveRow->addWidget(Ui::label(voice.label, 8, QFont::Normal, Theme::Text3,
                                       voiceContent));
     voiceContentLayout->addLayout(voiceWaveRow);
-    infoLayout->addWidget(makeInfoPanel(QStringLiteral("配音对齐"), Icons::Glyph::Mic,
+    infoLayout->addWidget(makeInfoPanel(QStringLiteral("生成配音"), Icons::Glyph::Mic,
                                         voiceContent, infoRow),
                           1);
 
@@ -3479,7 +3456,7 @@ void MixcutPage::buildProcessingScreen()
     sceneTop->setContentsMargins(0, 0, 0, 0);
     sceneTop->addStretch(1);
     m_processingScenesCount = monoLabel(QStringLiteral("0/%1")
-                                            .arg(m_project.source.shots),
+                                            .arg(source.shots),
                                         8, Theme::Text2, sceneContent);
     sceneTop->addWidget(m_processingScenesCount);
     sceneContentLayout->addLayout(sceneTop);
@@ -3513,9 +3490,7 @@ void MixcutPage::buildProcessingScreen()
     wave->setFixedWidth(64);
     sourceLayout->addWidget(wave, 0, Qt::AlignVCenter);
     auto *sourceLabel = new ElidedLabel(
-        QStringLiteral("%1 · %2")
-            .arg(m_project.source.name, m_project.source.duration),
-        sourceRow);
+        QStringLiteral("%1 · %2").arg(source.name, source.duration), sourceRow);
     sourceLabel->setPixelSize(9);
     sourceLabel->setTextColor(Theme::Text3);
     sourceLayout->addWidget(sourceLabel, 1);
@@ -3669,6 +3644,8 @@ void MixcutPage::updateProcessing()
         StudioData::mixcutStyleMeta(m_project.style);
     const StudioData::MixcutVoice voice =
         StudioData::getMixcutVoice(m_project.voiceId);
+    const StudioData::MixcutSource source =
+        StudioData::mixcutSourceFromMaterials(m_project.materials);
     if (m_processingPoster) {
         Studio::MixPosterSpec spec = m_processingPoster->spec();
         spec.caption = m_run.previewCaption;
@@ -3696,12 +3673,12 @@ void MixcutPage::updateProcessing()
     if (m_processingScenesCount) {
         m_processingScenesCount->setText(
             QStringLiteral("%1/%2").arg(m_run.matchedShots)
-                .arg(m_project.source.shots));
+                .arg(source.shots));
     }
     const int sceneCount = qMin(
-        m_project.source.scenes.size(),
+        source.scenes.size(),
         qMax(0, static_cast<int>(std::ceil(
-                     m_run.matchedShots * 1.0 / qMax(1, m_project.source.shots) * 3))));
+                     m_run.matchedShots * 1.0 / qMax(1, source.shots) * 3))));
     if (m_processingScenesLayout && sceneCount != m_lastScenesCount) {
         m_lastScenesCount = sceneCount;
         Studio::clearLayout(m_processingScenesLayout);
@@ -3710,7 +3687,7 @@ void MixcutPage::updateProcessing()
                 Ui::label(QStringLiteral("等待配音完成"), 8, QFont::Normal,
                           Theme::Text3, m_processingScenesLayout->parentWidget()));
         } else {
-            for (const QString &scene : m_project.source.scenes.mid(0, sceneCount)) {
+            for (const QString &scene : source.scenes.mid(0, sceneCount)) {
                 auto *thumb = new Studio::MixSceneWidget(
                     m_processingScenesLayout->parentWidget());
                 thumb->setScene(scene);
@@ -4035,6 +4012,11 @@ void MixcutPage::rebuildResult()
     titles->addLayout(metaLine);
     titleLayout->addLayout(titles, 1);
 
+    auto *backToHub = new Button(QStringLiteral("返回"), Button::Ghost, header);
+    backToHub->setLeadingGlyph(Icons::Glyph::ChevronLeft);
+    backToHub->setToolTip(QStringLiteral("返回智能混剪"));
+    connect(backToHub, &QAbstractButton::clicked, this, &MixcutPage::showHub);
+    titleLayout->addWidget(backToHub);
     auto *restart = new Button(QStringLiteral("重新混剪"), Button::Default, header);
     restart->setLeadingGlyph(Icons::Glyph::Reset);
     connect(restart, &QAbstractButton::clicked, this, &MixcutPage::restartFromResult);
@@ -4073,15 +4055,9 @@ void MixcutPage::rebuildResult()
     previewLayout->setSpacing(0);
     previewLayout->setAlignment(Qt::AlignHCenter);
     const bool portrait = m_result.ratio == QLatin1String("9:16");
-    const bool square = m_result.ratio == QLatin1String("1:1");
-    int posterHeight = portrait ? 494 : 202;
-    if (square) {
-        posterHeight = 360;
-    }
+    const int posterHeight = portrait ? 494 : 242;
     const int posterWidth = portrait ? qRound(posterHeight * 9.0 / 16.0)
-        : (m_result.ratio == QLatin1String("16:9")
-               ? qRound(posterHeight * 16.0 / 9.0)
-               : posterHeight);
+                                     : qRound(posterHeight * 16.0 / 9.0);
     auto *stack = new QWidget(previewPanel);
     stack->setFixedSize(posterWidth, posterHeight);
     auto *stackLayout = new QGridLayout(stack);
@@ -4371,7 +4347,7 @@ void MixcutPage::rebuildResult()
     adjustLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 10, Theme::Ai,
                                                adjust));
     auto *adjustLabel = Ui::label(
-        QStringLiteral("想换个表达？修改文案或更换音色后重新混剪，原片无需重复上传。"),
+        QStringLiteral("想换个表达？修改文案或更换音色后重新混剪，素材无需重复上传。"),
         9, QFont::Normal, Theme::Text3, adjust);
     adjustLabel->setWordWrap(true);
     adjustLayout->addWidget(adjustLabel, 1);
@@ -4413,15 +4389,13 @@ void MixcutPage::restartFromResult()
     if (!m_hasResult) {
         return;
     }
-    m_analysisTimer->stop();
-    m_voiceTimer->stop();
-    m_voiceDebounce->stop();
+    m_scriptTimer->stop();
     m_playTimer->stop();
+    stopVoiceSample();
     m_playing = false;
     m_playProgress = 0;
-    m_project.hasSource = true;
-    if (m_project.source.name.isEmpty()) {
-        m_project.source = StudioData::mixcutDemoSource();
+    if (m_project.materials.isEmpty()) {
+        m_project.materials = StudioData::mixcutDemoMaterials();
     }
     m_project.analysisReady = true;
     m_project.prompt = m_result.scriptPrompt;
@@ -4429,11 +4403,88 @@ void MixcutPage::restartFromResult()
     m_project.style = m_result.style;
     m_project.voiceId = m_result.voiceId;
     m_project.ratio = m_result.ratio;
-    m_project.voiceStatus = StudioData::VoiceStatus::Ready;
     m_analysisProgress = 100;
-    m_voiceProgress = 100;
     m_scriptEdited = false;
+    m_scriptRewrite = false;
     showStudio();
+}
+
+void MixcutPage::togglePlayback()
+{
+    if (!m_resultPoster) {
+        return;
+    }
+    if (m_playProgress >= 100) {
+        m_playProgress = 0;
+    }
+    m_playing = !m_playing;
+    if (m_playing) {
+        m_playTimer->start();
+    } else {
+        m_playTimer->stop();
+    }
+    setPlayIcon(m_resultCenterPlay, m_playing);
+    if (m_resultPlayButton) {
+        m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
+                                              : QStringLiteral("播放成片"));
+        m_resultPlayButton->setLeadingGlyph(m_playing ? Icons::Glyph::Pause
+                                                      : Icons::Glyph::Play);
+    }
+    updatePlayback();
+}
+
+void MixcutPage::updatePlayback()
+{
+    if (!m_resultPoster) {
+        return;
+    }
+    if (m_playing) {
+        m_playProgress = qMin(100, m_playProgress + 1);
+        if (m_playProgress >= 100) {
+            m_playing = false;
+            m_playTimer->stop();
+            setPlayIcon(m_resultCenterPlay, false);
+            if (m_resultPlayButton) {
+                m_resultPlayButton->setText(QStringLiteral("播放成片"));
+                m_resultPlayButton->setLeadingGlyph(Icons::Glyph::Play);
+            }
+        }
+    }
+
+    const QStringList lines = StudioData::mixcutScriptLines(m_result.script);
+    const int totalSeconds = qMax(1, StudioData::parseElapsed(m_result.durationLabel));
+    const int currentSeconds =
+        qRound(totalSeconds * (m_playProgress / 100.0));
+    const QString currentClock = StudioData::formatElapsed(
+        static_cast<qint64>(currentSeconds) * 1000);
+    const int lineIndex = lines.isEmpty()
+        ? 0
+        : qMin(lines.size() - 1,
+               static_cast<int>(std::floor(m_playProgress / 100.0 * lines.size())));
+    const QString activeLine =
+        lines.isEmpty() ? m_result.captionTitle : lines.at(lineIndex);
+    const StudioData::MixcutStyleMeta &meta =
+        StudioData::mixcutStyleMeta(m_result.style);
+    QString highlight;
+    for (const QString &keyword : meta.keywords) {
+        if (activeLine.contains(keyword)) {
+            highlight = keyword;
+            break;
+        }
+    }
+    Studio::MixPosterSpec spec = m_resultPoster->spec();
+    spec.caption = activeLine;
+    spec.highlight = highlight;
+    spec.timecode = (m_playing || m_playProgress > 0) ? currentClock
+                                                      : m_result.durationLabel;
+    spec.progress = m_playProgress;
+    m_resultPoster->setSpec(spec);
+    if (m_resultPlayBar) {
+        m_resultPlayBar->setValue(m_playProgress);
+    }
+    if (m_resultPlayClock) {
+        m_resultPlayClock->setText(currentClock);
+    }
 }
 
 void MixcutPage::copyText(const QString &text, const QString &label)

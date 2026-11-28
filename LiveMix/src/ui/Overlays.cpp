@@ -177,12 +177,13 @@ ModalCard::ModalCard(const QString &title, int width, QWidget *parent)
 
     auto *header = new QWidget(this);
     header->setFixedHeight(49);
-    auto *headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(18, 0, 14, 0);
-    headerLayout->setSpacing(8);
+    m_titleLayout = new QHBoxLayout(header);
+    m_titleLayout->setContentsMargins(18, 0, 14, 0);
+    m_titleLayout->setSpacing(8);
     auto *titleLabel = Ui::label(title, 14, 650, Theme::Text1, header);
-    headerLayout->addWidget(titleLabel);
-    headerLayout->addStretch(1);
+    m_titleLayout->addWidget(titleLabel);
+    m_titleLayout->addStretch(1);
+    QHBoxLayout *headerLayout = m_titleLayout;
 
     auto *closeButton = new GlyphButton(Icons::Glyph::Close, 24, header);
     closeButton->setColors(Theme::Text3, Theme::Text1);

@@ -1,10 +1,11 @@
 #pragma once
 
-// 智能混剪工作区：首页、文案与配音工作台、AI 混剪过程与成片结果。
+// 智能混剪工作区：首页、素材与文案单页工作台、AI 混剪过程与成片结果。
 // 当前只交付交互界面与本地过程模拟，不调用真实的视频理解 / TTS / 渲染服务。
 
 #include "../data/StudioData.h"
 
+#include <QVector>
 #include <QWidget>
 
 class ElidedLabel;
@@ -13,10 +14,11 @@ class QScrollArea;
 class QStackedWidget;
 class QTextEdit;
 class QToolButton;
-class GlyphButton;
 class QTimer;
 class QVBoxLayout;
 class QHBoxLayout;
+class QMediaPlayer;
+class QAudioOutput;
 class Button;
 class ProgressBar;
 
@@ -26,9 +28,8 @@ class StageSummaryCard;
 class StepRail;
 class SegmentedControl;
 class Waveform;
+class VoiceOrbWidget;
 }
-
-class VoiceChoiceButton;
 
 class MixcutPage : public QWidget
 {
@@ -42,6 +43,8 @@ signals:
     void toastRequested(const QString &message);
     void navigateRequested(const QString &pageId);
     void taskStatusChanged(const QString &text, bool running);
+    // 音色示例音的播放状态变化，音色库与工作台音色卡同步刷新。
+    void voiceSampleChanged();
 
 private:
     enum class Screen { Hub, Studio, Processing, Result };
@@ -60,56 +63,57 @@ private:
     QWidget *buildHubHero();
     QWidget *buildHubProcessPanel();
     QWidget *createRecentCard(const StudioData::MixcutResult &result, QWidget *parent);
-    QWidget *createHubVoiceCard(const QString &voiceId, QWidget *parent);
-    QWidget *buildUploadPanel();
-    QWidget *buildWorkbench();
     QWidget *buildStudioHeader();
-    QWidget *buildPreviewCard();
-    QWidget *buildSourceCard();
+    QWidget *buildMaterialCard();
+    QWidget *buildOutputCard();
     QWidget *buildScriptCard();
     QWidget *buildVoiceSection();
-    QWidget *buildAutoPackaging();
     QWidget *buildStudioFooter();
 
-    void startProject();
-    void importVideoFile();
-    void importSource(const StudioData::MixcutSource &source, bool announce);
-    void clearSource();
+    bool startProject();
+    void addMaterialsFromDialog();
+    void addMaterialPaths(const QStringList &paths, bool announce);
+    void appendMaterials(const QVector<StudioData::MixcutMaterial> &materials,
+                         bool announce);
+    void addSampleMaterials();
+    void removeMaterial(const QString &id);
+    void clearMaterials();
     void chooseStyle(StudioData::MixcutStyle style);
     void chooseVoice(const QString &voiceId);
     void chooseRatio(const QString &ratio);
-
-    void startAnalysis(qint64 durationMs, const QString &announce);
-    void tickAnalysis();
-    void startVoiceJob();
-    void tickVoice();
-    void scheduleVoiceSync();
-    void refreshStudioState();
-    void refreshAnalysisProgress();
-    void refreshVoicePanel();
-    void refreshScriptStats();
-    void refreshPreview();
-    void updateScriptFromEditor();
-    void updatePromptFromEditor();
-    void regenerateScript();
-    void generateFromPrompt();
-    void regenerateVoice();
+    void openVoicePicker();
     void openPromptEditor();
-    void togglePlayback();
-    void updatePlayback();
+    void toggleVoiceSample(const QString &voiceId);
+    void stopVoiceSample();
+    void updatePromptFromEditor();
+    void updateScriptFromEditor();
+    void generateFromPrompt();
+    void regenerateScript();
+    void startScriptJob(qint64 durationMs, bool rewriting,
+                        const QString &announce = QString());
+    void tickScript();
+    bool scriptJobRunning() const;
+    void refreshStudioState();
+    void refreshScriptMeta();
+    void refreshScriptProgress();
+    void refreshVoiceSection();
+    void refreshFooter();
+    int activeStep() const;
+    bool canStart() const;
+    bool hasMaterials() const;
+    QString headerDescription() const;
 
     void startGeneration();
     void updateProcessing();
     void finishGeneration();
     void openRecent(const StudioData::MixcutResult &result);
     void restartFromResult();
+    void togglePlayback();
+    void updatePlayback();
 
     void updateGenerationClock();
     void copyText(const QString &text, const QString &label);
     bool isRunning() const;
-    int activeStep() const;
-    bool canStart() const;
-    QString activeCaption() const;
 
     Screen m_screen = Screen::Hub;
     QStackedWidget *m_stack = nullptr;
@@ -123,69 +127,55 @@ private:
     QWidget *m_resultScreen = nullptr;
 
     StudioData::MixcutProject m_project;
-    int m_scriptVariant = 0;
     bool m_scriptEdited = false;
-    bool m_settingScriptText = false;
+    int m_scriptVariant = 0;
+    bool m_scriptRewrite = false;
     int m_analysisProgress = 0;
-    int m_voiceProgress = 0;
-    qint64 m_analysisStartedAt = 0;
-    qint64 m_analysisDuration = 2600;
-    QTimer *m_analysisTimer = nullptr;
-    QTimer *m_voiceTimer = nullptr;
-    QTimer *m_voiceDebounce = nullptr;
+    qint64 m_scriptStartedAt = 0;
+    qint64 m_scriptDuration = 1800;
+    QTimer *m_scriptTimer = nullptr;
+
+    // 音色示例音试听（音色库与工作台共用同一播放器）。
+    QMediaPlayer *m_samplePlayer = nullptr;
+    QAudioOutput *m_sampleAudio = nullptr;
+    QString m_sampleVoiceId;
 
     // 工作台动态控件
+    QScrollArea *m_studioScroll = nullptr;
     QLabel *m_studioDescription = nullptr;
     QLabel *m_studioStepLabel = nullptr;
     Studio::StepRail *m_stepRail = nullptr;
-    Studio::MixPosterWidget *m_previewPoster = nullptr;
-    QToolButton *m_previewPlayButton = nullptr;
-    QWidget *m_previewAnalysisOverlay = nullptr;
-    QLabel *m_previewAnalysisLabel = nullptr;
-    QLabel *m_previewAnalysisProgress = nullptr;
-    ProgressBar *m_previewAnalysisBar = nullptr;
-    QWidget *m_previewSkeleton = nullptr;
-    Studio::SegmentedControl *m_ratioControl = nullptr;
-    QLabel *m_previewStatusLabel = nullptr;
-    QLabel *m_previewMeta = nullptr;
-    ProgressBar *m_playBar = nullptr;
-    GlyphButton *m_previewRowPlay = nullptr;
-    QLabel *m_playClock = nullptr;
-    QLabel *m_playDuration = nullptr;
+    QLabel *m_outputHint = nullptr;
+    QLabel *m_deliveryHint = nullptr;
 
     Studio::SegmentedControl *m_styleControl = nullptr;
     QTextEdit *m_promptEdit = nullptr;
     QTextEdit *m_scriptEdit = nullptr;
-    QWidget *m_scriptOverlay = nullptr;
-    QLabel *m_scriptOverlayLabel = nullptr;
-    QLabel *m_scriptOverlayDetail = nullptr;
-    QLabel *m_scriptOverlayProgress = nullptr;
-    ProgressBar *m_scriptOverlayBar = nullptr;
     QWidget *m_scriptSkeleton = nullptr;
+    QLabel *m_scriptSkeletonProgress = nullptr;
+    QWidget *m_scriptRewriteOverlay = nullptr;
+    QLabel *m_scriptRewriteLabel = nullptr;
+    QLabel *m_scriptRewriteProgress = nullptr;
+    ProgressBar *m_scriptRewriteBar = nullptr;
     QLabel *m_scriptMeta = nullptr;
     QLabel *m_scriptStats = nullptr;
     QLabel *m_scriptSave = nullptr;
     Button *m_generateButton = nullptr;
     Button *m_regenerateButton = nullptr;
+    bool m_settingText = false;
 
-    QVector<VoiceChoiceButton *> m_voiceCards;
-    Studio::Waveform *m_voiceWave = nullptr;
-    GlyphButton *m_voicePlay = nullptr;
     QLabel *m_voiceMeta = nullptr;
-    QLabel *m_voiceDurationLabel = nullptr;
-    QLabel *m_voiceNameLabel = nullptr;
-    QLabel *m_voiceStatus = nullptr;
-    QWidget *m_voiceStatusDot = nullptr;
-    GlyphButton *m_voiceRegenerate = nullptr;
-    ProgressBar *m_voiceProgressBar = nullptr;
+    Studio::VoiceOrbWidget *m_voiceOrb = nullptr;
+    QLabel *m_voiceName = nullptr;
+    QLabel *m_voiceScene = nullptr;
+    QLabel *m_voiceLanguage = nullptr;
+    QWidget *m_voiceRecommendTag = nullptr;
+    Button *m_voiceSampleButton = nullptr;
+    QLabel *m_voiceSynthesisHint = nullptr;
 
     ElidedLabel *m_footerSummary = nullptr;
     QLabel *m_footerHint = nullptr;
     Button *m_startButton = nullptr;
-
-    bool m_playing = false;
-    int m_playProgress = 0;
-    QTimer *m_playTimer = nullptr;
 
     bool m_hasRun = false;
     StudioData::MixcutRun m_run;
@@ -226,6 +216,9 @@ private:
     ProgressBar *m_resultPlayBar = nullptr;
     QString m_resultFilePath;
     QString m_resultDraftPath;
+    bool m_playing = false;
+    int m_playProgress = 0;
+    QTimer *m_playTimer = nullptr;
 
     QTimer *m_clockTimer = nullptr;
 };

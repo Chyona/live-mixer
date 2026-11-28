@@ -245,6 +245,136 @@ void Note::paintEvent(QPaintEvent *event)
 }
 
 /* ------------------------------------------------------------------ */
+/* EmptyRecent                                                          */
+/* ------------------------------------------------------------------ */
+
+EmptyRecent::EmptyRecent(const QString &title, const QString &description,
+                         const QStringList &features, const QString &sampleLabel,
+                         const QString &startLabel, QWidget *parent)
+    : QWidget(parent)
+{
+    setMinimumHeight(138);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    auto *row = new QHBoxLayout(this);
+    row->setContentsMargins(20, 16, 20, 16);
+    row->setSpacing(20);
+
+    // 左侧插画在 paintEvent 中绘制，这里只占位。
+    auto *art = new QWidget(this);
+    art->setFixedSize(124, 96);
+    art->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    row->addWidget(art, 0, Qt::AlignVCenter);
+
+    auto *texts = new QWidget(this);
+    auto *textLayout = new QVBoxLayout(texts);
+    textLayout->setContentsMargins(0, 0, 0, 0);
+    textLayout->setSpacing(0);
+    auto *titleLabel = Ui::label(title, 14, QFont::DemiBold, Theme::Text1, texts);
+    textLayout->addWidget(titleLabel);
+    textLayout->addSpacing(4);
+    auto *descriptionLabel = Ui::label(description, 10, QFont::Normal, Theme::Text3,
+                                       texts);
+    descriptionLabel->setWordWrap(true);
+    descriptionLabel->setMaximumWidth(440);
+    textLayout->addWidget(descriptionLabel);
+    textLayout->addSpacing(8);
+    auto *featureRow = new QWidget(texts);
+    auto *featureLayout = new QHBoxLayout(featureRow);
+    featureLayout->setContentsMargins(0, 0, 0, 0);
+    featureLayout->setSpacing(14);
+    for (const QString &feature : features) {
+        auto *item = new QWidget(featureRow);
+        auto *itemLayout = new QHBoxLayout(item);
+        itemLayout->setContentsMargins(0, 0, 0, 0);
+        itemLayout->setSpacing(4);
+        itemLayout->addWidget(iconLabel(Icons::Glyph::Check, 10, Theme::Success,
+                                        item));
+        itemLayout->addWidget(Ui::label(feature, 9, QFont::Normal, Theme::Text3,
+                                        item));
+        featureLayout->addWidget(item);
+    }
+    featureLayout->addStretch(1);
+    textLayout->addWidget(featureRow);
+    row->addWidget(texts, 1);
+
+    auto *buttons = new QWidget(this);
+    auto *buttonLayout = new QHBoxLayout(buttons);
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setSpacing(8);
+    auto *sample = new Button(sampleLabel, Button::Default, buttons);
+    sample->setLeadingGlyph(Icons::Glyph::Play);
+    connect(sample, &QAbstractButton::clicked, this, &EmptyRecent::sampleRequested);
+    auto *start = new Button(startLabel, Button::Primary, buttons);
+    start->setLeadingGlyph(Icons::Glyph::Sparkle);
+    connect(start, &QAbstractButton::clicked, this, &EmptyRecent::startRequested);
+    buttonLayout->addWidget(sample);
+    buttonLayout->addWidget(start);
+    row->addWidget(buttons, 0, Qt::AlignVCenter);
+}
+
+void EmptyRecent::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF rect = QRectF(this->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath card;
+    card.addRoundedRect(rect, 10, 10);
+    painter.fillPath(card, Theme::alpha(Theme::Surface1, 0.55));
+
+    QRadialGradient glow(rect.left(), rect.top(), rect.width() * 0.8);
+    glow.setColorAt(0, QColor(110, 139, 255, 23));
+    glow.setColorAt(0.58, QColor(110, 139, 255, 0));
+    painter.fillPath(card, glow);
+
+    QPen dashPen(Theme::alpha(Theme::BorderStrong, 0.70), 1.0, Qt::DashLine);
+    painter.setPen(dashPen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(card);
+
+    // 叠放的三张素材卡：前一张带胶片图标与占位字幕行。
+    const qreal artX = rect.left() + 20;
+    const qreal artY = rect.center().y() - 48;
+
+    painter.save();
+    painter.translate(artX + 29, artY + 57);
+    painter.rotate(-8);
+    painter.setPen(QPen(Theme::alpha(Theme::BorderStrong, 0.50), 1.0, Qt::DashLine));
+    painter.setBrush(Theme::alpha(Theme::Surface2, 0.20));
+    painter.drawRoundedRect(QRectF(-29, -41, 58, 82), 6, 6);
+    painter.restore();
+
+    painter.save();
+    painter.translate(artX + 56, artY + 52);
+    painter.rotate(5);
+    painter.setPen(QPen(Theme::alpha(Theme::BorderStrong, 0.60), 1.0, Qt::DashLine));
+    painter.setBrush(Theme::alpha(Theme::Surface2, 0.30));
+    painter.drawRoundedRect(QRectF(-30, -43, 60, 86), 6, 6);
+    painter.restore();
+
+    painter.save();
+    painter.translate(artX + 83, artY + 45);
+    painter.setPen(QPen(Theme::alpha(Theme::Primary, 0.35), 1.0, Qt::DashLine));
+    painter.setBrush(QColor(QStringLiteral("#0c0e14")));
+    painter.drawRoundedRect(QRectF(-31, -45, 62, 90), 7, 7);
+    Icons::paint(&painter, QRectF(-9, -22, 18, 18), Icons::Glyph::Film,
+                 Theme::Text3, 1.8);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(Theme::alpha(Theme::Surface3, 0.80));
+    painter.drawRoundedRect(QRectF(-23, 26, 46, 3), 1.5, 1.5);
+    painter.setBrush(Theme::alpha(Theme::Surface3, 0.55));
+    painter.drawRoundedRect(QRectF(-23, 33, 31, 3), 1.5, 1.5);
+    painter.restore();
+
+    const QRectF badge(artX + 100, artY + 76, 20, 20);
+    painter.setPen(QPen(Theme::alpha(Theme::Ai, 0.35), 1.0));
+    painter.setBrush(QColor(QStringLiteral("#1b1509")));
+    painter.drawEllipse(badge);
+    Icons::paint(&painter, badge.adjusted(5, 5, -5, -5), Icons::Glyph::Sparkle,
+                 Theme::Ai, 1.8);
+}
+
+/* ------------------------------------------------------------------ */
 /* SegmentedControl                                                     */
 /* ------------------------------------------------------------------ */
 
