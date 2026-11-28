@@ -26,6 +26,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QFrame>
+#include <QGraphicsScene>
+#include <QGraphicsVideoItem>
+#include <QGraphicsView>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -761,6 +765,8 @@ MixcutPage::MixcutPage(ConfigStore *config, QWidget *parent)
 
 MixcutPage::~MixcutPage()
 {
+    // 播放器的视频输出绑定在结果页控件上，先于页面子控件释放，避免悬空。
+    resetResultPlayer();
     destroyPipeline();
 }
 
@@ -849,6 +855,10 @@ bool MixcutPage::canStart() const
 
 void MixcutPage::showHub()
 {
+    // 离开结果页时停止播放，避免成片声音在其它页面继续播放。
+    if (m_screen == Screen::Result) {
+        resetResultPlayer();
+    }
     m_screen = Screen::Hub;
     rebuildHub();
     m_stack->setCurrentWidget(m_hubScreen);
@@ -859,6 +869,9 @@ void MixcutPage::showHub()
 
 void MixcutPage::showStudio()
 {
+    if (m_screen == Screen::Result) {
+        resetResultPlayer();
+    }
     m_screen = Screen::Studio;
     rebuildStudio();
     m_stack->setCurrentWidget(m_studioScreen);
@@ -866,6 +879,9 @@ void MixcutPage::showStudio()
 
 void MixcutPage::showProcessing()
 {
+    if (m_screen == Screen::Result) {
+        resetResultPlayer();
+    }
     m_screen = Screen::Processing;
     m_stack->setCurrentWidget(m_processingScreen);
 }
@@ -4194,6 +4210,9 @@ void MixcutPage::saveHistory()
 
 void MixcutPage::rebuildResult()
 {
+    // 必须在清空旧布局前停止并释放播放器：视频画面是结果页的子控件，
+    // 布局清空后指针会悬空，先 reset 可以避免重复析构。
+    resetResultPlayer();
     auto *root = qobject_cast<QVBoxLayout *>(m_resultScreen->layout());
     if (!root) {
         root = new QVBoxLayout(m_resultScreen);
@@ -4206,7 +4225,11 @@ void MixcutPage::rebuildResult()
     m_resultPlayClock = nullptr;
     m_resultPlayButton = nullptr;
     m_resultCenterPlay = nullptr;
+    m_resultPlayToggle = nullptr;
     m_resultPlayBar = nullptr;
+    m_resultMediaStack = nullptr;
+    m_resultVideoView = nullptr;
+    m_resultVideoItem = nullptr;
 
     if (!m_hasResult) {
         auto *empty = new QWidget(m_resultScreen);
@@ -4382,11 +4405,11 @@ void MixcutPage::rebuildResult()
     const int posterHeight = portrait ? 494 : 242;
     const int posterWidth = portrait ? qRound(posterHeight * 9.0 / 16.0)
                                      : qRound(posterHeight * 16.0 / 9.0);
-    auto *stack = new QWidget(previewPanel);
-    stack->setFixedSize(posterWidth, posterHeight);
-    auto *stackLayout = new QGridLayout(stack);
-    stackLayout->setContentsMargins(0, 0, 0, 0);
-    m_resultPoster = new Studio::MixPosterWidget(stack);
+    auto *posterHost = new QWidget;
+    posterHost->setFixedSize(posterWidth, posterHeight);
+    auto *posterHostLayout = new QGridLayout(posterHost);
+    posterHostLayout->setContentsMargins(0, 0, 0, 0);
+    m_resultPoster = new Studio::MixPosterWidget(posterHost);
     m_resultPoster->setFixedSize(posterWidth, posterHeight);
     QString mainScene = QStringLiteral("street");
     if (m_result.style == StudioData::MixcutStyle::Review) {
@@ -4422,34 +4445,128 @@ void MixcutPage::rebuildResult()
         }
     }
     m_resultPoster->setSpec(spec);
-    stackLayout->addWidget(m_resultPoster, 0, 0);
-    m_resultCenterPlay = makePlayOverlay(stack);
+    posterHostLayout->addWidget(m_resultPoster, 0, 0);
+    m_resultCenterPlay = makePlayOverlay(posterHost);
     connect(m_resultCenterPlay, &QToolButton::clicked, this,
             &MixcutPage::togglePlayback);
-    stackLayout->addWidget(m_resultCenterPlay, 0, 0, Qt::AlignCenter);
-    previewLayout->addWidget(stack, 0, Qt::AlignHCenter);
+    posterHostLayout->addWidget(m_resultCenterPlay, 0, 0, Qt::AlignCenter);
+
+    // 海报与真实播放器画面放在同一个堆叠控件：未播放时展示海报与首帧，
+    // 点击播放或拖动进度后切到 QMediaPlayer 画面，画面和声音都在页面内。
+    m_resultMediaStack = new QStackedWidget(previewPanel);
+    m_resultMediaStack->setFixedSize(posterWidth, posterHeight);
+    m_resultMediaStack->addWidget(posterHost);
+    m_resultHasVideo = !m_resultFilePath.isEmpty()
+        && QFileInfo::exists(m_resultFilePath);
+    if (m_resultHasVideo) {
+        auto *videoHost = new QWidget(m_resultMediaStack);
+        videoHost->setStyleSheet(QStringLiteral("background:#000;"));
+        auto *videoLayout = new QVBoxLayout(videoHost);
+        videoLayout->setContentsMargins(0, 0, 0, 0);
+        videoLayout->setSpacing(0);
+        m_resultVideoView = new QGraphicsView(videoHost);
+        m_resultVideoView->setFrameShape(QFrame::NoFrame);
+        m_resultVideoView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_resultVideoView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_resultVideoView->setAlignment(Qt::AlignCenter);
+        m_resultVideoView->setStyleSheet(
+            QStringLiteral("background:#000;border:none;"));
+        auto *scene = new QGraphicsScene(m_resultVideoView);
+        scene->setBackgroundBrush(Qt::black);
+        m_resultVideoItem = new QGraphicsVideoItem;
+        m_resultVideoItem->setAspectRatioMode(Qt::KeepAspectRatio);
+        m_resultVideoItem->setSize(QSizeF(posterWidth, posterHeight));
+        scene->addItem(m_resultVideoItem);
+        scene->setSceneRect(0, 0, posterWidth, posterHeight);
+        m_resultVideoView->setScene(scene);
+        videoLayout->addWidget(m_resultVideoView);
+
+        m_resultPlayer = new QMediaPlayer(this);
+        m_resultAudio = new QAudioOutput(this);
+        m_resultAudio->setVolume(0.9);
+        m_resultPlayer->setAudioOutput(m_resultAudio);
+        m_resultPlayer->setVideoOutput(m_resultVideoItem);
+        m_resultPlayer->setSource(QUrl::fromLocalFile(m_resultFilePath));
+        connect(m_resultPlayer, &QMediaPlayer::errorOccurred, this,
+                [this](QMediaPlayer::Error, const QString &errorText) {
+                    finishPlayback();
+                    if (!errorText.isEmpty()) {
+                        emit toastRequested(
+                            QStringLiteral("成片播放失败：%1").arg(errorText));
+                    }
+                });
+        // 以播放器的真实结束信号为准；定时器轮询只作为兜底。
+        connect(m_resultPlayer, &QMediaPlayer::mediaStatusChanged, this,
+                [this](QMediaPlayer::MediaStatus status) {
+                    if (status == QMediaPlayer::EndOfMedia) {
+                        finishPlayback();
+                    }
+                });
+        m_resultMediaStack->addWidget(videoHost);
+    }
+    previewLayout->addWidget(m_resultMediaStack, 0, Qt::AlignHCenter);
     previewLayout->addSpacing(12);
 
     auto *playRow = new QWidget(previewPanel);
     auto *playLayout = new QHBoxLayout(playRow);
     playLayout->setContentsMargins(0, 0, 0, 0);
     playLayout->setSpacing(8);
-    auto *play = new GlyphButton(Icons::Glyph::Play, 28, playRow);
-    play->setGlyphSize(11);
-    play->setColors(Theme::Text1, Theme::Primary);
-    play->setBackgroundColors(Theme::Surface2, Theme::Surface3);
-    play->setToolTipText(QStringLiteral("播放或暂停"));
-    connect(play, &QAbstractButton::clicked, this, &MixcutPage::togglePlayback);
-    playLayout->addWidget(play);
+    m_resultPlayToggle = new GlyphButton(Icons::Glyph::Play, 28, playRow);
+    m_resultPlayToggle->setGlyphSize(11);
+    m_resultPlayToggle->setColors(Theme::Text1, Theme::Primary);
+    m_resultPlayToggle->setBackgroundColors(Theme::Surface2, Theme::Surface3);
+    m_resultPlayToggle->setToolTipText(QStringLiteral("播放或暂停"));
+    connect(m_resultPlayToggle, &QAbstractButton::clicked, this,
+            &MixcutPage::togglePlayback);
+    playLayout->addWidget(m_resultPlayToggle);
     auto *barHost = new QWidget(playRow);
     auto *barLayout = new QVBoxLayout(barHost);
     barLayout->setContentsMargins(0, 0, 0, 0);
-    barLayout->setSpacing(2);
-    m_resultPlayBar = new ProgressBar(barHost);
+    barLayout->setSpacing(0);
+    m_resultPlayBar = new SeekBar(barHost);
     m_resultPlayBar->setBarColor(Theme::Primary);
-    m_resultPlayBar->setValue(0);
-    m_resultPlayBar->setFixedHeight(4);
+    m_resultPlayBar->setPosition(0);
+    m_resultPlayBar->setFixedHeight(12);
+    // 历史记录里成片被移动/删除时不接受拖动，避免进度条停在与播放器无关的位置。
+    m_resultPlayBar->setEnabled(m_resultHasVideo);
+    if (!m_resultHasVideo) {
+        m_resultPlayBar->setToolTip(
+            QStringLiteral("这条记录没有本地成片，无法拖动预览"));
+    }
     barLayout->addWidget(m_resultPlayBar);
+    // 进度条支持点击与拖动定位：按下时暂停播放器，松开后按原状态恢复。
+    connect(m_resultPlayBar, &SeekBar::scrubStarted, this, [this](int permille) {
+        if (!m_resultPlayer) {
+            return;
+        }
+        m_resultSeeking = true;
+        m_resultResumeAfterSeek = m_playing;
+        m_playTimer->stop();
+        m_resultPlayer->pause();
+        if (m_resultMediaStack && m_resultMediaStack->count() > 1) {
+            m_resultMediaStack->setCurrentIndex(1);
+        }
+        seekResultTo(permille);
+    });
+    connect(m_resultPlayBar, &SeekBar::scrubbed, this,
+            &MixcutPage::seekResultTo);
+    connect(m_resultPlayBar, &SeekBar::scrubFinished, this,
+            [this](int permille) {
+                if (!m_resultPlayer) {
+                    m_resultSeeking = false;
+                    m_resultResumeAfterSeek = false;
+                    return;
+                }
+                seekResultTo(permille);
+                m_resultSeeking = false;
+                m_playing = m_resultResumeAfterSeek;
+                m_resultResumeAfterSeek = false;
+                if (m_playing) {
+                    m_resultPlayer->play();
+                    m_playTimer->start();
+                }
+                updatePlaybackControls();
+            });
     auto *clockRow = new QHBoxLayout;
     clockRow->setContentsMargins(0, 0, 0, 0);
     m_resultPlayClock = monoLabel(QStringLiteral("00:00"), 8, Theme::Text3,
@@ -4718,7 +4835,7 @@ void MixcutPage::rebuildResult()
     scrollLayout->addWidget(columns);
     auto *scroll = makeScrollArea(scrollContent, m_resultScreen);
     root->addWidget(scroll, 1);
-    setPlayIcon(m_resultCenterPlay, false);
+    updatePlaybackControls();
     updateGenerationClock();
     updatePlayback();
 }
@@ -4768,87 +4885,154 @@ void MixcutPage::restartFromResult()
 
 void MixcutPage::togglePlayback()
 {
-    if (!m_resultPoster) {
+    if (!m_hasResult) {
         return;
     }
-    if (m_playProgress >= 100) {
-        m_playProgress = 0;
+    if (!m_resultHasVideo || !m_resultPlayer) {
+        emit toastRequested(QStringLiteral(
+            "这条记录没有本地成片，无法在页面内播放：%1")
+                                .arg(m_resultFilePath));
+        return;
     }
-    m_playing = !m_playing;
     if (m_playing) {
-        // 页面内播放的是过程示意；成片用系统播放器打开，避免再内嵌一套解码器。
-        if (!m_resultFilePath.isEmpty() && QFileInfo::exists(m_resultFilePath)) {
-            if (!QDesktopServices::openUrl(
-                    QUrl::fromLocalFile(m_resultFilePath))) {
-                emit toastRequested(QStringLiteral("无法打开成片文件：%1")
-                                        .arg(m_resultFilePath));
-            }
-        }
-        m_playTimer->start();
-    } else {
+        m_resultPlayer->pause();
+        m_playing = false;
         m_playTimer->stop();
+    } else {
+        if (m_resultPlayer->duration() > 0
+            && m_resultPlayer->position() >= m_resultPlayer->duration() - 50) {
+            m_resultPlayer->setPosition(0);
+        }
+        // 切到播放器画面后再开始播放，避免海报覆盖视频首帧。
+        if (m_resultMediaStack && m_resultMediaStack->count() > 1) {
+            m_resultMediaStack->setCurrentIndex(1);
+        }
+        m_resultPlayer->play();
+        m_playing = true;
+        m_playTimer->start();
     }
-    setPlayIcon(m_resultCenterPlay, m_playing);
+    updatePlaybackControls();
+    updatePlayback();
+}
+
+void MixcutPage::updatePlaybackControls()
+{
     if (m_resultPlayButton) {
         m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
                                               : QStringLiteral("播放成片"));
         m_resultPlayButton->setLeadingGlyph(m_playing ? Icons::Glyph::Pause
                                                       : Icons::Glyph::Play);
     }
-    updatePlayback();
+    setPlayIcon(m_resultCenterPlay, m_playing);
+    if (m_resultPlayToggle) {
+        m_resultPlayToggle->setGlyph(m_playing ? Icons::Glyph::Pause
+                                               : Icons::Glyph::Play);
+    }
 }
 
 void MixcutPage::updatePlayback()
 {
-    if (!m_resultPoster) {
+    if (!m_hasResult || !m_resultPoster) {
         return;
     }
-    if (m_playing) {
-        m_playProgress = qMin(100, m_playProgress + 1);
-        if (m_playProgress >= 100) {
-            m_playing = false;
-            m_playTimer->stop();
-            setPlayIcon(m_resultCenterPlay, false);
-            if (m_resultPlayButton) {
-                m_resultPlayButton->setText(QStringLiteral("播放成片"));
-                m_resultPlayButton->setLeadingGlyph(Icons::Glyph::Play);
-            }
+    if (!m_resultHasVideo || !m_resultPlayer) {
+        if (m_resultPlayBar) {
+            m_resultPlayBar->setPosition(0);
         }
+        if (m_resultPlayClock) {
+            m_resultPlayClock->setText(StudioData::formatElapsed(0));
+        }
+        return;
     }
 
-    const QStringList lines = StudioData::mixcutScriptLines(m_result.script);
-    const int totalSeconds = qMax(1, StudioData::parseElapsed(m_result.durationLabel));
-    const int currentSeconds =
-        qRound(totalSeconds * (m_playProgress / 100.0));
-    const QString currentClock = StudioData::formatElapsed(
-        static_cast<qint64>(currentSeconds) * 1000);
-    const int lineIndex = lines.isEmpty()
-        ? 0
-        : qMin(lines.size() - 1,
-               static_cast<int>(std::floor(m_playProgress / 100.0 * lines.size())));
-    const QString activeLine =
-        lines.isEmpty() ? m_result.captionTitle : lines.at(lineIndex);
-    const StudioData::MixcutStyleMeta &meta =
-        StudioData::mixcutStyleMeta(m_result.style);
-    QString highlight;
-    for (const QString &keyword : meta.keywords) {
-        if (activeLine.contains(keyword)) {
-            highlight = keyword;
-            break;
-        }
+    const qint64 total = m_resultPlayer->duration();
+    const qint64 current = qMax<qint64>(0, m_resultPlayer->position());
+    if (m_playing && total > 0 && current >= total - 80) {
+        // 定时器兜底：部分后端结束时不保证发出 EndOfMedia。
+        finishPlayback();
+        return;
     }
-    Studio::MixPosterSpec spec = m_resultPoster->spec();
-    spec.caption = activeLine;
-    spec.highlight = highlight;
-    spec.timecode = (m_playing || m_playProgress > 0) ? currentClock
-                                                      : m_result.durationLabel;
-    spec.progress = m_playProgress;
-    m_resultPoster->setSpec(spec);
+    if (m_resultSeeking) {
+        return;
+    }
+    const int permille =
+        total > 0 ? qBound(0, int(current * 1000 / total), 1000) : 0;
+    m_playProgress = permille / 10;
     if (m_resultPlayBar) {
-        m_resultPlayBar->setValue(m_playProgress);
+        m_resultPlayBar->setPosition(permille);
     }
     if (m_resultPlayClock) {
-        m_resultPlayClock->setText(currentClock);
+        m_resultPlayClock->setText(StudioData::formatElapsed(current));
+    }
+}
+
+void MixcutPage::finishPlayback()
+{
+    m_playing = false;
+    m_playProgress = 0;
+    m_playTimer->stop();
+    m_resultSeeking = false;
+    m_resultResumeAfterSeek = false;
+    // 已经在停止态时不要再调 stop()，避免结束信号再次触发本函数。
+    if (m_resultPlayer
+        && m_resultPlayer->playbackState() != QMediaPlayer::StoppedState) {
+        m_resultPlayer->stop();
+    }
+    updatePlaybackControls();
+    if (m_resultMediaStack) {
+        m_resultMediaStack->setCurrentIndex(0);
+    }
+    if (m_resultPlayClock) {
+        m_resultPlayClock->setText(StudioData::formatElapsed(0));
+    }
+    if (m_resultPlayBar) {
+        m_resultPlayBar->setPosition(0);
+    }
+}
+
+void MixcutPage::resetResultPlayer()
+{
+    m_playTimer->stop();
+    m_playing = false;
+    m_playProgress = 0;
+    m_resultSeeking = false;
+    m_resultResumeAfterSeek = false;
+    if (m_resultPlayer) {
+        m_resultPlayer->stop();
+        // 视频画面随结果页布局销毁，先断开输出再释放播放器。
+        m_resultPlayer->setVideoOutput(nullptr);
+        delete m_resultPlayer;
+        m_resultPlayer = nullptr;
+    }
+    if (m_resultAudio) {
+        delete m_resultAudio;
+        m_resultAudio = nullptr;
+    }
+    // 视图、视频项与堆叠控件由结果页布局统一销毁，这里只清空指针。
+    m_resultMediaStack = nullptr;
+    m_resultVideoView = nullptr;
+    m_resultVideoItem = nullptr;
+    m_resultHasVideo = false;
+}
+
+void MixcutPage::seekResultTo(int permille)
+{
+    if (!m_resultPlayer) {
+        return;
+    }
+    const qint64 total = m_resultPlayer->duration();
+    if (total <= 0) {
+        return;
+    }
+    const int bounded = qBound(0, permille, 1000);
+    const qint64 target = total * bounded / 1000;
+    m_resultPlayer->setPosition(target);
+    m_playProgress = bounded / 10;
+    if (m_resultPlayBar) {
+        m_resultPlayBar->setPosition(bounded);
+    }
+    if (m_resultPlayClock) {
+        m_resultPlayClock->setText(StudioData::formatElapsed(target));
     }
 }
 

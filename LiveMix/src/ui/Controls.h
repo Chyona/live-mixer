@@ -26,6 +26,8 @@ class QResizeEvent;
 class QTimer;
 class QVBoxLayout;
 class QWheelEvent;
+class QMouseEvent;
+class QEnterEvent;
 
 namespace Ui {
 
@@ -319,6 +321,45 @@ private:
     int m_value = 0;
     QColor m_barColor = Theme::Primary;
     QColor m_trackColor = Theme::Surface3;
+};
+
+// 可拖动的播放进度条：点击轨道立即定位，按住可连续拖动；
+// 轨道保持设计稿的 4px 细条，悬停/拖动时显示圆形滑块并扩大点击热区。
+class SeekBar : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit SeekBar(QWidget *parent = nullptr);
+
+    // 播放位置，千分比（0–1000），避免长视频按百分比定位时精度不足。
+    void setPosition(int permille);
+    int position() const { return m_position; }
+    void setBarColor(const QColor &color);
+    void setTrackColor(const QColor &color);
+    QSize sizeHint() const override;
+
+signals:
+    void scrubStarted(int permille);
+    void scrubbed(int permille);
+    void scrubFinished(int permille);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+
+private:
+    int permilleFromX(qreal x) const;
+
+    int m_position = 0;
+    QColor m_barColor = Theme::Primary;
+    QColor m_trackColor = Theme::Surface3;
+    bool m_dragging = false;
+    bool m_hovered = false;
 };
 
 class NavItem : public QAbstractButton

@@ -20,9 +20,13 @@ class QVBoxLayout;
 class QHBoxLayout;
 class QMediaPlayer;
 class QAudioOutput;
+class QGraphicsView;
+class QGraphicsVideoItem;
 class QThread;
 class Button;
+class GlyphButton;
 class ProgressBar;
+class SeekBar;
 class ConfigStore;
 
 namespace Mixcut {
@@ -122,7 +126,11 @@ private:
     void openRecent(const StudioData::MixcutResult &result);
     void restartFromResult();
     void togglePlayback();
+    void updatePlaybackControls();
     void updatePlayback();
+    void finishPlayback();
+    void resetResultPlayer();
+    void seekResultTo(int permille);
 
     void updateGenerationClock();
     void copyText(const QString &text, const QString &label);
@@ -232,11 +240,22 @@ private:
     QLabel *m_resultPlayClock = nullptr;
     Button *m_resultPlayButton = nullptr;
     QToolButton *m_resultCenterPlay = nullptr;
-    ProgressBar *m_resultPlayBar = nullptr;
+    GlyphButton *m_resultPlayToggle = nullptr;
+    SeekBar *m_resultPlayBar = nullptr;
+    // 真实成片播放：海报与播放器画面共用同一尺寸的堆叠控件。
+    QStackedWidget *m_resultMediaStack = nullptr;
+    QGraphicsView *m_resultVideoView = nullptr;
+    QGraphicsVideoItem *m_resultVideoItem = nullptr;
+    QMediaPlayer *m_resultPlayer = nullptr;
+    QAudioOutput *m_resultAudio = nullptr;
     QString m_resultFilePath;
     QString m_resultDraftPath;
+    bool m_resultHasVideo = false;
     bool m_playing = false;
     int m_playProgress = 0;
+    // 拖动进度条期间暂停跟随播放器位置，松开后按原播放状态恢复。
+    bool m_resultSeeking = false;
+    bool m_resultResumeAfterSeek = false;
     QTimer *m_playTimer = nullptr;
 
     QTimer *m_clockTimer = nullptr;
