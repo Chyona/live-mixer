@@ -37,8 +37,6 @@ struct PipelineRequest
     QString cacheDir;  // 分析缓存与剪辑计划
     QString outputDir; // 成片输出目录
     QString draftRoot; // 剪映草稿根目录
-    // true：重新包装时强制重跑封面提示词与图生图，不复用封面缓存。
-    bool regenerateCover = false;
 };
 
 class PipelineService : public QObject
@@ -94,15 +92,14 @@ private:
     bool addBrollTracks(EditPlan *plan, CapCutClient *capcut,
                         const CapCutDraft &draft, const QString &workDir,
                         QString *error);
-    // 封面提示词 2：提示词 1 + 口播内容 → DeepSeek，按源文件缓存；
+    // 封面提示词 2：提示词 1 + 口播内容 → DeepSeek；每次成片都重新生成，
     // 调用失败时退回本地兜底提示词。
-    bool ensureCoverPrompt(EditPlan *plan, HttpClient *http,
-                           const QString &cacheDir, QString *error);
+    bool ensureCoverPrompt(EditPlan *plan, HttpClient *http);
     // 封面海报：取口播首帧 → seedream 图生图 → 上传并写到最上层图片轨。
     // 生成失败只记录日志，不阻断成片。
     bool addCoverTrack(EditPlan *plan, CapCutClient *capcut,
                        const CapCutDraft &draft, const QString &workDir,
-                       HttpClient *http, QString *error);
+                       HttpClient *http);
     bool addSubtitleTracks(const EditPlan &plan, CapCutClient *capcut,
                            const CapCutDraft &draft, QString *error);
     bool addAudioTracks(const EditPlan &plan, CapCutClient *capcut,

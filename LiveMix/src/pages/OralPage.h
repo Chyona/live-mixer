@@ -151,9 +151,6 @@ private:
     QWidget *m_resultScreen = nullptr;
 
     StudioData::OralProject m_project;
-    // 从成片结果点「重新包装」进入时为 true：生成时强制重做封面，
-    // 不复用上一次包装的封面提示词与封面图。
-    bool m_regenerateCover = false;
 
     // 视频素材缩略图：顺序生成，完成后直接刷新对应的缩略图控件。
     QStringList m_thumbnailQueue;
