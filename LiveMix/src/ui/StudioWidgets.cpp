@@ -734,9 +734,10 @@ SwitchRow::SwitchRow(const QString &title, const QString &description, bool chec
     texts->setSpacing(2);
     texts->addWidget(Ui::label(title, 11, QFont::Medium, Theme::Text1, this));
     if (!description.isEmpty()) {
-        auto *hint = Ui::label(description, 10, QFont::Normal, Theme::Text3, this);
-        hint->setWordWrap(true);
-        texts->addWidget(hint);
+        m_description =
+            Ui::label(description, 10, QFont::Normal, Theme::Text3, this);
+        m_description->setWordWrap(true);
+        texts->addWidget(m_description);
     }
     row->addLayout(texts, 1);
 
@@ -756,6 +757,13 @@ void SwitchRow::setChecked(bool checked)
     if (m_switch && m_switch->isChecked() != checked) {
         m_switch->setChecked(checked);
         update();
+    }
+}
+
+void SwitchRow::setDescription(const QString &description)
+{
+    if (m_description) {
+        m_description->setText(description);
     }
 }
 

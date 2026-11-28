@@ -75,23 +75,37 @@ private:
     // 1. 理解阶段。
     // mediaSourcePath 是实际进入成片的口播视频（剪口气之后的连续视频）；
     // 原片路径始终保留在 plan->originalSourcePath，供重新包装回到原片。
+    // allowPrecomputedSpeech：剪口气没有实际剪除（时间轴未变）时为 true，
+    // 即使之后做了不改变时长的降噪，也能直接复用剪口气阶段的 ASR。
     bool ensureAnalysis(EditPlan *plan, bool *fromCache, AsrClient *asr,
                         LlmClient *llm, CapCutClient *capcut,
                         const QString &mediaSourcePath,
-                        const SpeechAnalysis &precomputedSpeech, QString *error);
+                        const SpeechAnalysis &precomputedSpeech,
+                        bool allowPrecomputedSpeech, QString *error);
     bool loadAnalysisCache(const QString &cachePath, EditPlan *plan);
     bool saveAnalysisCache(const QString &cachePath, const EditPlan &plan,
                            QString *error);
     QString analysisCacheKey(const QString &sourcePath) const;
 
-    // 剪口气：先识别原片，按内置提示词删除语气词，并删除超过 0.5 秒的
-    // 静音；随后按保留区间裁剪拼接成一条连续视频。无需剪除时返回原片。
-    // sourceSpeech 在本次实际识别过原片且未剪除时返回 ASR 结果，供理解阶段
-    // 直接复用，避免同一条原片识别两次；命中剪口缓存时为空。
+    // 人声处理：按项目设置先剪口气（开启时），再对结果做降噪（开启时）。
+    // 两者都关闭时原样返回原片。sourceSpeech 在本次实际识别过原片且未剪除
+    // 时返回 ASR 结果，供理解阶段直接复用；命中缓存时为空。
     bool trimFillerWords(const QString &sourcePath, AsrClient *asr,
                          LlmClient *llm, CapCutClient *capcut,
                          QString *outputPath, TrimStats *stats,
                          SpeechAnalysis *sourceSpeech, QString *error);
+    // 剪口气：先识别原片，按内置提示词（含用户选填的额外删除指令）删除
+    // 语气词，并删除超过 0.5 秒的静音；随后按保留区间裁剪拼接成一条连续
+    // 视频。无需剪除时返回原片。
+    bool trimBreathCuts(const QString &sourcePath, AsrClient *asr,
+                        LlmClient *llm, CapCutClient *capcut,
+                        QString *outputPath, TrimStats *stats,
+                        SpeechAnalysis *sourceSpeech, QString *error);
+    // 降噪：按等级对音轨套用 afftdn 滤镜，画面不重新编码；结果按
+    // 「输入指纹 + 等级」缓存。失败只记录日志并回退到未降噪视频。
+    bool denoiseVoice(const QString &sourcePath,
+                      StudioData::OralDenoiseLevel level,
+                      QString *outputPath, QString *error);
     // ASR 首选豆包极速版；未开通时回退标准版 / qwen，供剪口气与理解阶段共用。
     bool transcribeSpeech(const QString &audioPath, AsrClient *asr,
                           CapCutClient *capcut, SpeechAnalysis *speech,
@@ -138,6 +152,10 @@ private:
     QString m_analysisFrameDir;
     QString m_editPlanPath;
     QString m_draftId;
+    // 本次剪口气的实际统计（命中缓存时同样恢复），用于结果页「剪气口」明细。
+    TrimStats m_trimStats;
+    // 降噪是否实际生效（失败时会回退到未降噪人声，不写入结果明细）。
+    bool m_denoiseApplied = false;
     std::atomic_bool m_cancelled{false};
 };
 

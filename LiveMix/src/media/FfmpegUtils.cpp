@@ -463,6 +463,62 @@ bool FfmpegUtils::cutKeepRanges(const QString &inputPath,
     return true;
 }
 
+bool FfmpegUtils::applyAudioFilter(const QString &inputPath,
+                                   const QString &audioFilter,
+                                   const QString &outputPath, QString *error)
+{
+    if (audioFilter.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("音频滤镜为空。");
+        }
+        return false;
+    }
+    if (!QDir().mkpath(QFileInfo(outputPath).absolutePath())) {
+        if (error) {
+            *error = QStringLiteral("无法创建音频输出目录：%1")
+                         .arg(QFileInfo(outputPath).absolutePath());
+        }
+        return false;
+    }
+
+    // 画面直接 copy，只重新编码音轨；口播成片只有一条人声轨，滤镜即作用于人声。
+    const QStringList args = {
+        QStringLiteral("-y"),
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-i"),
+        inputPath,
+        QStringLiteral("-map"),
+        QStringLiteral("0:v:0"),
+        QStringLiteral("-map"),
+        QStringLiteral("0:a:0"),
+        QStringLiteral("-c:v"),
+        QStringLiteral("copy"),
+        QStringLiteral("-af"),
+        audioFilter,
+        QStringLiteral("-c:a"),
+        QStringLiteral("aac"),
+        QStringLiteral("-b:a"),
+        QStringLiteral("128k"),
+        QStringLiteral("-movflags"),
+        QStringLiteral("+faststart"),
+        outputPath,
+    };
+    if (!runFfmpeg(args, 30 * 60 * 1000, error)) {
+        return false;
+    }
+    const QFileInfo output(outputPath);
+    if (!output.exists() || output.size() <= 0) {
+        if (error) {
+            *error = QStringLiteral("音频处理失败，未生成有效文件。");
+        }
+        return false;
+    }
+    return true;
+}
+
 bool FfmpegUtils::mediaDurationMs(const QString &filePath, qint64 *durationMs)
 {
     const QString ffprobe = FfmpegLocator::ffprobePath();

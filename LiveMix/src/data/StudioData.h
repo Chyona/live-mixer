@@ -28,6 +28,8 @@ enum class OralLayout { Punch, Clean, Vlog, Tech, Magazine, Neon };
 enum class OralFont { Sans, Serif, Mono };
 enum class OralSubtitleStyle { Keyword, Big, Minimal };
 enum class OralDensity { Low, Medium, High };
+// 降噪强度：轻度 / 标准 / 强力。只在开启降噪时生效。
+enum class OralDenoiseLevel { Light, Standard, Strong };
 enum class OralStage { Analyze, Match, Compose, Render };
 enum class Tone { Info, Ai, Ok, Muted };
 enum class StageStatus { Waiting, Running, Done };
@@ -96,6 +98,13 @@ struct OralProject {
     bool titleFx = true;
     bool bgm = true;
     bool sfx = true;
+    // 剪气口默认开启：生成时清理呼吸声与长停顿，并保留 0.4 秒自然换气。
+    // 额外删除指令由用户在生成前选填，生成时与默认规则一起执行。
+    bool breathCut = true;
+    QString breathCutInstruction;
+    // 降噪默认关闭；开启后按强度处理人声音轨。
+    bool denoise = false;
+    OralDenoiseLevel denoiseLevel = OralDenoiseLevel::Standard;
     QString ratio = QStringLiteral("9:16");
     bool outputBoth = false;
 };
@@ -117,6 +126,12 @@ struct OralResult {
     int subtitleCount = 0;
     int brollCount = 0;
     bool draftGenerated = false;
+    // 本次成片启用的人声处理与额外删除指令；重新包装时据此恢复设置。
+    // 旧历史没有这些字段时按「默认开启剪气口、关闭降噪」处理。
+    bool breathCut = true;
+    QString breathCutInstruction;
+    bool denoise = false;
+    OralDenoiseLevel denoiseLevel = OralDenoiseLevel::Standard;
     // 智能口播真实产物路径：成片 MP4、剪映草稿目录、草稿 ID 与剪辑计划 JSON。
     // 示例历史记录保持为空，界面会退回原型展示。
     QString filePath;
@@ -189,6 +204,10 @@ OralMaterial oralMaterialFromFile(const QString &filePath, qint64 sizeBytes,
 QString shortOralCaption(const QString &text, int maxLength = 20);
 int oralBrollCount(OralDensity density);
 QString oralDensityName(OralDensity density);
+QString oralDenoiseLevelName(OralDenoiseLevel level);
+QString oralDenoiseLevelDescription(OralDenoiseLevel level);
+QString oralDenoiseLevelKey(OralDenoiseLevel level);
+OralDenoiseLevel oralDenoiseLevelFromKey(const QString &key);
 
 /* ------------------------------------------------------------------ */
 /* 智能混剪                                                            */

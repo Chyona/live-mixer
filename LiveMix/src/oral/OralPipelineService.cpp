@@ -494,13 +494,22 @@ void PipelineService::run()
         return;
     }
 
-    // 一键包装：先剪口气（删除语气词 + 超过 0.5 秒的静音），再把剪好的
-    // 连续视频交给原有的成片流程。
+    // 一键包装：按设置先剪口气（删除语气词 + 超过 0.5 秒的静音），再按需
+    // 降噪，最后把处理好的连续视频交给原有的成片流程。
     const QString originalSourcePath = m_request.project.source.filePath;
+    const bool breathCut = m_request.project.breathCut;
+    const bool denoise = m_request.project.denoise;
     setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 1,
-             QStringLiteral("剪口气：删除语气词与静音"));
+             breathCut ? QStringLiteral("剪口气：删除语气词与静音")
+                       : (denoise ? QStringLiteral("降噪：处理人声音轨")
+                                  : QStringLiteral("读取口播原片")));
     addLog(StudioData::OralStage::Analyze,
-           QStringLiteral("一键包装：先剪口气，再进入现有成片流程"),
+           QStringLiteral("一键包装：%1，再进入现有成片流程")
+               .arg(breathCut && denoise
+                        ? QStringLiteral("先剪口气、再降噪")
+                        : (breathCut ? QStringLiteral("先剪口气")
+                                     : (denoise ? QStringLiteral("先降噪")
+                                                : QStringLiteral("直接使用原片")))),
            StudioData::Tone::Info);
 
     QString mediaSourcePath;
@@ -517,28 +526,32 @@ void PipelineService::run()
         emit finished(false, QStringLiteral("已取消生成"), StudioData::OralResult());
         return;
     }
-    if (mediaSourcePath != originalSourcePath) {
-        addLog(StudioData::OralStage::Analyze,
-               QStringLiteral("剪口气完成：删除 %1 处语气词、%2 段静音，"
-                              "时长 %3 → %4（节省 %5）")
-                   .arg(trimStats.fillerCount)
-                   .arg(trimStats.silenceCount)
-                   .arg(StudioData::formatElapsed(trimStats.sourceDurationMs),
-                        StudioData::formatElapsed(trimStats.outputDurationMs),
-                        StudioData::formatElapsed(trimStats.removedMs)),
-               StudioData::Tone::Ok);
-    } else {
-        addLog(StudioData::OralStage::Analyze,
-               QStringLiteral("剪口气未产生裁剪，继续使用原片"),
-               StudioData::Tone::Info);
+    m_trimStats = trimStats;
+    if (breathCut) {
+        if (trimStats.removedMs > 0) {
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("剪口气完成：删除 %1 处语气词、%2 段静音，"
+                                  "时长 %3 → %4（节省 %5）")
+                       .arg(trimStats.fillerCount)
+                       .arg(trimStats.silenceCount)
+                       .arg(StudioData::formatElapsed(trimStats.sourceDurationMs),
+                            StudioData::formatElapsed(trimStats.outputDurationMs),
+                            StudioData::formatElapsed(trimStats.removedMs)),
+                   StudioData::Tone::Ok);
+        } else {
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("剪口气未产生裁剪，继续使用原片"),
+                   StudioData::Tone::Info);
+        }
     }
 
     setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 16,
              mediaSourcePath == originalSourcePath
                  ? QStringLiteral("读取口播原片")
-                 : QStringLiteral("读取剪口气后的口播"));
+                 : QStringLiteral("读取处理后的人声口播"));
     if (!ensureAnalysis(&plan, &fromCache, &asr, &llm, &capcut,
-                        mediaSourcePath, sourceSpeech, &error)) {
+                        mediaSourcePath, sourceSpeech,
+                        trimStats.removedMs <= 0, &error)) {
         addLog(StudioData::OralStage::Analyze, error, StudioData::Tone::Muted);
         emit finished(false, error, StudioData::OralResult());
         return;
@@ -1013,6 +1026,64 @@ bool PipelineService::trimFillerWords(const QString &sourcePath, AsrClient *asr,
                                       SpeechAnalysis *sourceSpeech,
                                       QString *error)
 {
+    if (!outputPath || !stats) {
+        return false;
+    }
+    *outputPath = sourcePath;
+    *stats = TrimStats();
+    m_denoiseApplied = false;
+    if (sourceSpeech) {
+        *sourceSpeech = SpeechAnalysis();
+    }
+
+    const StudioData::OralProject &project = m_request.project;
+    if (!project.breathCut && !project.denoise) {
+        // 两项人声处理都关闭：直接使用原片。
+        return true;
+    }
+
+    QString preparedPath = sourcePath;
+    if (project.breathCut) {
+        if (!trimBreathCuts(sourcePath, asr, llm, capcut, &preparedPath,
+                            stats, sourceSpeech, error)) {
+            return false;
+        }
+    } else {
+        qint64 sourceDurationMs = 0;
+        QString probeError;
+        if (probeVideo(sourcePath, nullptr, nullptr, &sourceDurationMs,
+                       &probeError)) {
+            stats->sourceDurationMs = sourceDurationMs;
+            stats->outputDurationMs = sourceDurationMs;
+        }
+    }
+
+    if (project.denoise) {
+        QString denoisedPath;
+        QString denoiseError;
+        if (denoiseVoice(preparedPath, project.denoiseLevel, &denoisedPath,
+                         &denoiseError)) {
+            preparedPath = denoisedPath;
+            m_denoiseApplied = true;
+        } else {
+            // 降噪失败不阻断成片：继续使用未降噪的人声。
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("降噪失败，改用未降噪人声继续成片：%1")
+                       .arg(denoiseError),
+                   StudioData::Tone::Muted);
+        }
+    }
+
+    *outputPath = preparedPath;
+    return true;
+}
+
+bool PipelineService::trimBreathCuts(const QString &sourcePath, AsrClient *asr,
+                                     LlmClient *llm, CapCutClient *capcut,
+                                     QString *outputPath, TrimStats *stats,
+                                     SpeechAnalysis *sourceSpeech,
+                                     QString *error)
+{
     if (!outputPath || !stats || !asr || !llm || !capcut) {
         return false;
     }
@@ -1043,9 +1114,13 @@ bool PipelineService::trimFillerWords(const QString &sourcePath, AsrClient *asr,
         }
         return false;
     }
-    // 修改剪口气提示词或区间算法时，同步递增版本号让旧缓存失效。
+    // 修改剪口气提示词或区间算法时，同步递增版本号让旧缓存失效；
+    // 额外删除指令参与指纹，修改指令后重新识别。
+    const QString extraInstruction =
+        m_request.project.breathCutInstruction.trimmed();
     const QString trimKey = sha1Hex(
-        fileFingerprint(sourcePath) + QStringLiteral("|oral-trim-v1"));
+        fileFingerprint(sourcePath) + QStringLiteral("|oral-trim-v2|")
+        + extraInstruction);
     const QString cachedPath =
         QDir(trimDir).filePath(QStringLiteral("trim_%1.mp4").arg(trimKey));
     const QString cachedStatsPath = trimStatsPathFor(cachedPath);
@@ -1115,13 +1190,21 @@ bool PipelineService::trimFillerWords(const QString &sourcePath, AsrClient *asr,
     }
 
     setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 9,
-             QStringLiteral("剪口气：识别语气词"));
+             extraInstruction.isEmpty()
+                 ? QStringLiteral("剪口气：识别语气词")
+                 : QStringLiteral("剪口气：识别语气词与额外删除要求"));
+    if (!extraInstruction.isEmpty()) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("剪口气：额外删除指令「%1」将在本次生成时执行")
+                   .arg(extraInstruction),
+               StudioData::Tone::Ai);
+    }
     QVector<FillerCut> fillerCuts;
     if (!flattenSpeechWords(speech).isEmpty()) {
         QString fillerError;
         if (!llm->analyzeFillers(
                 m_request.gatewayBaseUrl, m_request.apiKey, speech,
-                &fillerCuts, &fillerError,
+                extraInstruction, &fillerCuts, &fillerError,
                 [this](const QString &status) {
                     addLog(StudioData::OralStage::Analyze, status,
                            StudioData::Tone::Info);
@@ -1250,11 +1333,128 @@ bool PipelineService::trimFillerWords(const QString &sourcePath, AsrClient *asr,
     return true;
 }
 
+bool PipelineService::denoiseVoice(const QString &sourcePath,
+                                   StudioData::OralDenoiseLevel level,
+                                   QString *outputPath, QString *error)
+{
+    if (!outputPath) {
+        return false;
+    }
+    *outputPath = sourcePath;
+    if (sourcePath.trimmed().isEmpty()) {
+        return true;
+    }
+
+    const QString denoiseDir =
+        QDir(m_request.cacheDir).filePath(QStringLiteral("denoise"));
+    if (!QDir().mkpath(denoiseDir)) {
+        if (error) {
+            *error = QStringLiteral("无法创建降噪缓存目录。");
+        }
+        return false;
+    }
+    // 修改降噪滤镜或强度档位时同步递增版本号让旧缓存失效。
+    const QString levelKey = StudioData::oralDenoiseLevelKey(level);
+    const QString denoiseKey = sha1Hex(
+        fileFingerprint(sourcePath) + QStringLiteral("|oral-denoise-v1|")
+        + levelKey);
+    const QString cachedPath =
+        QDir(denoiseDir).filePath(QStringLiteral("denoise_%1.mp4").arg(denoiseKey));
+    if (QFileInfo(cachedPath).isFile() && QFileInfo(cachedPath).size() > 0) {
+        qint64 cachedDurationMs = 0;
+        if (FfmpegUtils::mediaDurationMs(cachedPath, &cachedDurationMs)
+            && cachedDurationMs > 0) {
+            *outputPath = cachedPath;
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("复用已降噪的人声口播，跳过重复处理"),
+                   StudioData::Tone::Ok);
+            return true;
+        }
+        QFile::remove(cachedPath);
+    }
+
+    const QString workDir =
+        QDir(m_request.cacheDir)
+            .filePath(QStringLiteral("denoisework_%1_%2")
+                          .arg(m_request.runId)
+                          .arg(QDateTime::currentMSecsSinceEpoch()));
+    if (!QDir().mkpath(workDir)) {
+        if (error) {
+            *error = QStringLiteral("无法创建降噪临时目录。");
+        }
+        return false;
+    }
+    const auto cleanup = [&workDir] { QDir(workDir).removeRecursively(); };
+
+    // 三档强度对应不同的降噪量与噪声底，画面保持不重新编码。
+    QString audioFilter;
+    switch (level) {
+    case StudioData::OralDenoiseLevel::Light:
+        audioFilter = QStringLiteral("afftdn=nr=6:nf=-45");
+        break;
+    case StudioData::OralDenoiseLevel::Strong:
+        audioFilter = QStringLiteral("afftdn=nr=20:nf=-28");
+        break;
+    case StudioData::OralDenoiseLevel::Standard:
+    default:
+        audioFilter = QStringLiteral("afftdn=nr=12:nf=-35");
+        break;
+    }
+
+    setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 14,
+             QStringLiteral("降噪：处理人声音轨"));
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("降噪：%1强度，仅处理人声音轨…")
+               .arg(StudioData::oralDenoiseLevelName(level)),
+           StudioData::Tone::Info);
+    const QString tempOutput =
+        QDir(workDir).filePath(QStringLiteral("denoised.mp4"));
+    QString filterError;
+    if (!FfmpegUtils::applyAudioFilter(sourcePath, audioFilter, tempOutput,
+                                       &filterError)) {
+        cleanup();
+        if (error) {
+            *error = filterError;
+        }
+        return false;
+    }
+    qint64 outputDurationMs = 0;
+    if (!FfmpegUtils::mediaDurationMs(tempOutput, &outputDurationMs)
+        || outputDurationMs <= 0) {
+        cleanup();
+        if (error) {
+            *error = QStringLiteral("降噪结果无法读取。");
+        }
+        return false;
+    }
+
+    // 原子落到缓存目录；跨目录 rename 失败时退回复制。
+    QFile::remove(cachedPath);
+    if (!QFile::rename(tempOutput, cachedPath)) {
+        if (!QFile::copy(tempOutput, cachedPath)) {
+            cleanup();
+            if (error) {
+                *error = QStringLiteral("降噪结果写入缓存失败。");
+            }
+            return false;
+        }
+        QFile::remove(tempOutput);
+    }
+    cleanup();
+    *outputPath = cachedPath;
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("降噪完成：%1强度 · 仅人声轨")
+               .arg(StudioData::oralDenoiseLevelName(level)),
+           StudioData::Tone::Ok);
+    return true;
+}
+
 bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
                                      AsrClient *asr, LlmClient *llm,
                                      CapCutClient *capcut,
                                      const QString &mediaSourcePath,
                                      const SpeechAnalysis &precomputedSpeech,
+                                     bool allowPrecomputedSpeech,
                                      QString *error)
 {
     if (!plan || !fromCache || !asr || !llm || !capcut
@@ -1308,7 +1508,7 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
         1, sourceDurationMs * plan->canvas.fps / 1000));
     addLog(StudioData::OralStage::Analyze,
            QStringLiteral("已读取%1：%2×%3 · %4 · %5")
-               .arg(trimmed ? QStringLiteral("剪口气后的口播")
+               .arg(trimmed ? QStringLiteral("处理后的人声口播")
                             : QStringLiteral("口播原片"))
                .arg(sourceWidth)
                .arg(sourceHeight)
@@ -1359,8 +1559,9 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
                StudioData::Tone::Ok);
     } else {
         SpeechAnalysis speech;
-        // 只有未剪除（实际媒体仍是原片）时，剪口气阶段的 ASR 时间轴才可直接复用。
-        if (!precomputedSpeech.isEmpty() && !trimmed) {
+        // 剪口气没有实际剪除时，时间轴未变；即使之后做了不改变时长的
+        // 降噪，也可直接复用剪口气阶段的 ASR。
+        if (!precomputedSpeech.isEmpty() && allowPrecomputedSpeech) {
             // 剪口气阶段已对同一条视频做过 ASR，直接复用，避免识别两次。
             speech = precomputedSpeech;
             addLog(StudioData::OralStage::Analyze,
@@ -2532,6 +2733,13 @@ StudioData::OralResult PipelineService::makeResult(const EditPlan &plan,
         ? plan.sourcePath
         : plan.originalSourcePath;
     result.materials = m_request.project.materials;
+    // 人声处理设置随结果保存，重新包装时恢复为本次成片的配置。
+    result.breathCut = m_request.project.breathCut;
+    result.breathCutInstruction = result.breathCut
+        ? m_request.project.breathCutInstruction.trimmed()
+        : QString();
+    result.denoise = m_request.project.denoise;
+    result.denoiseLevel = m_request.project.denoiseLevel;
 
     int transitionCount = 0;
     for (const Shot &shot : plan.shots.shots) {
@@ -2546,21 +2754,37 @@ StudioData::OralResult PipelineService::makeResult(const EditPlan &plan,
              .arg(subtitlePresetName(plan.subtitles.preset))},
         {QStringLiteral("素材"),
          QStringLiteral("%1 处 B-Roll").arg(result.brollCount)},
-        {QStringLiteral("节奏"),
-         QStringLiteral("%1 个转场").arg(transitionCount)},
-        {QStringLiteral("模板"), QStringLiteral("清透讲解")},
-        {QStringLiteral("音效"),
-         QStringLiteral("%1 处").arg(plan.audio.sfx.size())},
-        {QStringLiteral("BGM"),
-         !plan.audio.bgm.name.isEmpty()
-             ? plan.audio.bgm.name
-             : (plan.audio.bgmEnabled ? QStringLiteral("未获取")
-                                      : QStringLiteral("未启用"))},
-        {QStringLiteral("语义"),
-         QStringLiteral("%1 个段落").arg(plan.semantics.segments.size())},
-        {QStringLiteral("说话人"),
-         QStringLiteral("%1 位").arg(qMax(1, plan.speech.speakers.size()))},
     };
+    const int breathCutCount =
+        m_trimStats.fillerCount + m_trimStats.silenceCount;
+    if (result.breathCut && breathCutCount > 0) {
+        result.highlights.append(
+            {QStringLiteral("剪气口"),
+             QStringLiteral("%1 处 · 省 %2 秒")
+                 .arg(breathCutCount)
+                 .arg(m_trimStats.removedMs / 1000.0, 0, 'f', 1)});
+    }
+    if (result.denoise && m_denoiseApplied) {
+        result.highlights.append(
+            {QStringLiteral("降噪"),
+             QStringLiteral("%1 · 人声轨")
+                 .arg(StudioData::oralDenoiseLevelName(result.denoiseLevel))});
+    }
+    result.highlights.append(
+        {{QStringLiteral("节奏"),
+          QStringLiteral("%1 个转场").arg(transitionCount)},
+         {QStringLiteral("模板"), QStringLiteral("清透讲解")},
+         {QStringLiteral("音效"),
+          QStringLiteral("%1 处").arg(plan.audio.sfx.size())},
+         {QStringLiteral("BGM"),
+          !plan.audio.bgm.name.isEmpty()
+              ? plan.audio.bgm.name
+              : (plan.audio.bgmEnabled ? QStringLiteral("未获取")
+                                       : QStringLiteral("未启用"))},
+         {QStringLiteral("语义"),
+          QStringLiteral("%1 个段落").arg(plan.semantics.segments.size())},
+         {QStringLiteral("说话人"),
+          QStringLiteral("%1 位").arg(qMax(1, plan.speech.speakers.size()))}});
     return result;
 }
 

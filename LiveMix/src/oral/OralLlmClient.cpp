@@ -531,6 +531,7 @@ bool LlmClient::analyzeSemantics(const QString &baseUrl, const QString &apiKey,
 
 bool LlmClient::analyzeFillers(const QString &baseUrl, const QString &apiKey,
                                const SpeechAnalysis &speech,
+                               const QString &instruction,
                                QVector<FillerCut> *cuts, QString *error,
                                const StatusCallback &onStatus)
 {
@@ -551,11 +552,13 @@ bool LlmClient::analyzeFillers(const QString &baseUrl, const QString &apiKey,
         return true;
     }
     if (onStatus) {
-        onStatus(QStringLiteral("正在识别语气词与口头禅…"));
+        onStatus(instruction.trimmed().isEmpty()
+                     ? QStringLiteral("正在识别语气词与口头禅…")
+                     : QStringLiteral("正在识别语气词与额外删除要求…"));
     }
 
     // 内置提示词：只删除无信息量的填充词和结巴重复，拿不准就不删。
-    const QString systemPrompt = QString::fromUtf8(R"PROMPT(你是短视频口播的精剪师。下面给你一份带全局词序号的逐词转写，请找出可以整词删除、删除后不影响语义的语气词和口头禅。
+    QString systemPrompt = QString::fromUtf8(R"PROMPT(你是短视频口播的精剪师。下面给你一份带全局词序号的逐词转写，请找出可以整词删除、删除后不影响语义的语气词和口头禅。
 
 可以删除：
 - 无意义的语气词/感叹词：嗯、啊、呃、额、哦、唔、唉、诶、呀、哎呀、哎、哈、咦等；
@@ -576,15 +579,32 @@ bool LlmClient::analyzeFillers(const QString &baseUrl, const QString &apiKey,
 输出格式：
 {"delete":[{"start":12,"end":12,"reason":"语气词"},{"start":30,"end":31,"reason":"口头禅"}]})PROMPT");
 
+    // 用户额外要求：只作为默认规则的补充。按时间段描述时，模型可结合
+    // 句子行括号内的时间码定位到对应词序号，输出格式保持不变。
+    const QString extraInstruction = instruction.trimmed();
+    if (!extraInstruction.isEmpty()) {
+        systemPrompt += QStringLiteral(
+            "\n\n用户的额外删除要求（必须在默认规则基础上执行）：\n%1\n"
+            "如果要求按时间段描述，请结合句子行括号内的时间码定位词序号；"
+            "仍然只输出词序号区间，不要输出时间段。")
+            .arg(extraInstruction);
+    }
+
     QStringList lines;
     int wordIndex = 0;
     int utteranceIndex = 0;
     for (const Utterance &utterance : speech.utterances) {
         ++utteranceIndex;
+        const QString timeRange =
+            QStringLiteral("%1–%2")
+                .arg(StudioData::formatElapsed(utterance.startMs),
+                     StudioData::formatElapsed(utterance.endMs));
         if (utterance.words.isEmpty()) {
-            lines.append(QStringLiteral("句子%1（无逐词时间线，不可删除）：%2")
-                             .arg(utteranceIndex)
-                             .arg(utterance.text.trimmed()));
+            lines.append(
+                QStringLiteral("句子%1（%2，无逐词时间线，不可删除）：%3")
+                    .arg(utteranceIndex)
+                    .arg(timeRange)
+                    .arg(utterance.text.trimmed()));
             continue;
         }
         QStringList tokens;
@@ -593,8 +613,9 @@ bool LlmClient::analyzeFillers(const QString &baseUrl, const QString &apiKey,
             tokens.append(QStringLiteral("[%1]%2").arg(wordIndex).arg(word.text));
             ++wordIndex;
         }
-        lines.append(QStringLiteral("句子%1：%2")
+        lines.append(QStringLiteral("句子%1（%2）：%3")
                          .arg(utteranceIndex)
+                         .arg(timeRange)
                          .arg(tokens.join(QLatin1Char(' '))));
     }
     const QString userText =

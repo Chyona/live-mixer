@@ -50,9 +50,11 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QtMath>
 #include <QStackedWidget>
+#include <QTextCursor>
 #include <QTextEdit>
 #include <QToolButton>
 #include <QTimer>
@@ -2093,7 +2095,7 @@ QWidget *OralPage::buildSetupHeader()
     auto *description = Ui::label(
         m_project.step == 1
             ? QStringLiteral("添加一段真人口播和相关素材，AI 会先理解内容，再按模板完成包装。")
-            : QStringLiteral("选择包装模板和细节，AI 会按口播节奏自动生成字幕、B-Roll 与音乐。"),
+            : QStringLiteral("选择包装模板和细节，AI 会按口播节奏清理气口、生成字幕、B-Roll 与音乐。"),
         11, QFont::Normal, Theme::Text2, header);
     description->setWordWrap(true);
     titles->addWidget(description);
@@ -2342,11 +2344,16 @@ QWidget *OralPage::buildSetupStepOne()
 QWidget *OralPage::buildSetupStepTwo()
 {
     auto *content = new QWidget;
-    auto *layout = new QHBoxLayout(content);
+    auto *layout = new QVBoxLayout(content);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(14);
 
-    auto *left = new QWidget(content);
+    auto *columns = new QWidget(content);
+    auto *columnsLayout = new QHBoxLayout(columns);
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(14);
+
+    auto *left = new QWidget(columns);
     auto *leftLayout = new QVBoxLayout(left);
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->setSpacing(14);
@@ -2374,7 +2381,8 @@ QWidget *OralPage::buildSetupStepTwo()
     leftLayout->addWidget(templateCard);
 
     auto *detailCard = new Studio::SectionCard(
-        Icons::Glyph::Film, QStringLiteral("包装细节"), left);
+        Icons::Glyph::Palette, QStringLiteral("画面包装"),
+        QStringLiteral("字幕 · B-Roll · 动效"), left);
     detailCard->setBodyMargins(QMargins(14, 14, 14, 14));
     auto *detailLayout = new QVBoxLayout;
     detailLayout->setContentsMargins(0, 0, 0, 0);
@@ -2492,83 +2500,274 @@ QWidget *OralPage::buildSetupStepTwo()
                               QStringLiteral("重点句自动生成花字"), m_project.titleFx,
                               [this](bool value) { m_project.titleFx = value; }),
                           0, 1);
-    toggleGrid->addWidget(makeSwitch(
-                              QStringLiteral("背景音乐"),
-                              QStringLiteral("按情绪匹配，人声自动闪避"), m_project.bgm,
-                              [this](bool value) { m_project.bgm = value; }),
-                          1, 0);
-    toggleGrid->addWidget(makeSwitch(
-                              QStringLiteral("音效点缀"),
-                              QStringLiteral("转场与重点处补充音效"), m_project.sfx,
-                              [this](bool value) { m_project.sfx = value; }),
-                          1, 1);
     detailLayout->addWidget(toggles);
-    detailCard->bodyLayout()->addLayout(detailLayout);
-    leftLayout->addWidget(detailCard);
-    leftLayout->addStretch(1);
+    detailLayout->addStretch(1);
+    detailLayout->addSpacing(12);
+    detailLayout->addWidget(Ui::separator(false, detailCard));
+    auto *sceneNote = new QWidget(detailCard);
+    auto *sceneNoteLayout = new QHBoxLayout(sceneNote);
+    sceneNoteLayout->setContentsMargins(0, 10, 0, 0);
+    sceneNoteLayout->setSpacing(6);
+    sceneNoteLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 10,
+                                                 Theme::Ai, sceneNote),
+                               0, Qt::AlignTop);
+    auto *sceneNoteText = Ui::label(
+        QStringLiteral("字幕、B-Roll 与动效会在生成时按口播节奏自动对齐。"), 9,
+        QFont::Normal, Theme::Text3, sceneNote);
+    sceneNoteText->setWordWrap(true);
+    sceneNoteLayout->addWidget(sceneNoteText, 1);
+    detailLayout->addWidget(sceneNote);
+    detailCard->bodyLayout()->addLayout(detailLayout, 1);
+    leftLayout->addWidget(detailCard, 1);
 
-    auto *right = new QWidget(content);
+    auto *right = new QWidget(columns);
     auto *rightLayout = new QVBoxLayout(right);
     rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(12);
+    rightLayout->setSpacing(14);
 
-    auto *previewCard = new Studio::SectionCard(
-        Icons::Glyph::Play, QStringLiteral("实时预览"), tmpl.name, right);
-    auto *ratioChip = new QLabel(m_project.ratio, previewCard);
-    ratioChip->setFont(Theme::monoFont(9));
-    ratioChip->setStyleSheet(
-        QStringLiteral("color:%1;background:%2;border:1px solid %3;"
-                       "border-radius:4px;padding:1px 5px;")
-            .arg(Theme::Text3.name(), Theme::Surface2.name(), Theme::Border.name()));
-    previewCard->headerLayout()->addWidget(ratioChip);
-    previewCard->setBodyMargins(QMargins(12, 12, 12, 12));
-    auto *previewBody = previewCard->bodyLayout();
-    previewBody->setSpacing(0);
+    auto *voiceCard = new Studio::SectionCard(
+        Icons::Glyph::Music, QStringLiteral("声音包装"),
+        QStringLiteral("BGM · 音效 · 人声"), right);
+    voiceCard->setBodyMargins(QMargins(14, 14, 14, 14));
+    auto *voiceLayout = new QVBoxLayout;
+    voiceLayout->setContentsMargins(0, 0, 0, 0);
+    voiceLayout->setSpacing(0);
 
-    auto *stage = new DarkStage(previewCard);
-    stage->setFixedHeight(392);
-    auto *stageLayout = new QHBoxLayout(stage);
-    stageLayout->setContentsMargins(12, 12, 12, 12);
-    stageLayout->setAlignment(Qt::AlignCenter);
-    const int previewHeight = m_project.ratio == QLatin1String("9:16") ? 392 : 212;
-    const int previewWidth = m_project.ratio == QLatin1String("9:16")
-        ? qRound(previewHeight * 9.0 / 16.0)
-        : qRound(previewHeight * 16.0 / 9.0);
-    auto *poster = new Studio::OralPosterWidget(stage);
-    poster->setFixedSize(previewWidth, previewHeight);
-    Studio::OralPosterSpec spec;
-    spec.templateId = m_project.templateId;
-    spec.headline = tmpl.headline;
-    spec.caption = m_project.hasSource && !m_project.source.transcript.isEmpty()
-        ? m_project.source.transcript.first().text
-        : tmpl.caption;
-    spec.keywords = m_project.hasSource ? m_project.source.topics.mid(0, 3)
-                                        : QStringList();
-    spec.materials = m_project.materials.mid(
-        0, m_project.density == StudioData::OralDensity::Low ? 1 : 2);
-    spec.ratio = m_project.ratio;
-    spec.subtitleStyle = m_project.subtitleStyle;
-    // 预览时间码使用真实口播时长；示例项目仍显示设计稿的 00:58。
-    spec.timecode = m_project.hasSource && !m_project.source.duration.isEmpty()
-        ? m_project.source.duration
-        : QStringLiteral("00:58");
-    poster->setSpec(spec);
-    stageLayout->addWidget(poster, 0, Qt::AlignCenter);
-    previewBody->addWidget(stage);
-    previewBody->addSpacing(12);
+    auto *voiceToggles = new QWidget(voiceCard);
+    auto *voiceToggleGrid = new QGridLayout(voiceToggles);
+    voiceToggleGrid->setContentsMargins(0, 0, 0, 0);
+    voiceToggleGrid->setHorizontalSpacing(6);
+    voiceToggleGrid->setVerticalSpacing(6);
+    auto bindSwitch = [this](Studio::SwitchRow *row,
+                             std::function<void(bool)> setter) {
+        connect(row, &Studio::SwitchRow::toggled, this,
+                [this, setter](bool value) {
+                    setter(value);
+                    rebuildSetup();
+                });
+    };
+    auto *bgmRow = new Studio::SwitchRow(
+        QStringLiteral("背景音乐"), QStringLiteral("按情绪匹配，人声闪避"),
+        m_project.bgm, voiceToggles);
+    bindSwitch(bgmRow, [this](bool value) { m_project.bgm = value; });
+    voiceToggleGrid->addWidget(bgmRow, 0, 0);
+    auto *sfxRow = new Studio::SwitchRow(
+        QStringLiteral("音效点缀"), QStringLiteral("转场与重点处补充音效"),
+        m_project.sfx, voiceToggles);
+    bindSwitch(sfxRow, [this](bool value) { m_project.sfx = value; });
+    voiceToggleGrid->addWidget(sfxRow, 0, 1);
+
+    const bool hasInstruction =
+        !m_project.breathCutInstruction.trimmed().isEmpty();
+    auto *breathRow = new Studio::SwitchRow(
+        QStringLiteral("剪气口"),
+        m_project.breathCut
+            ? (hasInstruction ? QStringLiteral("已开启 · 含额外删除指令")
+                              : QStringLiteral("已开启 · 默认清理气口"))
+            : QStringLiteral("清理呼吸与停顿，更紧凑"),
+        m_project.breathCut, voiceToggles);
+    bindSwitch(breathRow, [this](bool value) { m_project.breathCut = value; });
+    voiceToggleGrid->addWidget(breathRow, 1, 0);
+
+    auto *denoiseRow = new Studio::SwitchRow(
+        QStringLiteral("降噪"),
+        m_project.denoise
+            ? QStringLiteral("%1强度 · 适配人声轨")
+                  .arg(StudioData::oralDenoiseLevelName(m_project.denoiseLevel))
+            : QStringLiteral("压制底噪，保留人声"),
+        m_project.denoise, voiceToggles);
+    bindSwitch(denoiseRow, [this](bool value) { m_project.denoise = value; });
+    voiceToggleGrid->addWidget(denoiseRow, 1, 1);
+    voiceLayout->addWidget(voiceToggles);
+
+    if (m_project.breathCut) {
+        voiceLayout->addSpacing(8);
+        auto *panel = new QWidget(voiceCard);
+        panel->setObjectName(QStringLiteral("breathCutPanel"));
+        panel->setStyleSheet(
+            QStringLiteral("#breathCutPanel { background:%1; border:1px solid %2;"
+                           " border-radius:8px; }")
+                .arg(Theme::alpha(Theme::Surface2, 0.4).name(QColor::HexArgb),
+                     Theme::Border.name()));
+        auto *panelLayout = new QVBoxLayout(panel);
+        panelLayout->setContentsMargins(10, 9, 10, 9);
+        panelLayout->setSpacing(0);
+
+        auto *head = new QWidget(panel);
+        auto *headLayout = new QHBoxLayout(head);
+        headLayout->setContentsMargins(0, 0, 0, 0);
+        headLayout->setSpacing(6);
+        headLayout->addWidget(Studio::iconLabel(Icons::Glyph::Scissors, 12,
+                                                Theme::Primary, head));
+        headLayout->addWidget(Ui::label(
+            QStringLiteral("剪气口 · 额外删除指令"), 10, QFont::Medium,
+            Theme::Text1, head));
+        headLayout->addWidget(Studio::pillLabel(
+            QStringLiteral("选填"), Theme::Text3, Theme::Surface1,
+            Theme::Border, 8, head));
+        headLayout->addStretch(1);
+        headLayout->addWidget(Ui::label(QStringLiteral("生成时执行"), 9,
+                                        QFont::Normal, Theme::Text3, head));
+        panelLayout->addWidget(head);
+        panelLayout->addSpacing(6);
+
+        auto *description = Ui::label(
+            QStringLiteral("生成时默认清理呼吸声与长停顿，并保留 0.4 秒自然换气；"
+                           "额外删除要求可直接描述，留空即可。"),
+            9, QFont::Normal, Theme::Text3, panel);
+        description->setWordWrap(true);
+        panelLayout->addWidget(description);
+        panelLayout->addSpacing(8);
+
+        auto *editor = new QTextEdit(panel);
+        Studio::applyTextAreaStyle(editor, false, 10);
+        editor->setAcceptRichText(false);
+        editor->setFixedHeight(54);
+        editor->setPlaceholderText(QStringLiteral(
+            "例如：删掉所有「嗯、啊、那个」语气词，以及 00:12–00:18 的重复片段。"));
+        editor->setPlainText(m_project.breathCutInstruction);
+        panelLayout->addWidget(editor);
+        panelLayout->addSpacing(6);
+
+        auto *statusRow = new QWidget(panel);
+        auto *statusLayout = new QHBoxLayout(statusRow);
+        statusLayout->setContentsMargins(0, 0, 0, 0);
+        statusLayout->setSpacing(6);
+        auto *iconHost = new QWidget(statusRow);
+        auto *iconHostLayout = new QHBoxLayout(iconHost);
+        iconHostLayout->setContentsMargins(0, 0, 0, 0);
+        iconHostLayout->setSpacing(0);
+        auto *checkIcon =
+            Studio::iconLabel(Icons::Glyph::Check, 10, Theme::Success, iconHost);
+        auto *sparkleIcon =
+            Studio::iconLabel(Icons::Glyph::Sparkle, 10, Theme::Ai, iconHost);
+        iconHostLayout->addWidget(checkIcon);
+        iconHostLayout->addWidget(sparkleIcon);
+        statusLayout->addWidget(iconHost);
+        auto *statusLabel = new ElidedLabel(QString(), statusRow);
+        statusLabel->setPixelSize(9);
+        statusLabel->setTextColor(Theme::Text3);
+        statusLayout->addWidget(statusLabel, 1);
+        auto *counterLabel = monoLabel(QString(), 9, Theme::Text3, statusRow);
+        statusLayout->addWidget(counterLabel);
+        auto *clearButton = new LinkLabel(QStringLiteral("清空"), statusRow);
+        clearButton->setPixelSize(9);
+        clearButton->setTextColor(Theme::Text3);
+        clearButton->setHoverColor(Theme::Text1);
+        clearButton->setUnderlineOnHover(false);
+        statusLayout->addWidget(clearButton);
+        panelLayout->addWidget(statusRow);
+
+        auto refreshPanel = [this, counterLabel, clearButton, checkIcon,
+                             sparkleIcon, statusLabel, breathRow] {
+            const QString text = m_project.breathCutInstruction;
+            const bool hasText = !text.trimmed().isEmpty();
+            checkIcon->setVisible(hasText);
+            sparkleIcon->setVisible(!hasText);
+            statusLabel->setText(
+                hasText ? QStringLiteral("额外指令已记录，生成时与默认规则一起执行")
+                        : QStringLiteral("未填写额外指令，生成时按默认规则清理"));
+            counterLabel->setText(
+                QStringLiteral("%1/200").arg(text.size()));
+            clearButton->setVisible(text.size() > 0);
+            breathRow->setDescription(
+                hasText ? QStringLiteral("已开启 · 含额外删除指令")
+                        : QStringLiteral("已开启 · 默认清理气口"));
+        };
+        connect(editor, &QTextEdit::textChanged, this,
+                [this, editor, refreshPanel] {
+                    QString text = editor->toPlainText();
+                    if (text.size() > 200) {
+                        text.truncate(200);
+                        const QSignalBlocker blocker(editor);
+                        editor->setPlainText(text);
+                        editor->moveCursor(QTextCursor::End);
+                    }
+                    m_project.breathCutInstruction = text;
+                    refreshPanel();
+                });
+        connect(clearButton, &QAbstractButton::clicked, this,
+                [editor] { editor->clear(); });
+        refreshPanel();
+        voiceLayout->addWidget(panel);
+    }
+
+    if (m_project.denoise) {
+        voiceLayout->addSpacing(m_project.breathCut ? 6 : 8);
+        auto *panel = new QWidget(voiceCard);
+        panel->setObjectName(QStringLiteral("denoisePanel"));
+        panel->setStyleSheet(
+            QStringLiteral("#denoisePanel { background:%1; border:1px solid %2;"
+                           " border-radius:8px; }")
+                .arg(Theme::alpha(Theme::Surface2, 0.4).name(QColor::HexArgb),
+                     Theme::Border.name()));
+        auto *panelLayout = new QVBoxLayout(panel);
+        panelLayout->setContentsMargins(10, 8, 10, 8);
+        panelLayout->setSpacing(0);
+
+        auto *head = new QWidget(panel);
+        auto *headLayout = new QHBoxLayout(head);
+        headLayout->setContentsMargins(0, 0, 0, 0);
+        headLayout->setSpacing(6);
+        headLayout->addWidget(Studio::iconLabel(Icons::Glyph::Mic, 10,
+                                                Theme::Primary, head));
+        headLayout->addWidget(Ui::label(QStringLiteral("降噪强度"), 10,
+                                        QFont::Medium, Theme::Text1, head));
+        auto *levels = new Studio::SegmentedControl(head);
+        levels->setOptions({QStringLiteral("轻度"), QStringLiteral("标准"),
+                            QStringLiteral("强力")});
+        levels->setCompact(true);
+        levels->setFixedWidth(164);
+        levels->setCurrentIndex(
+            m_project.denoiseLevel == StudioData::OralDenoiseLevel::Light
+                ? 0
+                : (m_project.denoiseLevel == StudioData::OralDenoiseLevel::Strong
+                       ? 2
+                       : 1));
+        connect(levels, &Studio::SegmentedControl::currentChanged, this,
+                [this](int index) {
+                    m_project.denoiseLevel =
+                        index == 0 ? StudioData::OralDenoiseLevel::Light
+                        : (index == 2 ? StudioData::OralDenoiseLevel::Strong
+                                      : StudioData::OralDenoiseLevel::Standard);
+                    rebuildSetup();
+                });
+        headLayout->addWidget(levels);
+        headLayout->addStretch(1);
+        headLayout->addWidget(Studio::tagLabel(
+            QStringLiteral("仅人声轨"), Theme::Text3, Theme::Surface3, 8, head));
+        panelLayout->addWidget(head);
+        panelLayout->addSpacing(4);
+        auto *description = Ui::label(
+            StudioData::oralDenoiseLevelDescription(m_project.denoiseLevel), 9,
+            QFont::Normal, Theme::Text3, panel);
+        description->setWordWrap(true);
+        panelLayout->addWidget(description);
+        voiceLayout->addWidget(panel);
+    }
+    voiceCard->bodyLayout()->addLayout(voiceLayout);
+    rightLayout->addWidget(voiceCard);
+
+    auto *outputCard = new Studio::SectionCard(
+        Icons::Glyph::Film, QStringLiteral("成片设置"),
+        QStringLiteral("画幅与输出"), right);
+    outputCard->setBodyMargins(QMargins(14, 14, 14, 14));
+    auto *outputLayout = new QVBoxLayout;
+    outputLayout->setContentsMargins(0, 0, 0, 0);
+    outputLayout->setSpacing(0);
 
     auto *ratioHead = new QHBoxLayout;
     ratioHead->setContentsMargins(0, 0, 0, 0);
     ratioHead->addWidget(Ui::label(QStringLiteral("成片画幅"), 10, QFont::Medium,
-                                    Theme::Text2, previewCard));
+                                   Theme::Text2, outputCard));
     ratioHead->addStretch(1);
     ratioHead->addWidget(Ui::label(
         m_project.ratio == QLatin1String("9:16") ? QStringLiteral("适合抖音 / 视频号")
                                                   : QStringLiteral("适合 B 站 / 横屏"),
-        9, QFont::Normal, Theme::Text3, previewCard));
-    previewBody->addLayout(ratioHead);
-    previewBody->addSpacing(5);
-    auto *ratio = new Studio::SegmentedControl(previewCard);
+        9, QFont::Normal, Theme::Text3, outputCard));
+    outputLayout->addLayout(ratioHead);
+    outputLayout->addSpacing(5);
+    auto *ratio = new Studio::SegmentedControl(outputCard);
     ratio->setOptions({QStringLiteral("9:16"), QStringLiteral("16:9")});
     ratio->setCurrentIndex(m_project.ratio == QLatin1String("9:16") ? 0 : 1);
     connect(ratio, &Studio::SegmentedControl::currentChanged, this,
@@ -2576,52 +2775,69 @@ QWidget *OralPage::buildSetupStepTwo()
                 applyRatio(index == 0 ? QStringLiteral("9:16")
                                       : QStringLiteral("16:9"));
             });
-    previewBody->addWidget(ratio);
-    previewBody->addSpacing(12);
+    outputLayout->addWidget(ratio);
+    outputLayout->addSpacing(14);
 
     auto *outputHead = new QHBoxLayout;
     outputHead->setContentsMargins(0, 0, 0, 0);
     outputHead->addWidget(Ui::label(QStringLiteral("输出内容"), 10, QFont::Medium,
-                                     Theme::Text2, previewCard));
+                                    Theme::Text2, outputCard));
     outputHead->addStretch(1);
     outputHead->addWidget(Ui::label(QStringLiteral("默认直出成片"), 9, QFont::Normal,
-                                     Theme::Text3, previewCard));
-    previewBody->addLayout(outputHead);
-    previewBody->addSpacing(5);
+                                    Theme::Text3, outputCard));
+    outputLayout->addLayout(outputHead);
+    outputLayout->addSpacing(5);
     auto *videoOption = new OutputChoiceCard(
         QStringLiteral("直接生成成片"),
         QStringLiteral("MP4 · 1080p，生成后自动下载"), QStringLiteral("默认"),
-        Icons::Glyph::Film, !m_project.outputBoth, previewCard);
+        Icons::Glyph::Film, !m_project.outputBoth, outputCard);
     connect(videoOption, &QAbstractButton::clicked, this, [this] {
         if (!m_project.outputBoth) {
             return;
         }
         applyOutput(false);
     });
-    previewBody->addWidget(videoOption);
-    previewBody->addSpacing(6);
+    outputLayout->addWidget(videoOption);
+    outputLayout->addSpacing(6);
     auto *bothOption = new OutputChoiceCard(
         QStringLiteral("成片 + 剪映草稿"),
         QStringLiteral("成片自动下载，并生成可编辑草稿"), QString(),
-        Icons::Glyph::Scissors, m_project.outputBoth, previewCard);
+        Icons::Glyph::Scissors, m_project.outputBoth, outputCard);
     connect(bothOption, &QAbstractButton::clicked, this, [this] {
         if (m_project.outputBoth) {
             return;
         }
         applyOutput(true);
     });
-    previewBody->addWidget(bothOption);
+    outputLayout->addWidget(bothOption);
+    outputLayout->addStretch(1);
+    outputLayout->addSpacing(12);
+    outputLayout->addWidget(Ui::separator(false, outputCard));
+    auto *outputNote = new QWidget(outputCard);
+    auto *outputNoteLayout = new QHBoxLayout(outputNote);
+    outputNoteLayout->setContentsMargins(0, 10, 0, 0);
+    outputNoteLayout->setSpacing(6);
+    outputNoteLayout->addWidget(Studio::iconLabel(Icons::Glyph::Film, 10,
+                                                  Theme::Text3, outputNote),
+                                0, Qt::AlignTop);
+    auto *outputNoteText = Ui::label(
+        QStringLiteral("成片统一输出 MP4 · H.264 · 1080p · 30fps。"), 9,
+        QFont::Normal, Theme::Text3, outputNote);
+    outputNoteText->setWordWrap(true);
+    outputNoteLayout->addWidget(outputNoteText, 1);
+    outputLayout->addWidget(outputNote);
+    outputCard->bodyLayout()->addLayout(outputLayout, 1);
+    rightLayout->addWidget(outputCard, 1);
+
+    columnsLayout->addWidget(left, 147);
+    columnsLayout->addWidget(right, 100);
+    layout->addWidget(columns);
 
     auto *note = new Studio::Note(
         QStringLiteral(
             "开始后展示「理解口播 → 匹配素材 → 智能包装 → 渲染」全过程，可后台运行，完成后通知你。"),
-        Studio::Note::Primary);
-    rightLayout->addWidget(previewCard);
-    rightLayout->addWidget(note);
-    rightLayout->addStretch(1);
-
-    layout->addWidget(left, 147);
-    layout->addWidget(right, 100);
+        Studio::Note::Primary, content);
+    layout->addWidget(note);
     return content;
 }
 
@@ -2644,11 +2860,8 @@ QWidget *OralPage::buildSetupFooter()
         m_project.step == 1
             ? (ready ? QStringLiteral("素材已就绪，AI 将先识别口播，再按语义匹配素材")
                      : QStringLiteral("至少需要 1 段口播视频和 1 个相关素材"))
-            : QStringLiteral("预计成片 %1 · %2 处 B-Roll · %3 · %4")
-                  .arg(m_project.hasSource && !m_project.source.duration.isEmpty()
-                           ? m_project.source.duration
-                           : QStringLiteral("00:58"),
-                       QString::number(
+            : QStringLiteral("成片时长以生成为准 · %1 处 B-Roll · %2 · %3")
+                  .arg(QString::number(
                            StudioData::oralBrollCount(m_project.density)),
                        m_project.ratio,
                        m_project.outputBoth ? QStringLiteral("成片 + 剪映草稿")
@@ -2660,7 +2873,8 @@ QWidget *OralPage::buildSetupFooter()
     auto *hint = Ui::label(
         m_project.step == 1
             ? QStringLiteral("设置会随项目自动保存，可随时返回修改")
-            : QStringLiteral("生成约 2–4 分钟；完成后自动下载，可后台运行"),
+            : QStringLiteral("所有包装设置将在点击一键包装后执行；生成约 2–4 分钟；"
+                             "完成后自动下载，可后台运行"),
         9, QFont::Normal, Theme::Text3, footer);
     texts->addWidget(hint);
     layout->addLayout(texts, 1);
@@ -3313,6 +3527,18 @@ void OralPage::buildProcessingScreen()
     metaLine->addWidget(Ui::label(
         QStringLiteral("模板：%1").arg(StudioData::oralTemplateName(m_project.templateId)),
         10, QFont::Normal, Theme::Text3, top));
+    if (m_project.breathCut) {
+        metaLine->addWidget(Ui::label(QStringLiteral("·"), 10, QFont::Normal,
+                                        Theme::BorderStrong, top));
+        metaLine->addWidget(Ui::label(QStringLiteral("剪气口"), 10, QFont::Normal,
+                                        Theme::Text3, top));
+    }
+    if (m_project.denoise) {
+        metaLine->addWidget(Ui::label(QStringLiteral("·"), 10, QFont::Normal,
+                                        Theme::BorderStrong, top));
+        metaLine->addWidget(Ui::label(QStringLiteral("降噪"), 10, QFont::Normal,
+                                        Theme::Text3, top));
+    }
     metaLine->addWidget(Ui::label(QStringLiteral("·"), 10, QFont::Normal,
                                     Theme::BorderStrong, top));
     m_processingMeta = Ui::label(QStringLiteral("已用时 00:00"), 10, QFont::Normal,
@@ -4422,11 +4648,13 @@ void OralPage::rebuildResult()
     detailsGrid->setContentsMargins(0, 0, 0, 0);
     detailsGrid->setHorizontalSpacing(6);
     detailsGrid->setVerticalSpacing(6);
+    // 与设计一致：超过 4 项时改为三列，避免明细过于拥挤。
+    const int highlightColumns = m_result.highlights.size() > 4 ? 3 : 4;
     for (int index = 0; index < m_result.highlights.size(); ++index) {
         detailsGrid->addWidget(
             new Studio::StatTile(m_result.highlights.at(index).first,
                                  m_result.highlights.at(index).second, details),
-            index / 4, index % 4);
+            index / highlightColumns, index % highlightColumns);
     }
     details->bodyLayout()->addLayout(detailsGrid);
     details->bodyLayout()->addSpacing(8);
@@ -4447,6 +4675,38 @@ void OralPage::rebuildResult()
         Ui::label(QStringLiteral("人声、画面、字幕与音效已自动对齐"), 8,
                   QFont::Normal, Theme::Text3, detailChips));
     details->bodyLayout()->addWidget(detailChips);
+    const QString instruction = m_result.breathCutInstruction.trimmed();
+    if (!instruction.isEmpty()) {
+        details->bodyLayout()->addSpacing(8);
+        auto *instructionRow = new QWidget(details);
+        instructionRow->setObjectName(QStringLiteral("breathInstructionRow"));
+        instructionRow->setStyleSheet(
+            QStringLiteral("#breathInstructionRow { background:%1;"
+                           " border:1px solid %2; border-radius:6px; }")
+                .arg(Theme::alpha(Theme::Surface2, 0.45).name(QColor::HexArgb),
+                     Theme::Border.name()));
+        auto *instructionLayout = new QHBoxLayout(instructionRow);
+        instructionLayout->setContentsMargins(10, 8, 10, 8);
+        instructionLayout->setSpacing(6);
+        instructionLayout->addWidget(Studio::iconLabel(
+                                         Icons::Glyph::Sparkle, 10, Theme::Ai,
+                                         instructionRow),
+                                     0, Qt::AlignTop);
+        instructionLayout->addWidget(
+            Ui::label(QStringLiteral("额外删除指令"), 9, QFont::Normal,
+                      Theme::Text3, instructionRow),
+            0, Qt::AlignTop);
+        auto *instructionText = new ElidedLabel(instruction, instructionRow);
+        instructionText->setPixelSize(9);
+        instructionText->setTextColor(Theme::Text2);
+        instructionText->setToolTip(instruction);
+        instructionLayout->addWidget(instructionText, 1, Qt::AlignVCenter);
+        instructionLayout->addWidget(
+            Ui::label(QStringLiteral("已执行"), 9, QFont::Normal,
+                      Theme::Success, instructionRow),
+            0, Qt::AlignVCenter);
+        details->bodyLayout()->addWidget(instructionRow);
+    }
     rightLayout->addWidget(details);
 
     auto *output = new Studio::SectionCard(
@@ -4660,6 +4920,11 @@ void OralPage::restartFromResult()
     project.templateId = QStringLiteral("clean");
     project.ratio = result.ratio;
     project.outputBoth = result.outputBoth;
+    // 恢复本次成片使用的人声处理设置，避免重新包装时静默改回默认值。
+    project.breathCut = result.breathCut;
+    project.breathCutInstruction = result.breathCutInstruction;
+    project.denoise = result.denoise;
+    project.denoiseLevel = result.denoiseLevel;
     m_project = project;
     showSetup();
 

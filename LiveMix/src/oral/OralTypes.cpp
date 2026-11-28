@@ -1022,6 +1022,12 @@ QJsonObject oralResultToJson(const StudioData::OralResult &result)
     object.insert(QStringLiteral("editPlanPath"), result.editPlanPath);
     object.insert(QStringLiteral("videoCodec"), result.videoCodec);
     object.insert(QStringLiteral("sourcePath"), result.sourcePath);
+    object.insert(QStringLiteral("breathCut"), result.breathCut);
+    object.insert(QStringLiteral("breathCutInstruction"),
+                  result.breathCutInstruction);
+    object.insert(QStringLiteral("denoise"), result.denoise);
+    object.insert(QStringLiteral("denoiseLevel"),
+                  StudioData::oralDenoiseLevelKey(result.denoiseLevel));
     QJsonArray materials;
     for (const StudioData::OralMaterial &material : result.materials) {
         // 示例素材没有真实路径，无法用于重新包装，不写入历史。
@@ -1074,6 +1080,17 @@ StudioData::OralResult oralResultFromJson(const QJsonObject &object)
     result.editPlanPath = readString(object, QStringLiteral("editPlanPath"));
     result.videoCodec = readString(object, QStringLiteral("videoCodec"));
     result.sourcePath = readString(object, QStringLiteral("sourcePath"));
+    // 旧历史没有这些字段：按默认「开启剪气口、关闭降噪」处理。
+    if (object.contains(QStringLiteral("breathCut"))) {
+        result.breathCut =
+            object.value(QStringLiteral("breathCut")).toBool();
+    }
+    result.breathCutInstruction =
+        readString(object, QStringLiteral("breathCutInstruction"));
+    result.denoise = object.value(QStringLiteral("denoise")).toBool();
+    result.denoiseLevel = StudioData::oralDenoiseLevelFromKey(
+        readString(object, QStringLiteral("denoiseLevel"),
+                   QStringLiteral("standard")));
     for (const QJsonValue &value :
          object.value(QStringLiteral("materials")).toArray()) {
         StudioData::OralMaterial material =
