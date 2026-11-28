@@ -18,6 +18,7 @@
 #include <QDragLeaveEvent>
 #include <QDropEvent>
 #include <QEnterEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -55,6 +56,45 @@ namespace {
 QString cssColor(const QColor &color)
 {
     return color.name(QColor::HexArgb);
+}
+
+// QMediaPlayer 不能直接读取 qrc 里的 MP3：首次试听时把内置示例音
+// 释放到缓存目录，再用本地文件 URL 播放，安装包仍只携带嵌入资源。
+QString sampleAudioLocalPath(const QString &voiceId)
+{
+    QFile resource(QStringLiteral(":/audio/doubao/%1.mp3").arg(voiceId));
+    if (!resource.exists() || !resource.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    const QByteArray data = resource.readAll();
+    resource.close();
+    if (data.isEmpty()) {
+        return QString();
+    }
+
+    QString cacheDir =
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (cacheDir.isEmpty()) {
+        cacheDir = QDir::tempPath();
+    }
+    cacheDir = QDir(cacheDir).filePath(QStringLiteral("voice-samples"));
+    if (!QDir().mkpath(cacheDir)) {
+        return QString();
+    }
+    const QString path = QDir(cacheDir).filePath(voiceId + QStringLiteral(".mp3"));
+    if (QFileInfo::exists(path) && QFileInfo(path).size() == data.size()) {
+        return path;
+    }
+    QFile target(path);
+    if (!target.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return QString();
+    }
+    if (target.write(data) != data.size()) {
+        target.close();
+        return QString();
+    }
+    target.close();
+    return path;
 }
 
 QScrollArea *makeScrollArea(QWidget *content, QWidget *parent)
@@ -2514,7 +2554,12 @@ void MixcutPage::toggleVoiceSample(const QString &voiceId)
     m_samplePlayer->stop();
     const StudioData::MixcutVoice voice = StudioData::getMixcutVoice(voiceId);
     m_sampleVoiceId = voiceId;
-    m_samplePlayer->setSource(QUrl(voice.sampleSrc));
+    const QString localPath = sampleAudioLocalPath(voiceId);
+    if (localPath.isEmpty()) {
+        emit toastRequested(QStringLiteral("示例音加载失败，请重试"));
+        return;
+    }
+    m_samplePlayer->setSource(QUrl::fromLocalFile(localPath));
     m_samplePlayer->play();
     emit voiceSampleChanged();
 }
