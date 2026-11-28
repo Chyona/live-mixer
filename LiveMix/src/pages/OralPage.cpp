@@ -2026,8 +2026,8 @@ void OralPage::rebuildSetup()
     body->addWidget(m_project.step == 1 ? buildSetupStepOne()
                                         : buildSetupStepTwo());
     auto *scroll = makeScrollArea(scrollContent, m_setupScreen);
-    // 上传页布局按窗口高度调校：保留滚动能力，但不绘制滚动条遮挡内容。
-    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // 包装设置内容超出窗口时显示统一滚动条，内容不溢出时不显示。
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     root->addWidget(scroll, 1);
     root->addWidget(Ui::separator(false, m_setupScreen));
     root->addWidget(buildSetupFooter());
