@@ -1,7 +1,8 @@
 #pragma once
 
 // 智能混剪工作区：首页、素材与文案单页工作台、AI 混剪过程与成片结果。
-// 当前只交付交互界面与本地过程模拟，不调用真实的视频理解 / TTS / 渲染服务。
+// 页面只负责交互与展示；真正的素材分析、TTS、ASR、镜头规划、智能包装
+// 与剪映草稿合成由 Mixcut::PipelineService 在独立线程执行。
 
 #include "../data/StudioData.h"
 
@@ -19,8 +20,14 @@ class QVBoxLayout;
 class QHBoxLayout;
 class QMediaPlayer;
 class QAudioOutput;
+class QThread;
 class Button;
 class ProgressBar;
+class ConfigStore;
+
+namespace Mixcut {
+class PipelineService;
+}
 
 namespace Studio {
 class MixPosterWidget;
@@ -36,7 +43,7 @@ class MixcutPage : public QWidget
     Q_OBJECT
 
 public:
-    explicit MixcutPage(QWidget *parent = nullptr);
+    explicit MixcutPage(ConfigStore *config = nullptr, QWidget *parent = nullptr);
     ~MixcutPage() override;
 
 signals:
@@ -105,7 +112,13 @@ private:
 
     void startGeneration();
     void updateProcessing();
-    void finishGeneration();
+    // 真实流水线回调：过程快照、成功/失败收尾。
+    void onPipelineRunUpdated(const StudioData::MixcutRun &run);
+    void onPipelineFinished(bool success, const QString &message,
+                            const StudioData::MixcutResult &result);
+    void destroyPipeline();
+    void loadHistory();
+    void saveHistory();
     void openRecent(const StudioData::MixcutResult &result);
     void restartFromResult();
     void togglePlayback();
@@ -125,6 +138,13 @@ private:
     QWidget *m_studioScreen = nullptr;
     QWidget *m_processingScreen = nullptr;
     QWidget *m_resultScreen = nullptr;
+
+    ConfigStore *m_config = nullptr;
+    Mixcut::PipelineService *m_pipelineService = nullptr;
+    QThread *m_pipelineThread = nullptr;
+    bool m_pipelineRunning = false;
+    QVector<StudioData::MixcutResult> m_history;
+    QVector<StudioData::MixcutResult> m_persistedHistory;
 
     StudioData::MixcutProject m_project;
     bool m_scriptEdited = false;
@@ -180,8 +200,6 @@ private:
     bool m_hasRun = false;
     StudioData::MixcutRun m_run;
     int m_runId = 0;
-    qint64 m_runStartedAt = 0;
-    QTimer *m_runTimer = nullptr;
 
     QLabel *m_progressLabel = nullptr;
     QLabel *m_processingMeta = nullptr;
@@ -204,6 +222,7 @@ private:
     QLabel *m_logStepsLabel = nullptr;
     QLabel *m_logElapsedLabel = nullptr;
     int m_logCount = -1;
+    QString m_lastLogId;
     int m_lastScenesCount = -1;
 
     bool m_hasResult = false;

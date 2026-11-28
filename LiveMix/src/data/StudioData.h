@@ -1,8 +1,9 @@
 #pragma once
 
-// 智能口播 / 智能混剪的示例数据与生成过程模拟。
-// 两个模块当前只交付交互界面：素材、模板、文案与过程数据均来自这里，
-// 用于 1:1 还原设计稿中的各种状态，不触发真实的 ASR / TTS / 渲染。
+// 智能口播 / 智能混剪的界面示例数据与数据模型。
+// 智能口播的过程数据仍由这里模拟；智能混剪的生成过程已经由
+// Mixcut::PipelineService 在独立线程真实执行，这里保留其项目/结果模型、
+// 示例素材与文案模板，供界面展示与历史记录使用。
 
 #include <QColor>
 #include <QImage>
@@ -214,7 +215,9 @@ OralDenoiseLevel oralDenoiseLevelFromKey(const QString &key);
 /* ------------------------------------------------------------------ */
 
 enum class MixcutStyle { Planting, Review, Story };
-enum class MixcutStage { Parse, Voice, Match, Design, Render };
+// 与智能混剪的六步流水线一一对应：
+// 素材整理 → 语音理解 → 镜头规划 → 智能包装 → 时间轴编排 → 合成草稿。
+enum class MixcutStage { Parse, Voice, Match, Design, Timeline, Render };
 enum class MixcutMaterialKind { Video, Image };
 
 QString mixcutStyleName(MixcutStyle style);
@@ -317,6 +320,15 @@ struct MixcutResult {
     int sfxCount = 0;
     QString bgm;
     bool draftGenerated = false;
+    // 真实成片的本地文件、预览首帧与剪映草稿；重新混剪与历史回看使用。
+    QString filePath;
+    QString previewPath;
+    QString draftPath;
+    QString draftId;
+    QString editPlanPath;
+    QString videoCodec;
+    bool outputBoth = false;
+    QVector<MixcutMaterial> materials;
     QVector<QPair<QString, QString>> highlights;
 };
 
@@ -349,6 +361,7 @@ struct MixcutRun {
     bool done = false;
     qint64 elapsedMs = 0;
     qint64 totalMs = 0;
+    qint64 durationMs = 0;
     double progress = 0.0;
     int etaSeconds = 0;
     MixcutStage stage = MixcutStage::Parse;
@@ -358,6 +371,7 @@ struct MixcutRun {
     QStringList previewKeywords;
     double voiceProgress = 0.0;
     int matchedShots = 0;
+    int clipCount = 0;
     int subtitleCount = 0;
     int sfxCount = 0;
     int renderedFrames = 0;
@@ -398,6 +412,8 @@ QColor mixcutSceneAccent(const QString &scene);
 
 } // namespace StudioData
 
-// 智能口播流水线在独立线程运行，过程快照与结果通过 Qt 信号跨线程传递。
+// 智能口播 / 智能混剪流水线在独立线程运行，过程快照与结果通过 Qt 信号跨线程传递。
 Q_DECLARE_METATYPE(StudioData::OralRun)
 Q_DECLARE_METATYPE(StudioData::OralResult)
+Q_DECLARE_METATYPE(StudioData::MixcutRun)
+Q_DECLARE_METATYPE(StudioData::MixcutResult)

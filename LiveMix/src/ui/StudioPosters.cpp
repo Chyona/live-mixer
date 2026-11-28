@@ -576,7 +576,11 @@ void paintMixPoster(QPainter &painter, const QRectF &rect,
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
     clipRounded(painter, rect, 10);
-    paintMixScene(painter, rect, spec.scene);
+    if (!spec.frameImage.isNull()) {
+        paintCoverImage(painter, rect, spec.frameImage);
+    } else {
+        paintMixScene(painter, rect, spec.scene);
+    }
 
     QLinearGradient shade(rect.topLeft(), rect.bottomLeft());
     shade.setColorAt(0.0, QColor(4, 5, 9, 158));

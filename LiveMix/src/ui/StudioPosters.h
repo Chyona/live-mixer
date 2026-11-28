@@ -42,6 +42,8 @@ struct MixPosterSpec {
     QString caption;
     QString highlight;
     QString voiceName;
+    // 真实成片首帧；非空时直接展示视频画面，不再绘制原型场景插画。
+    QImage frameImage;
     QStringList secondaryScenes;
     QString ratio = QStringLiteral("9:16");
     QString timecode = QStringLiteral("00:00");

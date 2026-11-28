@@ -236,7 +236,12 @@ HttpResponse HttpClient::postMultipart(
             QNetworkRequest::ContentDispositionHeader,
             QStringLiteral("form-data; name=\"file\"; filename=\"%1\"")
                 .arg(uploadFileName(filePath)));
-        filePart.setHeader(QNetworkRequest::ContentTypeHeader, fileMimeType);
+        // QHttpPart 的 Content-Type 只接受 QByteArray；传 QString 会被 Qt
+        // 忽略并打印 setHeader 警告，上传分片可能丢失 MIME 类型。
+        filePart.setHeader(
+            QNetworkRequest::ContentTypeHeader,
+            fileMimeType.isEmpty() ? QByteArrayLiteral("application/octet-stream")
+                                   : fileMimeType.toUtf8());
         filePart.setBodyDevice(file);
         file->setParent(multiPart); // 由 multipart 统一释放
         multiPart->append(filePart);
