@@ -121,8 +121,10 @@ HttpResponse HttpClient::postJson(const QUrl &url, const QJsonObject &payload,
                                   const QByteArray &authorization, int timeoutMs)
 {
     QNetworkRequest request(url);
+    // ContentTypeHeader 只接受 QByteArray；传 QString 会被 Qt 6 忽略并打印
+    // setHeader 警告，部分网关会因此拒绝请求。
     request.setHeader(QNetworkRequest::ContentTypeHeader,
-                      QStringLiteral("application/json"));
+                      QByteArrayLiteral("application/json"));
     if (!authorization.isEmpty()) {
         request.setRawHeader("Authorization", authorization);
     }
@@ -140,7 +142,7 @@ HttpResponse HttpClient::postJsonStream(
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
-                      QStringLiteral("application/json"));
+                      QByteArrayLiteral("application/json"));
     if (!authorization.isEmpty()) {
         request.setRawHeader("Authorization", authorization);
     }

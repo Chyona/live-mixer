@@ -8,6 +8,7 @@
 
 #include "../api/HttpClient.h"
 #include "../core/MediaUtils.h"
+#include "../media/AudioDenoiser.h"
 #include "../media/FfmpegUtils.h"
 #include "OralAsrClient.h"
 #include "OralAudioAssetsClient.h"
@@ -21,6 +22,7 @@
 
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -35,6 +37,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <string>
 
 namespace {
 
@@ -441,6 +444,13 @@ void PipelineService::addLog(StudioData::OralStage stage, const QString &text,
     entry.text = text;
     entry.tone = tone;
     m_run.logs.append(entry);
+    // 过程日志同时写入应用日志文件：成片页日志只在界面内存中，
+    // 关闭窗口后无法排查封面、上传、渲染等后台失败。
+    if (tone == StudioData::Tone::Muted) {
+        qWarning().noquote() << "[oral]" << text;
+    } else {
+        qInfo().noquote() << "[oral]" << text;
+    }
     emitRun();
 }
 
@@ -1353,10 +1363,10 @@ bool PipelineService::denoiseVoice(const QString &sourcePath,
         }
         return false;
     }
-    // 修改降噪滤镜或强度档位时同步递增版本号让旧缓存失效。
+    // 修改降噪算法或强度档位时同步递增版本号让旧缓存失效。
     const QString levelKey = StudioData::oralDenoiseLevelKey(level);
     const QString denoiseKey = sha1Hex(
-        fileFingerprint(sourcePath) + QStringLiteral("|oral-denoise-v1|")
+        fileFingerprint(sourcePath) + QStringLiteral("|oral-denoise-v2|")
         + levelKey);
     const QString cachedPath =
         QDir(denoiseDir).filePath(QStringLiteral("denoise_%1.mp4").arg(denoiseKey));
@@ -1386,35 +1396,136 @@ bool PipelineService::denoiseVoice(const QString &sourcePath,
     }
     const auto cleanup = [&workDir] { QDir(workDir).removeRecursively(); };
 
-    // 三档强度对应不同的降噪量与噪声底，画面保持不重新编码。
-    QString audioFilter;
+    // 三档强度映射到本地 STFT 降噪的 strength；画面保持不重新编码。
+    double strength = 0.6;
     switch (level) {
     case StudioData::OralDenoiseLevel::Light:
-        audioFilter = QStringLiteral("afftdn=nr=6:nf=-45");
+        strength = 0.3;
         break;
     case StudioData::OralDenoiseLevel::Strong:
-        audioFilter = QStringLiteral("afftdn=nr=20:nf=-28");
+        strength = 0.85;
         break;
     case StudioData::OralDenoiseLevel::Standard:
     default:
-        audioFilter = QStringLiteral("afftdn=nr=12:nf=-35");
+        strength = 0.6;
         break;
     }
 
     setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 14,
              QStringLiteral("降噪：处理人声音轨"));
     addLog(StudioData::OralStage::Analyze,
-           QStringLiteral("降噪：%1强度，仅处理人声音轨…")
+           QStringLiteral("降噪：%1强度，本地频域处理人声音轨…")
                .arg(StudioData::oralDenoiseLevelName(level)),
            StudioData::Tone::Info);
-    const QString tempOutput =
-        QDir(workDir).filePath(QStringLiteral("denoised.mp4"));
-    QString filterError;
-    if (!FfmpegUtils::applyAudioFilter(sourcePath, audioFilter, tempOutput,
-                                       &filterError)) {
+
+    int sampleRate = 0;
+    int channels = 0;
+    QString mediaError;
+    if (!FfmpegUtils::audioStreamInfo(sourcePath, &sampleRate, &channels,
+                                      &mediaError)) {
         cleanup();
         if (error) {
-            *error = filterError;
+            *error = mediaError;
+        }
+        return false;
+    }
+
+    const QString rawInput =
+        QDir(workDir).filePath(QStringLiteral("audio_in.f32"));
+    const QString rawOutput =
+        QDir(workDir).filePath(QStringLiteral("audio_out.f32"));
+    if (!FfmpegUtils::decodeAudioF32(sourcePath, rawInput, sampleRate, channels,
+                                     &mediaError)) {
+        cleanup();
+        if (error) {
+            *error = mediaError;
+        }
+        return false;
+    }
+
+    const qint64 rawBytes = QFileInfo(rawInput).size();
+    const qint64 bytesPerFrame = qint64(sizeof(float)) * channels;
+    if (rawBytes <= 0 || rawBytes % bytesPerFrame != 0) {
+        cleanup();
+        if (error) {
+            *error = QStringLiteral("降噪音频数据格式异常。");
+        }
+        return false;
+    }
+    const qint64 frameCount = rawBytes / bytesPerFrame;
+
+    // 用内存映射承载整段 f32 PCM：DSP 不再复制输入/输出，长视频也不会
+    // 因整段功率谱或样本副本占满内存。
+    QFile inputFile(rawInput);
+    QFile outputFile(rawOutput);
+    uchar *inputMap = nullptr;
+    uchar *outputMap = nullptr;
+    const auto closeFiles = [&] {
+        if (outputMap) {
+            outputFile.unmap(outputMap);
+            outputMap = nullptr;
+        }
+        if (inputMap) {
+            inputFile.unmap(inputMap);
+            inputMap = nullptr;
+        }
+        inputFile.close();
+        outputFile.close();
+    };
+    const auto failIo = [&](const QString &message) {
+        closeFiles();
+        cleanup();
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (!inputFile.open(QIODevice::ReadOnly)) {
+        return failIo(QStringLiteral("无法读取降噪临时音频。"));
+    }
+    if (!outputFile.open(QIODevice::ReadWrite)) {
+        return failIo(QStringLiteral("无法创建降噪输出音频。"));
+    }
+    if (!outputFile.resize(rawBytes)) {
+        return failIo(QStringLiteral("无法分配降噪输出音频。"));
+    }
+    inputMap = inputFile.map(0, rawBytes);
+    if (!inputMap) {
+        return failIo(QStringLiteral("无法映射降噪输入音频。"));
+    }
+    outputMap = outputFile.map(0, rawBytes);
+    if (!outputMap) {
+        return failIo(QStringLiteral("无法映射降噪输出音频。"));
+    }
+
+    AudioDenoiser::Params params;
+    params.strength = strength;
+    std::string dspError;
+    const bool dspOk = AudioDenoiser::process(
+        reinterpret_cast<const float *>(inputMap),
+        reinterpret_cast<float *>(outputMap), frameCount, channels, params,
+        &dspError);
+    closeFiles();
+    if (!dspOk) {
+        cleanup();
+        if (error) {
+            *error = QString::fromStdString(dspError);
+        }
+        return false;
+    }
+
+    // 读不到容器时长时由封装阶段保留原音轨长度，不阻断降噪。
+    qint64 sourceDurationMs = 0;
+    FfmpegUtils::mediaDurationMs(sourcePath, &sourceDurationMs);
+
+    const QString tempOutput =
+        QDir(workDir).filePath(QStringLiteral("denoised.mp4"));
+    if (!FfmpegUtils::muxAudioF32(sourcePath, rawOutput, sampleRate, channels,
+                                  sourceDurationMs, tempOutput, &mediaError)) {
+        cleanup();
+        if (error) {
+            *error = mediaError;
         }
         return false;
     }
@@ -1443,7 +1554,7 @@ bool PipelineService::denoiseVoice(const QString &sourcePath,
     cleanup();
     *outputPath = cachedPath;
     addLog(StudioData::OralStage::Analyze,
-           QStringLiteral("降噪完成：%1强度 · 仅人声轨")
+           QStringLiteral("降噪完成：%1强度 · 本地频域处理 · 仅人声轨")
                .arg(StudioData::oralDenoiseLevelName(level)),
            StudioData::Tone::Ok);
     return true;
@@ -2279,14 +2390,30 @@ bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
         return true;
     }
     addLog(StudioData::OralStage::Compose,
-           QStringLiteral("已提取口播首帧，正在调用图生图生成封面…"),
+           QStringLiteral("已提取口播首帧，正在上传封面参考图…"),
+           StudioData::Tone::Info);
+
+    // 生图网关当前只接受公网 URL：data URI 会被拆成裸 base64 再当 URL
+    // 解析，上游返回 invalid url specified。复用剪映小助手的文件上传。
+    QString frameUrl;
+    QString uploadError;
+    if (!capcut->uploadFile(framePath, m_request.apiKey, &frameUrl,
+                            &uploadError)) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("口播首帧上传失败，封面跳过：%1")
+                   .arg(uploadError),
+               StudioData::Tone::Muted);
+        return true;
+    }
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("封面参考图已就绪，正在调用图生图生成封面…"),
            StudioData::Tone::Info);
 
     const QString rawPath =
         QDir(workDir).filePath(QStringLiteral("cover_raw.jpg"));
     CoverClient cover(http);
     if (!cover.generate(
-            m_request.gatewayBaseUrl, m_request.apiKey, framePath,
+            m_request.gatewayBaseUrl, m_request.apiKey, frameUrl,
             plan->cover.prompt, plan->canvas.width, plan->canvas.height,
             rawPath, &localError,
             [this](const QString &status) {
@@ -2330,7 +2457,6 @@ bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
              64, QStringLiteral("写入封面轨道"));
     QString uploadedUrl;
-    QString uploadError;
     if (!capcut->uploadFile(posterPath, m_request.apiKey, &uploadedUrl,
                             &uploadError)) {
         addLog(StudioData::OralStage::Compose,

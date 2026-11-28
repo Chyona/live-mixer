@@ -33,8 +33,15 @@
 
 ### 降噪
 
-- 轻度 / 标准 / 强力三档分别对应不同的 `afftdn` 降噪量与噪声底；
-- 画面不重新编码，只处理人声音轨；
+- 用本地 `AudioDenoiser` 做 STFT 频域降噪：帧长 1024 / 帧移 256（Hann 窗），
+  先按帧能量挑最安静 18% 的帧估计噪声功率谱（数字静音帧不参与，避免把
+  噪声谱拉到 0），再逐帧做 decision-directed 先验 SNR + Wiener 增益 +
+  快起慢落平滑，最后重叠相加重建；
+- 轻度 / 标准 / 强力三档分别对应 strength 0.3 / 0.6 / 0.85（过减因子与增益
+  下限随之递增）；
+- 音轨用 ffmpeg 解码为 f32le，处理完再与原视频封装；画面 `-c:v copy`
+  不重新编码，只重编码人声音轨；尾部对齐在封装阶段用 `apad,atrim` 完成，
+  垫出的静音不进入降噪 DSP，避免污染噪声谱估计；
 - 结果按「输入指纹 + 强度」缓存在 `cache/oral/denoise/`；
 - 降噪失败只记录日志并回退到未降噪人声，不阻断成片。
 
@@ -61,7 +68,9 @@
 3. **合成**
    - `OralCoverClient` / `OralCoverPrompts`：两步生成封面。
      第一步用内置提示词 1 + 口播内容调用 `deepseek-flash` 生成提示词 2；
-     第二步用提示词 2 + 口播首帧调用 `doubao-seedream-5-0-flash` 图生图。
+     第二步把口播首帧先上传到剪映小助手拿到公网 URL，再用提示词 2 + URL
+     调用 `doubao-seedream-5-0-flash` 图生图（网关当前会把 data URI 里的
+     base64 当 URL 解析并返回 invalid url）。
      提示词 2 与封面每次成片都重新生成，重新包装会得到不同的封面；
      图生图请求携带随机种子，避免相同提示词产出完全相同的图片。
    - `OralCapCutClient`：上传、创建草稿、视频/图片/字幕/音频/关键帧、云渲染、
@@ -93,6 +102,7 @@
 | `OralEditPlanBuilder.*` | 字幕系统与镜头规划 |
 | `OralTrimPlan.*` | 剪口气：语气词 + 长静音的保留区间计算 |
 | `OralPipelineService.*` | 工作线程编排、缓存、进度与结果 |
+| `../media/AudioDenoiser.*` | 本地 STFT 频域降噪 DSP（供降噪阶段调用） |
 | `OralDraftDownloadTask.*` | 结果页「生成草稿」下载任务 |
 
 ## 与 UI 的映射

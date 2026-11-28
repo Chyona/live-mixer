@@ -101,8 +101,8 @@ private:
                         LlmClient *llm, CapCutClient *capcut,
                         QString *outputPath, TrimStats *stats,
                         SpeechAnalysis *sourceSpeech, QString *error);
-    // 降噪：按等级对音轨套用 afftdn 滤镜，画面不重新编码；结果按
-    // 「输入指纹 + 等级」缓存。失败只记录日志并回退到未降噪视频。
+    // 降噪：按等级对音轨做本地 STFT 频域降噪（AudioDenoiser），画面不重新
+    // 编码；结果按「输入指纹 + 等级」缓存。失败只记录日志并回退到未降噪视频。
     bool denoiseVoice(const QString &sourcePath,
                       StudioData::OralDenoiseLevel level,
                       QString *outputPath, QString *error);
@@ -128,8 +128,8 @@ private:
     // 封面提示词 2：提示词 1 + 口播内容 → DeepSeek；每次成片都重新生成，
     // 调用失败时退回本地兜底提示词。
     bool ensureCoverPrompt(EditPlan *plan, HttpClient *http);
-    // 封面海报：取口播首帧 → seedream 图生图 → 上传并写到最上层图片轨。
-    // 生成失败只记录日志，不阻断成片。
+    // 封面海报：取口播首帧 → 上传成公网 URL → seedream 图生图 → 上传并写到
+    // 最上层图片轨。生成失败只记录日志，不阻断成片。
     bool addCoverTrack(EditPlan *plan, CapCutClient *capcut,
                        const CapCutDraft &draft, const QString &workDir,
                        HttpClient *http);

@@ -125,6 +125,8 @@ qt_add_executable(LiveMixStudio
     src/data/PipelineTypes.h
     src/data/PromptTypes.h
 
+    src/media/AudioDenoiser.h
+    src/media/AudioDenoiser.cpp
     src/media/FfmpegLocator.h
     src/media/FfmpegLocator.cpp
     src/media/FfmpegUtils.h

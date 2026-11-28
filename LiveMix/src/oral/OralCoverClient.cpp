@@ -1,17 +1,16 @@
 // 文件作用：智能口播封面海报生成实现。
 // 统一走 OpenAI 兼容的生图网关 /images/generations：
-// 请求体里的 image 字段是首帧的 data URI，网关会原样透传给火山方舟完成图生图。
+// 请求体里的 image 字段是首帧的公网 URL，网关会透传给火山方舟完成图生图。
+// 不要传 data URI：网关当前会把其中的 base64 当成 URL，上游报 invalid url。
 
 #include "OralCoverClient.h"
 
 #include "../api/HttpClient.h"
 #include "OralCoverPrompts.h"
 
-#include <QBuffer>
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
-#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QRandomGenerator>
@@ -28,9 +27,6 @@ constexpr char kPromptModel[] = "deepseek-flash";
 // 网关同步等待出图；服务器预算约 240 秒，客户端多留余量。
 constexpr int kImageTimeoutMs = 5 * 60 * 1000;
 constexpr int kChatTimeoutMs = 5 * 60 * 1000;
-// 参考图长边上限：足够模型识别人物与场景，又不会让请求体过大。
-constexpr int kReferenceMaxEdge = 1280;
-constexpr int kReferenceQuality = 90;
 
 QUrl gatewayUrl(const QString &baseUrl, const QString &pathSuffix)
 {
@@ -73,7 +69,14 @@ QString requestErrorMessage(const HttpResponse &response)
     if (!response.error.isEmpty()) {
         return response.error;
     }
-    return QStringLiteral("HTTP %1").arg(response.httpStatus);
+    QString fallback = QStringLiteral("HTTP %1").arg(response.httpStatus);
+    // 网关偶尔返回非 JSON 错误页；带上截断后的响应体，否则日志里只剩
+    // 一个状态码，无法判断是限流、额度还是模型不可用。
+    const QString body = QString::fromUtf8(response.body).simplified();
+    if (!body.isEmpty()) {
+        fallback += QStringLiteral("：%1").arg(body.left(300));
+    }
+    return fallback;
 }
 
 // 兼容 choices[0].message.content 的字符串与 [{type:"text", text:"..."}] 形式。
@@ -170,37 +173,6 @@ QString extractPrompt2(const QString &content)
         body = body.trimmed();
     }
     return body;
-}
-
-// 读取参考图并编码成 data URI；长边超过 1280 时等比缩小。
-bool referenceImageDataUri(const QString &path, QString *dataUri, QString *error)
-{
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    QImage image = reader.read();
-    if (image.isNull()) {
-        if (error) {
-            *error = QStringLiteral("无法读取口播首帧：%1")
-                         .arg(QFileInfo(path).fileName());
-        }
-        return false;
-    }
-    if (image.width() > kReferenceMaxEdge || image.height() > kReferenceMaxEdge) {
-        image = image.scaled(kReferenceMaxEdge, kReferenceMaxEdge,
-                             Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    QByteArray bytes;
-    QBuffer buffer(&bytes);
-    if (!buffer.open(QIODevice::WriteOnly)
-        || !image.save(&buffer, "JPG", kReferenceQuality)) {
-        if (error) {
-            *error = QStringLiteral("无法编码口播首帧。");
-        }
-        return false;
-    }
-    *dataUri = QStringLiteral("data:image/jpeg;base64,")
-        + QString::fromLatin1(bytes.toBase64());
-    return true;
 }
 
 // 网关返回 b64_json 时直接解码保存。
@@ -345,7 +317,7 @@ bool CoverClient::generatePrompt(const QString &baseUrl, const QString &apiKey,
 }
 
 bool CoverClient::generate(const QString &baseUrl, const QString &apiKey,
-                           const QString &referenceImagePath,
+                           const QString &referenceImageUrl,
                            const QString &prompt, int width, int height,
                            const QString &outputPath, QString *error,
                            const StatusCallback &onStatus)
@@ -359,6 +331,12 @@ bool CoverClient::generate(const QString &baseUrl, const QString &apiKey,
     if (apiKey.trimmed().isEmpty()) {
         if (error) {
             *error = QStringLiteral("封面生成需要 API 密钥，请先在设置中填写。");
+        }
+        return false;
+    }
+    if (referenceImageUrl.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("封面参考图地址为空。");
         }
         return false;
     }
@@ -389,15 +367,11 @@ bool CoverClient::generate(const QString &baseUrl, const QString &apiKey,
         return false;
     }
 
-    QString dataUri;
-    if (!referenceImageDataUri(referenceImagePath, &dataUri, error)) {
-        return false;
-    }
-
     QJsonObject payload;
     payload.insert(QStringLiteral("model"), QString::fromLatin1(kModel));
     payload.insert(QStringLiteral("prompt"), prompt);
-    payload.insert(QStringLiteral("image"), dataUri);
+    // 只传 URL：网关会把 data URI 的 base64 当 URL 解析，上游直接 400。
+    payload.insert(QStringLiteral("image"), referenceImageUrl.trimmed());
     payload.insert(QStringLiteral("size"),
                    QStringLiteral("%1x%2").arg(width).arg(height));
     // 显式传随机种子，不依赖网关默认值；即使提示词与参考图完全相同，

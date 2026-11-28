@@ -1,4 +1,5 @@
-// 文件作用：ffmpeg 子进程调用实现（音频提取、视频裁剪、分辨率探测）。
+// 文件作用：ffmpeg 子进程调用实现（音频提取、降噪 PCM 解码/封装、
+// 视频裁剪、分辨率探测）。
 #include "FfmpegUtils.h"
 
 #include "../core/MediaUtils.h"
@@ -463,25 +464,97 @@ bool FfmpegUtils::cutKeepRanges(const QString &inputPath,
     return true;
 }
 
-bool FfmpegUtils::applyAudioFilter(const QString &inputPath,
-                                   const QString &audioFilter,
-                                   const QString &outputPath, QString *error)
+bool FfmpegUtils::audioStreamInfo(const QString &filePath, int *sampleRate,
+                                  int *channels, QString *error)
 {
-    if (audioFilter.trimmed().isEmpty()) {
+    if (sampleRate) {
+        *sampleRate = 0;
+    }
+    if (channels) {
+        *channels = 0;
+    }
+
+    const QString ffprobe = FfmpegLocator::ffprobePath();
+    if (ffprobe.isEmpty()) {
         if (error) {
-            *error = QStringLiteral("音频滤镜为空。");
+            *error = QStringLiteral("未找到 ffprobe，请重新安装应用或设置 LIVEMIX_FFMPEG_DIR。");
+        }
+        return false;
+    }
+
+    QProcess process;
+    process.setProgram(ffprobe);
+    process.setArguments({QStringLiteral("-v"), QStringLiteral("error"),
+                          QStringLiteral("-select_streams"), QStringLiteral("a:0"),
+                          QStringLiteral("-show_entries"),
+                          QStringLiteral("stream=sample_rate,channels"),
+                          QStringLiteral("-of"), QStringLiteral("csv=p=0"),
+                          filePath});
+#ifdef Q_OS_WIN
+    process.setCreateProcessArgumentsModifier(
+        [](QProcess::CreateProcessArguments *args) {
+            args->flags |= CREATE_NO_WINDOW;
+        });
+#endif
+    process.start();
+    if (!process.waitForStarted(5000) || !process.waitForFinished(15000)) {
+        process.kill();
+        process.waitForFinished(1000);
+        if (error) {
+            *error = QStringLiteral("读取音频参数超时。");
+        }
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        if (error) {
+            *error = shortError(QString::fromLocal8Bit(process.readAllStandardError()));
+        }
+        return false;
+    }
+
+    // ffprobe 的 csv 输出形如「44100,2」；没有音轨时为空。
+    const QStringList fields =
+        QString::fromLatin1(process.readAllStandardOutput()).trimmed()
+            .split(QLatin1Char(','));
+    bool rateOk = false;
+    bool channelsOk = false;
+    const int parsedRate = fields.value(0).trimmed().toInt(&rateOk);
+    const int parsedChannels = fields.value(1).trimmed().toInt(&channelsOk);
+    if (!rateOk || !channelsOk || parsedRate <= 0 || parsedChannels <= 0) {
+        if (error) {
+            *error = QStringLiteral("视频没有可处理的音轨。");
+        }
+        return false;
+    }
+    if (sampleRate) {
+        *sampleRate = parsedRate;
+    }
+    if (channels) {
+        *channels = parsedChannels;
+    }
+    return true;
+}
+
+bool FfmpegUtils::decodeAudioF32(const QString &inputPath,
+                                 const QString &outputPath, int sampleRate,
+                                 int channels, QString *error)
+{
+    if (sampleRate <= 0 || channels <= 0) {
+        if (error) {
+            *error = QStringLiteral("音频参数无效。");
         }
         return false;
     }
     if (!QDir().mkpath(QFileInfo(outputPath).absolutePath())) {
         if (error) {
-            *error = QStringLiteral("无法创建音频输出目录：%1")
-                         .arg(QFileInfo(outputPath).absolutePath());
+            *error = QStringLiteral("无法创建降噪临时目录。");
         }
         return false;
     }
 
-    // 画面直接 copy，只重新编码音轨；口播成片只有一条人声轨，滤镜即作用于人声。
+    // aresample=first_pts=0 在音轨晚于视频起点时补开头静音，保证时间轴从
+    // 视频 t=0 开始。这里不补尾部：垫出来的数字静音会污染噪声谱估计，
+    // 尾部对齐交给封装阶段的 apad,atrim。
     const QStringList args = {
         QStringLiteral("-y"),
         QStringLiteral("-nostdin"),
@@ -491,19 +564,15 @@ bool FfmpegUtils::applyAudioFilter(const QString &inputPath,
         QStringLiteral("-i"),
         inputPath,
         QStringLiteral("-map"),
-        QStringLiteral("0:v:0"),
-        QStringLiteral("-map"),
         QStringLiteral("0:a:0"),
-        QStringLiteral("-c:v"),
-        QStringLiteral("copy"),
         QStringLiteral("-af"),
-        audioFilter,
-        QStringLiteral("-c:a"),
-        QStringLiteral("aac"),
-        QStringLiteral("-b:a"),
-        QStringLiteral("128k"),
-        QStringLiteral("-movflags"),
-        QStringLiteral("+faststart"),
+        QStringLiteral("aresample=async=1:first_pts=0"),
+        QStringLiteral("-ac"),
+        QString::number(channels),
+        QStringLiteral("-ar"),
+        QString::number(sampleRate),
+        QStringLiteral("-f"),
+        QStringLiteral("f32le"),
         outputPath,
     };
     if (!runFfmpeg(args, 30 * 60 * 1000, error)) {
@@ -512,7 +581,75 @@ bool FfmpegUtils::applyAudioFilter(const QString &inputPath,
     const QFileInfo output(outputPath);
     if (!output.exists() || output.size() <= 0) {
         if (error) {
-            *error = QStringLiteral("音频处理失败，未生成有效文件。");
+            *error = QStringLiteral("音频解码失败，未生成有效数据。");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool FfmpegUtils::muxAudioF32(const QString &videoPath,
+                              const QString &rawAudioPath, int sampleRate,
+                              int channels, qint64 durationMs,
+                              const QString &outputPath, QString *error)
+{
+    if (sampleRate <= 0 || channels <= 0) {
+        if (error) {
+            *error = QStringLiteral("音频参数无效。");
+        }
+        return false;
+    }
+    if (!QDir().mkpath(QFileInfo(outputPath).absolutePath())) {
+        if (error) {
+            *error = QStringLiteral("无法创建降噪输出目录。");
+        }
+        return false;
+    }
+
+    // 画面直接 copy，只重新编码已处理的音轨；口播成片只有一条人声轨。
+    QStringList args = {
+        QStringLiteral("-y"),
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-f"),
+        QStringLiteral("f32le"),
+        QStringLiteral("-ar"),
+        QString::number(sampleRate),
+        QStringLiteral("-ac"),
+        QString::number(channels),
+        QStringLiteral("-i"),
+        rawAudioPath,
+        QStringLiteral("-i"),
+        videoPath,
+        QStringLiteral("-map"),
+        QStringLiteral("0:a:0"),
+        QStringLiteral("-map"),
+        QStringLiteral("1:v:0?"),
+        QStringLiteral("-c:v"),
+        QStringLiteral("copy"),
+    };
+    // 尾部静音在这里补齐（而不是解码前），降噪 DSP 只看到真实人声。
+    // 用音频滤镜 atrim 截到视频时长，而不是输出级 -t：后者在容器时长
+    // 略短于视频流时会连最后一帧画面一起裁掉。
+    if (durationMs > 0) {
+        const QString alignAudio =
+            QStringLiteral("apad,atrim=start=0:end=%1")
+                .arg(QString::number(durationMs / 1000.0, 'f', 6));
+        args << QStringLiteral("-af") << alignAudio;
+    }
+    args << QStringLiteral("-c:a") << QStringLiteral("aac")
+         << QStringLiteral("-b:a") << QStringLiteral("192k")
+         << QStringLiteral("-movflags") << QStringLiteral("+faststart")
+         << outputPath;
+    if (!runFfmpeg(args, 30 * 60 * 1000, error)) {
+        return false;
+    }
+    const QFileInfo output(outputPath);
+    if (!output.exists() || output.size() <= 0) {
+        if (error) {
+            *error = QStringLiteral("降噪封装失败，未生成有效文件。");
         }
         return false;
     }

@@ -1,8 +1,9 @@
 #pragma once
 
-// 文件作用：直播切片流程用到的 ffmpeg 操作：
+// 文件作用：ffmpeg 操作封装：
 // 1. 从视频/直播录像中提取标准 MP3 音频供 ASR 使用；
-// 2. 按 LLM 给出的时间范围裁剪出成片片段。
+// 2. 按 LLM 给出的时间范围裁剪出成片片段；
+// 3. 智能口播降噪：音轨解码为 f32le、处理后再与原视频封装。
 
 #include <QPair>
 #include <QString>
@@ -28,10 +29,22 @@ bool cutKeepRanges(const QString &inputPath,
                    const QVector<QPair<qint64, qint64>> &ranges,
                    const QString &outputPath, QString *error);
 
-// 保持画面不重新编码，只对音轨套用 ffmpeg 音频滤镜（智能口播用于降噪）。
-// audioFilter 例如 "afftdn=nr=12:nf=-35"；画面沿用原编码，音轨转为 AAC。
-bool applyAudioFilter(const QString &inputPath, const QString &audioFilter,
-                      const QString &outputPath, QString *error);
+// 读取首条音频流的采样率与声道数（智能口播降噪按原参数解码与封装）。
+// 文件没有音轨时返回 false。
+bool audioStreamInfo(const QString &filePath, int *sampleRate, int *channels,
+                     QString *error);
+
+// 把首条音频流解码为交错 f32le 原始 PCM，作为本地降噪 DSP 的输入。
+// 输出没有文件头，采样率/声道数由调用方保存并用于后续封装。
+bool decodeAudioF32(const QString &inputPath, const QString &outputPath,
+                    int sampleRate, int channels, QString *error);
+
+// 用处理后的交错 f32le PCM 替换视频音轨；画面沿用原编码（-c:v copy），
+// 音轨转为 192kbps AAC。durationMs > 0 时在封装阶段补齐/截断到视频时长，
+// 避免把垫出的静音喂给降噪 DSP 影响噪声谱估计。
+bool muxAudioF32(const QString &videoPath, const QString &rawAudioPath,
+                 int sampleRate, int channels, qint64 durationMs,
+                 const QString &outputPath, QString *error);
 
 // 录制目录中的完整 MP4 路径（与 index.m3u8 同级，固定为 index.mp4）。
 // 输入不是 m3u8 时原样返回。
