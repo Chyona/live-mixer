@@ -202,7 +202,9 @@ struct MixcutContext {
 MixcutContext makeMixcutContext(const MixcutProject &project)
 {
     MixcutContext ctx;
-    const MixcutSource source = project.hasSource ? project.source : mixcutDemoSource();
+    const MixcutSource source = project.materials.isEmpty()
+        ? mixcutDemoSource()
+        : mixcutSourceFromMaterials(project.materials);
     const MixcutStyleMeta &meta = mixcutStyleMeta(project.style);
     const MixcutVoice voice = getMixcutVoice(project.voiceId);
     const QString script = project.script.trimmed().isEmpty()
@@ -216,7 +218,7 @@ MixcutContext makeMixcutContext(const MixcutProject &project)
     ctx.captions = ctx.stats.lines;
     ctx.subtitleCount = qMax(8, qRound(ctx.stats.chars / 7.0));
     ctx.sfxCount = qBound(3, qRound(ctx.stats.seconds / 5.0), 12);
-    ctx.cuts = qBound(4, qRound(ctx.stats.seconds / 3.0), source.shots);
+    ctx.cuts = qMax(1, qMin(source.shots, qRound(ctx.stats.seconds / 3.0)));
     ctx.frames = ctx.stats.seconds * 30;
     ctx.dimensions = mixcutRatioDimensions(project.ratio);
     ctx.bgm = meta.bgm;
@@ -241,14 +243,13 @@ QVector<MixcutStageSeed> mixcutStageSeeds(const MixcutContext &ctx)
            QStringLiteral("提取关键词：%1")
                .arg(ctx.keywords.mid(0, 4).join(QStringLiteral("、"))),
            Tone::Ai}}},
-        {MixcutStage::Voice, QStringLiteral("配音对齐"), 4200,
+        {MixcutStage::Voice, QStringLiteral("生成配音"), 4200,
          QStringLiteral("%1 · %2").arg(ctx.voice.name, ctx.stats.durationLabel),
          {{300,
-           QStringLiteral("载入已生成的配音：%1 · %2")
+           QStringLiteral("按文案合成配音：%1 · %2")
                .arg(ctx.voice.name, ctx.voice.label),
            Tone::Info},
-          {1500, QStringLiteral("按镜头切点重排配音节奏，重音与停顿保持自然"),
-           Tone::Ai},
+          {1500, QStringLiteral("逐句生成配音，重音与停顿保持自然"), Tone::Ai},
           {3200,
            QStringLiteral("配音与画面时间轴对齐完成 · %1").arg(ctx.stats.durationLabel),
            Tone::Ok}}},
@@ -257,7 +258,7 @@ QVector<MixcutStageSeed> mixcutStageSeeds(const MixcutContext &ctx)
              .arg(ctx.source.shots)
              .arg(ctx.cuts),
          {{300,
-           QStringLiteral("分析原片 %1 个镜头，识别画面主体与景别")
+           QStringLiteral("分析素材 %1 个镜头，识别画面主体与景别")
                .arg(ctx.source.shots),
            Tone::Ai},
           {1600, QStringLiteral("开场钩子 → 通勤街景（00:02–00:08）"), Tone::Ai},
@@ -1104,38 +1105,131 @@ QVector<MixcutStyle> mixcutStyles()
 
 const QVector<MixcutVoice> &mixcutVoices()
 {
-    static const QVector<MixcutVoice> voices = {
-        {QStringLiteral("linlan"), QStringLiteral("林澜"), QStringLiteral("知性女声"),
-         QStringLiteral("女声"), {QStringLiteral("自然"), QStringLiteral("知性")},
-         QStringLiteral("自然有质感的知性女声，适合干货讲解与日常种草。"),
-         QColor(QStringLiteral("#3C4C94")), QColor(QStringLiteral("#6E8BFF")),
-         QColor(QStringLiteral("#6E8BFF")), true},
-        {QStringLiteral("xiaotao"), QStringLiteral("小桃"), QStringLiteral("元气少女"),
-         QStringLiteral("女声"), {QStringLiteral("甜美"), QStringLiteral("轻快")},
-         QStringLiteral("明亮轻快，适合年轻化种草与生活分享。"),
-         QColor(QStringLiteral("#A34A38")), QColor(QStringLiteral("#FF9E7A")),
-         QColor(QStringLiteral("#FF9E7A")), false},
-        {QStringLiteral("chenyu"), QStringLiteral("陈屿"), QStringLiteral("磁性男声"),
-         QStringLiteral("男声"), {QStringLiteral("磁性"), QStringLiteral("沉稳")},
-         QStringLiteral("低音沉稳，适合评测、数码与品牌解说。"),
-         QColor(QStringLiteral("#0E5A64")), QColor(QStringLiteral("#55D6E0")),
-         QColor(QStringLiteral("#55D6E0")), false},
-        {QStringLiteral("anan"), QStringLiteral("安安"), QStringLiteral("温柔女声"),
-         QStringLiteral("女声"), {QStringLiteral("温柔"), QStringLiteral("治愈")},
-         QStringLiteral("温柔亲切，适合生活方式与情感叙事。"),
-         QColor(QStringLiteral("#6B4A72")), QColor(QStringLiteral("#C7A1C9")),
-         QColor(QStringLiteral("#C7A1C9")), false},
-        {QStringLiteral("akai"), QStringLiteral("阿凯"), QStringLiteral("活力男声"),
-         QStringLiteral("男声"), {QStringLiteral("活力"), QStringLiteral("带货")},
-         QStringLiteral("热情有冲劲，适合带货与强节奏内容。"),
-         QColor(QStringLiteral("#8A5A0E")), QColor(QStringLiteral("#FFB224")),
-         QColor(QStringLiteral("#FFB224")), false},
-        {QStringLiteral("laozhou"), QStringLiteral("老周"), QStringLiteral("沉稳男声"),
-         QStringLiteral("男声"), {QStringLiteral("解说"), QStringLiteral("可信")},
-         QStringLiteral("纪录片式叙述，可信度高，适合测评与知识内容。"),
-         QColor(QStringLiteral("#2F5B43")), QColor(QStringLiteral("#7FD8A8")),
-         QColor(QStringLiteral("#7FD8A8")), false},
+    // 豆包语音 2.0 预置音色：26 条中文 + 14 条外语，随安装包内置示例音。
+    struct VoiceSeed {
+        const char *id;
+        const char *name;
+        const char *gender;
+        const char *language;
+        const char *scene;
+        bool recommended;
     };
+    static const VoiceSeed seeds[] = {
+        {"zh_female_vv_uranus_bigtts", "Vivi", "女声", "中文", "通用", true},
+        {"zh_female_xiaohe_uranus_bigtts", "小何", "女声", "中文", "通用", false},
+        {"zh_male_m191_uranus_bigtts", "云舟", "男声", "中文", "通用", true},
+        {"zh_male_taocheng_uranus_bigtts", "小天", "男声", "中文", "通用", false},
+        {"zh_male_liufei_uranus_bigtts", "刘飞", "男声", "中文", "通用", false},
+        {"zh_female_shuangkuaisisi_uranus_bigtts", "爽快思思", "女声", "中文",
+         "通用", true},
+        {"zh_female_sophie_uranus_bigtts", "魅力苏菲", "女声", "中文", "通用",
+         false},
+        {"zh_male_cixingjieshuonan_uranus_bigtts", "磁性解说男声", "男声", "中文",
+         "通用", true},
+        {"zh_male_jieshuoxiaoming_uranus_bigtts", "解说小明", "男声", "中文",
+         "通用", false},
+        {"zh_male_guanggaojieshuo_uranus_bigtts", "广告解说", "男声", "中文",
+         "通用", false},
+        {"zh_female_wenroumama_uranus_bigtts", "温柔妈妈", "女声", "中文", "通用",
+         true},
+        {"zh_male_shenyeboke_uranus_bigtts", "深夜播客", "男声", "中文", "通用",
+         false},
+        {"zh_female_gaolengyujie_uranus_bigtts", "高冷御姐", "女声", "中文",
+         "通用", true},
+        {"zh_male_aojiaobazong_uranus_bigtts", "傲娇霸总", "男声", "中文", "通用",
+         false},
+        {"zh_female_tvbnv_uranus_bigtts", "TVB 女声", "女声", "中文", "通用",
+         false},
+        {"zh_female_kefunvsheng_uranus_bigtts", "暖阳女声", "女声", "中文", "客服",
+         false},
+        {"zh_female_yingyujiaoxue_uranus_bigtts", "Tina 老师", "女声", "中文",
+         "教育", false},
+        {"zh_female_xiaoxue_uranus_bigtts", "儿童绘本", "女声", "中文", "有声阅读",
+         false},
+        {"zh_male_xuanyijieshuo_uranus_bigtts", "悬疑解说", "男声", "中文",
+         "有声阅读", false},
+        {"zh_male_dayi_uranus_bigtts", "大壹", "男声", "中文", "视频配音", false},
+        {"zh_male_sunwukong_uranus_bigtts", "猴哥", "男声", "中文", "视频配音",
+         false},
+        {"zh_female_peiqi_uranus_bigtts", "佩奇猪", "女声", "中文", "视频配音",
+         false},
+        {"zh_female_gufengshaoyu_uranus_bigtts", "古风少御", "女声", "中文",
+         "角色扮演", false},
+        {"zh_male_tangseng_uranus_bigtts", "唐僧", "男声", "中文", "角色扮演",
+         false},
+        {"zh_male_zhubajie_uranus_bigtts", "猪八戒", "男声", "中文", "角色扮演",
+         false},
+        {"zh_female_wuzetian_uranus_bigtts", "武则天", "女声", "中文", "角色扮演",
+         false},
+        {"en_female_allison_uranus_bigtts", "Allison", "女声", "美式英语",
+         "视频配音", false},
+        {"en_male_ryan_uranus_bigtts", "Ryan", "男声", "美式英语", "有声阅读",
+         false},
+        {"ja_male_yusuke_uranus_bigtts", "Yusuke", "男声", "日语", "有声阅读",
+         false},
+        {"ko_male_m03_uranus_bigtts", "Minho", "男声", "韩语", "客服", false},
+        {"id_female_cesna_uranus_bigtts", "Cesna", "女声", "印尼语", "通用 · 客服",
+         false},
+        {"th_female_elle_uranus_bigtts", "Elle", "女声", "泰语", "通用", false},
+        {"vi_female_f01507b_uranus_bigtts", "Hannah", "女声", "越南语",
+         "通用 · 客服", false},
+        {"es_female_romina_uranus_bigtts", "Romina", "女声", "西班牙语", "通用",
+         false},
+        {"pt_female_mari_uranus_bigtts", "Mari", "女声", "巴西葡萄牙语",
+         "教学 · 视频配音", false},
+        {"fr_female_fr_f47_uranus_bigtts", "Camille", "女声", "法语",
+         "教学 · 客服", false},
+        {"de_male_sven_uranus_bigtts", "Sven", "男声", "德语", "通用 · 教学",
+         false},
+        {"ru_male_pavel_uranus_bigtts", "Pavel", "男声", "俄语",
+         "通用 · 视频配音", false},
+        {"it_male_luca_uranus_bigtts", "Luca", "男声", "意大利语", "有声阅读",
+         false},
+        {"ar_female_fatma_uranus_bigtts", "Fatma", "女声", "阿拉伯语", "趣味口音",
+         false},
+    };
+    static const QColor palette[][2] = {
+        {QColor(QStringLiteral("#3C4C94")), QColor(QStringLiteral("#6E8BFF"))},
+        {QColor(QStringLiteral("#A34A38")), QColor(QStringLiteral("#FF9E7A"))},
+        {QColor(QStringLiteral("#0E5A64")), QColor(QStringLiteral("#55D6E0"))},
+        {QColor(QStringLiteral("#6B4A72")), QColor(QStringLiteral("#C7A1C9"))},
+        {QColor(QStringLiteral("#8A5A0E")), QColor(QStringLiteral("#FFB224"))},
+        {QColor(QStringLiteral("#2F5B43")), QColor(QStringLiteral("#7FD8A8"))},
+        {QColor(QStringLiteral("#5A3C7D")), QColor(QStringLiteral("#A78BFA"))},
+        {QColor(QStringLiteral("#7A3B4E")), QColor(QStringLiteral("#F2849E"))},
+        {QColor(QStringLiteral("#34506E")), QColor(QStringLiteral("#7FB3E8"))},
+        {QColor(QStringLiteral("#6B5A2E")), QColor(QStringLiteral("#E0C56E"))},
+    };
+
+    static const QVector<MixcutVoice> voices = [] {
+        QVector<MixcutVoice> list;
+        const int count = static_cast<int>(sizeof(seeds) / sizeof(seeds[0]));
+        const int paletteCount = static_cast<int>(sizeof(palette) / sizeof(palette[0]));
+        for (int index = 0; index < count; ++index) {
+            const VoiceSeed &seed = seeds[index];
+            const QString id = QString::fromLatin1(seed.id);
+            const QString language = QString::fromUtf8(seed.language);
+            const QString scene = QString::fromUtf8(seed.scene);
+            MixcutVoice voice;
+            voice.id = id;
+            voice.name = QString::fromUtf8(seed.name);
+            voice.label = language == QStringLiteral("中文") ? scene : language;
+            voice.gender = QString::fromUtf8(seed.gender);
+            voice.language = language;
+            voice.scene = scene;
+            voice.tags = {voice.gender, scene};
+            voice.description = QStringLiteral("%1 · %2 · 豆包语音 2.0")
+                                    .arg(language, scene);
+            const QColor *pair = palette[index % paletteCount];
+            voice.gradientFrom = pair[0];
+            voice.gradientTo = pair[1];
+            voice.accent = pair[1];
+            voice.recommended = seed.recommended;
+            voice.sampleSrc = QStringLiteral(":/audio/doubao/%1.mp3").arg(id);
+            list.append(voice);
+        }
+        return list;
+    }();
     return voices;
 }
 
@@ -1406,72 +1500,229 @@ QString shortMixcutCaption(const QString &text, int maxLength)
 /* 智能混剪：示例原片                                                   */
 /* ------------------------------------------------------------------ */
 
-MixcutSource mixcutDemoSource()
+const QStringList &mixcutDemoScenes()
+{
+    static const QStringList scenes = {
+        QStringLiteral("street"), QStringLiteral("serum"),
+        QStringLiteral("swatch"), QStringLiteral("face"),
+        QStringLiteral("desk"),   QStringLiteral("sun"),
+        QStringLiteral("bag"),    QStringLiteral("box"),
+    };
+    return scenes;
+}
+
+const QVector<MixcutMaterial> &mixcutDemoMaterials()
+{
+    static const QVector<MixcutMaterial> materials = [] {
+        auto makeVideo = [](const char *id, const char *name, qint64 durationMs,
+                            const char *resolution, const char *size, int shots,
+                            const QStringList &scenes, const QStringList &topics) {
+            MixcutMaterial material;
+            material.id = QString::fromLatin1(id);
+            material.name = QString::fromUtf8(name);
+            material.kind = MixcutMaterialKind::Video;
+            material.durationMs = durationMs;
+            material.resolution = QString::fromUtf8(resolution);
+            material.size = QString::fromUtf8(size);
+            material.shots = shots;
+            material.sample = true;
+            material.scenes = scenes;
+            material.topics = topics;
+            return material;
+        };
+        auto makeImage = [](const char *id, const char *name, const char *resolution,
+                            const char *size, const char *scene, const char *topic) {
+            MixcutMaterial material;
+            material.id = QString::fromLatin1(id);
+            material.name = QString::fromUtf8(name);
+            material.kind = MixcutMaterialKind::Image;
+            material.durationMs = 0;
+            material.resolution = QString::fromUtf8(resolution);
+            material.size = QString::fromUtf8(size);
+            material.shots = 1;
+            material.sample = true;
+            material.scenes = {QString::fromUtf8(scene)};
+            material.topics = {QString::fromUtf8(topic)};
+            return material;
+        };
+
+        QVector<MixcutMaterial> list;
+        list.append(makeVideo("demo-video-1", "通勤防晒_原片.mp4", 92'000,
+                              "3840×2160", "268 MB", 8,
+                              {QStringLiteral("street"), QStringLiteral("serum"),
+                               QStringLiteral("sun"), QStringLiteral("desk")},
+                              {QStringLiteral("通勤场景"), QStringLiteral("产品特写"),
+                               QStringLiteral("户外光线")}));
+        list.append(makeVideo("demo-video-2", "产品特写_补拍.mp4", 48'000,
+                              "1920×1080", "96 MB", 4,
+                              {QStringLiteral("swatch"), QStringLiteral("bag"),
+                               QStringLiteral("box")},
+                              {QStringLiteral("质地展示"), QStringLiteral("开箱收纳")}));
+        list.append(makeImage("demo-image-1", "上脸效果_01.jpg", "1440×1920",
+                              "3.2 MB", "face", "上脸效果"));
+        list.append(makeImage("demo-image-2", "使用步骤_01.png", "1440×1920",
+                              "2.6 MB", "desk", "使用步骤"));
+        list.append(makeImage("demo-image-3", "质地特写_01.jpg", "1440×1920",
+                              "2.9 MB", "swatch", "质地展示"));
+        list.append(makeImage("demo-image-4", "包装开箱_01.jpg", "1440×1920",
+                              "3.1 MB", "box", "包装开箱"));
+        list.append(makeVideo("demo-video-3", "户外补涂_片段.mp4", 36'000,
+                              "1920×1080", "62 MB", 5,
+                              {QStringLiteral("sun"), QStringLiteral("street")},
+                              {QStringLiteral("户外补涂")}));
+        list.append(makeVideo("demo-video-4", "开箱收纳_片段.mp4", 42'000,
+                              "1920×1080", "78 MB", 6,
+                              {QStringLiteral("bag"), QStringLiteral("box")},
+                              {QStringLiteral("开箱收纳")}));
+        list.append(makeImage("demo-image-5", "通勤路上_01.jpg", "1440×1920",
+                              "2.8 MB", "street", "通勤场景"));
+        list.append(makeImage("demo-image-6", "成膜特写_01.jpg", "1440×1920",
+                              "2.4 MB", "face", "上脸效果"));
+        list.append(makeImage("demo-image-7", "细节放大_01.jpg", "1440×1920",
+                              "2.1 MB", "serum", "产品特写"));
+        list.append(makeImage("demo-image-8", "质地对比_01.jpg", "1440×1920",
+                              "2.7 MB", "swatch", "质地展示"));
+        list.append(makeImage("demo-image-9", "使用步骤_02.jpg", "1440×1920",
+                              "2.5 MB", "desk", "使用步骤"));
+        return list;
+    }();
+    return materials;
+}
+
+MixcutMaterialStats mixcutMaterialStats(const QVector<MixcutMaterial> &materials)
+{
+    MixcutMaterialStats stats;
+    qint64 durationMs = 0;
+    for (const MixcutMaterial &material : materials) {
+        if (material.kind == MixcutMaterialKind::Video) {
+            ++stats.videoCount;
+            durationMs += material.durationMs;
+        } else {
+            ++stats.imageCount;
+        }
+        stats.shots += material.shots;
+    }
+    stats.durationLabel = formatElapsed(durationMs);
+    return stats;
+}
+
+MixcutSource mixcutSourceFromMaterials(const QVector<MixcutMaterial> &materials)
 {
     MixcutSource source;
-    source.name = QStringLiteral("通勤防晒_原片.mp4");
-    source.duration = QStringLiteral("01:32");
-    source.resolution = QStringLiteral("3840×2160");
-    source.size = QStringLiteral("268 MB");
-    source.shots = 12;
-    source.sample = true;
-    source.scenes = {QStringLiteral("street"), QStringLiteral("serum"),
-                     QStringLiteral("swatch"), QStringLiteral("face"),
-                     QStringLiteral("desk"), QStringLiteral("sun"),
-                     QStringLiteral("bag"), QStringLiteral("box")};
-    source.topics = {QStringLiteral("通勤场景"), QStringLiteral("产品特写"),
-                     QStringLiteral("上脸效果"), QStringLiteral("质地展示"),
-                     QStringLiteral("户外光线")};
+    if (materials.isEmpty()) {
+        source.name = QStringLiteral("未上传素材");
+        source.duration = QStringLiteral("00:00");
+        source.resolution = QStringLiteral("—");
+        source.size = QStringLiteral("—");
+        return source;
+    }
+
+    const MixcutMaterialStats stats = mixcutMaterialStats(materials);
+    source.name = materials.size() == 1
+        ? materials.first().name
+        : QStringLiteral("%1 个素材").arg(materials.size());
+    source.duration = stats.videoCount > 0
+        ? stats.durationLabel
+        : QStringLiteral("%1 张图片").arg(stats.imageCount);
+    source.resolution = materials.first().resolution;
+    source.size = QStringLiteral("%1 个素材").arg(materials.size());
+    source.shots = stats.shots;
+    source.sample = std::all_of(
+        materials.begin(), materials.end(),
+        [](const MixcutMaterial &material) { return material.sample; });
+    for (const MixcutMaterial &material : materials) {
+        source.scenes.append(material.scenes);
+        for (const QString &topic : material.topics) {
+            if (!source.topics.contains(topic)) {
+                source.topics.append(topic);
+            }
+        }
+    }
     return source;
+}
+
+MixcutSource mixcutDemoSource()
+{
+    return mixcutSourceFromMaterials(mixcutDemoMaterials());
 }
 
 MixcutProject defaultMixcutProject()
 {
-    MixcutProject project;
-    project.source = mixcutDemoSource();
-    return project;
+    return MixcutProject();
 }
 
-MixcutSource mixcutSourceFromFile(const QString &fileName, qint64 sizeBytes)
+bool isMixcutMaterialFile(const QString &filePath)
 {
-    MixcutSource source = mixcutDemoSource();
-    source.name = fileName;
-    source.duration = QStringLiteral("01:28");
-    source.resolution = QStringLiteral("1920×1080");
-    source.size = uploadSize(sizeBytes);
-    source.shots = 12;
-    source.sample = false;
-    source.topics = {QStringLiteral("已识别画面"), QStringLiteral("产品特写"),
-                     QStringLiteral("通勤场景")};
-    return source;
+    static const QStringList videoSuffixes = {
+        QStringLiteral("mp4"), QStringLiteral("mov"), QStringLiteral("m4v"),
+        QStringLiteral("webm"), QStringLiteral("avi"), QStringLiteral("mkv"),
+    };
+    static const QStringList imageSuffixes = {
+        QStringLiteral("jpg"),  QStringLiteral("jpeg"), QStringLiteral("png"),
+        QStringLiteral("webp"), QStringLiteral("heic"), QStringLiteral("gif"),
+    };
+    const QString suffix = QFileInfo(filePath).suffix().toLower();
+    return videoSuffixes.contains(suffix) || imageSuffixes.contains(suffix);
+}
+
+MixcutMaterial mixcutMaterialFromFile(const QString &filePath, qint64 sizeBytes,
+                                      int index)
+{
+    static const QStringList imageSuffixes = {
+        QStringLiteral("jpg"),  QStringLiteral("jpeg"), QStringLiteral("png"),
+        QStringLiteral("webp"), QStringLiteral("heic"), QStringLiteral("gif"),
+    };
+    const QFileInfo info(filePath);
+    const bool image = imageSuffixes.contains(info.suffix().toLower());
+    const QStringList &scenes = mixcutDemoScenes();
+    const int sceneCount = scenes.size();
+
+    MixcutMaterial material;
+    material.id = QStringLiteral("mat-%1-%2-%3")
+                      .arg(QDateTime::currentMSecsSinceEpoch())
+                      .arg(index)
+                      .arg(info.baseName().left(8));
+    material.name = info.fileName();
+    material.filePath = filePath;
+    material.sample = false;
+    if (image) {
+        material.kind = MixcutMaterialKind::Image;
+        material.durationMs = 0;
+        material.resolution = QStringLiteral("1440×1920");
+        material.size = uploadSize(sizeBytes);
+        material.shots = 1;
+        material.scenes = {scenes.at(index % sceneCount)};
+        material.topics = {QStringLiteral("图片素材"), QStringLiteral("补充画面")};
+        return material;
+    }
+
+    material.kind = MixcutMaterialKind::Video;
+    material.durationMs = 72'000 + (index % 3) * 12'000;
+    material.resolution = QStringLiteral("1920×1080");
+    material.size = uploadSize(sizeBytes);
+    material.shots = 4 + (index % 3);
+    material.scenes = {scenes.at(index % sceneCount),
+                       scenes.at((index + 2) % sceneCount),
+                       scenes.at((index + 5) % sceneCount)};
+    material.topics = {QStringLiteral("已识别画面"), QStringLiteral("镜头素材")};
+    return material;
 }
 
 QString mixcutRatioDimensions(const QString &ratio)
 {
-    if (ratio == QLatin1String("16:9")) {
-        return QStringLiteral("1920×1080");
-    }
-    if (ratio == QLatin1String("1:1")) {
-        return QStringLiteral("1080×1080");
-    }
-    return QStringLiteral("1080×1920");
+    return ratio == QLatin1String("16:9") ? QStringLiteral("1920×1080")
+                                          : QStringLiteral("1080×1920");
 }
 
 QString mixcutRatioHint(const QString &ratio)
 {
-    if (ratio == QLatin1String("16:9")) {
-        return QStringLiteral("适合 B 站 / 横屏");
-    }
-    if (ratio == QLatin1String("1:1")) {
-        return QStringLiteral("适合信息流");
-    }
-    return QStringLiteral("适合抖音 / 视频号");
+    return ratio == QLatin1String("16:9") ? QStringLiteral("适合 B 站 / 横屏")
+                                          : QStringLiteral("适合抖音 / 视频号");
 }
 
 QString mixcutFileSize(int seconds, const QString &ratio)
 {
-    const double rate = ratio == QLatin1String("16:9") ? 1.9
-        : (ratio == QLatin1String("1:1") ? 1.55 : 1.45);
+    const double rate = ratio == QLatin1String("16:9") ? 1.9 : 1.45;
     return QStringLiteral("%1 MB").arg(seconds * rate, 0, 'f', 1);
 }
 
@@ -1682,7 +1933,11 @@ MixcutRun computeMixcutRun(const MixcutProject &project, qint64 elapsedMs, int r
 MixcutResult makeMixcutResult(const MixcutProject &project, qint64 generatedAt,
                               const QString &scriptOverride)
 {
-    const MixcutSource source = project.hasSource ? project.source : mixcutDemoSource();
+    const QVector<MixcutMaterial> materials = project.materials.isEmpty()
+        ? mixcutDemoMaterials()
+        : project.materials;
+    const MixcutSource source = mixcutSourceFromMaterials(materials);
+    const MixcutMaterialStats materialStats = mixcutMaterialStats(materials);
     const MixcutStyleMeta &meta = mixcutStyleMeta(project.style);
     const MixcutVoice voice = getMixcutVoice(project.voiceId);
     const QString script = !scriptOverride.trimmed().isEmpty()
@@ -1693,7 +1948,7 @@ MixcutResult makeMixcutResult(const MixcutProject &project, qint64 generatedAt,
     const MixcutScriptStats stats = mixcutScriptStats(script);
     const int subtitleCount = qMax(8, qRound(stats.chars / 7.0));
     const int sfxCount = qBound(3, qRound(stats.seconds / 5.0), 12);
-    const int cuts = qBound(4, qRound(stats.seconds / 3.0), source.shots);
+    const int cuts = qMax(1, qMin(source.shots, qRound(stats.seconds / 3.0)));
 
     MixcutResult result;
     result.id = QStringLiteral("mixcut-%1").arg(generatedAt);
@@ -1708,9 +1963,22 @@ MixcutResult makeMixcutResult(const MixcutProject &project, qint64 generatedAt,
     result.durationLabel = stats.durationLabel;
     result.fileSize = mixcutFileSize(stats.seconds, project.ratio);
     result.generatedAt = generatedAt;
-    result.sourceLabel = QStringLiteral("原片 · %1 · %2 个镜头")
-                             .arg(source.duration)
-                             .arg(source.shots);
+    if (materials.size() > 1) {
+        result.sourceLabel =
+            QStringLiteral("素材 · %1 个（%2 视频 / %3 图片）· %4 个镜头")
+                .arg(materials.size())
+                .arg(materialStats.videoCount)
+                .arg(materialStats.imageCount)
+                .arg(source.shots);
+    } else if (materials.first().kind == MixcutMaterialKind::Video) {
+        result.sourceLabel = QStringLiteral("原片 · %1 · %2 个镜头")
+                                 .arg(formatElapsed(materials.first().durationMs))
+                                 .arg(source.shots);
+    } else {
+        result.sourceLabel = QStringLiteral("图片 · %1 · %2 个镜头")
+                                 .arg(materials.first().resolution)
+                                 .arg(source.shots);
+    }
     result.scriptPrompt = project.prompt;
     result.script = script;
     result.sceneCount = source.shots;
@@ -1742,29 +2010,62 @@ QVector<MixcutResult> recentMixcutResults()
         const char *ratio;
         qint64 offsetMs;
         const char *prompt;
+        const char *projectName;
+        const char *title;
+        const char *captionTitle;
+        const char *description;
+        const char *tags;
     };
     const Seed seeds[] = {
-        {MixcutStyle::Planting, "linlan", "9:16", 2 * hour,
-         "夏天通勤防晒怎么选"},
-        {MixcutStyle::Review, "chenyu", "16:9", 25 * hour,
-         "通勤八小时防晒表现"},
-        {MixcutStyle::Story, "anan", "9:16", 3 * day,
-         "我的通勤防晒故事"},
+        {MixcutStyle::Planting, "zh_female_vv_uranus_bigtts", "9:16", 2 * hour,
+         "夏天通勤防晒怎么选", nullptr, nullptr, nullptr, nullptr, nullptr},
+        {MixcutStyle::Review, "zh_male_cixingjieshuonan_uranus_bigtts", "16:9",
+         25 * hour, "通勤八小时防晒表现", nullptr, nullptr, nullptr, nullptr,
+         nullptr},
+        {MixcutStyle::Story, "zh_female_wenroumama_uranus_bigtts", "9:16",
+         3 * day, "我的通勤防晒故事", nullptr, nullptr, nullptr, nullptr,
+         nullptr},
+        {MixcutStyle::Planting, "zh_female_shuangkuaisisi_uranus_bigtts", "9:16",
+         5 * day, "早八通勤五分钟防晒", "早八通勤 · 智能混剪",
+         "早八人 5 分钟出门，防晒一步不落", "早八通勤防晒",
+         "洁面、精华、防晒三步搞定，赶地铁也不慌。",
+         "#早八护肤 #通勤日常 #防晒"},
+        {MixcutStyle::Review, "zh_male_shenyeboke_uranus_bigtts", "16:9",
+         8 * day, "五支热门防晒横评", "防晒横评 · 智能混剪",
+         "5 支热门防晒横评，通勤到底该选哪支", "5 支防晒横评",
+         "从成膜速度、搓泥到泛白，一次讲清通勤防晒怎么选。",
+         "#防晒横评 #通勤防晒 #测评"},
+        {MixcutStyle::Planting, "zh_female_gaolengyujie_uranus_bigtts", "16:9",
+         12 * day, "通勤补涂防晒推荐", "防晒补涂 · 智能混剪",
+         "通勤补涂防晒，油皮只带这一支", "通勤补涂指南",
+         "不搓泥、不花妆，办公室和地铁里的补涂方案。",
+         "#防晒补涂 #油皮护肤 #通勤好物"},
+        {MixcutStyle::Story, "zh_male_m191_uranus_bigtts", "9:16", 20 * day,
+         "空瓶回购的通勤防晒", "空瓶回购 · 智能混剪",
+         "空瓶 3 支才敢推荐，通勤防晒就选它", "空瓶回购实录",
+         "从踩雷到回购，一个油皮打工人的真实防晒记录。",
+         "#空瓶记 #通勤防晒 #回购清单"},
     };
 
     QVector<MixcutResult> results;
     for (const Seed &seed : seeds) {
         MixcutProject project;
-        project.hasSource = true;
-        project.source = mixcutDemoSource();
+        project.materials = mixcutDemoMaterials();
         project.analysisReady = true;
         project.prompt = QString::fromUtf8(seed.prompt);
         project.script = generateMixcutScriptFromPrompt(project.prompt, seed.style, 0);
         project.style = seed.style;
         project.voiceId = QString::fromLatin1(seed.voice);
         project.ratio = QString::fromLatin1(seed.ratio);
-        project.voiceStatus = VoiceStatus::Ready;
-        results.append(makeMixcutResult(project, now - seed.offsetMs));
+        MixcutResult result = makeMixcutResult(project, now - seed.offsetMs);
+        if (seed.projectName) {
+            result.projectName = QString::fromUtf8(seed.projectName);
+            result.title = QString::fromUtf8(seed.title);
+            result.captionTitle = QString::fromUtf8(seed.captionTitle);
+            result.description = QString::fromUtf8(seed.description);
+            result.tags = QString::fromUtf8(seed.tags).split(QLatin1Char(' '));
+        }
+        results.append(result);
     }
     return results;
 }

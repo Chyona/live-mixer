@@ -196,7 +196,7 @@ QString oralDensityName(OralDensity density);
 
 enum class MixcutStyle { Planting, Review, Story };
 enum class MixcutStage { Parse, Voice, Match, Design, Render };
-enum class VoiceStatus { Idle, Generating, Ready, Outdated };
+enum class MixcutMaterialKind { Video, Image };
 
 QString mixcutStyleName(MixcutStyle style);
 QVector<MixcutStyle> mixcutStyles();
@@ -211,19 +211,26 @@ struct MixcutStyleMeta {
     QString bgm;
 };
 
-struct MixcutVoice {
+// 一条上传素材（视频或图片）。混剪项目可混合多段视频与多张图片。
+struct MixcutMaterial {
     QString id;
     QString name;
-    QString label;
-    QString gender;
-    QStringList tags;
-    QString description;
-    QColor gradientFrom;
-    QColor gradientTo;
-    QColor accent;
-    bool recommended = false;
+    MixcutMaterialKind kind = MixcutMaterialKind::Video;
+    // 视频时长（毫秒）；图片为 0。
+    qint64 durationMs = 0;
+    QString resolution;
+    QString size;
+    // 视频镜头数；单张图片固定为 1。
+    int shots = 0;
+    // 示例素材标记（用于「示例素材」胶囊与提示文案）。
+    bool sample = false;
+    QStringList scenes;
+    QStringList topics;
+    // 本地导入素材的真实路径；示例素材为空。
+    QString filePath;
 };
 
+// 由全部素材汇总出的原片概况，供过程页与结果页展示。
 struct MixcutSource {
     QString name;
     QString duration;
@@ -235,16 +242,39 @@ struct MixcutSource {
     QStringList topics;
 };
 
+struct MixcutVoice {
+    QString id;
+    QString name;
+    QString label;
+    QString gender;
+    // 音色所属语言与适用场景，用于音色库筛选与展示。
+    QString language;
+    QString scene;
+    QStringList tags;
+    QString description;
+    QColor gradientFrom;
+    QColor gradientTo;
+    QColor accent;
+    bool recommended = false;
+    // 本地示例音资源路径（qrc）；音色库试听使用。
+    QString sampleSrc;
+};
+
+struct MixcutMaterialStats {
+    int videoCount = 0;
+    int imageCount = 0;
+    int shots = 0;
+    QString durationLabel;
+};
+
 struct MixcutProject {
-    bool hasSource = false;
-    MixcutSource source;
+    QVector<MixcutMaterial> materials;
     bool analysisReady = false;
     QString prompt;
     QString script;
     MixcutStyle style = MixcutStyle::Planting;
-    QString voiceId = QStringLiteral("linlan");
+    QString voiceId = QStringLiteral("zh_female_vv_uranus_bigtts");
     QString ratio = QStringLiteral("9:16");
-    VoiceStatus voiceStatus = VoiceStatus::Idle;
 };
 
 struct MixcutResult {
@@ -319,9 +349,14 @@ struct MixcutRun {
 const QVector<MixcutVoice> &mixcutVoices();
 MixcutVoice getMixcutVoice(const QString &id);
 const MixcutStyleMeta &mixcutStyleMeta(MixcutStyle style);
+const QVector<MixcutMaterial> &mixcutDemoMaterials();
 MixcutSource mixcutDemoSource();
+MixcutSource mixcutSourceFromMaterials(const QVector<MixcutMaterial> &materials);
+MixcutMaterialStats mixcutMaterialStats(const QVector<MixcutMaterial> &materials);
+bool isMixcutMaterialFile(const QString &filePath);
+MixcutMaterial mixcutMaterialFromFile(const QString &filePath, qint64 sizeBytes,
+                                      int index);
 MixcutProject defaultMixcutProject();
-MixcutSource mixcutSourceFromFile(const QString &fileName, qint64 sizeBytes);
 QString mixcutRatioDimensions(const QString &ratio);
 QString mixcutRatioHint(const QString &ratio);
 QString mixcutFileSize(int seconds, const QString &ratio);

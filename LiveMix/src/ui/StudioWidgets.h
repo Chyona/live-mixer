@@ -83,6 +83,24 @@ private:
     QHBoxLayout *m_row = nullptr;
 };
 
+// 首页「最近记录」的空状态：智能口播与智能混剪共用同一套视觉。
+class EmptyRecent : public QWidget
+{
+    Q_OBJECT
+
+public:
+    EmptyRecent(const QString &title, const QString &description,
+                const QStringList &features, const QString &sampleLabel,
+                const QString &startLabel, QWidget *parent = nullptr);
+
+signals:
+    void sampleRequested();
+    void startRequested();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+};
+
 class SegmentedControl : public QWidget
 {
     Q_OBJECT

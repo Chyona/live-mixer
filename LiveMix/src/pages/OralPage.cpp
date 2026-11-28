@@ -515,6 +515,7 @@ protected:
         rightSpec.keywords = {QStringLiteral("油皮"), QStringLiteral("通勤")};
         rightSpec.materials = StudioData::demoMaterials().mid(0, 2);
         rightSpec.timecode = QStringLiteral("00:58");
+        rightSpec.progress = 40;
         rightSpec.ratio = QStringLiteral("9:16");
         painter.save();
         painter.translate(area.right() - 60, 0 + 104);
@@ -536,10 +537,10 @@ protected:
             painter.drawText(r.adjusted(21, 0, -6, 0), Qt::AlignLeft | Qt::AlignVCenter,
                              text);
         };
-        drawFloat(QRectF(area.left(), area.top() + 64, 120, 22),
+        drawFloat(QRectF(area.left(), area.top() + 62, 120, 22),
                   Theme::Ai, QStringLiteral("素材匹配 8/8"), Icons::Glyph::Sparkle,
                   Theme::Ai);
-        const QRectF saveRect(area.right() - 134, area.bottom() - 46, 134, 22);
+        const QRectF saveRect(area.right() - 134, area.bottom() - 72, 134, 22);
         painter.setPen(QPen(Theme::BorderStrong, 1.0));
         painter.setBrush(Theme::alpha(Theme::Surface2, 0.95));
         painter.drawRoundedRect(saveRect, 6, 6);
@@ -1303,7 +1304,7 @@ OralPage::OralPage(ConfigStore *config, QWidget *parent)
         updateProcessing();
         const int percent = qMin(99, static_cast<int>(std::floor(m_run.progress)));
         emit taskStatusChanged(
-            QStringLiteral("口播包装中 %1% · %2")
+            QStringLiteral("智能口播中 %1% · %2")
                 .arg(percent)
                 .arg(StudioData::formatElapsed(m_run.elapsedMs)),
             true);
@@ -1351,16 +1352,9 @@ void OralPage::buildUi()
     auto *hubRoot = new QVBoxLayout(m_hubScreen);
     hubRoot->setContentsMargins(0, 0, 0, 0);
     hubRoot->setSpacing(0);
-    // 标题区固定在页面顶部，滚动时「开始口播包装」始终可见。
-    m_hubHeader = new QWidget(m_hubScreen);
-    m_hubHeaderLayout = new QVBoxLayout(m_hubHeader);
-    m_hubHeaderLayout->setContentsMargins(22, 18, 22, 14);
-    m_hubHeaderLayout->setSpacing(0);
-    hubRoot->addWidget(m_hubHeader);
-    hubRoot->addWidget(Ui::separator(false, m_hubScreen));
     m_hubContent = new QWidget;
     m_hubLayout = new QVBoxLayout(m_hubContent);
-    m_hubLayout->setContentsMargins(22, 14, 22, 24);
+    m_hubLayout->setContentsMargins(22, 18, 22, 24);
     m_hubLayout->setSpacing(0);
     m_hubLayout->setAlignment(Qt::AlignTop);
     m_hubScroll = makeScrollArea(m_hubContent, m_hubScreen);
@@ -1445,9 +1439,8 @@ void OralPage::showResult()
 
 void OralPage::rebuildHub()
 {
-    Studio::clearLayout(m_hubHeaderLayout);
     Studio::clearLayout(m_hubLayout);
-    m_hubHeaderLayout->addWidget(buildHubHeader());
+    m_hubLayout->addWidget(buildHubHeader());
 
     auto *stats = new QWidget(m_hubContent);
     auto *statsLayout = new QHBoxLayout(stats);
@@ -1474,6 +1467,8 @@ void OralPage::rebuildHub()
     m_hubLayout->addWidget(stats);
 
     auto *heroRow = new QWidget(m_hubContent);
+    heroRow->setMinimumHeight(244);
+    heroRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *heroLayout = new QHBoxLayout(heroRow);
     heroLayout->setContentsMargins(0, 0, 0, 0);
     heroLayout->setSpacing(14);
@@ -1482,10 +1477,6 @@ void OralPage::rebuildHub()
     m_hubLayout->addWidget(heroRow);
 
     m_hubLayout->addSpacing(20);
-    auto *recentHeading = makeSectionHeading(
-        QStringLiteral("最近口播"),
-        QStringLiteral("全部 %1 个项目").arg(m_history.size()), nullptr,
-        m_hubContent);
     auto *recentMeta = new QWidget(m_hubContent);
     auto *recentMetaLayout = new QHBoxLayout(recentMeta);
     recentMetaLayout->setContentsMargins(0, 0, 0, 0);
@@ -1494,34 +1485,46 @@ void OralPage::rebuildHub()
                                                   Theme::Text3, recentMeta));
     recentMetaLayout->addWidget(Ui::label(QStringLiteral("自动保存生成记录"), 10,
                                           QFont::Normal, Theme::Text3, recentMeta));
+    auto *recentHeading = makeSectionHeading(
+        QStringLiteral("最近口播"),
+        m_history.isEmpty() ? QStringLiteral("暂无记录")
+                            : QStringLiteral("%1 个项目").arg(m_history.size()),
+        recentMeta, m_hubContent);
     auto *recentHeadingRow = new QWidget(m_hubContent);
     auto *recentHeadingLayout = new QHBoxLayout(recentHeadingRow);
     recentHeadingLayout->setContentsMargins(0, 0, 0, 8);
     recentHeadingLayout->setSpacing(0);
     recentHeadingLayout->addWidget(recentHeading, 1);
-    recentHeadingLayout->addWidget(recentMeta, 0, Qt::AlignVCenter);
     m_hubLayout->addWidget(recentHeadingRow);
 
-    auto *recentGrid = new QWidget(m_hubContent);
-    auto *recentLayout = new QGridLayout(recentGrid);
-    recentLayout->setContentsMargins(0, 0, 0, 0);
-    recentLayout->setHorizontalSpacing(12);
-    recentLayout->setVerticalSpacing(12);
-    for (int index = 0; index < m_history.size(); ++index) {
-        recentLayout->addWidget(createRecentCard(m_history.at(index), recentGrid),
-                                index / 3, index % 3);
+    if (!m_history.isEmpty()) {
+        auto *recentGrid = new QWidget(m_hubContent);
+        auto *recentLayout = new QGridLayout(recentGrid);
+        recentLayout->setContentsMargins(0, 0, 0, 0);
+        recentLayout->setHorizontalSpacing(12);
+        recentLayout->setVerticalSpacing(12);
+        for (int index = 0; index < m_history.size(); ++index) {
+            recentLayout->addWidget(createRecentCard(m_history.at(index), recentGrid),
+                                    index / 3, index % 3);
+        }
+        for (int column = 0; column < 3; ++column) {
+            recentLayout->setColumnStretch(column, 1);
+        }
+        m_hubLayout->addWidget(recentGrid);
+    } else {
+        auto *empty = new Studio::EmptyRecent(
+            QStringLiteral("还没有口播记录"),
+            QStringLiteral("完成第一个口播包装后，成片、发布文案与剪映草稿会自动保存到这里，随时回看或重新包装。"),
+            {QStringLiteral("成片自动下载"), QStringLiteral("发布文案可复制"),
+             QStringLiteral("可回看与重新包装")},
+            QStringLiteral("用示例口播试包装"),
+            QStringLiteral("开始第一个口播"), m_hubContent);
+        connect(empty, &Studio::EmptyRecent::startRequested, this,
+                &OralPage::startProject);
+        connect(empty, &Studio::EmptyRecent::sampleRequested, this,
+                &OralPage::startSampleProject);
+        m_hubLayout->addWidget(empty);
     }
-    if (m_history.isEmpty()) {
-        auto *empty = new Studio::Note(
-            QStringLiteral("还没有真实生成记录。完成一次口播包装后，"
-                           "成片会自动保存在这里。"),
-            Studio::Note::Muted, recentGrid);
-        recentLayout->addWidget(empty, 0, 0, 1, 3);
-    }
-    for (int column = 0; column < 3; ++column) {
-        recentLayout->setColumnStretch(column, 1);
-    }
-    m_hubLayout->addWidget(recentGrid);
 
     m_hubLayout->addSpacing(16);
     auto *tip = new QWidget(m_hubContent);
@@ -1534,7 +1537,7 @@ void OralPage::rebuildHub()
     auto *tipLayout = new QHBoxLayout(tip);
     tipLayout->setContentsMargins(12, 9, 12, 9);
     tipLayout->setSpacing(8);
-    tipLayout->addWidget(Studio::iconLabel(Icons::Glyph::Wand, 12, Theme::Ai, tip));
+    tipLayout->addWidget(Studio::iconLabel(Icons::Glyph::Sparkle, 12, Theme::Ai, tip));
     auto *tipLabel = Ui::label(
         QStringLiteral("小提示：开始包装后可在「包装设置」里选择模板，AI 会自动按模板节奏调整字幕、素材插入密度和音乐风格。"),
         10, QFont::Normal, Theme::Text3, tip);
@@ -1556,10 +1559,9 @@ QWidget *OralPage::buildHubHeader()
 {
     auto *header = new PageHeader(
         QStringLiteral("智能口播"),
-        QStringLiteral("上传真人口播与相关素材，选择模板，一键包装成片。"),
-        m_hubHeader);
-    // 固定标题区自带上下留白，页头自身不再保留底部间距。
-    header->layout()->setContentsMargins(0, 0, 0, 0);
+        QStringLiteral("上传真人口播与相关素材，选择包装模板，一键成片。"),
+        m_hubContent);
+    header->layout()->setContentsMargins(0, 0, 0, 16);
     auto *newChip = new Chip(QStringLiteral("新功能"), Chip::Ai, header);
     header->setTitleMeta(newChip);
     auto *start = new Button(QStringLiteral("开始口播包装"), Button::Primary, header);
@@ -1581,9 +1583,9 @@ QWidget *OralPage::buildHubHero()
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->setSpacing(0);
     leftLayout->addWidget(
-        makeSoftPill(Icons::Glyph::Sparkle, QStringLiteral("AI 口播包装"),
-                     Theme::Primary, Theme::alpha(Theme::Primary, 0.14),
-                     Theme::alpha(Theme::Primary, 0.30), left),
+        makeSoftPill(Icons::Glyph::Sparkle, QStringLiteral("AI 口播 · 素材 · 成片"),
+                     Theme::Ai, Studio::aiSoft(),
+                     Theme::alpha(Theme::Ai, 0.30), left),
         0, Qt::AlignLeft);
     leftLayout->addSpacing(9);
     leftLayout->addWidget(Ui::label(QStringLiteral("真人口播 · 一键包装"), 17,
@@ -1593,16 +1595,17 @@ QWidget *OralPage::buildHubHero()
         QStringLiteral("上传一段真人口播和相关素材，AI 理解内容后自动插入画面、字幕与节奏包装，直接生成可发布的成片。"),
         11, QFont::Normal, Theme::Text2, left);
     description->setWordWrap(true);
-    description->setMaximumWidth(350);
+    description->setMaximumWidth(360);
     leftLayout->addWidget(description);
     leftLayout->addSpacing(10);
     leftLayout->addWidget(makeBullet(QStringLiteral("智能素材匹配，B-Roll 自动插入"),
-                                     Theme::Primary, left));
+                                     Theme::Ai, left));
     leftLayout->addWidget(makeBullet(QStringLiteral("模板、字幕、转场、BGM 一次到位"),
-                                     Theme::Primary, left));
+                                     Theme::Ai, left));
+    leftLayout->addWidget(makeBullet(QStringLiteral("成片生成后自动下载"), Theme::Ai,
+                                     left));
     leftLayout->addWidget(makeBullet(
-        QStringLiteral("成片生成后自动下载，也可同时生成剪映草稿"), Theme::Primary,
-        left));
+        QStringLiteral("可同时生成可编辑的剪映草稿"), Theme::Ai, left));
     leftLayout->addStretch(1);
 
     auto *action = new QWidget(left);
@@ -1642,9 +1645,9 @@ QWidget *OralPage::buildHubProcessPanel()
     auto *titles = new QVBoxLayout;
     titles->setContentsMargins(0, 0, 0, 0);
     titles->setSpacing(1);
-    titles->addWidget(Ui::label(QStringLiteral("一次成片，三步完成"), 12,
+    titles->addWidget(Ui::label(QStringLiteral("上传素材，三步成片"), 12,
                                 QFont::DemiBold, Theme::Text1, header));
-    titles->addWidget(Ui::label(QStringLiteral("全程无需剪辑，AI 自动完成"), 9,
+    titles->addWidget(Ui::label(QStringLiteral("全程无需手动剪辑，AI 自动完成"), 9,
                                 QFont::Normal, Theme::Text3, header));
     headerLayout->addLayout(titles, 1);
     layout->addWidget(header);
@@ -1656,13 +1659,13 @@ QWidget *OralPage::buildHubProcessPanel()
         Icons::Glyph glyph;
     };
     const QVector<StepInfo> steps = {
-        {QStringLiteral("上传口播与素材"),
+        {QStringLiteral("上传素材"),
          QStringLiteral("一段真人口播，加上产品、场景等相关素材。"),
          Icons::Glyph::Upload},
-        {QStringLiteral("选择包装模板"),
-         QStringLiteral("6 套风格任选，字幕、B-Roll 与音乐自动适配。"),
+        {QStringLiteral("包装设置"),
+         QStringLiteral("6 套模板任选，字幕、B-Roll 与音乐自动适配。"),
          Icons::Glyph::Palette},
-        {QStringLiteral("一键包装成片"),
+        {QStringLiteral("一键成片"),
          QStringLiteral("AI 理解内容、匹配画面并渲染，完成后自动下载。"),
          Icons::Glyph::Wand},
     };
@@ -1851,7 +1854,7 @@ QWidget *OralPage::createRecentCard(const StudioData::OralResult &result,
         ? StudioData::demoMaterials().mid(0, 1)
         : result.materials.mid(0, 1);
     spec.ratio = result.ratio;
-    spec.badge = tmpl.name;
+    spec.badge = QStringLiteral("成片");
     spec.timecode = result.durationLabel;
     poster->setSpec(spec);
     layout->addWidget(poster, 0, Qt::AlignTop);
@@ -1906,6 +1909,16 @@ QWidget *OralPage::createRecentCard(const StudioData::OralResult &result,
 
 void OralPage::startProject()
 {
+    openNewProject(false);
+}
+
+void OralPage::startSampleProject()
+{
+    openNewProject(true);
+}
+
+void OralPage::openNewProject(bool sample)
+{
     if (isRunning()) {
         const auto answer = QMessageBox::question(
             this, QStringLiteral("开始新项目"),
@@ -1932,6 +1945,11 @@ void OralPage::startProject()
     const QString templateId = m_project.templateId;
     m_project = StudioData::defaultOralProject();
     m_project.templateId = templateId;
+    if (sample) {
+        m_project.source = StudioData::demoOralSource();
+        m_project.hasSource = true;
+        m_project.materials = StudioData::demoMaterials();
+    }
     // 新项目沿用普通封面缓存策略；重新包装的标记只属于上一次结果。
     m_regenerateCover = false;
     showSetup();
@@ -3154,7 +3172,7 @@ void OralPage::startGeneration()
     showProcessing();
     m_runTimer->start();
     emit taskStatusChanged(
-        QStringLiteral("口播包装中 0% · 00:00"), true);
+        QStringLiteral("智能口播中 0% · 00:00"), true);
 
     auto *service = new Oral::PipelineService(request);
     auto *thread = new QThread;
@@ -3208,7 +3226,7 @@ void OralPage::buildProcessingScreen()
     titleLine->setSpacing(8);
     titleLine->addWidget(Ui::label(QStringLiteral("AI 正在包装你的口播"), 16,
                                      QFont::DemiBold, Theme::Text1, top));
-    titleLine->addWidget(new Chip(QStringLiteral("智能包装中"), Chip::Run, top));
+    titleLine->addWidget(new Chip(QStringLiteral("智能口播中"), Chip::Run, top));
     auto *ratioLabel = monoLabel(
         QStringLiteral("%1 · %2")
             .arg(m_project.ratio, m_project.outputBoth
@@ -3501,7 +3519,7 @@ void OralPage::updateProcessing()
     if (m_processingProjectLabel && !m_run.previewCaption.isEmpty()) {
         // 语义分析完成后把真实标题写进过程页副标题，替换占位文案。
         m_processingProjectLabel->setText(
-            QStringLiteral("%1 · 口播包装").arg(m_run.previewCaption.left(20)));
+            QStringLiteral("%1 · 智能口播").arg(m_run.previewCaption.left(20)));
     }
     if (m_processingMeta) {
         m_processingMeta->setText(
@@ -3535,12 +3553,16 @@ void OralPage::updateProcessing()
             qRound(stage.progress), stage.status == StudioData::StageStatus::Running);
     }
 
+    const int materialTotal = qMax(1, int(m_project.materials.size()));
+    // 真实流水线返回已匹配素材数；示例过程按 8 个素材模拟时同样取真实值。
+    const int matchedMaterials = qMin(materialTotal, m_run.matchedMaterials);
     if (m_processingPoster) {
         Studio::OralPosterSpec spec = m_processingPoster->spec();
         spec.caption = m_run.previewCaption;
         spec.keywords = m_run.previewKeywords;
         spec.materials = m_project.materials.mid(
-            0, qMin(2, static_cast<int>(std::ceil(m_run.matchedMaterials / 4.0))));
+            0, qMin(2, static_cast<int>(
+                          std::ceil(matchedMaterials * 1.0 / materialTotal * 2))));
         spec.timecode = StudioData::formatElapsed(m_run.elapsedMs);
         spec.progress = qRound(m_run.progress);
         m_processingPoster->setSpec(spec);
@@ -3568,16 +3590,11 @@ void OralPage::updateProcessing()
     }
 
     if (m_matchedCount) {
-        // 分母使用本次真实素材数（界面最多展示 8 个缩略图），不再写死 8。
-        const int totalMaterials =
-            qMin(8, qMax(1, int(m_project.materials.size())));
         m_matchedCount->setText(
-            QStringLiteral("%1/%2")
-                .arg(qMin(totalMaterials, m_run.matchedMaterials))
-                .arg(totalMaterials));
+            QStringLiteral("%1/%2").arg(matchedMaterials).arg(materialTotal));
     }
-    const int thumbCount = qMin(2, static_cast<int>(
-                                        std::ceil(m_run.matchedMaterials / 4.0)));
+    const int thumbCount = qMin(
+        2, static_cast<int>(std::ceil(matchedMaterials * 1.0 / materialTotal * 2)));
     if (m_matchedLayout && thumbCount != m_lastMatchedCount) {
         m_lastMatchedCount = thumbCount;
         Studio::clearLayout(m_matchedLayout);
@@ -3611,14 +3628,22 @@ void OralPage::updateProcessing()
     }
 
     if (m_processingSourceMeta) {
-        m_processingSourceMeta->setText(
-            m_run.stage == StudioData::OralStage::Render
-                ? QStringLiteral("%1/%2 帧")
-                      .arg(StudioData::formatNumber(m_run.renderedFrames),
-                           StudioData::formatNumber(m_run.totalFrames))
-                : QStringLiteral("%1 · %2")
-                      .arg(StudioData::oralTemplateName(m_project.templateId),
-                           m_project.ratio));
+        if (m_run.stage == StudioData::OralStage::Render) {
+            m_processingSourceMeta->setText(
+                QStringLiteral("%1/%2 帧")
+                    .arg(StudioData::formatNumber(m_run.renderedFrames),
+                         StudioData::formatNumber(m_run.totalFrames)));
+        } else if (m_run.stage == StudioData::OralStage::Compose) {
+            m_processingSourceMeta->setText(
+                QStringLiteral("%1 条字幕").arg(m_run.subtitleCount));
+        } else if (m_run.stage == StudioData::OralStage::Match) {
+            m_processingSourceMeta->setText(
+                QStringLiteral("%1 个素材").arg(materialTotal));
+        } else {
+            m_processingSourceMeta->setText(
+                QStringLiteral("%1 字口播")
+                    .arg(m_project.source.words > 0 ? m_project.source.words : 486));
+        }
     }
 
     const StudioData::OralStageState *current = nullptr;
@@ -3660,11 +3685,13 @@ void OralPage::updateProcessing()
             QStringLiteral("%1/%2 步").arg(doneCount).arg(m_run.stages.size()));
     }
     if (m_logFooter) {
-        // 字幕总数来自真实 ASR 拆分结果；没有结果前显示 0/0。
+        const int sfxCount = m_project.sfx
+            ? qMin(4, qRound(m_run.subtitleCount / 6.0))
+            : 0;
         m_logFooter->setText(
-            QStringLiteral("字幕 %1/%2")
+            QStringLiteral("字幕 %1 · 音效 %2")
                 .arg(m_run.subtitleCount)
-                .arg(m_run.totalSubtitles));
+                .arg(sfxCount));
     }
 
     if (m_logLayout && m_run.logs.size() != m_logCount) {
@@ -3763,7 +3790,7 @@ void OralPage::onPipelineRunUpdated(const StudioData::OralRun &run)
     updateProcessing();
     const int percent = qMin(99, static_cast<int>(std::floor(m_run.progress)));
     emit taskStatusChanged(
-        QStringLiteral("口播包装中 %1% · %2")
+        QStringLiteral("智能口播中 %1% · %2")
             .arg(percent)
             .arg(StudioData::formatElapsed(m_run.elapsedMs)),
         true);
@@ -3981,14 +4008,20 @@ void OralPage::rebuildResult()
     auto *breadcrumb = new QWidget(header);
     auto *breadcrumbLayout = new QHBoxLayout(breadcrumb);
     breadcrumbLayout->setContentsMargins(0, 0, 0, 0);
-    breadcrumbLayout->setSpacing(8);
-    auto *back = new Button(QStringLiteral("返回最近口播"), Button::Ghost, breadcrumb);
-    back->setCompact(true);
-    back->setLeadingGlyph(Icons::Glyph::ChevronLeft);
+    breadcrumbLayout->setSpacing(6);
+    auto *back = new LinkLabel(QStringLiteral("智能口播"), breadcrumb);
+    back->setPixelSize(10);
+    back->setTextColor(Theme::Text3);
+    back->setHoverColor(Theme::Text1);
+    back->setLeadingGlyph(Icons::Glyph::ChevronLeft, 10);
+    back->setUnderlineOnHover(false);
     connect(back, &QAbstractButton::clicked, this, &OralPage::showHub);
     breadcrumbLayout->addWidget(back);
+    breadcrumbLayout->addWidget(Ui::label(QStringLiteral("/"), 10, QFont::Normal,
+                                           Theme::BorderStrong, breadcrumb));
     breadcrumbLayout->addWidget(Ui::label(QStringLiteral("成片结果"), 10,
                                            QFont::Normal, Theme::Text2, breadcrumb));
+    breadcrumbLayout->addSpacing(4);
     auto *saved = new QWidget(breadcrumb);
     auto *savedLayout = new QHBoxLayout(saved);
     savedLayout->setContentsMargins(0, 0, 0, 0);
@@ -4044,6 +4077,11 @@ void OralPage::rebuildResult()
     titles->addLayout(metaLine);
     titleLayout->addLayout(titles, 1);
 
+    auto *backToHub = new Button(QStringLiteral("返回"), Button::Ghost, header);
+    backToHub->setLeadingGlyph(Icons::Glyph::ChevronLeft);
+    backToHub->setToolTip(QStringLiteral("返回智能口播"));
+    connect(backToHub, &QAbstractButton::clicked, this, &OralPage::showHub);
+    titleLayout->addWidget(backToHub);
     auto *restart = new Button(QStringLiteral("重新包装"), Button::Default, header);
     restart->setLeadingGlyph(Icons::Glyph::Reset);
     connect(restart, &QAbstractButton::clicked, this, &OralPage::restartFromResult);
@@ -4083,7 +4121,7 @@ void OralPage::rebuildResult()
     previewLayout->setSpacing(0);
     previewLayout->setAlignment(Qt::AlignHCenter);
     const bool portrait = m_result.ratio == QLatin1String("9:16");
-    const int posterHeight = portrait ? 494 : 202;
+    const int posterHeight = portrait ? 494 : 242;
     const int posterWidth = portrait ? qRound(posterHeight * 9.0 / 16.0)
                                      : qRound(posterHeight * 16.0 / 9.0);
     auto *poster = new Studio::OralPosterWidget(previewPanel);
@@ -4322,19 +4360,18 @@ void OralPage::rebuildResult()
     auto *detailChipsLayout = new QHBoxLayout(detailChips);
     detailChipsLayout->setContentsMargins(0, 0, 0, 0);
     detailChipsLayout->setSpacing(6);
-    detailChipsLayout->addWidget(
-        new Chip(m_result.materials.isEmpty()
-                     ? QStringLiteral("素材 · 已理解")
-                     : QStringLiteral("素材 · %1 个已理解")
-                           .arg(m_result.materials.size()),
-                 Chip::Neutral, detailChips));
+    detailChipsLayout->addWidget(new Chip(
+        QStringLiteral("模板 · %1").arg(tmpl.name), Chip::Neutral, detailChips));
     detailChipsLayout->addWidget(new Chip(
         QStringLiteral("字幕 · %1 条").arg(m_result.subtitleCount), Chip::Neutral,
         detailChips));
+    detailChipsLayout->addWidget(new Chip(
+        QStringLiteral("B-Roll · %1 处").arg(m_result.brollCount), Chip::Neutral,
+        detailChips));
     detailChipsLayout->addStretch(1);
     detailChipsLayout->addWidget(
-        Ui::label(QStringLiteral("字幕、画面与音频已自动对齐"), 8, QFont::Normal,
-                  Theme::Text3, detailChips));
+        Ui::label(QStringLiteral("人声、画面、字幕与音效已自动对齐"), 8,
+                  QFont::Normal, Theme::Text3, detailChips));
     details->bodyLayout()->addWidget(detailChips);
     rightLayout->addWidget(details);
 
@@ -4344,7 +4381,13 @@ void OralPage::rebuildResult()
     output->setBodyMargins(QMargins(12, 12, 12, 12));
     auto *outputBody = output->bodyLayout();
     outputBody->setSpacing(8);
-    auto *videoRight = new Chip(QStringLiteral("已自动下载"), Chip::Ok, output);
+    auto *videoRight = new Button(QStringLiteral("打开成片目录"), Button::Ghost,
+                                  output);
+    videoRight->setCompact(true);
+    videoRight->setLeadingGlyph(Icons::Glyph::Folder);
+    videoRight->setTextColor(Theme::Success);
+    connect(videoRight, &QAbstractButton::clicked, this,
+            &OralPage::openExportFolder);
     outputBody->addWidget(makeFileRow(
         Icons::Glyph::Film, videoFileName, QStringLiteral("MP4"),
         QStringLiteral("%1 · %2 · %3 · 30fps")
@@ -4380,7 +4423,7 @@ void OralPage::rebuildResult()
             : QFileInfo(m_resultDraftPath).fileName(),
         QStringLiteral("草稿"),
         m_draftState == 2
-            ? QStringLiteral("已写入剪映草稿目录，可继续修改字幕、素材与音乐")
+            ? QStringLiteral("已写入剪映草稿目录，可继续修改文案、配音与镜头")
             : QStringLiteral("生成可二次编辑的剪映草稿"),
         draftRight, output);
     m_resultDraftHint = nullptr;
@@ -4695,6 +4738,23 @@ void OralPage::openDraftFolder()
     }
     if (!QDesktopServices::openUrl(QUrl::fromLocalFile(m_resultDraftPath))) {
         emit toastRequested(QStringLiteral("无法打开草稿文件夹"));
+    }
+}
+
+void OralPage::openExportFolder()
+{
+    if (m_resultFilePath.isEmpty() || !QFileInfo::exists(m_resultFilePath)) {
+        emit toastRequested(QStringLiteral("成片文件不存在，请重新生成"));
+        return;
+    }
+    const QString folder = QFileInfo(m_resultFilePath).absolutePath();
+    if (QDesktopServices::openUrl(QUrl::fromLocalFile(folder))) {
+        emit toastRequested(
+            Theme::isWindowsWindowStyle()
+                ? QStringLiteral("已在资源管理器中打开成片目录")
+                : QStringLiteral("已在访达中打开成片目录"));
+    } else {
+        emit toastRequested(QStringLiteral("无法打开成片目录"));
     }
 }
 

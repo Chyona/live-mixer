@@ -4,5 +4,45 @@
         <file>brand/logo.png</file>
         <file>app/logo.png</file>
         <file>app/logo-windows.png</file>
+        <file>audio/doubao/ar_female_fatma_uranus_bigtts.mp3</file>
+        <file>audio/doubao/de_male_sven_uranus_bigtts.mp3</file>
+        <file>audio/doubao/en_female_allison_uranus_bigtts.mp3</file>
+        <file>audio/doubao/en_male_ryan_uranus_bigtts.mp3</file>
+        <file>audio/doubao/es_female_romina_uranus_bigtts.mp3</file>
+        <file>audio/doubao/fr_female_fr_f47_uranus_bigtts.mp3</file>
+        <file>audio/doubao/id_female_cesna_uranus_bigtts.mp3</file>
+        <file>audio/doubao/it_male_luca_uranus_bigtts.mp3</file>
+        <file>audio/doubao/ja_male_yusuke_uranus_bigtts.mp3</file>
+        <file>audio/doubao/ko_male_m03_uranus_bigtts.mp3</file>
+        <file>audio/doubao/pt_female_mari_uranus_bigtts.mp3</file>
+        <file>audio/doubao/ru_male_pavel_uranus_bigtts.mp3</file>
+        <file>audio/doubao/th_female_elle_uranus_bigtts.mp3</file>
+        <file>audio/doubao/vi_female_f01507b_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_gaolengyujie_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_gufengshaoyu_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_kefunvsheng_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_peiqi_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_shuangkuaisisi_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_sophie_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_tvbnv_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_vv_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_wenroumama_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_wuzetian_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_xiaohe_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_xiaoxue_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_female_yingyujiaoxue_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_aojiaobazong_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_cixingjieshuonan_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_dayi_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_guanggaojieshuo_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_jieshuoxiaoming_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_liufei_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_m191_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_shenyeboke_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_sunwukong_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_tangseng_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_taocheng_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_xuanyijieshuo_uranus_bigtts.mp3</file>
+        <file>audio/doubao/zh_male_zhubajie_uranus_bigtts.mp3</file>
     </qresource>
 </RCC>

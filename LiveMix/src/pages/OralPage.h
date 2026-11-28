@@ -87,6 +87,9 @@ private:
     QWidget *createRecentCard(const StudioData::OralResult &result, QWidget *parent);
 
     void startProject();
+    // 用示例口播与示例素材直接体验完整包装流程。
+    void startSampleProject();
+    void openNewProject(bool sample);
     void openVideoFile();
     void openMaterialFiles();
     void clearSource();
@@ -115,6 +118,7 @@ private:
     void onDraftFinished(bool success, const QString &localPath,
                          const QString &error);
     void openDraftFolder();
+    void openExportFolder();
     void openResultVideoPreview();
     void resetResultPlayer();
     void openRecent(const StudioData::OralResult &result);
@@ -134,8 +138,6 @@ private:
     Screen m_screen = Screen::Hub;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_hubScreen = nullptr;
-    QWidget *m_hubHeader = nullptr;
-    QVBoxLayout *m_hubHeaderLayout = nullptr;
     QScrollArea *m_hubScroll = nullptr;
     QWidget *m_hubContent = nullptr;
     QVBoxLayout *m_hubLayout = nullptr;

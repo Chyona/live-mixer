@@ -21,6 +21,7 @@ public:
 
     QVBoxLayout *contentLayout() const { return m_contentLayout; }
     QHBoxLayout *footerLayout() const { return m_footerLayout; }
+    QHBoxLayout *titleLayout() const { return m_titleLayout; }
     void setContentSpacing(int spacing);
     void addFooterButton(QWidget *button);
     // 视频等原生渲染内容不需要父级阴影特效。
@@ -36,6 +37,7 @@ protected:
 private:
     QVBoxLayout *m_contentLayout = nullptr;
     QHBoxLayout *m_footerLayout = nullptr;
+    QHBoxLayout *m_titleLayout = nullptr;
     bool m_shadowEnabled = true;
 };
 
