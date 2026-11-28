@@ -157,6 +157,18 @@ struct SpeechAnalysis
     static SpeechAnalysis fromJson(const QJsonObject &object);
 };
 
+// 按 utterances 顺序展开的全局词级时间线；没有逐词结果的句子不贡献词。
+// 剪口气的提示词与本地时间定位共用这一份顺序，保证词序号一致。
+QVector<Word> flattenSpeechWords(const SpeechAnalysis &speech);
+
+// 剪口气：大模型判定的可删除语气词/口头禅，按全局词序号闭区间表示。
+struct FillerCut
+{
+    int startWord = 0;
+    int endWord = 0;
+    QString reason;
+};
+
 // 语义段落（内容分段）。
 struct SemanticSegment
 {
@@ -322,7 +334,11 @@ struct EditPlan
     QString createdAt;
     Canvas canvas;
     qint64 durationMs = 0;
+    // 实际进入成片的口播视频：开启剪口气后指向剪好的连续视频，
+    // 未剪除或旧版本计划时与 sourcePath 相同。
     QString sourcePath;
+    // 用户最初上传的口播原片。重新包装必须回到原片，而不是缓存里的剪口视频。
+    QString originalSourcePath;
     QString sourceName;
     int sourceWidth = 0;
     int sourceHeight = 0;

@@ -176,6 +176,8 @@ qt_add_executable(LiveMixStudio
     src/oral/OralCapCutClient.cpp
     src/oral/OralEditPlanBuilder.h
     src/oral/OralEditPlanBuilder.cpp
+    src/oral/OralTrimPlan.h
+    src/oral/OralTrimPlan.cpp
     src/oral/OralPipelineService.h
     src/oral/OralPipelineService.cpp
     src/oral/OralDraftDownloadTask.h

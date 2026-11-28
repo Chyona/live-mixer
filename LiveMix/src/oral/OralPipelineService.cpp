@@ -1,6 +1,8 @@
 // 文件作用：智能口播流水线实现。
-// 本文件按「理解 → 生成 → 合成」串起 ASR、DeepSeek 语义/素材/镜头分析、
-// 字幕与音频系统、capcut-mate 落轨与云渲染。与直播切片服务没有任何调用关系。
+// 先执行剪口气（删除语气词与超过 0.5 秒的静音，参考直播切片的区间裁剪
+// 方式），再按「理解 → 生成 → 合成」串起 ASR、DeepSeek 语义/素材/镜头
+// 分析、字幕与音频系统、capcut-mate 落轨与云渲染。
+// 与直播切片服务没有任何调用关系。
 
 #include "OralPipelineService.h"
 
@@ -65,6 +67,36 @@ QString fileFingerprint(const QString &path)
         .arg(info.lastModified().toMSecsSinceEpoch());
 }
 
+// 以视频时长为准裁剪 ASR 时间线，避免尾部静音/容器差异导致字幕越过片尾。
+// 返回 false 表示裁剪后没有可用语句。
+bool clampSpeechToDuration(Oral::SpeechAnalysis *speech, qint64 durationMs)
+{
+    if (!speech || durationMs <= 0) {
+        return false;
+    }
+    speech->durationMs = durationMs;
+    QVector<Oral::Utterance> clamped;
+    for (Oral::Utterance utterance : speech->utterances) {
+        if (utterance.startMs >= durationMs) {
+            continue;
+        }
+        utterance.endMs = qMin(utterance.endMs, durationMs);
+        if (utterance.endMs <= utterance.startMs) {
+            continue;
+        }
+        for (Oral::Word &word : utterance.words) {
+            word.startMs = qMin(word.startMs, utterance.endMs);
+            word.endMs = qMin(word.endMs, utterance.endMs);
+        }
+        clamped.append(utterance);
+    }
+    if (clamped.isEmpty()) {
+        return false;
+    }
+    speech->utterances = clamped;
+    return true;
+}
+
 Oral::SubtitlePreset presetFromStudio(StudioData::OralSubtitleStyle style)
 {
     switch (style) {
@@ -95,8 +127,14 @@ QString subtitlePresetName(Oral::SubtitlePreset preset)
 QString projectNameFor(const Oral::EditPlan &plan)
 {
     QString title = plan.semantics.title.trimmed();
+    if (title.isEmpty() && !plan.sourceName.trimmed().isEmpty()) {
+        title = QFileInfo(plan.sourceName).completeBaseName();
+    }
     if (title.isEmpty()) {
-        title = QFileInfo(plan.sourcePath).completeBaseName();
+        const QString fallbackPath = plan.originalSourcePath.isEmpty()
+            ? plan.sourcePath
+            : plan.originalSourcePath;
+        title = QFileInfo(fallbackPath).completeBaseName();
     }
     title = title.left(12);
     if (title.isEmpty()) {
@@ -158,8 +196,14 @@ QString fallbackCoverPromptFor(const Oral::EditPlan &plan)
     if (title.isEmpty()) {
         title = plan.subtitles.titleText.trimmed();
     }
+    if (title.isEmpty() && !plan.sourceName.trimmed().isEmpty()) {
+        title = QFileInfo(plan.sourceName).completeBaseName();
+    }
     if (title.isEmpty()) {
-        title = QFileInfo(plan.sourcePath).completeBaseName();
+        const QString fallbackPath = plan.originalSourcePath.isEmpty()
+            ? plan.sourcePath
+            : plan.originalSourcePath;
+        title = QFileInfo(fallbackPath).completeBaseName();
     }
     title = title.simplified();
     if (title.size() > 14) {
@@ -266,7 +310,7 @@ QString materialPreparedName(const QString &id, const QString &suffix)
     return MediaUtils::sanitizeFileComponent(id, 40) + suffix;
 }
 
-// 口播原片上传缓存：同一源文件在 6 天内重新包装时复用对象存储地址，
+// 口播视频上传缓存：同一源文件在 6 天内重新包装时复用对象存储地址，
 // 避免重复上传。URL 失效时 add_videos 会失败，调用方会重新上传并覆盖缓存。
 constexpr qint64 kUploadCacheTtlMs = 6LL * 24 * 60 * 60 * 1000;
 
@@ -450,9 +494,51 @@ void PipelineService::run()
         return;
     }
 
+    // 一键包装：先剪口气（删除语气词 + 超过 0.5 秒的静音），再把剪好的
+    // 连续视频交给原有的成片流程。
+    const QString originalSourcePath = m_request.project.source.filePath;
     setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 1,
-             QStringLiteral("读取口播原片"));
-    if (!ensureAnalysis(&plan, &fromCache, &asr, &llm, &capcut, &error)) {
+             QStringLiteral("剪口气：删除语气词与静音"));
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("一键包装：先剪口气，再进入现有成片流程"),
+           StudioData::Tone::Info);
+
+    QString mediaSourcePath;
+    TrimStats trimStats;
+    SpeechAnalysis sourceSpeech;
+    if (!trimFillerWords(originalSourcePath, &asr, &llm, &capcut,
+                         &mediaSourcePath, &trimStats, &sourceSpeech,
+                         &error)) {
+        addLog(StudioData::OralStage::Analyze, error, StudioData::Tone::Muted);
+        emit finished(false, error, StudioData::OralResult());
+        return;
+    }
+    if (isCancelled()) {
+        emit finished(false, QStringLiteral("已取消生成"), StudioData::OralResult());
+        return;
+    }
+    if (mediaSourcePath != originalSourcePath) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("剪口气完成：删除 %1 处语气词、%2 段静音，"
+                              "时长 %3 → %4（节省 %5）")
+                   .arg(trimStats.fillerCount)
+                   .arg(trimStats.silenceCount)
+                   .arg(StudioData::formatElapsed(trimStats.sourceDurationMs),
+                        StudioData::formatElapsed(trimStats.outputDurationMs),
+                        StudioData::formatElapsed(trimStats.removedMs)),
+               StudioData::Tone::Ok);
+    } else {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("剪口气未产生裁剪，继续使用原片"),
+               StudioData::Tone::Info);
+    }
+
+    setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 16,
+             mediaSourcePath == originalSourcePath
+                 ? QStringLiteral("读取口播原片")
+                 : QStringLiteral("读取剪口气后的口播"));
+    if (!ensureAnalysis(&plan, &fromCache, &asr, &llm, &capcut,
+                        mediaSourcePath, sourceSpeech, &error)) {
         addLog(StudioData::OralStage::Analyze, error, StudioData::Tone::Muted);
         emit finished(false, error, StudioData::OralResult());
         return;
@@ -589,10 +675,11 @@ void PipelineService::run()
 /* 1. 理解阶段                                                          */
 /* ------------------------------------------------------------------ */
 
-QString PipelineService::analysisCacheKey() const
+QString PipelineService::analysisCacheKey(const QString &sourcePath) const
 {
     QStringList parts;
-    parts.append(fileFingerprint(m_request.project.source.filePath));
+    // 以实际进入成片的视频为准：剪口气结果变化时必须重新识别。
+    parts.append(fileFingerprint(sourcePath));
     for (const StudioData::OralMaterial &material : m_request.project.materials) {
         // 带上素材 ID：同一文件被重新导入时 ID 会变化，避免复用旧 ID 的分镜。
         parts.append(material.id + QLatin1Char('|')
@@ -798,11 +885,380 @@ void PipelineService::normalizeSemanticTimes(SemanticAnalysis *analysis,
     }
 }
 
+bool PipelineService::transcribeSpeech(const QString &audioPath, AsrClient *asr,
+                                       CapCutClient *capcut,
+                                       SpeechAnalysis *speech, QString *error)
+{
+    if (!asr || !capcut || !speech) {
+        return false;
+    }
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("正在调用 ASR（%1）…").arg(AsrClient::modelName()),
+           StudioData::Tone::Info);
+    QString primaryError;
+    if (asr->transcribe(audioPath, m_request.gatewayBaseUrl, m_request.apiKey,
+                        speech, &primaryError)) {
+        return true;
+    }
+    // 首选模型是产品指定的豆包极速版；如果当前 API Key 未开通该资源，
+    // 自动回退到标准版（公网 URL）或 qwen3-asr-flash（本地文件）。
+    if (!asrErrorNeedsFallback(primaryError)) {
+        if (error) {
+            *error = primaryError;
+        }
+        return false;
+    }
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("豆包极速版未开通，正在回退标准版 ASR…"),
+           StudioData::Tone::Muted);
+    QString audioUrl;
+    QString fallbackError;
+    if (capcut->uploadFile(audioPath, m_request.apiKey, &audioUrl,
+                           &fallbackError)
+        && asr->transcribeUrl(audioUrl, AsrClient::fallbackUrlModelName(),
+                              m_request.gatewayBaseUrl, m_request.apiKey,
+                              speech, &fallbackError)) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("已回退到 %1 完成识别")
+                   .arg(AsrClient::fallbackUrlModelName()),
+               StudioData::Tone::Info);
+        return true;
+    }
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("标准版识别失败，继续回退本地文件模型：%1")
+               .arg(fallbackError),
+           StudioData::Tone::Muted);
+    if (asr->transcribeWithModel(
+            audioPath, AsrClient::fallbackFileModelName(),
+            m_request.gatewayBaseUrl, m_request.apiKey, speech,
+            &fallbackError)) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("已回退到 %1 完成识别")
+                   .arg(AsrClient::fallbackFileModelName()),
+               StudioData::Tone::Info);
+        return true;
+    }
+    if (error) {
+        *error = primaryError
+            + QStringLiteral("；回退也失败：%1").arg(fallbackError);
+    }
+    return false;
+}
+
+namespace {
+
+// 剪口气缓存旁的统计文件：缓存命中时过程日志也能显示真实删除量。
+QString trimStatsPathFor(const QString &trimmedPath)
+{
+    return trimmedPath + QStringLiteral(".trim.json");
+}
+
+bool loadTrimStats(const QString &path, Oral::TrimStats *stats)
+{
+    if (!stats) {
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    const QJsonObject object =
+        HttpClient::parseJsonObject(file.readAll());
+    if (object.isEmpty()) {
+        return false;
+    }
+    stats->fillerCount = object.value(QStringLiteral("fillerCount")).toInt();
+    stats->silenceCount = object.value(QStringLiteral("silenceCount")).toInt();
+    stats->removedMs = qint64(object.value(QStringLiteral("removedMs")).toDouble());
+    const qint64 sourceDurationMs =
+        qint64(object.value(QStringLiteral("sourceDurationMs")).toDouble());
+    if (sourceDurationMs > 0) {
+        stats->sourceDurationMs = sourceDurationMs;
+    }
+    const qint64 outputDurationMs =
+        qint64(object.value(QStringLiteral("outputDurationMs")).toDouble());
+    if (outputDurationMs > 0) {
+        stats->outputDurationMs = outputDurationMs;
+    }
+    stats->keepRangeCount =
+        object.value(QStringLiteral("keepRangeCount")).toInt();
+    stats->fillerCutsRejected =
+        object.value(QStringLiteral("fillerCutsRejected")).toBool();
+    return true;
+}
+
+void saveTrimStats(const QString &path, const Oral::TrimStats &stats)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("fillerCount"), stats.fillerCount);
+    object.insert(QStringLiteral("silenceCount"), stats.silenceCount);
+    object.insert(QStringLiteral("removedMs"), double(stats.removedMs));
+    object.insert(QStringLiteral("sourceDurationMs"), double(stats.sourceDurationMs));
+    object.insert(QStringLiteral("outputDurationMs"), double(stats.outputDurationMs));
+    object.insert(QStringLiteral("keepRangeCount"), stats.keepRangeCount);
+    object.insert(QStringLiteral("fillerCutsRejected"), stats.fillerCutsRejected);
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return;
+    }
+    file.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
+    file.commit();
+}
+
+} // namespace
+
+bool PipelineService::trimFillerWords(const QString &sourcePath, AsrClient *asr,
+                                      LlmClient *llm, CapCutClient *capcut,
+                                      QString *outputPath, TrimStats *stats,
+                                      SpeechAnalysis *sourceSpeech,
+                                      QString *error)
+{
+    if (!outputPath || !stats || !asr || !llm || !capcut) {
+        return false;
+    }
+    *outputPath = sourcePath;
+    *stats = TrimStats();
+    if (sourceSpeech) {
+        *sourceSpeech = SpeechAnalysis();
+    }
+
+    qint64 sourceDurationMs = 0;
+    QString probeError;
+    if (!probeVideo(sourcePath, nullptr, nullptr, &sourceDurationMs,
+                    &probeError)) {
+        if (error) {
+            *error = QStringLiteral("无法读取口播视频：%1").arg(probeError);
+        }
+        return false;
+    }
+    stats->sourceDurationMs = sourceDurationMs;
+
+    // 剪口气结果按「源文件指纹 + 算法版本」缓存：重新包装直接复用，
+    // 不再重复 ASR / 大模型 / 裁剪；分析缓存也绑定这条剪好的视频。
+    const QString trimDir =
+        QDir(m_request.cacheDir).filePath(QStringLiteral("trim"));
+    if (!QDir().mkpath(trimDir)) {
+        if (error) {
+            *error = QStringLiteral("无法创建剪口气缓存目录。");
+        }
+        return false;
+    }
+    // 修改剪口气提示词或区间算法时，同步递增版本号让旧缓存失效。
+    const QString trimKey = sha1Hex(
+        fileFingerprint(sourcePath) + QStringLiteral("|oral-trim-v1"));
+    const QString cachedPath =
+        QDir(trimDir).filePath(QStringLiteral("trim_%1.mp4").arg(trimKey));
+    const QString cachedStatsPath = trimStatsPathFor(cachedPath);
+    if (QFileInfo(cachedPath).isFile() && QFileInfo(cachedPath).size() > 0) {
+        qint64 cachedDurationMs = 0;
+        if (FfmpegUtils::mediaDurationMs(cachedPath, &cachedDurationMs)
+            && cachedDurationMs > 0) {
+            *outputPath = cachedPath;
+            stats->outputDurationMs = cachedDurationMs;
+            stats->removedMs =
+                qMax<qint64>(0, sourceDurationMs - cachedDurationMs);
+            loadTrimStats(cachedStatsPath, stats);
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("复用已剪好的口气视频，跳过重复识别与裁剪"),
+                   StudioData::Tone::Ok);
+            return true;
+        }
+        // 缓存损坏：删除后重新生成。
+        QFile::remove(cachedPath);
+        QFile::remove(cachedStatsPath);
+    }
+
+    const QString workDir =
+        QDir(m_request.cacheDir)
+            .filePath(QStringLiteral("trimwork_%1_%2")
+                          .arg(m_request.runId)
+                          .arg(QDateTime::currentMSecsSinceEpoch()));
+    if (!QDir().mkpath(workDir)) {
+        if (error) {
+            *error = QStringLiteral("无法创建剪口气临时目录。");
+        }
+        return false;
+    }
+    const auto cleanup = [&workDir] { QDir(workDir).removeRecursively(); };
+
+    setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 2,
+             QStringLiteral("剪口气：提取口播音轨"));
+    const QString audioPath =
+        QDir(workDir).filePath(QStringLiteral("speech.mp3"));
+    if (!FfmpegUtils::extractMp3(sourcePath, audioPath, error)) {
+        cleanup();
+        return false;
+    }
+    setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 5,
+             QStringLiteral("剪口气：识别口播"));
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("剪口气：正在识别口播，用于定位语气词与静音…"),
+           StudioData::Tone::Info);
+    SpeechAnalysis speech;
+    if (!transcribeSpeech(audioPath, asr, capcut, &speech, error)) {
+        cleanup();
+        return false;
+    }
+    if (!clampSpeechToDuration(&speech, sourceDurationMs)) {
+        if (error) {
+            *error = QStringLiteral("语音识别结果与视频时长不匹配。");
+        }
+        cleanup();
+        return false;
+    }
+    if (isCancelled()) {
+        cleanup();
+        if (error) {
+            *error = QStringLiteral("已取消生成");
+        }
+        return false;
+    }
+
+    setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 9,
+             QStringLiteral("剪口气：识别语气词"));
+    QVector<FillerCut> fillerCuts;
+    if (!flattenSpeechWords(speech).isEmpty()) {
+        QString fillerError;
+        if (!llm->analyzeFillers(
+                m_request.gatewayBaseUrl, m_request.apiKey, speech,
+                &fillerCuts, &fillerError,
+                [this](const QString &status) {
+                    addLog(StudioData::OralStage::Analyze, status,
+                           StudioData::Tone::Info);
+                })) {
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("语气词识别失败，仅删除长静音：%1")
+                       .arg(fillerError),
+                   StudioData::Tone::Muted);
+        }
+    } else {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("ASR 未返回逐词时间线，仅删除超过 0.5 秒的静音"),
+               StudioData::Tone::Info);
+    }
+    if (isCancelled()) {
+        cleanup();
+        if (error) {
+            *error = QStringLiteral("已取消生成");
+        }
+        return false;
+    }
+
+    TrimStats localStats;
+    const QVector<TrimRange> keepRanges =
+        buildTrimKeepRanges(speech, fillerCuts, sourceDurationMs, &localStats);
+    *stats = localStats;
+    if (localStats.fillerCutsRejected) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("语气词删除量异常，已放弃语气词删除，仅保留静音裁剪"),
+               StudioData::Tone::Muted);
+    }
+    const bool noChange = keepRanges.isEmpty()
+        || (keepRanges.size() == 1 && keepRanges.first().startMs <= 0
+            && keepRanges.first().endMs >= sourceDurationMs);
+    if (noChange) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("剪口气：未发现需要删除的语气词或静音"),
+               StudioData::Tone::Info);
+        cleanup();
+        *outputPath = sourcePath;
+        if (sourceSpeech) {
+            *sourceSpeech = speech;
+        }
+        stats->outputDurationMs = sourceDurationMs;
+        stats->removedMs = 0;
+        return true;
+    }
+
+    addLog(StudioData::OralStage::Analyze,
+           QStringLiteral("剪口气：计划删除 %1 处语气词、%2 段静音，"
+                          "保留 %3 段连续语音")
+               .arg(localStats.fillerCount)
+               .arg(localStats.silenceCount)
+               .arg(keepRanges.size()),
+           StudioData::Tone::Ai);
+    setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running, 13,
+             QStringLiteral("剪口气：裁剪并拼接"));
+
+    // 与直播切片相同：保留区间确定后交给 ffmpeg 裁剪；这里一次拼接成
+    // 连续视频，后续成片流程完全按这条新视频的时间轴工作。
+    QVector<QPair<qint64, qint64>> mediaRanges;
+    mediaRanges.reserve(keepRanges.size());
+    for (const TrimRange &range : keepRanges) {
+        mediaRanges.append({range.startMs, range.endMs});
+    }
+    const QString tempOutput =
+        QDir(workDir).filePath(QStringLiteral("trimmed.mp4"));
+    QString cutError;
+    if (!FfmpegUtils::cutKeepRanges(sourcePath, mediaRanges, tempOutput,
+                                    &cutError)) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("剪口气裁剪失败，改用原片继续成片：%1")
+                   .arg(cutError),
+               StudioData::Tone::Muted);
+        cleanup();
+        *outputPath = sourcePath;
+        if (sourceSpeech) {
+            *sourceSpeech = speech;
+        }
+        *stats = TrimStats();
+        stats->sourceDurationMs = sourceDurationMs;
+        stats->outputDurationMs = sourceDurationMs;
+        return true;
+    }
+    qint64 trimmedDurationMs = 0;
+    if (!FfmpegUtils::mediaDurationMs(tempOutput, &trimmedDurationMs)
+        || trimmedDurationMs <= 0) {
+        addLog(StudioData::OralStage::Analyze,
+               QStringLiteral("剪口气结果无法读取，改用原片继续成片"),
+               StudioData::Tone::Muted);
+        cleanup();
+        *outputPath = sourcePath;
+        if (sourceSpeech) {
+            *sourceSpeech = speech;
+        }
+        *stats = TrimStats();
+        stats->sourceDurationMs = sourceDurationMs;
+        stats->outputDurationMs = sourceDurationMs;
+        return true;
+    }
+
+    // 原子落到缓存目录；跨目录 rename 失败时退回复制。
+    QFile::remove(cachedPath);
+    if (!QFile::rename(tempOutput, cachedPath)) {
+        if (!QFile::copy(tempOutput, cachedPath)) {
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("剪口气结果写入缓存失败，改用原片继续成片"),
+                   StudioData::Tone::Muted);
+            cleanup();
+            *outputPath = sourcePath;
+            if (sourceSpeech) {
+                *sourceSpeech = speech;
+            }
+            *stats = TrimStats();
+            stats->sourceDurationMs = sourceDurationMs;
+            stats->outputDurationMs = sourceDurationMs;
+            return true;
+        }
+        QFile::remove(tempOutput);
+    }
+    stats->outputDurationMs = trimmedDurationMs;
+    stats->removedMs = qMax<qint64>(0, sourceDurationMs - trimmedDurationMs);
+    saveTrimStats(cachedStatsPath, *stats);
+    cleanup();
+    *outputPath = cachedPath;
+    return true;
+}
+
 bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
                                      AsrClient *asr, LlmClient *llm,
-                                     CapCutClient *capcut, QString *error)
+                                     CapCutClient *capcut,
+                                     const QString &mediaSourcePath,
+                                     const SpeechAnalysis &precomputedSpeech,
+                                     QString *error)
 {
-    if (!plan || !fromCache || !asr || !llm || !capcut) {
+    if (!plan || !fromCache || !asr || !llm || !capcut
+        || mediaSourcePath.trimmed().isEmpty()) {
         return false;
     }
     *fromCache = false;
@@ -818,8 +1274,14 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
     plan->templateId = QStringLiteral("clean");
     plan->outputBoth = project.outputBoth;
     plan->createdAt = QDateTime::currentDateTime().toString(Qt::ISODate);
-    plan->sourcePath = project.source.filePath;
+    // sourcePath 是实际进入成片的视频（可能已剪口气）；原片单独保存，
+    // 结果页重新包装时回到原片重新执行「先剪口气，再成片」。
+    plan->sourcePath = mediaSourcePath;
+    plan->originalSourcePath = mediaSourcePath == project.source.filePath
+        ? QString()
+        : project.source.filePath;
     plan->sourceName = project.source.name;
+    const bool trimmed = !plan->originalSourcePath.isEmpty();
 
     int sourceWidth = 0;
     int sourceHeight = 0;
@@ -835,12 +1297,19 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
     const QFileInfo sourceInfo(plan->sourcePath);
     plan->sourceWidth = sourceWidth;
     plan->sourceHeight = sourceHeight;
-    plan->sourceSizeBytes = sourceInfo.size();
+    // 大小保留用户上传的原片信息（结果页重新包装时展示）；实际上传体积
+    // 在合成阶段按当前视频文件重新计算。
+    const QFileInfo originalInfo(project.source.filePath);
+    plan->sourceSizeBytes = trimmed && originalInfo.isFile()
+        ? originalInfo.size()
+        : sourceInfo.size();
     plan->durationMs = sourceDurationMs;
     m_run.totalFrames = int(qMax<qint64>(
         1, sourceDurationMs * plan->canvas.fps / 1000));
     addLog(StudioData::OralStage::Analyze,
-           QStringLiteral("已读取口播原片：%1×%2 · %3 · %4")
+           QStringLiteral("已读取%1：%2×%3 · %4 · %5")
+               .arg(trimmed ? QStringLiteral("剪口气后的口播")
+                            : QStringLiteral("口播原片"))
                .arg(sourceWidth)
                .arg(sourceHeight)
                .arg(StudioData::formatElapsed(sourceDurationMs),
@@ -853,7 +1322,7 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
         }
         return false;
     }
-    const QString cacheKey = analysisCacheKey();
+    const QString cacheKey = analysisCacheKey(plan->sourcePath);
     const QString cachePath = QDir(m_request.cacheDir)
                                   .filePath(QStringLiteral("analysis_%1.json")
                                                 .arg(cacheKey));
@@ -889,97 +1358,40 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
                    .arg(plan->materials.size()),
                StudioData::Tone::Ok);
     } else {
-        // 语音分析：提取 MP3 → 豆包极速版 ASR。
-        setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running,
-                 8, QStringLiteral("提取口播音轨"));
-        const QString audioPath =
-            QDir(m_workDir).filePath(QStringLiteral("speech.mp3"));
-        if (!FfmpegUtils::extractMp3(plan->sourcePath, audioPath, error)) {
-            return false;
-        }
-        addLog(StudioData::OralStage::Analyze,
-               QStringLiteral("已提取口播音轨，准备提交语音识别"),
-               StudioData::Tone::Info);
-        setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running,
-                 20, QStringLiteral("提交语音识别"));
-        addLog(StudioData::OralStage::Analyze,
-               QStringLiteral("正在调用 ASR（%1）…").arg(AsrClient::modelName()),
-               StudioData::Tone::Info);
         SpeechAnalysis speech;
-        QString primaryError;
-        bool transcribed = asr->transcribe(
-            audioPath, m_request.gatewayBaseUrl, m_request.apiKey, &speech,
-            &primaryError);
-        // 首选模型是产品指定的豆包极速版；如果当前 API Key 未开通该资源，
-        // 自动回退到标准版（公网 URL）或 qwen3-asr-flash（本地文件），
-        // 保证功能可用并在过程日志里明确提示。
-        if (!transcribed && asrErrorNeedsFallback(primaryError)) {
+        // 只有未剪除（实际媒体仍是原片）时，剪口气阶段的 ASR 时间轴才可直接复用。
+        if (!precomputedSpeech.isEmpty() && !trimmed) {
+            // 剪口气阶段已对同一条视频做过 ASR，直接复用，避免识别两次。
+            speech = precomputedSpeech;
             addLog(StudioData::OralStage::Analyze,
-                   QStringLiteral("豆包极速版未开通，正在回退标准版 ASR…"),
-                   StudioData::Tone::Muted);
-            QString audioUrl;
-            QString fallbackError;
-            if (capcut->uploadFile(audioPath, m_request.apiKey, &audioUrl,
-                                   &fallbackError)
-                && asr->transcribeUrl(
-                    audioUrl, AsrClient::fallbackUrlModelName(),
-                    m_request.gatewayBaseUrl, m_request.apiKey, &speech,
-                    &fallbackError)) {
-                transcribed = true;
-                addLog(StudioData::OralStage::Analyze,
-                       QStringLiteral("已回退到 %1 完成识别")
-                           .arg(AsrClient::fallbackUrlModelName()),
-                       StudioData::Tone::Info);
-            } else {
-                addLog(StudioData::OralStage::Analyze,
-                       QStringLiteral("标准版识别失败，继续回退本地文件模型：%1")
-                           .arg(fallbackError),
-                       StudioData::Tone::Muted);
-                if (asr->transcribeWithModel(
-                        audioPath, AsrClient::fallbackFileModelName(),
-                        m_request.gatewayBaseUrl, m_request.apiKey, &speech,
-                        &fallbackError)) {
-                    transcribed = true;
-                    addLog(StudioData::OralStage::Analyze,
-                           QStringLiteral("已回退到 %1 完成识别")
-                               .arg(AsrClient::fallbackFileModelName()),
-                           StudioData::Tone::Info);
-                } else {
-                    primaryError += QStringLiteral("；回退也失败：%1")
-                                        .arg(fallbackError);
-                }
+                   QStringLiteral("复用剪口气阶段的语音识别结果，跳过重复 ASR"),
+                   StudioData::Tone::Ok);
+        } else {
+            // 语音分析：提取 MP3 → ASR（极速版优先，未开通时自动回退）。
+            setStage(StudioData::OralStage::Analyze,
+                     StudioData::StageStatus::Running, 18,
+                     QStringLiteral("提取口播音轨"));
+            const QString audioPath =
+                QDir(m_workDir).filePath(QStringLiteral("speech.mp3"));
+            if (!FfmpegUtils::extractMp3(plan->sourcePath, audioPath, error)) {
+                return false;
+            }
+            addLog(StudioData::OralStage::Analyze,
+                   QStringLiteral("已提取口播音轨，准备提交语音识别"),
+                   StudioData::Tone::Info);
+            setStage(StudioData::OralStage::Analyze,
+                     StudioData::StageStatus::Running, 26,
+                     QStringLiteral("提交语音识别"));
+            if (!transcribeSpeech(audioPath, asr, capcut, &speech, error)) {
+                return false;
             }
         }
-        if (!transcribed) {
-            if (error) {
-                *error = primaryError;
-            }
-            return false;
-        }
-        // 以源视频时长为准裁剪 ASR 时间线，避免尾部静音/容器差异导致字幕越过片尾。
-        speech.durationMs = plan->durationMs;
-        QVector<Utterance> clampedUtterances;
-        for (Utterance utterance : speech.utterances) {
-            if (utterance.startMs >= plan->durationMs) {
-                continue;
-            }
-            utterance.endMs = qMin(utterance.endMs, plan->durationMs);
-            if (utterance.endMs <= utterance.startMs) {
-                continue;
-            }
-            for (Word &word : utterance.words) {
-                word.startMs = qMin(word.startMs, utterance.endMs);
-                word.endMs = qMin(word.endMs, utterance.endMs);
-            }
-            clampedUtterances.append(utterance);
-        }
-        if (clampedUtterances.isEmpty()) {
+        if (!clampSpeechToDuration(&speech, plan->durationMs)) {
             if (error) {
                 *error = QStringLiteral("语音识别结果与视频时长不匹配。");
             }
             return false;
         }
-        speech.utterances = clampedUtterances;
         plan->speech = speech;
         addLog(StudioData::OralStage::Analyze,
                QStringLiteral("ASR 识别完成：%1 字 · %2 句 · %3 位说话人")
@@ -988,7 +1400,7 @@ bool PipelineService::ensureAnalysis(EditPlan *plan, bool *fromCache,
                    .arg(qMax(1, speech.speakers.size())),
                StudioData::Tone::Ok);
         setStage(StudioData::OralStage::Analyze, StudioData::StageStatus::Running,
-                 55, QStringLiteral("语义分析：内容分段与主题提取"));
+                 62, QStringLiteral("语义分析：内容分段与主题提取"));
         addLog(StudioData::OralStage::Analyze,
                QStringLiteral("正在用 %1 做语义分析…").arg(LlmClient::modelName()),
                StudioData::Tone::Info);
@@ -1317,21 +1729,22 @@ bool PipelineService::composeDraft(EditPlan *plan, CapCutClient *capcut,
                .arg(plan->canvas.height),
            StudioData::Tone::Info);
 
-    // 口播原片：整段放在 V1，保留原声；B-Roll 覆盖在其上方。
+    // 口播视频：整段放在 V1，保留原声；B-Roll 覆盖在其上方。
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
-             28, QStringLiteral("上传口播原片"));
+             28, QStringLiteral("上传口播视频"));
     const QString sourceFingerprint = fileFingerprint(plan->sourcePath);
     QString sourceUrl;
     bool sourceFromCache =
         readSourceUploadCache(m_request.cacheDir, sourceFingerprint, &sourceUrl);
     if (sourceFromCache) {
         addLog(StudioData::OralStage::Compose,
-               QStringLiteral("复用 6 天内已上传的口播原片，跳过重复上传"),
+               QStringLiteral("复用 6 天内已上传的口播视频，跳过重复上传"),
                StudioData::Tone::Ok);
     } else {
         addLog(StudioData::OralStage::Compose,
-               QStringLiteral("正在上传口播原片（%1）…")
-                   .arg(formatFileSize(plan->sourceSizeBytes)),
+               QStringLiteral("正在上传口播视频（%1）…")
+                   .arg(formatFileSize(
+                       QFileInfo(plan->sourcePath).size())),
                StudioData::Tone::Info);
         if (!capcut->uploadFile(plan->sourcePath, m_request.apiKey, &sourceUrl,
                                 error)) {
@@ -1355,7 +1768,7 @@ bool PipelineService::composeDraft(EditPlan *plan, CapCutClient *capcut,
     if (!sourceAdded && sourceFromCache) {
         // 缓存 URL 可能已过期：重新上传一次再落轨。
         addLog(StudioData::OralStage::Compose,
-               QStringLiteral("缓存的原片地址已失效，正在重新上传…"),
+               QStringLiteral("缓存的口播视频地址已失效，正在重新上传…"),
                StudioData::Tone::Muted);
         sourceFromCache = false;
         if (!capcut->uploadFile(plan->sourcePath, m_request.apiKey, &sourceUrl,
@@ -1373,7 +1786,7 @@ bool PipelineService::composeDraft(EditPlan *plan, CapCutClient *capcut,
         writeSourceUploadCache(m_request.cacheDir, sourceFingerprint, sourceUrl);
     }
     addLog(StudioData::OralStage::Compose,
-           QStringLiteral("口播原片已写入 V1 轨"), StudioData::Tone::Ok);
+           QStringLiteral("口播视频已写入 V1 轨"), StudioData::Tone::Ok);
 
     // B-Roll：视频与图片各自一条轨，覆盖在口播上方。
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
@@ -1405,7 +1818,7 @@ bool PipelineService::addBrollTracks(EditPlan *plan, CapCutClient *capcut,
 {
     if (!plan || plan->shots.shots.isEmpty()) {
         addLog(StudioData::OralStage::Compose,
-               QStringLiteral("本次没有规划 B-Roll，成片以口播原片为主"),
+               QStringLiteral("本次没有规划 B-Roll，成片以口播视频为主"),
                StudioData::Tone::Info);
         return true;
     }
@@ -1500,7 +1913,7 @@ bool PipelineService::addBrollTracks(EditPlan *plan, CapCutClient *capcut,
             video.height = plan->canvas.height;
             video.startUs = shot.startMs * 1000;
             video.endUs = shot.endMs * 1000;
-            // B-Roll 只提供画面，声音仍来自 V1 的口播原片。
+            // B-Roll 只提供画面，声音仍来自 V1 的口播视频。
             video.volume = 0.0;
             videos.append(video);
             videoShotIndexes.append(index);
@@ -2114,7 +2527,10 @@ StudioData::OralResult PipelineService::makeResult(const EditPlan &plan,
     result.draftId = m_draftId;
     result.editPlanPath = m_editPlanPath;
     result.videoCodec = videoCodecName(videoPath);
-    result.sourcePath = plan.sourcePath;
+    // 历史记录保存用户最初上传的原片：重新包装时重新执行「先剪口气，再成片」。
+    result.sourcePath = plan.originalSourcePath.isEmpty()
+        ? plan.sourcePath
+        : plan.originalSourcePath;
     result.materials = m_request.project.materials;
 
     int transitionCount = 0;

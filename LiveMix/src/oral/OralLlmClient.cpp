@@ -18,6 +18,8 @@
 #include <QUrl>
 #include <QtMath>
 
+#include <algorithm>
+
 namespace {
 
 constexpr char kModel[] = "deepseek-flash";
@@ -317,6 +319,20 @@ QString formatClock(qint64 ms)
         .arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
+// 兼容模型把序号输出成数字或字符串。
+int jsonInt(const QJsonValue &value, int fallback)
+{
+    if (value.isDouble()) {
+        return value.toInt(fallback);
+    }
+    if (value.isString()) {
+        bool ok = false;
+        const int parsed = value.toString().trimmed().toInt(&ok);
+        return ok ? parsed : fallback;
+    }
+    return fallback;
+}
+
 QString buildTranscriptText(const Oral::SpeechAnalysis &speech)
 {
     QString text;
@@ -510,6 +526,115 @@ bool LlmClient::analyzeSemantics(const QString &baseUrl, const QString &apiKey,
     }
 
     *analysis = result;
+    return true;
+}
+
+bool LlmClient::analyzeFillers(const QString &baseUrl, const QString &apiKey,
+                               const SpeechAnalysis &speech,
+                               QVector<FillerCut> *cuts, QString *error,
+                               const StatusCallback &onStatus)
+{
+    if (!cuts) {
+        if (error) {
+            *error = QStringLiteral("剪口气结果无效。");
+        }
+        return false;
+    }
+    cuts->clear();
+
+    const QVector<Word> words = flattenSpeechWords(speech);
+    if (words.isEmpty()) {
+        // 没有逐词时间线时无法精确定位语气词；静音裁剪仍会继续。
+        if (onStatus) {
+            onStatus(QStringLiteral("ASR 未返回逐词时间线，跳过语气词识别"));
+        }
+        return true;
+    }
+    if (onStatus) {
+        onStatus(QStringLiteral("正在识别语气词与口头禅…"));
+    }
+
+    // 内置提示词：只删除无信息量的填充词和结巴重复，拿不准就不删。
+    const QString systemPrompt = QString::fromUtf8(R"PROMPT(你是短视频口播的精剪师。下面给你一份带全局词序号的逐词转写，请找出可以整词删除、删除后不影响语义的语气词和口头禅。
+
+可以删除：
+- 无意义的语气词/感叹词：嗯、啊、呃、额、哦、唔、唉、诶、呀、哎呀、哎、哈、咦等；
+- 纯填充的口头禅：这个、那个、就是、然后、其实、怎么说、怎么说呢、你知道吗、对吧、对不对、是吧等（仅限删除后句子仍然通顺、语义不变的情况）；
+- 结巴、重复起音或重复词：如「我我」「这个这个」「就是就是」，只保留最后一个完整词。
+
+不能删除：
+- 承载实际信息的词：名词、动词、形容词、数字、产品名、品牌名、价格、卖点、行动号召；
+- 承担转折、因果、顺序等实际连接作用的词（如「但是」「所以」「然后接下来」）；
+- 表示肯定、否定或回应的语气词（如回答「嗯」表示同意）。
+
+要求：
+- 只依据给定的词序号，不要编造；
+- start/end 为闭区间，必须满足 0 ≤ start ≤ end < 总词数；
+- 同一处连续多个词用一个区间表示；
+- 删得越少越好，拿不准就不删；
+- 只输出一个 JSON 对象，不要 Markdown 代码块，不要输出解释。
+输出格式：
+{"delete":[{"start":12,"end":12,"reason":"语气词"},{"start":30,"end":31,"reason":"口头禅"}]})PROMPT");
+
+    QStringList lines;
+    int wordIndex = 0;
+    int utteranceIndex = 0;
+    for (const Utterance &utterance : speech.utterances) {
+        ++utteranceIndex;
+        if (utterance.words.isEmpty()) {
+            lines.append(QStringLiteral("句子%1（无逐词时间线，不可删除）：%2")
+                             .arg(utteranceIndex)
+                             .arg(utterance.text.trimmed()));
+            continue;
+        }
+        QStringList tokens;
+        tokens.reserve(utterance.words.size());
+        for (const Word &word : utterance.words) {
+            tokens.append(QStringLiteral("[%1]%2").arg(wordIndex).arg(word.text));
+            ++wordIndex;
+        }
+        lines.append(QStringLiteral("句子%1：%2")
+                         .arg(utteranceIndex)
+                         .arg(tokens.join(QLatin1Char(' '))));
+    }
+    const QString userText =
+        QStringLiteral("## 口播逐词转写\n总词数：%1\n\n%2\n\n请按系统要求输出 JSON。")
+            .arg(wordIndex)
+            .arg(lines.join(QLatin1Char('\n')));
+
+    QJsonObject object;
+    if (!requestJsonObject(baseUrl, apiKey, systemPrompt, QJsonValue(userText),
+                           0.2, &object, error, onStatus)) {
+        return false;
+    }
+
+    const QJsonArray deletes =
+        object.value(QStringLiteral("delete")).toArray();
+    for (const QJsonValue &value : deletes) {
+        const QJsonObject item = value.toObject();
+        FillerCut cut;
+        cut.startWord = item.contains(QStringLiteral("start"))
+            ? jsonInt(item.value(QStringLiteral("start")), -1)
+            : jsonInt(item.value(QStringLiteral("startWord")), -1);
+        cut.endWord = item.contains(QStringLiteral("end"))
+            ? jsonInt(item.value(QStringLiteral("end")), cut.startWord)
+            : jsonInt(item.value(QStringLiteral("endWord")), cut.startWord);
+        cut.reason = item.value(QStringLiteral("reason")).toString().trimmed();
+        if (cut.startWord < 0 || cut.startWord >= wordIndex
+            || cut.endWord < cut.startWord || cut.endWord >= wordIndex) {
+            continue;
+        }
+        cuts->append(cut);
+        // 防御异常输出：一次剪口气最多处理 300 处语气词。
+        if (cuts->size() >= 300) {
+            break;
+        }
+    }
+
+    std::sort(cuts->begin(), cuts->end(),
+              [](const FillerCut &left, const FillerCut &right) {
+                  return left.startWord < right.startWord;
+              });
     return true;
 }
 
