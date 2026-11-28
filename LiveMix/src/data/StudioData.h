@@ -127,8 +127,11 @@ struct OralResult {
     QString editPlanPath;
     // 成片实际视频编码（H.264 / H.265 等），用于结果页输出信息。
     QString videoCodec;
-    // 本次成片使用的真实素材（含缩略图）。不写入历史 JSON，仅用于当前会话
-    // 的结果页海报；重启后历史结果会退回内置插图，但成片播放仍然真实。
+    // 本次成片使用的口播原片路径。随历史记录持久化，重新包装时用来恢复
+    // 原始输入；旧版本历史没有该字段时回退到剪辑计划 JSON。
+    QString sourcePath;
+    // 本次成片使用的真实素材（含缩略图）。缩略图不写入历史 JSON；素材路径
+    // 与元数据会随历史保存（见 Oral::oralResultToJson），重新包装时可原样恢复。
     QVector<OralMaterial> materials;
     QVector<QPair<QString, QString>> highlights;
 };
