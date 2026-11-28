@@ -965,7 +965,8 @@ void MainWindow::buildPages()
     // 智能口播需要读取设置页的 API 地址与密钥；传入配置存储但不修改它。
     m_oral = new OralPage(m_configStore.get());
     addPage(QStringLiteral("oral"), m_oral);
-    m_mixcut = new MixcutPage;
+    // 智能混剪需要读取设置页的 API 地址、密钥与全局成片设置。
+    m_mixcut = new MixcutPage(m_configStore.get());
     addPage(QStringLiteral("mixcut"), m_mixcut);
     m_results = new ResultsPage;
     addPage(QStringLiteral("workspace"), m_results);

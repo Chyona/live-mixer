@@ -183,6 +183,25 @@ qt_add_executable(LiveMixStudio
     src/oral/OralDraftDownloadTask.h
     src/oral/OralDraftDownloadTask.cpp
 
+    # 智能混剪：素材整理 → 语音理解 → 镜头规划 → 智能包装 →
+    # 时间轴编排 → capcut-mate 草稿/成片。
+    src/mixcut/MixcutTypes.h
+    src/mixcut/MixcutTypes.cpp
+    src/mixcut/MixcutMediaUtils.h
+    src/mixcut/MixcutMediaUtils.cpp
+    src/mixcut/MixcutTtsClient.h
+    src/mixcut/MixcutTtsClient.cpp
+    src/mixcut/MixcutLlmClient.h
+    src/mixcut/MixcutLlmClient.cpp
+    src/mixcut/MixcutSfxCatalog.h
+    src/mixcut/MixcutSfxCatalog.cpp
+    src/mixcut/MixcutCapCutClient.h
+    src/mixcut/MixcutCapCutClient.cpp
+    src/mixcut/MixcutEditPlanBuilder.h
+    src/mixcut/MixcutEditPlanBuilder.cpp
+    src/mixcut/MixcutPipelineService.h
+    src/mixcut/MixcutPipelineService.cpp
+
     src/ui/Icons.h
     src/ui/Icons.cpp
     src/ui/Controls.h

@@ -1,5 +1,8 @@
 #include "MixcutPage.h"
 
+#include "../core/AppConfig.h"
+#include "../mixcut/MixcutPipelineService.h"
+#include "../mixcut/MixcutTypes.h"
 #include "../ui/Controls.h"
 #include "../ui/Icons.h"
 #include "../ui/Overlays.h"
@@ -13,6 +16,7 @@
 #include <QClipboard>
 #include <QCursor>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
@@ -24,6 +28,9 @@
 #include <QFontMetrics>
 #include <QGridLayout>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayout>
@@ -36,11 +43,13 @@
 #include <QProgressBar>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QSaveFile>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QStackedWidget>
 #include <QTextEdit>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -711,10 +720,12 @@ private:
 /* MixcutPage                                                           */
 /* ------------------------------------------------------------------ */
 
-MixcutPage::MixcutPage(QWidget *parent)
+MixcutPage::MixcutPage(ConfigStore *config, QWidget *parent)
     : QWidget(parent)
+    , m_config(config)
 {
     m_project = StudioData::defaultMixcutProject();
+    loadHistory();
 
     m_scriptTimer = new QTimer(this);
     m_scriptTimer->setInterval(60);
@@ -740,27 +751,6 @@ MixcutPage::MixcutPage(QWidget *parent)
     connect(this, &MixcutPage::voiceSampleChanged, this,
             &MixcutPage::refreshVoiceSection);
 
-    m_runTimer = new QTimer(this);
-    m_runTimer->setInterval(100);
-    connect(m_runTimer, &QTimer::timeout, this, [this] {
-        if (!m_hasRun) {
-            return;
-        }
-        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_runStartedAt;
-        m_run = StudioData::computeMixcutRun(m_project, elapsed, m_runId);
-        updateProcessing();
-        if (m_run.done) {
-            finishGeneration();
-        } else {
-            const int percent = qMin(99, static_cast<int>(std::floor(m_run.progress)));
-            emit taskStatusChanged(
-                QStringLiteral("智能混剪中 %1% · %2")
-                    .arg(percent)
-                    .arg(StudioData::formatElapsed(m_run.elapsedMs)),
-                true);
-        }
-    });
-
     m_clockTimer = new QTimer(this);
     m_clockTimer->setInterval(10 * 1000);
     connect(m_clockTimer, &QTimer::timeout, this, &MixcutPage::updateGenerationClock);
@@ -769,7 +759,10 @@ MixcutPage::MixcutPage(QWidget *parent)
     buildUi();
 }
 
-MixcutPage::~MixcutPage() = default;
+MixcutPage::~MixcutPage()
+{
+    destroyPipeline();
+}
 
 void MixcutPage::buildUi()
 {
@@ -824,7 +817,7 @@ void MixcutPage::buildUi()
 
 bool MixcutPage::isRunning() const
 {
-    return m_hasRun && !m_run.done;
+    return m_pipelineRunning || (m_hasRun && !m_run.done);
 }
 
 bool MixcutPage::hasMaterials() const
@@ -932,7 +925,7 @@ void MixcutPage::rebuildHub()
                                                    Theme::Text3, recentMeta));
     recentMetaLayout->addWidget(Ui::label(QStringLiteral("自动保存生成记录"), 10,
                                            QFont::Normal, Theme::Text3, recentMeta));
-    const int recentCount = StudioData::recentMixcutResults().size();
+    const int recentCount = m_history.size();
     auto *recentHeading = makeSectionHeading(
         QStringLiteral("最近混剪"),
         recentCount > 0 ? QStringLiteral("%1 个项目").arg(recentCount)
@@ -944,8 +937,7 @@ void MixcutPage::rebuildHub()
     recentHeadingLayout->addWidget(recentHeading, 1);
     m_hubLayout->addWidget(recentHeadingRow);
 
-    const QVector<StudioData::MixcutResult> recents =
-        StudioData::recentMixcutResults();
+    const QVector<StudioData::MixcutResult> recents = m_history;
     if (!recents.isEmpty()) {
         auto *recentGridHost = new QWidget(m_hubContent);
         auto *recentGrid = new QGridLayout(recentGridHost);
@@ -966,13 +958,13 @@ void MixcutPage::rebuildHub()
             QStringLiteral("完成第一个混剪后，成片、发布文案与剪映草稿会自动保存到这里，随时回看或重新混剪。"),
             {QStringLiteral("成片自动下载"), QStringLiteral("发布文案可复制"),
              QStringLiteral("可回看与重新混剪")},
-            QStringLiteral("用示例素材试剪"), QStringLiteral("开始第一个混剪"),
+            QStringLiteral("导入本地素材"), QStringLiteral("开始第一个混剪"),
             m_hubContent);
         connect(empty, &Studio::EmptyRecent::startRequested, this,
                 &MixcutPage::startProject);
         connect(empty, &Studio::EmptyRecent::sampleRequested, this, [this] {
             if (startProject()) {
-                addSampleMaterials();
+                addMaterialsFromDialog();
             }
         });
         m_hubLayout->addWidget(empty);
@@ -1200,6 +1192,15 @@ QWidget *MixcutPage::createRecentCard(const StudioData::MixcutResult &result,
     spec.ratio = result.ratio;
     spec.timecode = result.durationLabel;
     spec.badge = QStringLiteral("成片");
+    if (!result.previewPath.isEmpty()) {
+        const QImage frame(result.previewPath);
+        if (!frame.isNull()) {
+            spec.frameImage = frame;
+            spec.title.clear();
+            spec.caption.clear();
+            spec.highlight.clear();
+        }
+    }
     poster->setSpec(spec);
     layout->addWidget(poster, 0, Qt::AlignTop);
 
@@ -1525,7 +1526,7 @@ bool MixcutPage::startProject()
         if (answer != QMessageBox::Yes) {
             return false;
         }
-        m_runTimer->stop();
+        destroyPipeline();
         m_hasRun = false;
         emit taskStatusChanged(QString(), false);
     }
@@ -1801,13 +1802,7 @@ QWidget *MixcutPage::buildMaterialCard()
         uploadButton->setLeadingGlyph(Icons::Glyph::Upload);
         connect(uploadButton, &QAbstractButton::clicked, this,
                 &MixcutPage::addMaterialsFromDialog);
-        auto *sample = new Button(QStringLiteral("使用示例素材"), Button::Default,
-                                  buttons);
-        sample->setLeadingGlyph(Icons::Glyph::Play);
-        connect(sample, &QAbstractButton::clicked, this,
-                &MixcutPage::addSampleMaterials);
         buttonLayout->addWidget(uploadButton);
-        buttonLayout->addWidget(sample);
         emptyLayout->addWidget(buttons, 0, Qt::AlignHCenter);
         auto *features = new QWidget(dropZone);
         auto *featureLayout = new QHBoxLayout(features);
@@ -2454,7 +2449,10 @@ void MixcutPage::appendMaterials(
 
 void MixcutPage::addSampleMaterials()
 {
-    appendMaterials(StudioData::mixcutDemoMaterials(), true);
+    // 示例素材没有本地文件，不能参与真实 TTS / 草稿合成；引导选择本地素材。
+    emit toastRequested(QStringLiteral(
+        "示例素材仅用于界面预览，请选择本地视频或图片开始真实混剪"));
+    addMaterialsFromDialog();
 }
 
 void MixcutPage::removeMaterial(const QString &id)
@@ -3168,11 +3166,17 @@ void MixcutPage::refreshVoiceSection()
     if (m_voiceSynthesisHint) {
         m_voiceSynthesisHint->setText(
             hasScript
-                ? QStringLiteral("按当前文案生成，预计 %1 · 上方示例音仅用于试听")
+                ? QStringLiteral("seed-tts-2.0 · %1 字 · 预计 %2")
+                      .arg(stats.chars)
                       .arg(stats.durationLabel)
                 : (scriptJobRunning()
-                       ? QStringLiteral("文案生成后，一键成片时自动合成配音")
+                       ? QStringLiteral("文案生成后用 seed-tts-2.0 自动合成配音")
                        : QStringLiteral("生成文案并选好音色后，一键成片时自动合成配音")));
+        m_voiceSynthesisHint->setToolTip(
+            QStringLiteral("一键成片时调用语音网关 seed-tts-2.0 生成配音，"
+                           "按合成字符数计费（2.8 元/万字符，本次约 %1 元）；"
+                           "示例音仅用于试听。")
+                .arg(stats.chars * 2.8 / 10000.0, 0, 'f', 2));
     }
 }
 
@@ -3306,23 +3310,126 @@ void MixcutPage::startGeneration()
     if (!canStart()) {
         return;
     }
+    // 示例素材没有本地文件，无法进入真实渲染；统一要求用户上传真实素材。
+    QVector<StudioData::MixcutMaterial> materials;
+    for (const StudioData::MixcutMaterial &material : m_project.materials) {
+        if (material.sample) {
+            emit toastRequested(QStringLiteral(
+                "示例素材仅用于界面预览，请上传本地视频或图片后再一键成片"));
+            return;
+        }
+        if (material.filePath.trimmed().isEmpty()
+            || !QFileInfo::exists(material.filePath)) {
+            emit toastRequested(
+                QStringLiteral("素材「%1」文件不存在，请重新上传")
+                    .arg(material.name));
+            return;
+        }
+        materials.append(material);
+    }
+    if (materials.isEmpty()) {
+        emit toastRequested(QStringLiteral("请先上传视频或图片素材"));
+        return;
+    }
+
+    const AppConfig config = m_config ? m_config->config() : AppConfig();
+    const QString apiKey = config.service.apiKey.trimmed();
+    if (apiKey.isEmpty()) {
+        emit toastRequested(QStringLiteral("请先在设置中填写 API Key，再开始混剪"));
+        emit navigateRequested(QStringLiteral("settings"));
+        return;
+    }
+
     m_scriptTimer->stop();
     m_playTimer->stop();
     stopVoiceSample();
     m_playing = false;
     m_playProgress = 0;
+    m_project.materials = materials;
 
+    const QString movies = QStandardPaths::writableLocation(
+        QStandardPaths::MoviesLocation);
+    const QString baseDir = movies.isEmpty() ? QDir::homePath() : movies;
+    const QString outputDir =
+        QDir(baseDir).filePath(QStringLiteral("LiveMix/混剪成片"));
+    const QString draftRoot =
+        QDir(baseDir).filePath(QStringLiteral("LiveMix/CapDraft"));
+    QString cacheDir = QStandardPaths::writableLocation(
+        QStandardPaths::CacheLocation);
+    if (cacheDir.isEmpty()) {
+        cacheDir = QDir::tempPath();
+    }
+    cacheDir = QDir(cacheDir).filePath(QStringLiteral("mixcut"));
+
+    Mixcut::PipelineRequest request;
+    request.runId = m_runId + 1;
+    request.apiKey = apiKey;
+    request.gatewayBaseUrl = config.service.apiUrl;
+    request.project = m_project;
+    request.cacheDir = cacheDir;
+    request.outputDir = outputDir;
+    request.draftRoot = draftRoot;
+    request.transitions = config.finish.transitions;
+    request.effects = config.finish.effects;
+    request.filters = config.finish.filters;
+    request.bgm = config.finish.bgm;
+    request.sfx = config.finish.sfx;
+
+    destroyPipeline();
     buildProcessingScreen();
-    m_runId += 1;
-    m_runStartedAt = QDateTime::currentMSecsSinceEpoch();
-    m_run = StudioData::computeMixcutRun(m_project, 0, m_runId);
+    m_runId = request.runId;
+    m_run = StudioData::MixcutRun();
+    m_run.runId = m_runId;
+    m_run.stage = StudioData::MixcutStage::Parse;
+    const QStringList labels = {
+        QStringLiteral("素材整理"), QStringLiteral("语音理解"),
+        QStringLiteral("镜头规划"), QStringLiteral("智能包装"),
+        QStringLiteral("时间轴"), QStringLiteral("合成草稿")};
+    const QVector<StudioData::MixcutStage> keys = {
+        StudioData::MixcutStage::Parse, StudioData::MixcutStage::Voice,
+        StudioData::MixcutStage::Match, StudioData::MixcutStage::Design,
+        StudioData::MixcutStage::Timeline, StudioData::MixcutStage::Render};
+    for (int index = 0; index < keys.size(); ++index) {
+        StudioData::MixcutStageState stage;
+        stage.key = keys.at(index);
+        stage.label = labels.at(index);
+        stage.detail = QStringLiteral("等待开始");
+        m_run.stages.append(stage);
+    }
     m_hasRun = true;
+    m_pipelineRunning = true;
     m_logCount = -1;
+    m_lastLogId.clear();
     m_lastScenesCount = -1;
     updateProcessing();
     showProcessing();
-    m_runTimer->start();
     emit taskStatusChanged(QStringLiteral("智能混剪中 0% · 00:00"), true);
+
+    auto *service = new Mixcut::PipelineService(request);
+    auto *thread = new QThread;
+    service->moveToThread(thread);
+    connect(thread, &QThread::started, service, &Mixcut::PipelineService::run);
+    // 捕获 service 实例：取消旧项目后，旧线程晚到的信号必须被丢弃。
+    connect(service, &Mixcut::PipelineService::runUpdated, this,
+            [this, service, runId = request.runId](
+                const StudioData::MixcutRun &run) {
+                if (service == m_pipelineService && runId == m_runId) {
+                    onPipelineRunUpdated(run);
+                }
+            });
+    connect(service, &Mixcut::PipelineService::finished, this,
+            [this, service, runId = request.runId](
+                bool success, const QString &message,
+                const StudioData::MixcutResult &result) {
+                if (service == m_pipelineService && runId == m_runId) {
+                    onPipelineFinished(success, message, result);
+                }
+            });
+    connect(thread, &QThread::finished, service, &QObject::deleteLater);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    m_pipelineService = service;
+    m_pipelineThread = thread;
+    thread->start();
 }
 
 void MixcutPage::buildProcessingScreen()
@@ -3425,7 +3532,7 @@ void MixcutPage::buildProcessingScreen()
     auto *stagesLayout = new QHBoxLayout(stages);
     stagesLayout->setContentsMargins(0, 0, 0, 0);
     stagesLayout->setSpacing(8);
-    for (int index = 0; index < 5; ++index) {
+    for (int index = 0; index < 6; ++index) {
         auto *card = new Studio::StageSummaryCard(stages);
         m_stageCards.append(card);
         stagesLayout->addWidget(card, 1);
@@ -3586,7 +3693,7 @@ void MixcutPage::buildProcessingScreen()
     m_logElapsedLabel = monoLabel(QStringLiteral("00:00"), 9, Theme::Text3,
                                    logHeader);
     logCounts->addWidget(m_logElapsedLabel);
-    m_logStepsLabel = monoLabel(QStringLiteral("0/5 步"), 9, Theme::Text3,
+    m_logStepsLabel = monoLabel(QStringLiteral("0/6 步"), 9, Theme::Text3,
                                 logHeader);
     logCounts->addWidget(m_logStepsLabel);
     logHeaderLayout->addLayout(logCounts);
@@ -3674,8 +3781,8 @@ void MixcutPage::updateProcessing()
     }
 
     const QVector<Icons::Glyph> glyphs = {
-        Icons::Glyph::Doc, Icons::Glyph::Mic, Icons::Glyph::Image,
-        Icons::Glyph::Wand, Icons::Glyph::Film,
+        Icons::Glyph::Image, Icons::Glyph::Mic, Icons::Glyph::Film,
+        Icons::Glyph::Wand, Icons::Glyph::Doc, Icons::Glyph::Sparkle,
     };
     const QStringList statusTexts = {QStringLiteral("等待"), QStringLiteral("进行中"),
                                      QStringLiteral("完成")};
@@ -3712,24 +3819,43 @@ void MixcutPage::updateProcessing()
         spec.progress = qRound(m_run.progress);
         m_processingPoster->setSpec(spec);
     }
+    double voiceProgress = m_run.voiceProgress;
+    if (voiceProgress <= 0.0) {
+        for (const StudioData::MixcutStageState &stage : m_run.stages) {
+            if (stage.key == StudioData::MixcutStage::Voice) {
+                voiceProgress = stage.status == StudioData::StageStatus::Done
+                    ? 100.0
+                    : stage.progress;
+                break;
+            }
+        }
+    }
     if (m_processingVoiceLabel) {
         m_processingVoiceLabel->setText(
-            QStringLiteral("%1%").arg(qRound(m_run.voiceProgress)));
+            QStringLiteral("%1%").arg(qRound(voiceProgress)));
     }
     if (m_processingVoiceWave) {
-        m_processingVoiceWave->setProgress(qRound(m_run.voiceProgress));
+        m_processingVoiceWave->setProgress(qRound(voiceProgress));
         m_processingVoiceWave->setAnimated(
             m_run.stage == StudioData::MixcutStage::Voice);
     }
+    const int totalShots = qMax(1, m_run.clipCount > 0 ? m_run.clipCount
+                                                       : source.shots);
     if (m_processingScenesCount) {
+        const bool planningDone =
+            m_run.stage == StudioData::MixcutStage::Match
+            || m_run.stage == StudioData::MixcutStage::Design
+            || m_run.stage == StudioData::MixcutStage::Timeline
+            || m_run.stage == StudioData::MixcutStage::Render;
         m_processingScenesCount->setText(
-            QStringLiteral("%1/%2").arg(m_run.matchedShots)
-                .arg(source.shots));
+            planningDone
+                ? QStringLiteral("%1 个镜头").arg(m_run.matchedShots)
+                : QStringLiteral("%1/%2").arg(m_run.matchedShots).arg(totalShots));
     }
     const int sceneCount = qMin(
         source.scenes.size(),
         qMax(0, static_cast<int>(std::ceil(
-                     m_run.matchedShots * 1.0 / qMax(1, source.shots) * 3))));
+                     m_run.matchedShots * 1.0 / totalShots * 3))));
     if (m_processingScenesLayout && sceneCount != m_lastScenesCount) {
         m_lastScenesCount = sceneCount;
         Studio::clearLayout(m_processingScenesLayout);
@@ -3771,6 +3897,9 @@ void MixcutPage::updateProcessing()
         } else if (m_run.stage == StudioData::MixcutStage::Design) {
             m_processingSourceMeta->setText(
                 QStringLiteral("%1 条字幕").arg(m_run.subtitleCount));
+        } else if (m_run.stage == StudioData::MixcutStage::Timeline) {
+            m_processingSourceMeta->setText(
+                QStringLiteral("%1 个镜头").arg(m_run.matchedShots));
         } else {
             m_processingSourceMeta->setText(
                 QStringLiteral("%1 句文案").arg(stats.sentences));
@@ -3821,8 +3950,12 @@ void MixcutPage::updateProcessing()
                 .arg(m_run.sfxCount));
     }
 
-    if (m_logLayout && m_run.logs.size() != m_logCount) {
+    const QString lastLogId =
+        m_run.logs.isEmpty() ? QString() : m_run.logs.last().id;
+    if (m_logLayout
+        && (m_run.logs.size() != m_logCount || lastLogId != m_lastLogId)) {
         m_logCount = m_run.logs.size();
+        m_lastLogId = lastLogId;
         Studio::clearLayout(m_logLayout);
         if (m_run.logs.isEmpty()) {
             auto *row = new QWidget;
@@ -3908,25 +4041,151 @@ void MixcutPage::updateProcessing()
     }
 }
 
-void MixcutPage::finishGeneration()
+void MixcutPage::onPipelineRunUpdated(const StudioData::MixcutRun &run)
 {
-    if (!m_hasRun) {
+    if (!m_hasRun || run.runId != m_runId) {
         return;
     }
-    m_runTimer->stop();
-    m_run = StudioData::computeMixcutRun(m_project, StudioData::mixcutRunTotalMs(m_project),
-                                        m_runId);
-    m_run.done = true;
+    m_run = run;
     updateProcessing();
-    m_hasRun = false;
-    m_result = StudioData::makeMixcutResult(m_project,
-                                            QDateTime::currentMSecsSinceEpoch());
-    m_hasResult = true;
-    showResult();
-    emit taskStatusChanged(QString(), false);
-    if (!isVisible()) {
-        emit toastRequested(QStringLiteral("智能混剪成片已生成并自动下载，可预览查看"));
+    const int percent =
+        qMin(99, static_cast<int>(std::floor(m_run.progress)));
+    emit taskStatusChanged(
+        QStringLiteral("智能混剪中 %1% · %2")
+            .arg(percent)
+            .arg(StudioData::formatElapsed(m_run.elapsedMs)),
+        true);
+}
+
+void MixcutPage::onPipelineFinished(bool success, const QString &message,
+                                    const StudioData::MixcutResult &result)
+{
+    // 取消旧项目后旧线程可能晚到；只接受当前服务实例的结果。
+    if (!m_pipelineRunning) {
+        return;
     }
+    if (sender() && m_pipelineService && sender() != m_pipelineService) {
+        return;
+    }
+    m_hasRun = false;
+    m_pipelineRunning = false;
+    m_pipelineService = nullptr;
+    if (m_pipelineThread) {
+        m_pipelineThread->quit();
+        m_pipelineThread = nullptr;
+    }
+    emit taskStatusChanged(QString(), false);
+
+    if (!success) {
+        m_run.done = true;
+        updateProcessing();
+        QMessageBox::warning(this, QStringLiteral("智能混剪生成失败"), message);
+        emit toastRequested(QStringLiteral("智能混剪生成失败：%1").arg(message));
+        showStudio();
+        return;
+    }
+
+    m_run.done = true;
+    m_run.progress = 100.0;
+    updateProcessing();
+    m_result = result;
+    m_hasResult = true;
+    m_resultFilePath = result.filePath;
+    m_resultDraftPath = result.draftPath;
+    // 真实生成记录持久化。
+    m_history.prepend(m_result);
+    m_persistedHistory.prepend(m_result);
+    saveHistory();
+    showResult();
+    if (!isVisible()) {
+        emit toastRequested(QStringLiteral(
+            "智能混剪成片已生成并自动下载，可预览查看"));
+    } else {
+        emit toastRequested(message);
+    }
+}
+
+void MixcutPage::destroyPipeline()
+{
+    if (m_pipelineService) {
+        m_pipelineService->cancel();
+        // 旧线程可能因为阻塞网络请求晚到信号；先断开与界面的连接。
+        disconnect(m_pipelineService, nullptr, this, nullptr);
+    }
+    if (m_pipelineThread) {
+        m_pipelineThread->quit();
+        // 阻塞网络请求无法立即中断；最多等 3 秒，之后让线程自行结束并回收。
+        if (!m_pipelineThread->wait(3000)) {
+            disconnect(m_pipelineThread, nullptr, this, nullptr);
+        }
+    }
+    m_pipelineService = nullptr;
+    m_pipelineThread = nullptr;
+    m_pipelineRunning = false;
+}
+
+namespace {
+
+QString mixcutHistoryFilePath()
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty()) {
+        dir = QDir::homePath() + QStringLiteral("/.livemix");
+    }
+    return QDir(dir).filePath(QStringLiteral("mixcut_history.json"));
+}
+
+} // namespace
+
+void MixcutPage::loadHistory()
+{
+    m_persistedHistory.clear();
+    QFile file(mixcutHistoryFilePath());
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        m_history.clear();
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    QJsonArray results;
+    if (document.isArray()) {
+        results = document.array();
+    } else if (document.isObject()) {
+        results = document.object().value(QStringLiteral("results")).toArray();
+    }
+    for (const QJsonValue &value : results) {
+        const StudioData::MixcutResult result =
+            Mixcut::mixcutResultFromJson(value.toObject());
+        // 只保留有真实成片路径的记录，避免把损坏的历史当成可播放结果。
+        if (!result.id.isEmpty() && !result.filePath.isEmpty()
+            && QFileInfo::exists(result.filePath)) {
+            m_persistedHistory.append(result);
+        }
+    }
+    m_history = m_persistedHistory;
+}
+
+void MixcutPage::saveHistory()
+{
+    while (m_persistedHistory.size() > 30) {
+        m_persistedHistory.removeLast();
+    }
+    QString dir = QFileInfo(mixcutHistoryFilePath()).absolutePath();
+    if (!QDir().mkpath(dir)) {
+        return;
+    }
+    QJsonArray results;
+    for (const StudioData::MixcutResult &result : m_persistedHistory) {
+        results.append(Mixcut::mixcutResultToJson(result));
+    }
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("results"), results);
+    QSaveFile file(mixcutHistoryFilePath());
+    if (!file.open(QIODevice::WriteOnly)) {
+        return;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    file.commit();
 }
 
 /* ------------------------------------------------------------------ */
@@ -3985,10 +4244,22 @@ void MixcutPage::rebuildResult()
     fileName.replace(QStringLiteral(" · "), QStringLiteral("_"));
     const QString movies = QStandardPaths::writableLocation(
         QStandardPaths::MoviesLocation);
-    m_resultFilePath = QDir(movies).filePath(
-        QStringLiteral("LiveMix/混剪成片/%1.mp4").arg(fileName));
-    m_resultDraftPath = QDir(movies).filePath(
-        QStringLiteral("LiveMix/CapDraft/%1_%2").arg(fileName, m_result.id));
+    const QString baseDir = movies.isEmpty() ? QDir::homePath() : movies;
+    if (!m_result.filePath.trimmed().isEmpty()) {
+        m_resultFilePath = m_result.filePath;
+    } else {
+        m_resultFilePath = QDir(baseDir).filePath(
+            QStringLiteral("LiveMix/混剪成片/%1.mp4").arg(fileName));
+    }
+    if (!m_result.draftPath.trimmed().isEmpty()) {
+        m_resultDraftPath = m_result.draftPath;
+    } else {
+        m_resultDraftPath = QDir(baseDir).filePath(
+            QStringLiteral("LiveMix/CapDraft/%1_%2").arg(fileName, m_result.id));
+    }
+    if (!m_resultFilePath.isEmpty()) {
+        fileName = QFileInfo(m_resultFilePath).completeBaseName();
+    }
 
     auto *header = new QWidget(m_resultScreen);
     auto *headerLayout = new QVBoxLayout(header);
@@ -4036,7 +4307,9 @@ void MixcutPage::rebuildResult()
     projectName->setTextColor(Theme::Text1);
     titleLine->addWidget(projectName, 0);
     titleLine->addWidget(
-        new Chip(QStringLiteral("已生成并自动导入剪映"), Chip::Ok, header));
+        new Chip(m_result.draftGenerated ? QStringLiteral("已生成并自动导入剪映")
+                                         : QStringLiteral("成片已生成"),
+                 Chip::Ok, header));
     titleLine->addWidget(makeGenerationPill(&m_resultGenerationLabel, header));
     titleLine->addStretch(1);
     titles->addLayout(titleLine);
@@ -4137,6 +4410,17 @@ void MixcutPage::rebuildResult()
     spec.timecode = m_result.durationLabel;
     spec.progress = 0;
     spec.badge = StudioData::mixcutStyleName(m_result.style);
+    // 生成完成后用真实成片首帧替换设计稿插画。
+    if (!m_result.previewPath.isEmpty()) {
+        const QImage frame(m_result.previewPath);
+        if (!frame.isNull()) {
+            spec.frameImage = frame;
+            spec.title.clear();
+            spec.caption.clear();
+            spec.highlight.clear();
+            spec.badge = QStringLiteral("成片");
+        }
+    }
     m_resultPoster->setSpec(spec);
     stackLayout->addWidget(m_resultPoster, 0, 0);
     m_resultCenterPlay = makePlayOverlay(stack);
@@ -4323,26 +4607,42 @@ void MixcutPage::rebuildResult()
     openFile->setLeadingGlyph(Icons::Glyph::Folder);
     openFile->setTextColor(Theme::Success);
     connect(openFile, &QAbstractButton::clicked, this, [this] {
-        emit toastRequested(QStringLiteral("已在访达中打开成片目录"));
+        const QString dir = QFileInfo(m_resultFilePath).absolutePath();
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dir))) {
+            emit toastRequested(QStringLiteral("无法打开成片目录：%1").arg(dir));
+        }
     });
     outputBody->addWidget(makeFileRow(
-        Icons::Glyph::Film, fileName + QStringLiteral(".mp4"), QStringLiteral("MP4"),
-        QStringLiteral("%1 · %2 · H.264 · 30fps")
+        Icons::Glyph::Film, QFileInfo(m_resultFilePath).fileName(),
+        QStringLiteral("MP4"),
+        QStringLiteral("%1 · %2 · %3 · 30fps")
             .arg(StudioData::mixcutRatioDimensions(m_result.ratio),
-                 m_result.fileSize),
+                 m_result.fileSize,
+                 m_result.videoCodec.isEmpty() ? QStringLiteral("H.264")
+                                               : m_result.videoCodec),
         openFile, output));
     auto *openDraft = new Button(QStringLiteral("打开草稿"), Button::Ghost, output);
     openDraft->setCompact(true);
     openDraft->setLeadingGlyph(Icons::Glyph::Folder);
     openDraft->setTextColor(Theme::Success);
     connect(openDraft, &QAbstractButton::clicked, this, [this] {
-        emit toastRequested(QStringLiteral("已在访达中打开剪映草稿文件夹"));
+        const QString dir = m_result.draftPath.trimmed().isEmpty()
+            ? QFileInfo(m_resultDraftPath).absolutePath()
+            : m_result.draftPath;
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dir))) {
+            emit toastRequested(QStringLiteral("无法打开剪映草稿目录：%1").arg(dir));
+        }
     });
     outputBody->addWidget(makeFileRow(
-        Icons::Glyph::Scissors, fileName + QStringLiteral("_剪映草稿"),
+        Icons::Glyph::Scissors,
+        m_result.draftGenerated ? QFileInfo(m_resultDraftPath).fileName()
+                                : QStringLiteral("剪映草稿"),
         QStringLiteral("草稿"),
-        QStringLiteral("已写入剪映草稿目录，可继续修改文案、配音与镜头"), openDraft,
-        output));
+        m_result.draftGenerated
+            ? QStringLiteral("已写入剪映草稿目录，可继续修改文案、配音与镜头")
+            : QStringLiteral("本次草稿下载失败，可稍后在剪映小助手中重新导出"),
+        openDraft, output));
+    openDraft->setEnabled(m_result.draftGenerated);
     auto *pathRow = new QWidget(output);
     auto *pathLayout = new QHBoxLayout(pathRow);
     pathLayout->setContentsMargins(0, 2, 0, 0);
@@ -4430,6 +4730,10 @@ void MixcutPage::openRecent(const StudioData::MixcutResult &result)
         emit toastRequested(QStringLiteral("当前有智能混剪正在生成，完成后即可查看"));
         return;
     }
+    if (!result.filePath.isEmpty() && !QFileInfo::exists(result.filePath)) {
+        emit toastRequested(QStringLiteral("成片文件已被移动或删除：%1")
+                                .arg(result.filePath));
+    }
     m_result = result;
     m_hasResult = true;
     showResult();
@@ -4445,7 +4749,9 @@ void MixcutPage::restartFromResult()
     stopVoiceSample();
     m_playing = false;
     m_playProgress = 0;
-    if (m_project.materials.isEmpty()) {
+    if (!m_result.materials.isEmpty()) {
+        m_project.materials = m_result.materials;
+    } else if (m_project.materials.isEmpty()) {
         m_project.materials = StudioData::mixcutDemoMaterials();
     }
     m_project.analysisReady = true;
@@ -4470,6 +4776,14 @@ void MixcutPage::togglePlayback()
     }
     m_playing = !m_playing;
     if (m_playing) {
+        // 页面内播放的是过程示意；成片用系统播放器打开，避免再内嵌一套解码器。
+        if (!m_resultFilePath.isEmpty() && QFileInfo::exists(m_resultFilePath)) {
+            if (!QDesktopServices::openUrl(
+                    QUrl::fromLocalFile(m_resultFilePath))) {
+                emit toastRequested(QStringLiteral("无法打开成片文件：%1")
+                                        .arg(m_resultFilePath));
+            }
+        }
         m_playTimer->start();
     } else {
         m_playTimer->stop();
