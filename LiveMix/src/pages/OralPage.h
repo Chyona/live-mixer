@@ -102,8 +102,12 @@ private:
     void previewMaterial(const StudioData::OralMaterial &material);
     void ensureMaterialPreviews();
     void requestVideoThumbnail(const QString &path);
+    // 最近口播卡片：成片首帧缺失时补截 0 秒帧并就地刷新海报。
+    void requestPosterFrame(const QString &path);
+    void requestPreviewFrame(const QString &path, bool materialFrame);
     void startNextThumbnailJob();
     void applyMaterialThumbnail(const QString &path, const QImage &image);
+    void applyPosterFrame(const QString &path, const QImage &image);
     void chooseTemplate(const QString &templateId);
     void startGeneration();
     void updateProcessing();
@@ -157,13 +161,21 @@ private:
 
     StudioData::OralProject m_project;
 
-    // 视频素材缩略图：顺序生成，完成后直接刷新对应的缩略图控件。
-    QStringList m_thumbnailQueue;
-    QString m_thumbnailInFlight;
+    // 预览截帧任务：素材缩略图取 0.5 秒帧，最近口播封面取成片 0 秒首帧。
+    // 共用一条串行队列，避免同时启动多个 ffmpeg 进程。
+    enum class PreviewFrameKind { Material, Poster };
+    struct PreviewFrameJob {
+        QString path;
+        PreviewFrameKind kind = PreviewFrameKind::Material;
+    };
+    QVector<PreviewFrameJob> m_thumbnailQueue;
+    PreviewFrameJob m_thumbnailInFlight;
     QProcess *m_thumbnailProcess = nullptr;
     QSet<QString> m_failedPreviewPaths;
     // 按文件路径记录素材步骤中的缩略图控件；每次重建步骤时重新登记。
     QHash<QString, QVector<Studio::MaterialVisualWidget *>> m_previewWidgets;
+    // 按成片路径记录最近口播卡片的海报控件；每次重建首页时重新登记。
+    QHash<QString, QVector<Studio::OralPosterWidget *>> m_recentPosterWidgets;
     // 口播视频卡片的缩略图/元数据控件；元数据异步探测完成后就地刷新。
     std::function<void(const StudioData::OralSource &)> m_sourcePreviewUpdater;
     QLabel *m_sourceMetaLabel = nullptr;
