@@ -288,6 +288,51 @@ bool extractKeyframes(const QString &path, MaterialKind kind, qint64 durationMs,
     return true;
 }
 
+bool extractFirstFrame(const QString &videoPath, const QString &outputPath,
+                       QString *error)
+{
+    if (videoPath.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("口播视频路径为空。");
+        }
+        return false;
+    }
+    if (!QDir().mkpath(QFileInfo(outputPath).absolutePath())) {
+        if (error) {
+            *error = QStringLiteral("无法创建封面帧目录：%1")
+                         .arg(QFileInfo(outputPath).absolutePath());
+        }
+        return false;
+    }
+    // -ss 0 放在 -i 前，快速定位到片头；-frames:v 1 只保留首帧。
+    const QStringList args = {
+        QStringLiteral("-y"),
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-ss"),
+        QStringLiteral("0"),
+        QStringLiteral("-i"),
+        videoPath,
+        QStringLiteral("-frames:v"),
+        QStringLiteral("1"),
+        QStringLiteral("-q:v"),
+        QStringLiteral("2"),
+        outputPath,
+    };
+    if (!runFfmpeg(args, 30000, error)) {
+        return false;
+    }
+    if (!QFileInfo::exists(outputPath) || QFileInfo(outputPath).size() <= 0) {
+        if (error) {
+            *error = QStringLiteral("口播首帧为空。");
+        }
+        return false;
+    }
+    return true;
+}
+
 VisualFeatures analyzeVisualFeatures(const QStringList &frames, bool video)
 {
     QVector<QImage> images;

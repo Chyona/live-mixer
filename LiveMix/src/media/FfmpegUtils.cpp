@@ -429,17 +429,13 @@ bool FfmpegUtils::extractThumbnail(const QString &inputPath, qint64 positionMs,
 
 QString FfmpegUtils::thumbnailCachePath(const QString &videoPath)
 {
-    QString cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-    if (cacheDir.isEmpty()) {
-        cacheDir = QDir::tempPath();
-    }
-    const QFileInfo info(videoPath);
-    const QString key = videoPath + QLatin1Char(':')
-        + QString::number(info.lastModified().toMSecsSinceEpoch());
-    const QString hash = QString::fromLatin1(
-        QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
-    return QDir(cacheDir).filePath(QStringLiteral("previews/") + hash
-                                   + QStringLiteral(".png"));
+    return previewCachePath(videoPath, QStringLiteral(".png"));
+}
+
+QString FfmpegUtils::posterFrameCachePath(const QString &videoPath)
+{
+    // 与素材缩略图使用同一路径哈希，靠 -poster 后缀区分 0 秒帧与 0.5 秒帧。
+    return previewCachePath(videoPath, QStringLiteral("-poster.png"));
 }
 
 QString FfmpegUtils::hlsPreviewCachePath(const QString &videoPath)

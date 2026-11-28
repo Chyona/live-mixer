@@ -120,6 +120,8 @@ struct OralResult {
     // 智能口播真实产物路径：成片 MP4、剪映草稿目录、草稿 ID 与剪辑计划 JSON。
     // 示例历史记录保持为空，界面会退回原型展示。
     QString filePath;
+    // 成片首帧预览（真实视频 0 秒帧，即封面海报）的本地缓存路径。
+    QString previewPath;
     QString draftPath;
     QString draftId;
     QString editPlanPath;

@@ -144,6 +144,27 @@ QString sourceFileMetaHtml(const StudioData::OralSource &source)
              Theme::monoFont(9).family(), source.resolution.toHtmlEscaped());
 }
 
+// 结果页预览：优先读流水线缓存的成片 0 秒帧；旧历史记录没有缓存时补截一次。
+QImage loadResultFramePreview(const QString &previewPath,
+                              const QString &videoPath)
+{
+    if (!previewPath.isEmpty()) {
+        const QImage image(previewPath);
+        if (!image.isNull()) {
+            return image;
+        }
+    }
+    if (videoPath.isEmpty() || !QFileInfo::exists(videoPath)) {
+        return QImage();
+    }
+    const QString cachePath = FfmpegUtils::posterFrameCachePath(videoPath);
+    if (!QFileInfo::exists(cachePath) || QFileInfo(cachePath).size() <= 0) {
+        QString error;
+        FfmpegUtils::extractThumbnail(videoPath, 0, cachePath, &error);
+    }
+    return QImage(cachePath);
+}
+
 // 按缩略图尺寸解码图片，避免把原始大图整张读进内存。
 QImage loadMaterialPreview(const QString &path)
 {
@@ -3985,6 +4006,9 @@ void OralPage::rebuildResult()
     spec.materials = m_result.materials.isEmpty()
         ? StudioData::demoMaterials().mid(0, 2)
         : m_result.materials.mid(0, 2);
+    // 生成完成后用真实成片首帧（封面海报）替换设计稿插画。
+    spec.frameImage = loadResultFramePreview(m_result.previewPath,
+                                             m_resultFilePath);
     spec.timecode = m_result.durationLabel;
     spec.progress = 0;
     poster->setSpec(spec);

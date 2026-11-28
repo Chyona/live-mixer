@@ -10,6 +10,7 @@
 #include "OralAsrClient.h"
 #include "OralAudioAssetsClient.h"
 #include "OralCapCutClient.h"
+#include "OralCoverClient.h"
 #include "OralEditPlanBuilder.h"
 #include "OralLlmClient.h"
 #include "OralMediaUtils.h"
@@ -40,6 +41,8 @@ constexpr double kBgmVolume = 0.12;
 constexpr int kMaxSfxCount = 8;
 constexpr qint64 kRenderPollMs = 4000;
 constexpr qint64 kRenderTimeoutMs = 30 * 60 * 1000;
+// 产品指定的封面时间线：[0, 10000] 微秒；领域结构统一用毫秒。
+constexpr qint64 kCoverEndMs = 10;
 
 QString sha1Hex(const QString &text)
 {
@@ -111,6 +114,85 @@ QString safeFileNameFor(const Oral::EditPlan &plan)
         fileName = QStringLiteral("口播成片");
     }
     return fileName;
+}
+
+// 封面提示词：把语义分析结果转成海报描述，让图生图保留人物特征并贴合内容。
+QString coverPromptFor(const Oral::EditPlan &plan)
+{
+    QString title = plan.semantics.title.trimmed();
+    if (title.isEmpty()) {
+        title = plan.subtitles.titleText.trimmed();
+    }
+    if (title.isEmpty()) {
+        title = QFileInfo(plan.sourcePath).completeBaseName();
+    }
+    title = title.simplified();
+    if (title.size() > 14) {
+        title = title.left(14);
+    }
+
+    QStringList points;
+    for (const Oral::SemanticSegment &segment : plan.semantics.segments) {
+        const QString point = segment.title.trimmed();
+        if (!point.isEmpty() && !points.contains(point)) {
+            points.append(point);
+        }
+        if (points.size() >= 3) {
+            break;
+        }
+    }
+    QString core = points.join(QStringLiteral("、"));
+    if (core.isEmpty()) {
+        core = plan.semantics.description.trimmed();
+    }
+    if (core.size() > 60) {
+        core = core.left(60);
+    }
+
+    QStringList keywords;
+    for (const QString &keyword : plan.semantics.keywords) {
+        const QString clean = keyword.trimmed();
+        if (!clean.isEmpty() && !keywords.contains(clean)) {
+            keywords.append(clean);
+        }
+        if (keywords.size() >= 6) {
+            break;
+        }
+    }
+
+    const QString orientation = plan.canvas.width >= plan.canvas.height
+        ? QStringLiteral("横版 16:9")
+        : QStringLiteral("竖版 9:16");
+    QStringList lines;
+    lines.append(QStringLiteral("以参考图中的真人为海报主体，保留人物的外貌、发型、"
+                                "服装与所处场景，生成一张")
+                 + orientation + QStringLiteral("的短视频封面海报。"));
+    if (!title.isEmpty()) {
+        lines.append(QStringLiteral("视频主题：") + title
+                     + QStringLiteral("。"));
+    }
+    if (!core.isEmpty()) {
+        lines.append(QStringLiteral("内容要点：") + core
+                     + QStringLiteral("。"));
+    }
+    if (!keywords.isEmpty()) {
+        lines.append(QStringLiteral("关键词：")
+                     + keywords.join(QStringLiteral("、"))
+                     + QStringLiteral("。"));
+    }
+    lines.append(QStringLiteral("画面要求：真实摄影质感，主体清晰突出，半身或近景"
+                                "构图，背景干净并适度虚化，光线通透有层次，色调"
+                                "与参考图协调，具有吸引点击的视觉冲击力。"));
+    if (title.isEmpty()) {
+        lines.append(QStringLiteral("文字要求：画面中不要出现任何文字、水印、"
+                                    "Logo、二维码、拼贴或多分格。"));
+    } else {
+        lines.append(QStringLiteral("文字要求：只排入一行清晰醒目的主标题「")
+                     + title
+                     + QStringLiteral("」，字体现代、排版简洁；不要出现其他文字、"
+                                      "水印、Logo、二维码、拼贴或多分格。"));
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 // BGM 短于成片时按整首长度循环铺满。
@@ -429,6 +511,27 @@ void PipelineService::run()
         return;
     }
 
+    // 结果页预览：抽取成片 0 秒帧（即刚写入的封面海报）缓存到本地。
+    setStage(StudioData::OralStage::Render, StudioData::StageStatus::Running, 97,
+             QStringLiteral("生成首帧预览"));
+    QString previewPath;
+    const QString posterPreviewPath =
+        FfmpegUtils::posterFrameCachePath(outputPath);
+    QString previewError;
+    if (FfmpegUtils::extractThumbnail(outputPath, 0, posterPreviewPath,
+                                      &previewError)) {
+        previewPath = posterPreviewPath;
+    } else {
+        // 首帧截取失败时退而使用本地封面海报，结果页仍能显示封面预览。
+        if (!plan.cover.localPath.isEmpty()
+            && QFileInfo::exists(plan.cover.localPath)) {
+            previewPath = plan.cover.localPath;
+        }
+        addLog(StudioData::OralStage::Render,
+               QStringLiteral("成片首帧预览生成失败：%1").arg(previewError),
+               StudioData::Tone::Muted);
+    }
+
     setStage(StudioData::OralStage::Render, StudioData::StageStatus::Done, 100,
              QStringLiteral("%1×%2 · %3fps")
                  .arg(plan.canvas.width)
@@ -438,7 +541,8 @@ void PipelineService::run()
     m_run.progress = 100.0;
     emitRun();
 
-    const StudioData::OralResult result = makeResult(plan, outputPath, draftPath);
+    const StudioData::OralResult result =
+        makeResult(plan, outputPath, draftPath, previewPath);
     QString message = QStringLiteral("智能口播成片已生成并自动下载");
     if (!draftPath.isEmpty()) {
         message += QStringLiteral("，剪映草稿已写入本地目录");
@@ -1160,7 +1264,6 @@ bool PipelineService::composeDraft(EditPlan *plan, CapCutClient *capcut,
                                    HttpClient *http, const QString &workDir,
                                    CapCutDraft *draft, QString *error)
 {
-    Q_UNUSED(http);
     if (!plan || !capcut || !draft) {
         if (error) {
             *error = QStringLiteral("合成阶段参数无效。");
@@ -1241,6 +1344,11 @@ bool PipelineService::composeDraft(EditPlan *plan, CapCutClient *capcut,
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
              42, QStringLiteral("预处理并写入 B-Roll"));
     addBrollTracks(plan, capcut, *draft, workDir, error);
+
+    // 封面：口播首帧图生图生成海报，压在最上层，覆盖片头 10 毫秒。
+    setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
+             58, QStringLiteral("生成封面海报"));
+    addCoverTrack(plan, capcut, *draft, workDir, http, error);
 
     // 字幕：标题花字单独一条轨，正文关键词高亮。
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
@@ -1441,6 +1549,166 @@ bool PipelineService::addBrollTracks(EditPlan *plan, CapCutClient *capcut,
     addLog(StudioData::OralStage::Compose,
            QStringLiteral("B-Roll 就绪：%1 个素材已预处理").arg(preparedCount),
            StudioData::Tone::Info);
+    return true;
+}
+
+bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
+                                    const CapCutDraft &draft,
+                                    const QString &workDir, HttpClient *http,
+                                    QString *error)
+{
+    Q_UNUSED(error);
+    if (!plan || !capcut || !http) {
+        return true;
+    }
+
+    plan->cover.startMs = 0;
+    plan->cover.endMs = kCoverEndMs;
+    if (plan->cover.prompt.isEmpty()) {
+        plan->cover.prompt = coverPromptFor(*plan);
+    }
+
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("正在用口播首帧生成封面海报（%1）…")
+               .arg(CoverClient::modelName()),
+           StudioData::Tone::Ai);
+
+    // 封面按「源文件 + 模型 + 提示词 + 画布」缓存，重复包装不重复计费。
+    const QString cacheDir =
+        QDir(m_request.cacheDir).filePath(QStringLiteral("covers"));
+    const QString cacheKey = sha1Hex(QStringList{
+        fileFingerprint(plan->sourcePath),
+        CoverClient::modelName(),
+        plan->cover.prompt,
+        QStringLiteral("%1x%2").arg(plan->canvas.width).arg(plan->canvas.height),
+    }.join(QLatin1Char('|')));
+    const QString coverPath = QDir(cacheDir).filePath(
+        QStringLiteral("cover_%1.jpg").arg(cacheKey));
+
+    // 缓存文件可能是上次中断留下的半截图片，必须能读出且尺寸正确才复用。
+    bool coverCached = false;
+    if (QFileInfo::exists(coverPath) && QFileInfo(coverPath).size() > 0) {
+        int coverWidth = 0;
+        int coverHeight = 0;
+        QString probeError;
+        coverCached = probeImage(coverPath, &coverWidth, &coverHeight,
+                                 &probeError)
+            && coverWidth == plan->canvas.width
+            && coverHeight == plan->canvas.height;
+        if (!coverCached) {
+            QFile::remove(coverPath);
+        }
+    }
+    QString posterPath = coverPath;
+    if (coverCached) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("复用已生成的封面海报，跳过重复生成"),
+               StudioData::Tone::Ok);
+    } else {
+        const QString framePath =
+            QDir(workDir).filePath(QStringLiteral("cover_frame.jpg"));
+        QString localError;
+        if (!extractFirstFrame(plan->sourcePath, framePath, &localError)) {
+            addLog(StudioData::OralStage::Compose,
+                   QStringLiteral("口播首帧提取失败，成片继续输出：%1")
+                       .arg(localError),
+                   StudioData::Tone::Muted);
+            return true;
+        }
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("已提取口播首帧，正在调用图生图生成封面…"),
+               StudioData::Tone::Info);
+
+        const QString rawPath =
+            QDir(workDir).filePath(QStringLiteral("cover_raw.jpg"));
+        CoverClient cover(http);
+        if (!cover.generate(
+                m_request.gatewayBaseUrl, m_request.apiKey, framePath,
+                plan->cover.prompt, plan->canvas.width, plan->canvas.height,
+                rawPath, &localError,
+                [this](const QString &status) {
+                    addLog(StudioData::OralStage::Compose, status,
+                           StudioData::Tone::Info);
+                })) {
+            addLog(StudioData::OralStage::Compose,
+                   QStringLiteral("封面生成失败，成片继续输出：%1")
+                       .arg(localError),
+                   StudioData::Tone::Muted);
+            return true;
+        }
+        // 模型输出尺寸可能与请求略有差异，统一裁成画布尺寸后写入缓存。
+        // 先写 .part 再改名，避免中断留下半截缓存被下一次复用。
+        const QString partPath =
+            coverPath + QStringLiteral(".part.jpg");
+        if (!prepareCanvasImage(rawPath, plan->canvas.width,
+                                plan->canvas.height, partPath, &localError)) {
+            addLog(StudioData::OralStage::Compose,
+                   QStringLiteral("封面预处理失败，成片继续输出：%1")
+                       .arg(localError),
+                   StudioData::Tone::Muted);
+            return true;
+        }
+        if (QFileInfo::exists(coverPath)) {
+            QFile::remove(coverPath);
+        }
+        if (!QFile::rename(partPath, coverPath)) {
+            posterPath = partPath;
+            addLog(StudioData::OralStage::Compose,
+                   QStringLiteral("封面缓存写入失败，本次使用临时文件"),
+                   StudioData::Tone::Muted);
+        }
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面海报已生成：%1×%2")
+                   .arg(plan->canvas.width)
+                   .arg(plan->canvas.height),
+               StudioData::Tone::Ok);
+    }
+    plan->cover.localPath = posterPath;
+
+    setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
+             64, QStringLiteral("写入封面轨道"));
+    QString uploadedUrl;
+    QString uploadError;
+    if (!capcut->uploadFile(posterPath, m_request.apiKey, &uploadedUrl,
+                            &uploadError)) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面海报上传失败，已跳过：%1").arg(uploadError),
+               StudioData::Tone::Muted);
+        return true;
+    }
+    CapCutImage image;
+    image.url = uploadedUrl;
+    image.width = plan->canvas.width;
+    image.height = plan->canvas.height;
+    image.startUs = plan->cover.startMs * 1000;
+    image.endUs = plan->cover.endMs * 1000;
+    QStringList segmentIds;
+    if (!capcut->addImages(draft, {image}, 1.0, 0, 0, &segmentIds,
+                           &uploadError)) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面轨道写入失败，已跳过：%1").arg(uploadError),
+               StudioData::Tone::Muted);
+        return true;
+    }
+    plan->cover.uploadedUrl = uploadedUrl;
+
+    // 封面占据首帧：标题与正文从封面结束之后开始，避免遮住封面。
+    if (plan->subtitles.titleStartMs < plan->cover.endMs) {
+        plan->subtitles.titleStartMs = plan->cover.endMs;
+    }
+    for (SubtitleCue &cue : plan->subtitles.cues) {
+        if (cue.startMs < plan->cover.endMs) {
+            cue.startMs = plan->cover.endMs;
+        }
+        if (cue.endMs <= cue.startMs) {
+            cue.endMs = qMin(plan->durationMs, cue.startMs + 300);
+        }
+    }
+
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("封面海报已写入成片开头（0–%1 毫秒）")
+               .arg(plan->cover.endMs),
+           StudioData::Tone::Ok);
     return true;
 }
 
@@ -1771,7 +2039,8 @@ bool PipelineService::renderAndDownload(const EditPlan &plan,
 
 StudioData::OralResult PipelineService::makeResult(const EditPlan &plan,
                                                    const QString &videoPath,
-                                                   const QString &draftPath) const
+                                                   const QString &draftPath,
+                                                   const QString &previewPath) const
 {
     StudioData::OralResult result;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -1792,6 +2061,7 @@ StudioData::OralResult PipelineService::makeResult(const EditPlan &plan,
     result.brollCount = plan.shots.shots.size();
     result.draftGenerated = !draftPath.isEmpty();
     result.filePath = videoPath;
+    result.previewPath = previewPath;
     result.draftPath = draftPath;
     result.draftId = m_draftId;
     result.editPlanPath = m_editPlanPath;

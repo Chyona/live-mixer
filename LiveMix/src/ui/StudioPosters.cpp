@@ -217,6 +217,29 @@ void clipRounded(QPainter &painter, const QRectF &rect, qreal radius)
     painter.setClipPath(path);
 }
 
+// 按目标区域等比铺满并居中裁剪绘制图片。
+void paintCoverImage(QPainter &painter, const QRectF &rect, const QImage &image)
+{
+    if (image.isNull() || rect.width() < 2 || rect.height() < 2) {
+        return;
+    }
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    const QSize imageSize = image.size();
+    const qreal imageAspect = qreal(imageSize.width()) / imageSize.height();
+    const qreal rectAspect = rect.width() / rect.height();
+    QRectF source(0, 0, imageSize.width(), imageSize.height());
+    if (imageAspect > rectAspect) {
+        const qreal width = imageSize.height() * rectAspect;
+        source = QRectF((imageSize.width() - width) / 2.0, 0, width,
+                        imageSize.height());
+    } else {
+        const qreal height = imageSize.width() / rectAspect;
+        source = QRectF(0, (imageSize.height() - height) / 2.0,
+                        imageSize.width(), height);
+    }
+    painter.drawImage(rect, image, source);
+}
+
 QFont posterFont(StudioData::OralFont family, int pixelSize, int weight)
 {
     QFont font = Theme::font(pixelSize, weight);
@@ -245,6 +268,13 @@ void paintOralPoster(QPainter &painter, const QRectF &rect,
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
     clipRounded(painter, rect, 10);
+
+    // 有真实成片首帧时只绘制视频画面，避免原型海报的标题/关键词叠在封面上。
+    if (!spec.frameImage.isNull()) {
+        paintCoverImage(painter, rect, spec.frameImage);
+        painter.restore();
+        return;
+    }
 
     const StudioData::OralTemplate tmpl = StudioData::oralTemplate(spec.templateId);
     if (spec.ratio == QLatin1String("16:9")) {
@@ -932,21 +962,7 @@ void paintOralMaterial(QPainter &painter, const QRectF &rect,
 
     // 导入素材使用真实缩略图：按目标区域等比铺满并居中裁剪。
     if (!material.preview.isNull()) {
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        const QSize imageSize = material.preview.size();
-        const qreal imageAspect = qreal(imageSize.width()) / imageSize.height();
-        const qreal rectAspect = rect.width() / rect.height();
-        QRectF source(0, 0, imageSize.width(), imageSize.height());
-        if (imageAspect > rectAspect) {
-            const qreal width = imageSize.height() * rectAspect;
-            source = QRectF((imageSize.width() - width) / 2.0, 0, width,
-                            imageSize.height());
-        } else {
-            const qreal height = imageSize.width() / rectAspect;
-            source = QRectF(0, (imageSize.height() - height) / 2.0,
-                            imageSize.width(), height);
-        }
-        painter.drawImage(rect, material.preview, source);
+        paintCoverImage(painter, rect, material.preview);
         painter.restore();
         return;
     }

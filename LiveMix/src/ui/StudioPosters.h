@@ -7,6 +7,7 @@
 #include "Controls.h"
 
 #include <QColor>
+#include <QImage>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -23,6 +24,8 @@ struct OralPosterSpec {
     QString headline;
     QString caption;
     QStringList keywords;
+    // 成片真实首帧；非空时直接展示视频画面，不再绘制原型海报的标题与关键词。
+    QImage frameImage;
     QVector<StudioData::OralMaterial> materials;
     QString ratio = QStringLiteral("9:16");
     QString timecode = QStringLiteral("00:58");

@@ -286,6 +286,20 @@ struct AudioPlan
     static AudioPlan fromJson(const QJsonObject &object);
 };
 
+// 封面海报：取口播首帧用 doubao-seedream-5-0-flash 图生图生成。
+// 产品指定的时间线是 [0, 10000] 微秒；领域结构统一用毫秒，提交时再 ×1000。
+struct CoverPlan
+{
+    QString prompt;
+    QString localPath;   // 本地生成的封面（画布尺寸）
+    QString uploadedUrl; // capcut-mate 上传后的临时地址
+    qint64 startMs = 0;
+    qint64 endMs = 10; // 10 毫秒 = 10000 微秒
+
+    QJsonObject toJson() const;
+    static CoverPlan fromJson(const QJsonObject &object);
+};
+
 // 画布配置。
 struct Canvas
 {
@@ -321,6 +335,7 @@ struct EditPlan
     ShotPlan shots;
     SubtitlePlan subtitles;
     AudioPlan audio;
+    CoverPlan cover;
 
     // 完整计划 JSON（包含分析、镜头、字幕、音频与渲染设置）。
     QJsonObject toJson() const;
