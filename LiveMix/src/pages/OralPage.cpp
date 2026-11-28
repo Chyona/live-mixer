@@ -3941,6 +3941,7 @@ void OralPage::rebuildResult()
     m_resultDraftButton = nullptr;
     m_resultDraftHint = nullptr;
     m_resultCenterPlay = nullptr;
+    m_resultPlayToggle = nullptr;
 
     if (!m_hasResult) {
         auto *empty = new QWidget(m_resultScreen);
@@ -4198,6 +4199,13 @@ void OralPage::rebuildResult()
                             QStringLiteral("成片播放失败：%1").arg(errorText));
                     }
                 });
+        // 以播放器的真实结束信号为准；定时器轮询只作为兜底。
+        connect(m_resultPlayer, &QMediaPlayer::mediaStatusChanged, this,
+                [this](QMediaPlayer::MediaStatus status) {
+                    if (status == QMediaPlayer::EndOfMedia) {
+                        finishPlayback();
+                    }
+                });
         m_resultMediaStack->addWidget(videoHost);
     }
     previewLayout->addWidget(m_resultMediaStack, 0, Qt::AlignHCenter);
@@ -4207,13 +4215,14 @@ void OralPage::rebuildResult()
     auto *playLayout = new QHBoxLayout(playRow);
     playLayout->setContentsMargins(0, 0, 0, 0);
     playLayout->setSpacing(8);
-    auto *play = new GlyphButton(Icons::Glyph::Play, 28, playRow);
-    play->setGlyphSize(11);
-    play->setColors(Theme::Text1, Theme::Primary);
-    play->setBackgroundColors(Theme::Surface2, Theme::Surface3);
-    play->setToolTipText(QStringLiteral("播放或暂停"));
-    connect(play, &QAbstractButton::clicked, this, &OralPage::togglePlayback);
-    playLayout->addWidget(play);
+    m_resultPlayToggle = new GlyphButton(Icons::Glyph::Play, 28, playRow);
+    m_resultPlayToggle->setGlyphSize(11);
+    m_resultPlayToggle->setColors(Theme::Text1, Theme::Primary);
+    m_resultPlayToggle->setBackgroundColors(Theme::Surface2, Theme::Surface3);
+    m_resultPlayToggle->setToolTipText(QStringLiteral("播放或暂停"));
+    connect(m_resultPlayToggle, &QAbstractButton::clicked, this,
+            &OralPage::togglePlayback);
+    playLayout->addWidget(m_resultPlayToggle);
     auto *playBarHost = new QWidget(playRow);
     auto *playBarLayout = new QVBoxLayout(playBarHost);
     playBarLayout->setContentsMargins(0, 0, 0, 0);
@@ -4642,6 +4651,12 @@ void OralPage::togglePlayback()
         m_playing = true;
         m_playTimer->start();
     }
+    updatePlaybackControls();
+    updatePlayback();
+}
+
+void OralPage::updatePlaybackControls()
+{
     if (m_resultPlayButton) {
         m_resultPlayButton->setText(m_playing ? QStringLiteral("暂停播放")
                                               : QStringLiteral("播放成片"));
@@ -4649,7 +4664,10 @@ void OralPage::togglePlayback()
                                                       : Icons::Glyph::Play);
     }
     setResultPlayIcon(m_resultCenterPlay, m_playing);
-    updatePlayback();
+    if (m_resultPlayToggle) {
+        m_resultPlayToggle->setGlyph(m_playing ? Icons::Glyph::Pause
+                                               : Icons::Glyph::Play);
+    }
 }
 
 void OralPage::updatePlayback()
@@ -4660,22 +4678,14 @@ void OralPage::updatePlayback()
     if (m_resultHasVideo && m_resultPlayer) {
         const qint64 total = m_resultPlayer->duration();
         const qint64 current = qMax<qint64>(0, m_resultPlayer->position());
+        if (m_playing && total > 0 && current >= total - 80) {
+            // 定时器兜底：部分后端结束时不保证发出 EndOfMedia。
+            finishPlayback();
+            return;
+        }
         m_playProgress = total > 0
             ? qBound(0, int(current * 100 / total), 100)
             : 0;
-        if (m_playing && total > 0 && current >= total - 80) {
-            m_playing = false;
-            m_playTimer->stop();
-            m_resultPlayer->stop();
-            if (m_resultPlayButton) {
-                m_resultPlayButton->setText(QStringLiteral("播放成片"));
-                m_resultPlayButton->setLeadingGlyph(Icons::Glyph::Play);
-            }
-            setResultPlayIcon(m_resultCenterPlay, false);
-            if (m_resultMediaStack) {
-                m_resultMediaStack->setCurrentIndex(0);
-            }
-        }
         if (m_resultPlayClock) {
             m_resultPlayClock->setText(StudioData::formatElapsed(current));
         }
@@ -4687,6 +4697,33 @@ void OralPage::updatePlayback()
     }
     if (m_resultPlayBar) {
         m_resultPlayBar->setValue(m_playProgress);
+    }
+}
+
+void OralPage::finishPlayback()
+{
+    m_playing = false;
+    m_playProgress = 0;
+    if (m_playTimer) {
+        m_playTimer->stop();
+    }
+    // 已经在停止态时不要再调 stop()，避免结束信号再次触发本函数。
+    if (m_resultPlayer
+        && m_resultPlayer->playbackState() != QMediaPlayer::StoppedState) {
+        m_resultPlayer->stop();
+    }
+    updatePlaybackControls();
+    if (m_resultMediaStack) {
+        m_resultMediaStack->setCurrentIndex(0);
+    }
+    if (m_resultPlayClock) {
+        m_resultPlayClock->setText(QStringLiteral("00:00"));
+    }
+    if (m_resultPoster) {
+        m_resultPoster->setProgress(0);
+    }
+    if (m_resultPlayBar) {
+        m_resultPlayBar->setValue(0);
     }
 }
 

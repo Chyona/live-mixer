@@ -22,6 +22,7 @@ class QVBoxLayout;
 class QHBoxLayout;
 class QProcess;
 class Button;
+class GlyphButton;
 class ProgressBar;
 class ConfigStore;
 class QThread;
@@ -129,6 +130,10 @@ private:
 
     void togglePlayback();
     void updatePlayback();
+    // 播放按钮、中心悬浮按钮与底部控制条的图标/文案统一跟随 m_playing。
+    void updatePlaybackControls();
+    // 播放结束：切回海报并把进度、时间码与控制条一起归零。
+    void finishPlayback();
 
     void updateGenerationClock();
     void copyText(const QString &text, const QString &label);
@@ -212,6 +217,7 @@ private:
     QLabel *m_resultPlayClock = nullptr;
     Button *m_resultPlayButton = nullptr;
     QToolButton *m_resultCenterPlay = nullptr;
+    GlyphButton *m_resultPlayToggle = nullptr;
     ProgressBar *m_resultPlayBar = nullptr;
     Button *m_resultDraftButton = nullptr;
     QLabel *m_resultDraftHint = nullptr;
