@@ -28,6 +28,11 @@ bool cutKeepRanges(const QString &inputPath,
                    const QVector<QPair<qint64, qint64>> &ranges,
                    const QString &outputPath, QString *error);
 
+// 保持画面不重新编码，只对音轨套用 ffmpeg 音频滤镜（智能口播用于降噪）。
+// audioFilter 例如 "afftdn=nr=12:nf=-35"；画面沿用原编码，音轨转为 AAC。
+bool applyAudioFilter(const QString &inputPath, const QString &audioFilter,
+                      const QString &outputPath, QString *error);
+
 // 录制目录中的完整 MP4 路径（与 index.m3u8 同级，固定为 index.mp4）。
 // 输入不是 m3u8 时原样返回。
 QString recordingMp4Path(const QString &playlistPath);

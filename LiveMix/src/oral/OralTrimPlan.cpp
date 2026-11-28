@@ -10,8 +10,9 @@ namespace {
 
 // 超过该间隔视为静音并删除。
 constexpr qint64 kSilenceMinMs = 500;
-// 静音两端保留的余量，避免 ASR 词边界略偏时切掉起音/尾音。
-constexpr qint64 kSpeechEdgeGuardMs = 120;
+// 静音两端保留的余量：各 200ms，两段语音之间合计保留 0.4 秒自然换气，
+// 同时避免 ASR 词边界略偏时切掉起音/尾音。
+constexpr qint64 kSpeechEdgeGuardMs = 200;
 // 删除语气词时向相邻短间隙延伸的余量，让切点更干净。
 constexpr qint64 kFillerEdgePadMs = 80;
 // 过短的保留碎片（通常只是切点附近的噪声）并入删除。

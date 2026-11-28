@@ -177,6 +177,8 @@ public:
 
     bool isChecked() const;
     void setChecked(bool checked);
+    // 就地更新说明文字（例如剪气口额外指令填写后切换说明），不重建控件。
+    void setDescription(const QString &description);
 
 signals:
     void toggled(bool checked);
@@ -189,6 +191,7 @@ protected:
 
 private:
     Switch *m_switch = nullptr;
+    QLabel *m_description = nullptr;
     bool m_hovered = false;
 };
 

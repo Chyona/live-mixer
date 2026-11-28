@@ -589,6 +589,56 @@ QString oralDensityName(OralDensity density)
     }
 }
 
+QString oralDenoiseLevelName(OralDenoiseLevel level)
+{
+    switch (level) {
+    case OralDenoiseLevel::Light:
+        return QStringLiteral("轻度");
+    case OralDenoiseLevel::Strong:
+        return QStringLiteral("强力");
+    case OralDenoiseLevel::Standard:
+    default:
+        return QStringLiteral("标准");
+    }
+}
+
+QString oralDenoiseLevelDescription(OralDenoiseLevel level)
+{
+    switch (level) {
+    case OralDenoiseLevel::Light:
+        return QStringLiteral("只压制持续底噪，保留环境氛围与呼吸感。");
+    case OralDenoiseLevel::Strong:
+        return QStringLiteral("更彻底地去除底噪，适合嘈杂室内。");
+    case OralDenoiseLevel::Standard:
+    default:
+        return QStringLiteral("抑制环境底噪，保留齿音与人声细节。");
+    }
+}
+
+QString oralDenoiseLevelKey(OralDenoiseLevel level)
+{
+    switch (level) {
+    case OralDenoiseLevel::Light:
+        return QStringLiteral("light");
+    case OralDenoiseLevel::Strong:
+        return QStringLiteral("strong");
+    case OralDenoiseLevel::Standard:
+    default:
+        return QStringLiteral("standard");
+    }
+}
+
+OralDenoiseLevel oralDenoiseLevelFromKey(const QString &key)
+{
+    if (key == QLatin1String("light")) {
+        return OralDenoiseLevel::Light;
+    }
+    if (key == QLatin1String("strong")) {
+        return OralDenoiseLevel::Strong;
+    }
+    return OralDenoiseLevel::Standard;
+}
+
 QString shortOralCaption(const QString &text, int maxLength)
 {
     const QString first = text.split(QRegularExpression(QStringLiteral("[。！？\\n]"))).value(0).trimmed();

@@ -40,10 +40,11 @@ public:
                           QString *error, const StatusCallback &onStatus = {});
 
     // 剪口气：从逐词转写中找出可整词删除的语气词/口头禅。
-    // 返回全局词序号闭区间（见 Oral::flattenSpeechWords）；提示词内置，
-    // 不提供配置。没有逐词时间线时返回空结果。
+    // 返回全局词序号闭区间（见 Oral::flattenSpeechWords）；默认规则内置，
+    // instruction 为用户选填的额外删除要求（自然语言），仅在非空时追加到
+    // 提示词。没有逐词时间线时返回空结果。
     bool analyzeFillers(const QString &baseUrl, const QString &apiKey,
-                        const SpeechAnalysis &speech,
+                        const SpeechAnalysis &speech, const QString &instruction,
                         QVector<FillerCut> *cuts, QString *error,
                         const StatusCallback &onStatus = {});
 
