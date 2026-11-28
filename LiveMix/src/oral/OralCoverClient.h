@@ -1,9 +1,10 @@
 #pragma once
 
 // 文件作用：智能口播封面海报生成。
-// 取口播视频首帧作为参考图，调用生图网关的 doubao-seedream-5-0-flash
-// 完成图生图，得到一张与视频内容匹配的海报（画布尺寸、本地 JPG）。
-// 网关与 LLM / ASR 共用设置页地址：POST <apiUrl>/images/generations。
+// 分两步：
+// 1. 内置提示词 1 + 口播文案 → DeepSeek 生成提示词 2；
+// 2. 提示词 2 + 口播首帧 → doubao-seedream-5-0-flash 图生图，得到封面海报。
+// 两个请求都与 LLM / ASR 共用设置页的网关地址。
 
 #include <QString>
 
@@ -20,7 +21,14 @@ public:
 
     explicit CoverClient(HttpClient *http);
 
-    // referenceImagePath：口播首帧（本地图片）；prompt：海报提示词；
+    // 第一步：提示词 1 + 口播内容 → 提示词 2。
+    // oralContent 由调用方按「口播文案 + 画幅等补充信息」组织。
+    bool generatePrompt(const QString &baseUrl, const QString &apiKey,
+                        const QString &oralContent, QString *prompt,
+                        QString *error, const StatusCallback &onStatus = {});
+
+    // 第二步：提示词 2 + 首帧图 → 封面。
+    // referenceImagePath：口播首帧（本地图片）；prompt：提示词 2；
     // width × height：输出画布尺寸。成功时图片写入 outputPath。
     bool generate(const QString &baseUrl, const QString &apiKey,
                   const QString &referenceImagePath, const QString &prompt,
@@ -28,6 +36,8 @@ public:
                   QString *error, const StatusCallback &onStatus = {});
 
     static QString modelName();
+    // 提示词 2 使用的文本模型，与智能口播语义分析保持一致。
+    static QString promptModelName();
 
 private:
     HttpClient *m_http = nullptr;

@@ -92,6 +92,10 @@ private:
     bool addBrollTracks(EditPlan *plan, CapCutClient *capcut,
                         const CapCutDraft &draft, const QString &workDir,
                         QString *error);
+    // 封面提示词 2：提示词 1 + 口播内容 → DeepSeek，按源文件缓存；
+    // 调用失败时退回本地兜底提示词。
+    bool ensureCoverPrompt(EditPlan *plan, HttpClient *http,
+                           const QString &cacheDir, QString *error);
     // 封面海报：取口播首帧 → seedream 图生图 → 上传并写到最上层图片轨。
     // 生成失败只记录日志，不阻断成片。
     bool addCoverTrack(EditPlan *plan, CapCutClient *capcut,

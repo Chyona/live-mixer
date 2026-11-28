@@ -5,6 +5,7 @@
 #include "OralCoverClient.h"
 
 #include "../api/HttpClient.h"
+#include "OralCoverPrompts.h"
 
 #include <QBuffer>
 #include <QDir>
@@ -13,6 +14,7 @@
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QStringList>
 #include <QThread>
 #include <QUrl>
 
@@ -20,13 +22,16 @@ namespace {
 
 // 产品指定的封面生成模型。
 constexpr char kModel[] = "doubao-seedream-5-0-flash";
+// 提示词 2 使用与智能口播语义分析一致的文本模型。
+constexpr char kPromptModel[] = "deepseek-flash";
 // 网关同步等待出图；服务器预算约 240 秒，客户端多留余量。
 constexpr int kImageTimeoutMs = 5 * 60 * 1000;
+constexpr int kChatTimeoutMs = 5 * 60 * 1000;
 // 参考图长边上限：足够模型识别人物与场景，又不会让请求体过大。
 constexpr int kReferenceMaxEdge = 1280;
 constexpr int kReferenceQuality = 90;
 
-QUrl imageGenerationsUrl(const QString &baseUrl)
+QUrl gatewayUrl(const QString &baseUrl, const QString &pathSuffix)
 {
     QUrl url = QUrl::fromUserInput(baseUrl.trimmed());
     if (!url.isValid() || url.host().isEmpty()) {
@@ -36,8 +41,18 @@ QUrl imageGenerationsUrl(const QString &baseUrl)
     if (!path.endsWith(QLatin1Char('/'))) {
         path += QLatin1Char('/');
     }
-    url.setPath(path + QStringLiteral("images/generations"));
+    url.setPath(path + pathSuffix);
     return url;
+}
+
+QUrl imageGenerationsUrl(const QString &baseUrl)
+{
+    return gatewayUrl(baseUrl, QStringLiteral("images/generations"));
+}
+
+QUrl chatCompletionsUrl(const QString &baseUrl)
+{
+    return gatewayUrl(baseUrl, QStringLiteral("chat/completions"));
 }
 
 QString requestErrorMessage(const HttpResponse &response)
@@ -58,6 +73,102 @@ QString requestErrorMessage(const HttpResponse &response)
         return response.error;
     }
     return QStringLiteral("HTTP %1").arg(response.httpStatus);
+}
+
+// 兼容 choices[0].message.content 的字符串与 [{type:"text", text:"..."}] 形式。
+QString messageContentText(const QJsonValue &value)
+{
+    if (value.isString()) {
+        return value.toString();
+    }
+    if (value.isArray()) {
+        QString text;
+        for (const QJsonValue &part : value.toArray()) {
+            const QJsonObject object = part.toObject();
+            if (object.value(QStringLiteral("type")).toString()
+                == QLatin1String("text")) {
+                text += object.value(QStringLiteral("text")).toString();
+            } else if (object.contains(QStringLiteral("text"))) {
+                text += object.value(QStringLiteral("text")).toString();
+            }
+        }
+        return text;
+    }
+    return QString();
+}
+
+// 去掉模型偶尔包在整个输出外面的 Markdown 代码块围栏。
+QString stripOuterFence(QString text)
+{
+    text = text.trimmed();
+    if (!text.startsWith(QLatin1String("```"))) {
+        return text;
+    }
+    const int lineEnd = text.indexOf(QLatin1Char('\n'));
+    if (lineEnd < 0) {
+        return text;
+    }
+    text.remove(0, lineEnd + 1);
+    const int close = text.lastIndexOf(QLatin1String("```"));
+    if (close >= 0) {
+        text.truncate(close);
+    }
+    return text.trimmed();
+}
+
+// 提示词 1 要求输出主版本 + 备选版；图生图只需要主版本的提示词 2。
+QString cutAtAlternativeVersions(QString text)
+{
+    const QStringList markers = {
+        QStringLiteral("## 备选"),
+        QStringLiteral("备选B版"),
+        QStringLiteral("## 一句话"),
+        QStringLiteral("一句话改动建议"),
+    };
+    int cut = -1;
+    for (const QString &marker : markers) {
+        const int index = text.indexOf(marker);
+        if (index >= 0 && (cut < 0 || index < cut)) {
+            cut = index;
+        }
+    }
+    if (cut >= 0) {
+        text.truncate(cut);
+    }
+    return text.trimmed();
+}
+
+// 从「提示词2：」之后截取主版本提示词，去掉备选版本与改动建议。
+QString extractPrompt2(const QString &content)
+{
+    const QString text = stripOuterFence(content);
+    int marker = text.indexOf(QStringLiteral("提示词2"));
+    if (marker < 0) {
+        marker = text.indexOf(QStringLiteral("提示词 2"));
+    }
+    if (marker < 0) {
+        // 模型偶尔直接输出 1–9 段结构，此时整体作为提示词 2。
+        return cutAtAlternativeVersions(text);
+    }
+    int colon = text.indexOf(QStringLiteral("："), marker);
+    if (colon < 0) {
+        colon = text.indexOf(QLatin1Char(':'), marker);
+    }
+    if (colon < 0) {
+        return cutAtAlternativeVersions(text);
+    }
+    QString body = stripOuterFence(text.mid(colon + 1));
+    body = cutAtAlternativeVersions(body);
+    while (body.startsWith(QLatin1Char('*')) || body.startsWith(QLatin1Char('#'))
+           || body.startsWith(QLatin1Char(' '))) {
+        body.remove(0, 1);
+    }
+    body = body.trimmed();
+    while (body.endsWith(QLatin1Char('*')) || body.endsWith(QLatin1Char('#'))) {
+        body.chop(1);
+        body = body.trimmed();
+    }
+    return body;
 }
 
 // 读取参考图并编码成 data URI；长边超过 1280 时等比缩小。
@@ -124,6 +235,112 @@ CoverClient::CoverClient(HttpClient *http)
 QString CoverClient::modelName()
 {
     return QString::fromLatin1(kModel);
+}
+
+QString CoverClient::promptModelName()
+{
+    return QString::fromLatin1(kPromptModel);
+}
+
+bool CoverClient::generatePrompt(const QString &baseUrl, const QString &apiKey,
+                                 const QString &oralContent, QString *prompt,
+                                 QString *error, const StatusCallback &onStatus)
+{
+    if (!m_http) {
+        if (error) {
+            *error = QStringLiteral("封面提示词客户端未初始化。");
+        }
+        return false;
+    }
+    if (!prompt) {
+        if (error) {
+            *error = QStringLiteral("封面提示词输出参数无效。");
+        }
+        return false;
+    }
+    if (apiKey.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("封面提示词生成需要 API 密钥，请先在设置中填写。");
+        }
+        return false;
+    }
+    if (oralContent.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("口播内容为空，无法生成封面提示词。");
+        }
+        return false;
+    }
+    const QUrl url = chatCompletionsUrl(baseUrl);
+    if (!url.isValid() || url.host().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("API 地址无效：%1").arg(baseUrl);
+        }
+        return false;
+    }
+
+    QJsonArray messages;
+    QJsonObject system;
+    system.insert(QStringLiteral("role"), QStringLiteral("system"));
+    system.insert(QStringLiteral("content"), Oral::coverDirectorPrompt());
+    messages.append(system);
+    QJsonObject user;
+    user.insert(QStringLiteral("role"), QStringLiteral("user"));
+    user.insert(QStringLiteral("content"), oralContent);
+    messages.append(user);
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("model"), QString::fromLatin1(kPromptModel));
+    payload.insert(QStringLiteral("messages"), messages);
+    payload.insert(QStringLiteral("temperature"), 0.6);
+    payload.insert(QStringLiteral("stream"), false);
+
+    // 网络抖动或上游 5xx 时重试；4xx 直接返回，避免重复计费。
+    QString lastError;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (attempt > 0 && onStatus) {
+            onStatus(QStringLiteral("封面提示词连接波动，正在重试（%1/2）…")
+                         .arg(attempt));
+        }
+        const HttpResponse response = m_http->postJson(
+            url, payload, QByteArray("Bearer ") + apiKey.toUtf8(),
+            kChatTimeoutMs);
+        if (response.isHttpOk()
+            && !response.json.contains(QStringLiteral("error"))) {
+            const QJsonArray choices =
+                response.json.value(QStringLiteral("choices")).toArray();
+            if (!choices.isEmpty()) {
+                const QJsonObject message =
+                    choices.first()
+                        .toObject()
+                        .value(QStringLiteral("message"))
+                        .toObject();
+                const QString content = messageContentText(
+                    message.value(QStringLiteral("content")));
+                const QString prompt2 = extractPrompt2(content);
+                if (!prompt2.isEmpty()) {
+                    *prompt = prompt2;
+                    return true;
+                }
+                lastError = QStringLiteral("大模型返回的提示词为空。");
+            } else {
+                lastError = QStringLiteral("大模型返回空结果。");
+            }
+        } else {
+            lastError = requestErrorMessage(response);
+            const bool retryable = response.httpStatus == 429
+                || response.httpStatus >= 500 || !response.networkOk;
+            if (!retryable) {
+                break;
+            }
+        }
+        if (attempt < 2) {
+            QThread::msleep(800u << attempt);
+        }
+    }
+    if (error) {
+        *error = QStringLiteral("封面提示词生成失败：%1").arg(lastError);
+    }
+    return false;
 }
 
 bool CoverClient::generate(const QString &baseUrl, const QString &apiKey,
