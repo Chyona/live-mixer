@@ -1383,7 +1383,7 @@ bool PipelineService::composeDraft(EditPlan *plan, CapCutClient *capcut,
     // 封面：口播首帧图生图生成海报，压在最上层，覆盖片头 10 毫秒。
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
              58, QStringLiteral("生成封面海报"));
-    addCoverTrack(plan, capcut, *draft, workDir, http, error);
+    addCoverTrack(plan, capcut, *draft, workDir, http);
 
     // 字幕：标题花字单独一条轨，正文关键词高亮。
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
@@ -1587,50 +1587,14 @@ bool PipelineService::addBrollTracks(EditPlan *plan, CapCutClient *capcut,
     return true;
 }
 
-bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http,
-                                        const QString &cacheDir, QString *error)
+bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http)
 {
-    Q_UNUSED(error);
     if (!plan || !http) {
         return false;
     }
-    if (!m_request.regenerateCover
-        && !plan->cover.prompt.trimmed().isEmpty()) {
-        return true;
-    }
 
-    // 提示词 2 按「源文件 + 提示词 1 内容 + 文本模型 + 画布」缓存，避免重复调用；
-    // 提示词 1 调整后缓存指纹自动变化。重新包装时跳过缓存，重新生成。
-    const QString promptCachePath = QDir(cacheDir).filePath(
-        QStringLiteral("prompt_%1.txt")
-            .arg(sha1Hex(QStringList{
-                fileFingerprint(plan->sourcePath),
-                Oral::coverDirectorPrompt(),
-                CoverClient::promptModelName(),
-                plan->canvas.ratio,
-                QStringLiteral("%1x%2")
-                    .arg(plan->canvas.width)
-                    .arg(plan->canvas.height),
-            }.join(QLatin1Char('|')))));
-    if (!m_request.regenerateCover) {
-        QFile cached(promptCachePath);
-        if (cached.open(QIODevice::ReadOnly)) {
-            const QString prompt = QString::fromUtf8(cached.readAll()).trimmed();
-            cached.close();
-            if (!prompt.isEmpty()) {
-                plan->cover.prompt = prompt;
-                addLog(StudioData::OralStage::Compose,
-                       QStringLiteral("复用已生成的封面提示词 2"),
-                       StudioData::Tone::Ok);
-                return true;
-            }
-        }
-    } else {
-        addLog(StudioData::OralStage::Compose,
-               QStringLiteral("重新包装：重新生成封面提示词 2"),
-               StudioData::Tone::Info);
-    }
-
+    // 封面属于创意内容，不按源文件复用：每次成片都重新生成提示词 2，
+    // 让「重新包装」得到与上一版不同的封面。
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
              60, QStringLiteral("生成封面提示词 2"));
     addLog(StudioData::OralStage::Compose,
@@ -1650,13 +1614,6 @@ bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http,
         addLog(StudioData::OralStage::Compose,
                QStringLiteral("封面提示词 2 已生成（%1 字）").arg(prompt.size()),
                StudioData::Tone::Ok);
-        if (QDir().mkpath(cacheDir)) {
-            QSaveFile file(promptCachePath);
-            if (file.open(QIODevice::WriteOnly)) {
-                file.write(prompt.toUtf8());
-                file.commit();
-            }
-        }
         return true;
     }
 
@@ -1670,8 +1627,7 @@ bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http,
 
 bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
                                     const CapCutDraft &draft,
-                                    const QString &workDir, HttpClient *http,
-                                    QString *error)
+                                    const QString &workDir, HttpClient *http)
 {
     if (!plan || !capcut || !http) {
         return true;
@@ -1679,107 +1635,82 @@ bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
 
     plan->cover.startMs = 0;
     plan->cover.endMs = kCoverEndMs;
-    const QString cacheDir =
-        QDir(m_request.cacheDir).filePath(QStringLiteral("covers"));
-    ensureCoverPrompt(plan, http, cacheDir, error);
+    ensureCoverPrompt(plan, http);
 
-    // 封面按「源文件 + 模型 + 提示词 2 + 画布」缓存；普通生成复用缓存，
-    // 重新包装时强制重新生成。
-    const QString cacheKey = sha1Hex(QStringList{
+    // 文件名按「源文件 + 模型 + 提示词 2 + 画布」生成，只用于区分不同成片；
+    // 封面本身每次成片都会重新调用图生图，不复用上一次的文件。
+    const QString coverKey = sha1Hex(QStringList{
         fileFingerprint(plan->sourcePath),
         CoverClient::modelName(),
         plan->cover.prompt,
         QStringLiteral("%1x%2").arg(plan->canvas.width).arg(plan->canvas.height),
     }.join(QLatin1Char('|')));
-    const QString coverPath = QDir(cacheDir).filePath(
-        QStringLiteral("cover_%1.jpg").arg(cacheKey));
+    const QString coverPath = QDir(m_request.cacheDir).filePath(
+        QStringLiteral("covers/cover_%1.jpg").arg(coverKey));
 
-    // 缓存文件可能是上次中断留下的半截图片，必须能读出且尺寸正确才复用。
-    // 重新包装时跳过缓存，强制重新调用图生图生成封面。
-    bool coverCached = false;
-    if (!m_request.regenerateCover && QFileInfo::exists(coverPath)
-        && QFileInfo(coverPath).size() > 0) {
-        int coverWidth = 0;
-        int coverHeight = 0;
-        QString probeError;
-        coverCached = probeImage(coverPath, &coverWidth, &coverHeight,
-                                 &probeError)
-            && coverWidth == plan->canvas.width
-            && coverHeight == plan->canvas.height;
-        if (!coverCached) {
-            QFile::remove(coverPath);
-        }
+    setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
+             62, QStringLiteral("生成封面海报"));
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("正在用口播首帧生成封面海报（%1）…")
+               .arg(CoverClient::modelName()),
+           StudioData::Tone::Ai);
+    const QString framePath =
+        QDir(workDir).filePath(QStringLiteral("cover_frame.jpg"));
+    QString localError;
+    if (!extractFirstFrame(plan->sourcePath, framePath, &localError)) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("口播首帧提取失败，成片继续输出：%1")
+                   .arg(localError),
+               StudioData::Tone::Muted);
+        return true;
+    }
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("已提取口播首帧，正在调用图生图生成封面…"),
+           StudioData::Tone::Info);
+
+    const QString rawPath =
+        QDir(workDir).filePath(QStringLiteral("cover_raw.jpg"));
+    CoverClient cover(http);
+    if (!cover.generate(
+            m_request.gatewayBaseUrl, m_request.apiKey, framePath,
+            plan->cover.prompt, plan->canvas.width, plan->canvas.height,
+            rawPath, &localError,
+            [this](const QString &status) {
+                addLog(StudioData::OralStage::Compose, status,
+                       StudioData::Tone::Info);
+            })) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面生成失败，成片继续输出：%1")
+                   .arg(localError),
+               StudioData::Tone::Muted);
+        return true;
+    }
+    // 模型输出尺寸可能与请求略有差异，统一裁成画布尺寸。
+    // 先写 .part 再改名，避免中断留下半截文件。
+    const QString partPath = coverPath + QStringLiteral(".part.jpg");
+    if (!prepareCanvasImage(rawPath, plan->canvas.width,
+                            plan->canvas.height, partPath, &localError)) {
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面预处理失败，成片继续输出：%1")
+                   .arg(localError),
+               StudioData::Tone::Muted);
+        return true;
     }
     QString posterPath = coverPath;
-    if (coverCached) {
-        addLog(StudioData::OralStage::Compose,
-               QStringLiteral("复用已生成的封面海报，跳过重复生成"),
-               StudioData::Tone::Ok);
-    } else {
-        setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
-                 62, QStringLiteral("生成封面海报"));
-        addLog(StudioData::OralStage::Compose,
-               QStringLiteral("正在用口播首帧生成封面海报（%1）…")
-                   .arg(CoverClient::modelName()),
-               StudioData::Tone::Ai);
-        const QString framePath =
-            QDir(workDir).filePath(QStringLiteral("cover_frame.jpg"));
-        QString localError;
-        if (!extractFirstFrame(plan->sourcePath, framePath, &localError)) {
-            addLog(StudioData::OralStage::Compose,
-                   QStringLiteral("口播首帧提取失败，成片继续输出：%1")
-                       .arg(localError),
-                   StudioData::Tone::Muted);
-            return true;
-        }
-        addLog(StudioData::OralStage::Compose,
-               QStringLiteral("已提取口播首帧，正在调用图生图生成封面…"),
-               StudioData::Tone::Info);
-
-        const QString rawPath =
-            QDir(workDir).filePath(QStringLiteral("cover_raw.jpg"));
-        CoverClient cover(http);
-        if (!cover.generate(
-                m_request.gatewayBaseUrl, m_request.apiKey, framePath,
-                plan->cover.prompt, plan->canvas.width, plan->canvas.height,
-                rawPath, &localError,
-                [this](const QString &status) {
-                    addLog(StudioData::OralStage::Compose, status,
-                           StudioData::Tone::Info);
-                })) {
-            addLog(StudioData::OralStage::Compose,
-                   QStringLiteral("封面生成失败，成片继续输出：%1")
-                       .arg(localError),
-                   StudioData::Tone::Muted);
-            return true;
-        }
-        // 模型输出尺寸可能与请求略有差异，统一裁成画布尺寸后写入缓存。
-        // 先写 .part 再改名，避免中断留下半截缓存被下一次复用。
-        const QString partPath =
-            coverPath + QStringLiteral(".part.jpg");
-        if (!prepareCanvasImage(rawPath, plan->canvas.width,
-                                plan->canvas.height, partPath, &localError)) {
-            addLog(StudioData::OralStage::Compose,
-                   QStringLiteral("封面预处理失败，成片继续输出：%1")
-                       .arg(localError),
-                   StudioData::Tone::Muted);
-            return true;
-        }
-        if (QFileInfo::exists(coverPath)) {
-            QFile::remove(coverPath);
-        }
-        if (!QFile::rename(partPath, coverPath)) {
-            posterPath = partPath;
-            addLog(StudioData::OralStage::Compose,
-                   QStringLiteral("封面缓存写入失败，本次使用临时文件"),
-                   StudioData::Tone::Muted);
-        }
-        addLog(StudioData::OralStage::Compose,
-               QStringLiteral("封面海报已生成：%1×%2")
-                   .arg(plan->canvas.width)
-                   .arg(plan->canvas.height),
-               StudioData::Tone::Ok);
+    if (QFileInfo::exists(coverPath)) {
+        QFile::remove(coverPath);
     }
+    if (!QFile::rename(partPath, coverPath)) {
+        posterPath = partPath;
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面文件写入失败，本次使用临时文件"),
+               StudioData::Tone::Muted);
+    }
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("封面海报已生成：%1×%2")
+               .arg(plan->canvas.width)
+               .arg(plan->canvas.height),
+           StudioData::Tone::Ok);
     plan->cover.localPath = posterPath;
 
     setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,

@@ -14,6 +14,7 @@
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QRandomGenerator>
 #include <QStringList>
 #include <QThread>
 #include <QUrl>
@@ -399,6 +400,10 @@ bool CoverClient::generate(const QString &baseUrl, const QString &apiKey,
     payload.insert(QStringLiteral("image"), dataUri);
     payload.insert(QStringLiteral("size"),
                    QStringLiteral("%1x%2").arg(width).arg(height));
+    // 显式传随机种子，不依赖网关默认值；即使提示词与参考图完全相同，
+    // 重新成片也会得到另一张封面。火山方舟种子范围为 [-1, 2147483647]。
+    payload.insert(QStringLiteral("seed"),
+                   QRandomGenerator::global()->bounded(1, 2147483647));
     // Seedream 5.0 Flash 每次只出一张，不支持 n / 组图参数，不要传。
     // 火山方舟的生图接口默认带「AI生成」水印；封面需要干净画面，显式关闭。
     payload.insert(QStringLiteral("watermark"), false);

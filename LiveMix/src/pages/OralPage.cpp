@@ -1950,8 +1950,6 @@ void OralPage::openNewProject(bool sample)
         m_project.hasSource = true;
         m_project.materials = StudioData::demoMaterials();
     }
-    // 新项目沿用普通封面缓存策略；重新包装的标记只属于上一次结果。
-    m_regenerateCover = false;
     showSetup();
 }
 
@@ -3142,7 +3140,6 @@ void OralPage::startGeneration()
     request.cacheDir = cacheDir;
     request.outputDir = outputDir;
     request.draftRoot = draftRoot;
-    request.regenerateCover = m_regenerateCover;
 
     destroyPipeline();
     buildProcessingScreen();
@@ -4587,8 +4584,6 @@ void OralPage::restartFromResult()
     project.ratio = result.ratio;
     project.outputBoth = result.outputBoth;
     m_project = project;
-    // 重新包装要换一张封面：生成时跳过封面提示词与封面图缓存。
-    m_regenerateCover = true;
     showSetup();
 
     if (hasSource) {
