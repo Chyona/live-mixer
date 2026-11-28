@@ -144,6 +144,25 @@ QString sourceFileMetaHtml(const StudioData::OralSource &source)
              Theme::monoFont(9).family(), source.resolution.toHtmlEscaped());
 }
 
+// 最近口播卡片：只读取已缓存的首帧，不做阻塞截帧；缺失时由后台队列补齐。
+QImage cachedResultFramePreview(const StudioData::OralResult &result)
+{
+    if (!result.previewPath.isEmpty()) {
+        const QImage image(result.previewPath);
+        if (!image.isNull()) {
+            return image;
+        }
+    }
+    if (result.filePath.isEmpty()) {
+        return QImage();
+    }
+    const QString cachePath = FfmpegUtils::posterFrameCachePath(result.filePath);
+    if (!QFileInfo::exists(cachePath) || QFileInfo(cachePath).size() <= 0) {
+        return QImage();
+    }
+    return QImage(cachePath);
+}
+
 // 结果页预览：优先读流水线缓存的成片 0 秒帧；旧历史记录没有缓存时补截一次。
 QImage loadResultFramePreview(const QString &previewPath,
                               const QString &videoPath)
@@ -1442,6 +1461,8 @@ void OralPage::showResult()
 
 void OralPage::rebuildHub()
 {
+    // 旧卡片海报即将随布局清空，先取消登记避免异步截帧回调更新悬空指针。
+    m_recentPosterWidgets.clear();
     Studio::clearLayout(m_hubLayout);
     m_hubLayout->addWidget(buildHubHeader());
 
@@ -1859,7 +1880,14 @@ QWidget *OralPage::createRecentCard(const StudioData::OralResult &result,
     spec.ratio = result.ratio;
     spec.badge = QStringLiteral("成片");
     spec.timecode = result.durationLabel;
+    // 预览图使用成片首帧；首帧尚未缓存时先展示设计稿海报，后台截帧后就地替换。
+    spec.frameImage = cachedResultFramePreview(result);
     poster->setSpec(spec);
+    if (spec.frameImage.isNull() && !result.filePath.isEmpty()
+        && QFileInfo::exists(result.filePath)) {
+        m_recentPosterWidgets[result.filePath].append(poster);
+        requestPosterFrame(result.filePath);
+    }
     layout->addWidget(poster, 0, Qt::AlignTop);
 
     auto *texts = new QWidget(row);
@@ -2914,11 +2942,28 @@ void OralPage::ensureMaterialPreviews()
 
 void OralPage::requestVideoThumbnail(const QString &path)
 {
-    if (m_thumbnailInFlight == path || m_thumbnailQueue.contains(path)
+    requestPreviewFrame(path, true);
+}
+
+void OralPage::requestPosterFrame(const QString &path)
+{
+    requestPreviewFrame(path, false);
+}
+
+void OralPage::requestPreviewFrame(const QString &path, bool materialFrame)
+{
+    const PreviewFrameKind kind =
+        materialFrame ? PreviewFrameKind::Material : PreviewFrameKind::Poster;
+    if ((m_thumbnailInFlight.path == path && m_thumbnailInFlight.kind == kind)
         || m_failedPreviewPaths.contains(path)) {
         return;
     }
-    m_thumbnailQueue.append(path);
+    for (const PreviewFrameJob &job : m_thumbnailQueue) {
+        if (job.path == path && job.kind == kind) {
+            return;
+        }
+    }
+    m_thumbnailQueue.append({path, kind});
     startNextThumbnailJob();
 }
 
@@ -2933,8 +2978,12 @@ void OralPage::startNextThumbnailJob()
         return;
     }
 
-    const QString path = m_thumbnailQueue.takeFirst();
-    const QString cachePath = FfmpegUtils::thumbnailCachePath(path);
+    const PreviewFrameJob job = m_thumbnailQueue.takeFirst();
+    const QString path = job.path;
+    const bool posterFrame = job.kind == PreviewFrameKind::Poster;
+    const QString cachePath = posterFrame
+        ? FfmpegUtils::posterFrameCachePath(path)
+        : FfmpegUtils::thumbnailCachePath(path);
     if (!QDir().mkpath(QFileInfo(cachePath).absolutePath())) {
         m_failedPreviewPaths.insert(path);
         startNextThumbnailJob();
@@ -2943,23 +2992,25 @@ void OralPage::startNextThumbnailJob()
 
     auto *process = new QProcess(this);
     m_thumbnailProcess = process;
-    m_thumbnailInFlight = path;
+    m_thumbnailInFlight = job;
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this,
-            [this, process, path, cachePath](int exitCode,
-                                             QProcess::ExitStatus status) {
+            [this, process, path, cachePath, posterFrame](
+                int exitCode, QProcess::ExitStatus status) {
                 if (m_thumbnailProcess != process) {
                     return;
                 }
                 process->deleteLater();
                 m_thumbnailProcess = nullptr;
-                m_thumbnailInFlight.clear();
+                m_thumbnailInFlight = PreviewFrameJob();
                 QImage image;
                 if (exitCode == 0 && status == QProcess::NormalExit) {
                     image = QImage(cachePath);
                 }
                 if (image.isNull()) {
                     m_failedPreviewPaths.insert(path);
+                } else if (posterFrame) {
+                    applyPosterFrame(path, image);
                 } else {
                     applyMaterialThumbnail(path, image);
                 }
@@ -2972,15 +3023,18 @@ void OralPage::startNextThumbnailJob()
                 }
                 process->deleteLater();
                 m_thumbnailProcess = nullptr;
-                m_thumbnailInFlight.clear();
+                m_thumbnailInFlight = PreviewFrameJob();
                 m_failedPreviewPaths.insert(path);
                 startNextThumbnailJob();
             });
+    // 素材缩略图取 0.5 秒帧避开片头黑场；成片封面固定取 0 秒首帧。
     process->start(ffmpeg,
                    {QStringLiteral("-y"), QStringLiteral("-nostdin"),
                     QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"),
                     QStringLiteral("error"), QStringLiteral("-ss"),
-                    QStringLiteral("0.500"), QStringLiteral("-i"), path,
+                    posterFrame ? QStringLiteral("0.000")
+                                : QStringLiteral("0.500"),
+                    QStringLiteral("-i"), path,
                     QStringLiteral("-frames:v"), QStringLiteral("1"),
                     QStringLiteral("-vf"), QStringLiteral("scale=640:-2"),
                     cachePath});
@@ -3021,6 +3075,17 @@ void OralPage::applyMaterialThumbnail(const QString &path, const QImage &image)
             widget->setMaterial(material);
         }
         break;
+    }
+}
+
+void OralPage::applyPosterFrame(const QString &path, const QImage &image)
+{
+    // 首页可能已重建，登记表只保留当前仍存在的卡片海报。
+    const QVector<Studio::OralPosterWidget *> posters =
+        m_recentPosterWidgets.value(path);
+    for (Studio::OralPosterWidget *poster : posters) {
+        poster->spec().frameImage = image;
+        poster->update();
     }
 }
 
