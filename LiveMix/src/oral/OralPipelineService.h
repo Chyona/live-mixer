@@ -92,6 +92,11 @@ private:
     bool addBrollTracks(EditPlan *plan, CapCutClient *capcut,
                         const CapCutDraft &draft, const QString &workDir,
                         QString *error);
+    // 封面海报：取口播首帧 → seedream 图生图 → 上传并写到最上层图片轨。
+    // 生成失败只记录日志，不阻断成片。
+    bool addCoverTrack(EditPlan *plan, CapCutClient *capcut,
+                       const CapCutDraft &draft, const QString &workDir,
+                       HttpClient *http, QString *error);
     bool addSubtitleTracks(const EditPlan &plan, CapCutClient *capcut,
                            const CapCutDraft &draft, QString *error);
     bool addAudioTracks(const EditPlan &plan, CapCutClient *capcut,
@@ -101,7 +106,8 @@ private:
                            QString *draftPath, QString *error);
     StudioData::OralResult makeResult(const EditPlan &plan,
                                       const QString &videoPath,
-                                      const QString &draftPath) const;
+                                      const QString &draftPath,
+                                      const QString &previewPath) const;
 
     PipelineRequest m_request;
     StudioData::OralRun m_run;

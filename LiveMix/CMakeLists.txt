@@ -168,6 +168,8 @@ qt_add_executable(LiveMixStudio
     src/oral/OralAudioAssetsClient.cpp
     src/oral/OralSfxCatalog.h
     src/oral/OralSfxCatalog.cpp
+    src/oral/OralCoverClient.h
+    src/oral/OralCoverClient.cpp
     src/oral/OralCapCutClient.h
     src/oral/OralCapCutClient.cpp
     src/oral/OralEditPlanBuilder.h

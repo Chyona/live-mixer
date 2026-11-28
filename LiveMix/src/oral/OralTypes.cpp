@@ -717,6 +717,28 @@ AudioPlan AudioPlan::fromJson(const QJsonObject &object)
 /* 画布与剪辑计划                                                       */
 /* ------------------------------------------------------------------ */
 
+QJsonObject CoverPlan::toJson() const
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("prompt"), prompt);
+    object.insert(QStringLiteral("localPath"), localPath);
+    object.insert(QStringLiteral("uploadedUrl"), uploadedUrl);
+    object.insert(QStringLiteral("startMs"), startMs);
+    object.insert(QStringLiteral("endMs"), endMs);
+    return object;
+}
+
+CoverPlan CoverPlan::fromJson(const QJsonObject &object)
+{
+    CoverPlan cover;
+    cover.prompt = readString(object, QStringLiteral("prompt"));
+    cover.localPath = readString(object, QStringLiteral("localPath"));
+    cover.uploadedUrl = readString(object, QStringLiteral("uploadedUrl"));
+    cover.startMs = readMs(object, QStringLiteral("startMs"));
+    cover.endMs = readMs(object, QStringLiteral("endMs"), 10);
+    return cover;
+}
+
 QJsonObject Canvas::toJson() const
 {
     QJsonObject object;
@@ -770,6 +792,7 @@ QJsonObject EditPlan::toJson() const
     root.insert(QStringLiteral("shotPlan"), shots.toJson());
     root.insert(QStringLiteral("subtitles"), subtitles.toJson());
     root.insert(QStringLiteral("audio"), audio.toJson());
+    root.insert(QStringLiteral("cover"), cover.toJson());
     root.insert(QStringLiteral("timeline"), timelineJson());
     return root;
 }
@@ -806,6 +829,19 @@ QJsonObject EditPlan::timelineJson() const
         item.insert(QStringLiteral("sourceInMs"), shot.sourceInMs);
         item.insert(QStringLiteral("shotType"), shotTypeKey(shot.shotType));
         item.insert(QStringLiteral("transition"), shot.transition);
+        videoTracks.append(item);
+    }
+
+    // V4：封面海报，压在最上层，只覆盖片头 [0, 10000] 微秒（10 毫秒）。
+    if (!cover.localPath.isEmpty() || !cover.uploadedUrl.isEmpty()) {
+        QJsonObject item;
+        item.insert(QStringLiteral("track"), QStringLiteral("V4"));
+        item.insert(QStringLiteral("type"), QStringLiteral("cover"));
+        item.insert(QStringLiteral("startMs"), cover.startMs);
+        item.insert(QStringLiteral("endMs"), cover.endMs);
+        item.insert(QStringLiteral("path"),
+                    cover.uploadedUrl.isEmpty() ? cover.localPath
+                                                : cover.uploadedUrl);
         videoTracks.append(item);
     }
 
@@ -890,6 +926,8 @@ EditPlan EditPlan::fromJson(const QJsonObject &object)
     plan.subtitles = SubtitlePlan::fromJson(
         object.value(QStringLiteral("subtitles")).toObject());
     plan.audio = AudioPlan::fromJson(object.value(QStringLiteral("audio")).toObject());
+    plan.cover = CoverPlan::fromJson(
+        object.value(QStringLiteral("cover")).toObject());
     return plan;
 }
 
@@ -917,6 +955,7 @@ QJsonObject oralResultToJson(const StudioData::OralResult &result)
     object.insert(QStringLiteral("brollCount"), result.brollCount);
     object.insert(QStringLiteral("draftGenerated"), result.draftGenerated);
     object.insert(QStringLiteral("filePath"), result.filePath);
+    object.insert(QStringLiteral("previewPath"), result.previewPath);
     object.insert(QStringLiteral("draftPath"), result.draftPath);
     object.insert(QStringLiteral("draftId"), result.draftId);
     object.insert(QStringLiteral("editPlanPath"), result.editPlanPath);
@@ -958,6 +997,7 @@ StudioData::OralResult oralResultFromJson(const QJsonObject &object)
     result.draftGenerated =
         object.value(QStringLiteral("draftGenerated")).toBool();
     result.filePath = readString(object, QStringLiteral("filePath"));
+    result.previewPath = readString(object, QStringLiteral("previewPath"));
     result.draftPath = readString(object, QStringLiteral("draftPath"));
     result.draftId = readString(object, QStringLiteral("draftId"));
     result.editPlanPath = readString(object, QStringLiteral("editPlanPath"));

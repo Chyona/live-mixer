@@ -22,6 +22,10 @@ bool probeVideo(const QString &path, int *width, int *height,
 bool extractKeyframes(const QString &path, MaterialKind kind, qint64 durationMs,
                       const QString &workDir, QStringList *frames, QString *error);
 
+// 抽取口播视频的第一帧，作为封面图生图的参考图（原始分辨率 JPEG）。
+bool extractFirstFrame(const QString &videoPath, const QString &outputPath,
+                       QString *error);
+
 // 从关键帧计算本地视觉特征，作为大模型理解失败时的兜底信息。
 VisualFeatures analyzeVisualFeatures(const QStringList &frames, bool video);
 

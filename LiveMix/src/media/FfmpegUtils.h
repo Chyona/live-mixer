@@ -43,6 +43,9 @@ bool extractThumbnail(const QString &inputPath, qint64 positionMs,
 // 视频封面图缓存路径：按“路径 + 修改时间”生成，导入弹窗与视频库卡片共用。
 QString thumbnailCachePath(const QString &videoPath);
 
+// 成片首帧预览缓存路径：固定取 0 秒帧，与素材缩略图（0.5 秒）分开缓存。
+QString posterFrameCachePath(const QString &videoPath);
+
 // HLS 录像的完整 MP4 预览缓存路径；播放前会转封装整个录像。
 QString hlsPreviewCachePath(const QString &videoPath);
 
