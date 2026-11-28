@@ -785,13 +785,30 @@ void MixcutPage::buildUi()
     auto *hubRoot = new QVBoxLayout(m_hubScreen);
     hubRoot->setContentsMargins(0, 0, 0, 0);
     hubRoot->setSpacing(0);
+    // 头部固定，统计、入口卡片与最近混剪在下方独立滚动。
+    auto *hubHeaderHost = new QWidget(m_hubScreen);
+    auto *hubHeaderLayout = new QVBoxLayout(hubHeaderHost);
+    hubHeaderLayout->setContentsMargins(22, 18, 22, 0);
+    hubHeaderLayout->setSpacing(0);
+    auto *hubHeader = new PageHeader(
+        QStringLiteral("智能混剪"),
+        QStringLiteral("上传视频或图片素材，输入提示词生成文案，选好音色后一键成片，成片与剪映草稿一次交付。"),
+        hubHeaderHost);
+    hubHeader->setTitleMeta(new Chip(QStringLiteral("新功能"), Chip::Ai, hubHeader));
+    auto *hubStart = new Button(QStringLiteral("开始混剪"), Button::Primary,
+                                hubHeader);
+    hubStart->setLeadingGlyph(Icons::Glyph::Sparkle);
+    connect(hubStart, &QAbstractButton::clicked, this, &MixcutPage::startProject);
+    hubHeader->addAction(hubStart);
+    hubHeaderLayout->addWidget(hubHeader);
+    hubRoot->addWidget(hubHeaderHost);
     m_hubContent = new QWidget;
     m_hubLayout = new QVBoxLayout(m_hubContent);
-    m_hubLayout->setContentsMargins(22, 18, 22, 24);
+    m_hubLayout->setContentsMargins(22, 0, 22, 24);
     m_hubLayout->setSpacing(0);
     m_hubLayout->setAlignment(Qt::AlignTop);
     m_hubScroll = makeScrollArea(m_hubContent, m_hubScreen);
-    hubRoot->addWidget(m_hubScroll);
+    hubRoot->addWidget(m_hubScroll, 1);
     m_stack->addWidget(m_hubScreen);
 
     m_studioScreen = new QWidget(m_stack);
@@ -870,17 +887,6 @@ void MixcutPage::showResult()
 void MixcutPage::rebuildHub()
 {
     Studio::clearLayout(m_hubLayout);
-
-    auto *header = new PageHeader(
-        QStringLiteral("智能混剪"),
-        QStringLiteral("上传视频或图片素材，输入提示词生成文案，选好音色后一键成片，成片与剪映草稿一次交付。"),
-        this);
-    header->setTitleMeta(new Chip(QStringLiteral("新功能"), Chip::Ai, header));
-    auto *start = new Button(QStringLiteral("开始混剪"), Button::Primary, header);
-    start->setLeadingGlyph(Icons::Glyph::Sparkle);
-    connect(start, &QAbstractButton::clicked, this, &MixcutPage::startProject);
-    header->addAction(start);
-    m_hubLayout->addWidget(header);
 
     auto *stats = new QWidget(m_hubContent);
     auto *statsLayout = new QHBoxLayout(stats);
