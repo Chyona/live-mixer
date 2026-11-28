@@ -1220,6 +1220,134 @@ void ProgressBar::paintEvent(QPaintEvent *)
 }
 
 // -----------------------------------------------------------------------------
+// SeekBar
+// -----------------------------------------------------------------------------
+
+SeekBar::SeekBar(QWidget *parent)
+    : QWidget(parent)
+{
+    // 轨道只画 4px，但控件留 12px 高度作为点击/拖动热区。
+    setFixedHeight(12);
+    setMinimumWidth(40);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setCursor(Qt::PointingHandCursor);
+    setAttribute(Qt::WA_Hover, true);
+    setFocusPolicy(Qt::NoFocus);
+}
+
+void SeekBar::setPosition(int permille)
+{
+    m_position = qBound(0, permille, 1000);
+    update();
+}
+
+void SeekBar::setBarColor(const QColor &color)
+{
+    m_barColor = color;
+    update();
+}
+
+void SeekBar::setTrackColor(const QColor &color)
+{
+    m_trackColor = color;
+    update();
+}
+
+QSize SeekBar::sizeHint() const
+{
+    return QSize(100, 12);
+}
+
+int SeekBar::permilleFromX(qreal x) const
+{
+    if (width() <= 0) {
+        return 0;
+    }
+    return qRound(qBound<qreal>(0.0, x / width(), 1.0) * 1000.0);
+}
+
+void SeekBar::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    constexpr qreal trackHeight = 4.0;
+    const QRectF track(0, (height() - trackHeight) / 2.0, width(), trackHeight);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(m_trackColor);
+    painter.drawRoundedRect(track, 2, 2);
+
+    const qreal fraction = m_position / 1000.0;
+    const qreal filledWidth =
+        m_position > 0 ? std::max(4.0, width() * fraction) : 0.0;
+    if (filledWidth > 0) {
+        painter.setBrush(m_barColor);
+        painter.drawRoundedRect(
+            QRectF(0, track.top(), qMin<qreal>(filledWidth, width()), trackHeight),
+            2, 2);
+    }
+
+    // 设计稿没有常驻滑块；只在悬停或拖动时显示，避免静止时干扰画面。
+    if (isEnabled() && (m_hovered || m_dragging)) {
+        constexpr qreal knobRadius = 5.0;
+        const qreal knobX =
+            qBound(knobRadius, width() * fraction, width() - knobRadius);
+        painter.setBrush(Theme::Text1);
+        painter.drawEllipse(QPointF(knobX, height() / 2.0), knobRadius,
+                            knobRadius);
+    }
+}
+
+void SeekBar::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton || !isEnabled()) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    m_dragging = true;
+    setPosition(permilleFromX(event->position().x()));
+    emit scrubStarted(m_position);
+    event->accept();
+}
+
+void SeekBar::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!m_dragging) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+    setPosition(permilleFromX(event->position().x()));
+    emit scrubbed(m_position);
+    event->accept();
+}
+
+void SeekBar::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (!m_dragging || event->button() != Qt::LeftButton) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+    m_dragging = false;
+    setPosition(permilleFromX(event->position().x()));
+    update();
+    emit scrubFinished(m_position);
+    event->accept();
+}
+
+void SeekBar::enterEvent(QEnterEvent *event)
+{
+    m_hovered = true;
+    update();
+    QWidget::enterEvent(event);
+}
+
+void SeekBar::leaveEvent(QEvent *event)
+{
+    m_hovered = false;
+    update();
+    QWidget::leaveEvent(event);
+}
+
+// -----------------------------------------------------------------------------
 // NavItem
 // -----------------------------------------------------------------------------
 

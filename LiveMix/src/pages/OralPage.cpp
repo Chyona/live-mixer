@@ -4526,12 +4526,51 @@ void OralPage::rebuildResult()
     auto *playBarHost = new QWidget(playRow);
     auto *playBarLayout = new QVBoxLayout(playBarHost);
     playBarLayout->setContentsMargins(0, 0, 0, 0);
-    playBarLayout->setSpacing(2);
-    m_resultPlayBar = new ProgressBar(playBarHost);
+    playBarLayout->setSpacing(0);
+    m_resultPlayBar = new SeekBar(playBarHost);
     m_resultPlayBar->setBarColor(Theme::Primary);
-    m_resultPlayBar->setValue(0);
-    m_resultPlayBar->setFixedHeight(4);
+    m_resultPlayBar->setPosition(0);
+    m_resultPlayBar->setFixedHeight(12);
+    // 没有本地成片时不允许拖动，避免进度条停在与播放器无关的位置。
+    m_resultPlayBar->setEnabled(m_resultHasVideo);
+    if (!m_resultHasVideo) {
+        m_resultPlayBar->setToolTip(
+            QStringLiteral("这条记录没有本地成片，无法拖动预览"));
+    }
     playBarLayout->addWidget(m_resultPlayBar);
+    // 进度条支持点击与拖动定位：按下时暂停播放器，松开后按原状态恢复。
+    connect(m_resultPlayBar, &SeekBar::scrubStarted, this, [this](int permille) {
+        if (!m_resultPlayer) {
+            return;
+        }
+        m_resultSeeking = true;
+        m_resultResumeAfterSeek = m_playing;
+        m_playTimer->stop();
+        m_resultPlayer->pause();
+        if (m_resultMediaStack && m_resultMediaStack->count() > 1) {
+            m_resultMediaStack->setCurrentIndex(1);
+        }
+        seekResultTo(permille);
+    });
+    connect(m_resultPlayBar, &SeekBar::scrubbed, this,
+            &OralPage::seekResultTo);
+    connect(m_resultPlayBar, &SeekBar::scrubFinished, this,
+            [this](int permille) {
+                if (!m_resultPlayer) {
+                    m_resultSeeking = false;
+                    m_resultResumeAfterSeek = false;
+                    return;
+                }
+                seekResultTo(permille);
+                m_resultSeeking = false;
+                m_playing = m_resultResumeAfterSeek;
+                m_resultResumeAfterSeek = false;
+                if (m_playing) {
+                    m_resultPlayer->play();
+                    m_playTimer->start();
+                }
+                updatePlaybackControls();
+            });
     auto *clockRow = new QHBoxLayout;
     clockRow->setContentsMargins(0, 0, 0, 0);
     auto *timeLabel = monoLabel(QStringLiteral("00:00"), 8, Theme::Text3, playBarHost);
@@ -5022,20 +5061,29 @@ void OralPage::updatePlayback()
             finishPlayback();
             return;
         }
-        m_playProgress = total > 0
-            ? qBound(0, int(current * 100 / total), 100)
+        if (m_resultSeeking) {
+            return;
+        }
+        const int permille = total > 0
+            ? qBound(0, int(current * 1000 / total), 1000)
             : 0;
+        m_playProgress = permille / 10;
         if (m_resultPlayClock) {
             m_resultPlayClock->setText(StudioData::formatElapsed(current));
         }
-    } else if (m_resultPlayClock) {
-        m_resultPlayClock->setText(QStringLiteral("00:00"));
+        if (m_resultPlayBar) {
+            m_resultPlayBar->setPosition(permille);
+        }
+    } else {
+        if (m_resultPlayClock) {
+            m_resultPlayClock->setText(QStringLiteral("00:00"));
+        }
+        if (m_resultPlayBar) {
+            m_resultPlayBar->setPosition(0);
+        }
     }
     if (m_resultPoster) {
         m_resultPoster->setProgress(m_playProgress);
-    }
-    if (m_resultPlayBar) {
-        m_resultPlayBar->setValue(m_playProgress);
     }
 }
 
@@ -5043,6 +5091,8 @@ void OralPage::finishPlayback()
 {
     m_playing = false;
     m_playProgress = 0;
+    m_resultSeeking = false;
+    m_resultResumeAfterSeek = false;
     if (m_playTimer) {
         m_playTimer->stop();
     }
@@ -5062,7 +5112,7 @@ void OralPage::finishPlayback()
         m_resultPoster->setProgress(0);
     }
     if (m_resultPlayBar) {
-        m_resultPlayBar->setValue(0);
+        m_resultPlayBar->setPosition(0);
     }
 }
 
@@ -5073,6 +5123,8 @@ void OralPage::resetResultPlayer()
     }
     m_playing = false;
     m_playProgress = 0;
+    m_resultSeeking = false;
+    m_resultResumeAfterSeek = false;
     if (m_resultPlayer) {
         m_resultPlayer->stop();
         m_resultPlayer->setVideoOutput(nullptr);
@@ -5090,6 +5142,27 @@ void OralPage::resetResultPlayer()
     m_resultVideoItem = nullptr;
     m_resultMediaStack = nullptr;
     m_resultHasVideo = false;
+}
+
+void OralPage::seekResultTo(int permille)
+{
+    if (!m_resultPlayer) {
+        return;
+    }
+    const qint64 total = m_resultPlayer->duration();
+    if (total <= 0) {
+        return;
+    }
+    const int bounded = qBound(0, permille, 1000);
+    const qint64 target = total * bounded / 1000;
+    m_resultPlayer->setPosition(target);
+    m_playProgress = bounded / 10;
+    if (m_resultPlayBar) {
+        m_resultPlayBar->setPosition(bounded);
+    }
+    if (m_resultPlayClock) {
+        m_resultPlayClock->setText(StudioData::formatElapsed(target));
+    }
 }
 
 void OralPage::openResultVideoPreview()

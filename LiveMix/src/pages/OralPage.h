@@ -24,6 +24,7 @@ class QProcess;
 class Button;
 class GlyphButton;
 class ProgressBar;
+class SeekBar;
 class ConfigStore;
 class QThread;
 class QMediaPlayer;
@@ -138,6 +139,8 @@ private:
     void updatePlaybackControls();
     // 播放结束：切回海报并把进度、时间码与控制条一起归零。
     void finishPlayback();
+    // 进度条拖动定位：permille 为 0–1000 的千分比。
+    void seekResultTo(int permille);
 
     void updateGenerationClock();
     void copyText(const QString &text, const QString &label);
@@ -230,13 +233,16 @@ private:
     Button *m_resultPlayButton = nullptr;
     QToolButton *m_resultCenterPlay = nullptr;
     GlyphButton *m_resultPlayToggle = nullptr;
-    ProgressBar *m_resultPlayBar = nullptr;
+    SeekBar *m_resultPlayBar = nullptr;
     Button *m_resultDraftButton = nullptr;
     QLabel *m_resultDraftHint = nullptr;
     QString m_resultFilePath;
     QString m_resultDraftPath;
     bool m_playing = false;
     int m_playProgress = 0;
+    // 拖动进度条期间暂停跟随播放器位置，松开后按原播放状态恢复。
+    bool m_resultSeeking = false;
+    bool m_resultResumeAfterSeek = false;
     QTimer *m_playTimer = nullptr;
     int m_draftState = 0; // 0 idle / 1 running / 2 done
     int m_draftProgress = 0;
