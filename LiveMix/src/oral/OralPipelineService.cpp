@@ -11,6 +11,7 @@
 #include "OralAudioAssetsClient.h"
 #include "OralCapCutClient.h"
 #include "OralCoverClient.h"
+#include "OralCoverPrompts.h"
 #include "OralEditPlanBuilder.h"
 #include "OralLlmClient.h"
 #include "OralMediaUtils.h"
@@ -116,8 +117,42 @@ QString safeFileNameFor(const Oral::EditPlan &plan)
     return fileName;
 }
 
-// 封面提示词：把语义分析结果转成海报描述，让图生图保留人物特征并贴合内容。
-QString coverPromptFor(const Oral::EditPlan &plan)
+// 第一步的输入：把口播全文与画幅等补充信息交给提示词 1。
+QString coverOralContentFor(const Oral::EditPlan &plan)
+{
+    QString text = plan.speech.text.trimmed();
+    if (text.isEmpty()) {
+        QStringList utterances;
+        for (const Oral::Utterance &utterance : plan.speech.utterances) {
+            const QString line = utterance.text.trimmed();
+            if (!line.isEmpty()) {
+                utterances.append(line);
+            }
+        }
+        text = utterances.join(QLatin1Char('\n'));
+    }
+    if (text.size() > 4000) {
+        text = text.left(4000) + QStringLiteral("…");
+    }
+
+    QStringList lines;
+    lines.append(QStringLiteral("口播文案："));
+    lines.append(text);
+    lines.append(QString());
+    lines.append(QStringLiteral("可选补充："));
+    lines.append(QStringLiteral("画幅：%1").arg(plan.canvas.ratio));
+    if (!plan.semantics.title.trimmed().isEmpty()) {
+        lines.append(QStringLiteral("视频标题：")
+                     + plan.semantics.title.trimmed());
+    }
+    lines.append(QStringLiteral(
+        "首帧图将在第二步作为图生图参考图提供；请严格按“以参考图人物为主体”"
+        "的约束撰写提示词2。"));
+    return lines.join(QLatin1Char('\n'));
+}
+
+// 提示词 1 调用失败时的本地兜底：至少保证封面仍能生成。
+QString fallbackCoverPromptFor(const Oral::EditPlan &plan)
 {
     QString title = plan.semantics.title.trimmed();
     if (title.isEmpty()) {
@@ -1552,30 +1587,96 @@ bool PipelineService::addBrollTracks(EditPlan *plan, CapCutClient *capcut,
     return true;
 }
 
+bool PipelineService::ensureCoverPrompt(EditPlan *plan, HttpClient *http,
+                                        const QString &cacheDir, QString *error)
+{
+    Q_UNUSED(error);
+    if (!plan || !http) {
+        return false;
+    }
+    if (!plan->cover.prompt.trimmed().isEmpty()) {
+        return true;
+    }
+
+    // 提示词 2 按「源文件 + 提示词 1 内容 + 文本模型 + 画布」缓存，避免重复调用；
+    // 提示词 1 调整后缓存指纹自动变化。
+    const QString promptCachePath = QDir(cacheDir).filePath(
+        QStringLiteral("prompt_%1.txt")
+            .arg(sha1Hex(QStringList{
+                fileFingerprint(plan->sourcePath),
+                Oral::coverDirectorPrompt(),
+                CoverClient::promptModelName(),
+                plan->canvas.ratio,
+                QStringLiteral("%1x%2")
+                    .arg(plan->canvas.width)
+                    .arg(plan->canvas.height),
+            }.join(QLatin1Char('|')))));
+    QFile cached(promptCachePath);
+    if (cached.open(QIODevice::ReadOnly)) {
+        const QString prompt = QString::fromUtf8(cached.readAll()).trimmed();
+        cached.close();
+        if (!prompt.isEmpty()) {
+            plan->cover.prompt = prompt;
+            addLog(StudioData::OralStage::Compose,
+                   QStringLiteral("复用已生成的封面提示词 2"),
+                   StudioData::Tone::Ok);
+            return true;
+        }
+    }
+
+    setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
+             60, QStringLiteral("生成封面提示词 2"));
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("正在用口播内容生成封面提示词 2（%1）…")
+               .arg(CoverClient::promptModelName()),
+           StudioData::Tone::Ai);
+    CoverClient cover(http);
+    QString prompt;
+    QString promptError;
+    if (cover.generatePrompt(m_request.gatewayBaseUrl, m_request.apiKey,
+                             coverOralContentFor(*plan), &prompt, &promptError,
+                             [this](const QString &status) {
+                                 addLog(StudioData::OralStage::Compose, status,
+                                        StudioData::Tone::Info);
+                             })) {
+        plan->cover.prompt = prompt;
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("封面提示词 2 已生成（%1 字）").arg(prompt.size()),
+               StudioData::Tone::Ok);
+        if (QDir().mkpath(cacheDir)) {
+            QSaveFile file(promptCachePath);
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(prompt.toUtf8());
+                file.commit();
+            }
+        }
+        return true;
+    }
+
+    plan->cover.prompt = fallbackCoverPromptFor(*plan);
+    addLog(StudioData::OralStage::Compose,
+           QStringLiteral("封面提示词生成失败，改用本地兜底提示词：%1")
+               .arg(promptError),
+           StudioData::Tone::Muted);
+    return true;
+}
+
 bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
                                     const CapCutDraft &draft,
                                     const QString &workDir, HttpClient *http,
                                     QString *error)
 {
-    Q_UNUSED(error);
     if (!plan || !capcut || !http) {
         return true;
     }
 
     plan->cover.startMs = 0;
     plan->cover.endMs = kCoverEndMs;
-    if (plan->cover.prompt.isEmpty()) {
-        plan->cover.prompt = coverPromptFor(*plan);
-    }
-
-    addLog(StudioData::OralStage::Compose,
-           QStringLiteral("正在用口播首帧生成封面海报（%1）…")
-               .arg(CoverClient::modelName()),
-           StudioData::Tone::Ai);
-
-    // 封面按「源文件 + 模型 + 提示词 + 画布」缓存，重复包装不重复计费。
     const QString cacheDir =
         QDir(m_request.cacheDir).filePath(QStringLiteral("covers"));
+    ensureCoverPrompt(plan, http, cacheDir, error);
+
+    // 封面按「源文件 + 模型 + 提示词 2 + 画布」缓存，重复包装不重复计费。
     const QString cacheKey = sha1Hex(QStringList{
         fileFingerprint(plan->sourcePath),
         CoverClient::modelName(),
@@ -1605,6 +1706,12 @@ bool PipelineService::addCoverTrack(EditPlan *plan, CapCutClient *capcut,
                QStringLiteral("复用已生成的封面海报，跳过重复生成"),
                StudioData::Tone::Ok);
     } else {
+        setStage(StudioData::OralStage::Compose, StudioData::StageStatus::Running,
+                 62, QStringLiteral("生成封面海报"));
+        addLog(StudioData::OralStage::Compose,
+               QStringLiteral("正在用口播首帧生成封面海报（%1）…")
+                   .arg(CoverClient::modelName()),
+               StudioData::Tone::Ai);
         const QString framePath =
             QDir(workDir).filePath(QStringLiteral("cover_frame.jpg"));
         QString localError;

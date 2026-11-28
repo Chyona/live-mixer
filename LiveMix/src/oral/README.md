@@ -25,8 +25,10 @@
    - 分析结果按「源视频 + 素材」文件指纹缓存，重新包装时跳过重复 ASR/理解。
 
 3. **合成**
-   - `OralCoverClient`：取口播首帧，调用 `doubao-seedream-5-0-flash` 图生图，
-     生成与视频内容匹配的封面海报；按源文件与提示词缓存，重复包装不重复计费。
+   - `OralCoverClient` / `OralCoverPrompts`：两步生成封面。
+     第一步用内置提示词 1 + 口播内容调用 `deepseek-flash` 生成提示词 2；
+     第二步用提示词 2 + 口播首帧调用 `doubao-seedream-5-0-flash` 图生图。
+     提示词 2 与封面均按源文件缓存，重复包装不重复计费。
    - `OralCapCutClient`：上传、创建草稿、视频/图片/字幕/音频/关键帧、云渲染、
      下载成片与剪映草稿。
    - 轨道结构：
@@ -50,7 +52,8 @@
 | `OralLlmClient.*` | DeepSeek 语义/素材/镜头/音效分析 |
 | `OralAudioAssetsClient.*` | 独立签名的 BGM / 音效素材服务 |
 | `OralSfxCatalog.*` | 内置音效目录 |
-| `OralCoverClient.*` | 口播首帧图生图封面（doubao-seedream-5-0-flash） |
+| `OralCoverPrompts.*` | 内置封面提示词 1（视觉导演，不提供配置） |
+| `OralCoverClient.*` | 提示词 2 生成（deepseek-flash）+ 首帧图生图封面（doubao-seedream-5-0-flash） |
 | `OralCapCutClient.*` | capcut-mate 接口与草稿本地化 |
 | `OralEditPlanBuilder.*` | 字幕系统与镜头规划 |
 | `OralPipelineService.*` | 工作线程编排、缓存、进度与结果 |

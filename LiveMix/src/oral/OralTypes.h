@@ -286,11 +286,11 @@ struct AudioPlan
     static AudioPlan fromJson(const QJsonObject &object);
 };
 
-// 封面海报：取口播首帧用 doubao-seedream-5-0-flash 图生图生成。
+// 封面海报：提示词 1 + 口播内容生成提示词 2，再用提示词 2 + 首帧图生图。
 // 产品指定的时间线是 [0, 10000] 微秒；领域结构统一用毫秒，提交时再 ×1000。
 struct CoverPlan
 {
-    QString prompt;
+    QString prompt;      // 提示词 2（图生图提示词）
     QString localPath;   // 本地生成的封面（画布尺寸）
     QString uploadedUrl; // capcut-mate 上传后的临时地址
     qint64 startMs = 0;
